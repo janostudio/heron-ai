@@ -8,7 +8,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const VERSION = 'v' + require('./package.json').version;
-const REPO = 'heron-ai/heron-ai';
+const REPO = 'janostudio/heron-ai';
 const MAX_RETRIES = 3;
 
 const PLATFORM_MAP = {
