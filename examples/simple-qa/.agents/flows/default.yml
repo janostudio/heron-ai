@@ -1,0 +1,15 @@
+name: default_flow
+description: "默认问答流程"
+
+config_root: "examples/simple-qa/"
+loop_max_rounds: 0
+
+stages:
+  - name: qa
+    team: qa_team
+    on_signal:
+      continue: null
+      wait_input: null
+      goal_achieved: null
+      goal_failed: null
+      goal_impossible: null

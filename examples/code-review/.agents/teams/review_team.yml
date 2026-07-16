@@ -1,0 +1,47 @@
+name: review_team
+description: "代码审查团队：安全 + 性能并行审查，Lead 汇总"
+
+stages:
+  - process: parallel
+    tasks:
+      - name: security_review
+        agent: security-reviewer
+        description: |
+          审查以下代码的安全性。检查常见漏洞：
+          - SQL 注入
+          - XSS
+          - 敏感信息泄露
+          - 不安全的加密
+          - 权限问题
+          代码：
+          ```
+          {{.Input}}
+          ```
+
+      - name: performance_review
+        agent: performance-reviewer
+        description: |
+          审查以下代码的性能。检查：
+          - 不必要的循环和重复计算
+          - 内存泄漏风险
+          - 数据库查询效率
+          - 并发问题
+          - 资源未释放
+          代码：
+          ```
+          {{.Input}}
+          ```
+
+  - process: sequential
+    tasks:
+      - name: aggregate
+        agent: lead-reviewer
+        description: |
+          综合安全审查和性能审查的结果，生成最终的代码审查报告。
+
+          报告要求：
+          1. 总览：代码质量评级（A-F）
+          2. 安全问题（按严重程度排序）
+          3. 性能问题（按影响程度排序）
+          4. 改进建议（具体代码行级别）
+          5. 合并建议（approve / changes_requested / comment）

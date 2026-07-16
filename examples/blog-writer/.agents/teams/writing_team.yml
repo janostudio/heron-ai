@@ -1,0 +1,17 @@
+name: writing_team
+description: "Writing team: writer creates the blog post from research and outline"
+
+stages:
+  - process: sequential
+    tasks:
+      - name: write_blog
+        agent: writer
+        description: |
+          Write a complete blog post based on the research and outline from the previous stage.
+          Use Read to review previous results. Use Write to save the final post.
+          Use TodoWrite to track progress.
+          
+          Requirements:
+          - 800-1500 words, engaging tone
+          - Follow the structured output format
+          - Include research facts and statistics

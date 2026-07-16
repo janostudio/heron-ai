@@ -1,0 +1,31 @@
+#!/usr/bin/env node
+// bin/heron - cross-platform entry script for heron-ai
+// Calls the platform-specific Go binary, passing through all arguments
+
+const { spawnSync } = require('child_process');
+const path = require('path');
+const os = require('os');
+
+const PLATFORM_MAP = {
+  'linux-x64':   'heron-linux-amd64',
+  'linux-arm64': 'heron-linux-arm64',
+  'darwin-x64':   'heron-darwin-amd64',
+  'darwin-arm64': 'heron-darwin-arm64',
+  'win32-x64':    'heron-windows-amd64.exe',
+};
+
+const key = `${os.platform()}-${os.arch() === 'x64' ? 'x64' : os.arch()}`;
+const binaryName = PLATFORM_MAP[key];
+
+if (!binaryName) {
+  console.error(`Unsupported platform: ${key}`);
+  process.exit(1);
+}
+
+const binaryPath = path.join(__dirname, binaryName);
+
+const result = spawnSync(binaryPath, process.argv.slice(2), {
+  stdio: 'inherit',
+});
+
+process.exit(result.status !== null ? result.status : 1);

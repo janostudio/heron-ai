@@ -1,0 +1,2 @@
+{"content":"hello","created_at":"2026-07-15T13:22:16Z","role":"user"}
+{"agent_name":"qa_team","content":"你好！有什么可以帮你的吗？\n","created_at":"2026-07-15T13:22:16Z","role":"assistant","signal":"continue","stage_name":"qa","usage":{"completion_tokens":31,"prompt_tokens":92,"total_tokens":123}}

@@ -1,0 +1,5 @@
+# Global maintainers
+* @heron-ai/maintainers
+
+# CI/CD workflows
+.github/workflows/ @heron-ai/devops

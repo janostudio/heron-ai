@@ -1,0 +1,37 @@
+{
+  "completion_tokens": 4467,
+  "created_at": "2026-07-15T14:28:19Z",
+  "flow_name": "blog_writer_flow",
+  "prompt": "test",
+  "prompt_tokens": 2403,
+  "round_num": 3,
+  "run_id": "20260715-142819-686qow",
+  "signal": "continue",
+  "stages": [
+    {
+      "signal": "continue",
+      "stage_name": "research_stage",
+      "team_name": "research_team",
+      "usage": {
+        "total_tokens": 907
+      }
+    },
+    {
+      "signal": "continue",
+      "stage_name": "writing_stage",
+      "team_name": "writing_team",
+      "usage": {
+        "total_tokens": 2260
+      }
+    },
+    {
+      "signal": "continue",
+      "stage_name": "review_stage",
+      "team_name": "review_team",
+      "usage": {
+        "total_tokens": 3703
+      }
+    }
+  ],
+  "total_tokens": 6870
+}

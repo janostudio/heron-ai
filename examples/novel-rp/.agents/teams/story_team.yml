@@ -1,0 +1,26 @@
+name: story_team
+description: "故事创作团队：主角 + 反派 + 旁白"
+
+stages:
+  - process: parallel
+    tasks:
+      - name: hero_act
+        agent: hero
+        description: "根据当前剧情，描述主角的行动和对话：{{.Plot}}"
+        expected_output: "主角的行动和对话"
+        output_format: text
+
+      - name: villain_act
+        agent: villain
+        description: "根据当前剧情，描述反派的行动和对话：{{.Plot}}"
+        expected_output: "反派的行动和对话"
+        output_format: text
+
+  - process: sequential
+    tasks:
+      - name: narrate
+        agent: narrator
+        description: "综合主角和反派的行动，推进剧情"
+        expected_output: "旁白叙述"
+        context: [hero_act, villain_act]
+        output_format: text

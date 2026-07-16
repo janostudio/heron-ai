@@ -1,0 +1,15 @@
+name: code_review_flow
+description: "多 Agent 代码审查流程：安全审查 + 性能审查 → 综合报告"
+
+config_root: "examples/code-review/"
+loop_max_rounds: 0
+
+stages:
+  - name: review
+    team: review_team
+    on_signal:
+      continue: null
+      wait_input: null
+      goal_achieved: null
+      goal_failed: null
+      goal_impossible: null
