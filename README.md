@@ -1,53 +1,99 @@
-# Heron AI
+# Heron AI - Multi-Agent Generic Engine
 
-<p align="center">
-  <img src="assets/icon.png" alt="Heron AI" width="128" height="128">
-</p>
-
-[![npm version](https://badge.fury.io/js/heron-ai.svg)](https://www.npmjs.com/package/heron-ai)
-[![Go Report Card](https://goreportcard.com/badge/github.com/heron-ai/heron-engine)](https://goreportcard.com/report/github.com/heron-ai/heron-engine)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
-> **English** | [中文](README.zh-CN.md)
-
-**Heron AI** is a generic multi-agent engine built in Go. No framework dependencies.
-Design, orchestrate, and evaluate AI agent workflows.
+Build, orchestrate, and evaluate AI agents. Written in pure Go, no framework dependencies.
 
 ## Quick Start
 
 ```bash
-npm install -g heron-ai
+# Install
+npm install -g @qinghuangniao/heron-ai
+
+# Set API key
+export OPENAI_API_KEY=sk-your-key
+
+# Run with builtin default agent
 heron
+
+# Run with a specific flow
+heron --flow .agents/flows/blog.yml
+
+# Non-interactive mode
+heron --prompt "Hello" --flow .agents/flows/default.yml
 ```
 
-## Features
+## Examples
 
-- Multi-agent orchestration (Flow + Team + Signal)
-- Turn-based agent runtime (Prompt + Tool + Guardrail + HITL + Handoff)
-- Extensible (Lua / WASM / external scripts)
-- TUI interface (bubbletea)
-- File-based storage (JSONL + Markdown)
-- MCP protocol support
+See the [examples](./examples/) directory for complete configurations:
 
-## Documentation
+| Example | Description | Agents |
+|---------|-------------|--------|
+| [simple-qa](./examples/simple-qa/) | Single agent Q&A | 1 |
+| [code-review](./examples/code-review/) | Multi-agent code review | 3 |
+| [blog-writer](./examples/blog-writer/) | 3-team content pipeline | 4 |
 
-- [Why Heron AI](docs/why-heron.md) - Problem, philosophy, comparison
-- [Getting Started](docs/getting-started.md) - Installation and configuration
-- [CLI Reference](docs/cli-reference.md) - All available commands
-- [Configuration](docs/configuration.md) - Settings, models, providers
-- [Flow Guide](docs/flow-guide.md) - How to design and run flows
-- [Agent Guide](docs/agent-guide.md) - Agent configuration and behavior
-- [Extension Guide](docs/extension-guide.md) - Lua / WASM / script extensions
-- [Examples](examples/) - Sample flow configurations
+## Configuration
+
+Heron uses a `.agents/` directory for all configuration:
+
+```
+.agents/
+├── flows/         # Flow definitions (YAML)
+├── teams/         # Team configurations (YAML)
+├── agents/        # Agent definitions (Markdown + YAML frontmatter)
+├── skills/        # Skill definitions
+├── knowledge/     # Knowledge base files
+├── rules/         # Global rules
+├── models.json    # Model registry
+└── settings.json  # Engine settings
+```
+
+### models.json
+
+```json
+{
+  "model": "deepseek-v4-flash",
+  "models": [
+    {
+      "name": "deepseek-v4-flash",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "${OPENAI_API_KEY}",
+      "max_tokens": 64000
+    }
+  ]
+}
+```
+
+## Architecture
+
+```
+Flow (orchestration)
+  └── Stage (team execution)
+        └── Team (agent scheduling)
+              ├── parallel: agents run concurrently
+              └── sequential: agents run in order, passing context
+                    └── Agent (LLM turn loop)
+                          └── Turn (LLM call + tool execution)
+```
+
+## CLI Usage
+
+```
+heron                          # TUI interactive mode
+heron --flow <path>            # TUI with specific flow
+heron --prompt <text> --flow <path>  # Non-interactive
+heron --serve                   # HTTP API server
+heron --version                 # Print version
+```
 
 ## Development
 
 ```bash
-git clone https://github.com/heron-ai/heron-engine.git
-cd heron-engine
-go build ./cmd/server/
+git clone git@github.com:janostudio/heron-ai.git
+cd heron-ai
+go build -o bin/heron ./cmd/server/
+go test ./...
 ```
 
 ## License
 
-MIT - see [LICENSE](LICENSE)
+MIT
