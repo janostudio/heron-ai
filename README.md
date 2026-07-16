@@ -23,13 +23,19 @@ heron --prompt "Hello" --flow .agents/flows/default.yml
 
 ## Examples
 
-See the [examples](./examples/) directory for complete configurations:
+| Example | Description | Agents | Teams |
+|---------|-------------|--------|-------|
+| [simple-qa](./examples/simple-qa/) | Single agent Q&A | 1 | 1 |
+| [code-review](./examples/code-review/) | Multi-agent code review | 3 | 1 |
+| [blog-writer](./examples/blog-writer/) | 3-team content pipeline | 4 | 3 |
+| [novel-rp](./examples/novel-rp/) | Multi-character roleplay | 3 | 1 |
 
-| Example | Description | Agents |
-|---------|-------------|--------|
-| [simple-qa](./examples/simple-qa/) | Single agent Q&A | 1 |
-| [code-review](./examples/code-review/) | Multi-agent code review | 3 |
-| [blog-writer](./examples/blog-writer/) | 3-team content pipeline | 4 |
+## Documentation
+
+- [Architecture](./docs/ARCHITECTURE.md) - How Heron works under the hood
+- [Configuration](./docs/CONFIGURATION.md) - All config options explained
+- [CLI Usage](./docs/CLI.md) - Command reference
+- [Examples Guide](./examples/) - Full working examples
 
 ## Configuration
 
@@ -39,7 +45,7 @@ Heron uses a `.agents/` directory for all configuration:
 .agents/
 ├── flows/         # Flow definitions (YAML)
 ├── teams/         # Team configurations (YAML)
-├── agents/        # Agent definitions (Markdown + YAML frontmatter)
+├── agents/        # Agent definitions (Markdown + YAML)
 ├── skills/        # Skill definitions
 ├── knowledge/     # Knowledge base files
 ├── rules/         # Global rules
@@ -61,33 +67,6 @@ Heron uses a `.agents/` directory for all configuration:
     }
   ]
 }
-```
-
-## Documentation
-
-- [Usage Guide](./docs/usage.md) - CLI, TUI, and HTTP API
-- [Configuration](./docs/config.md) - Settings, models, flows
-- [Architecture](./docs/architecture.md) - Entity relationships and flow design
-- [Module Design](./docs/modules.md) - Package structure and layers
-
-```
-Flow (orchestration)
-  └── Stage (team execution)
-        └── Team (agent scheduling)
-              ├── parallel: agents run concurrently
-              └── sequential: agents run in order, passing context
-                    └── Agent (LLM turn loop)
-                          └── Turn (LLM call + tool execution)
-```
-
-## CLI Usage
-
-```
-heron                          # TUI interactive mode
-heron --flow <path>            # TUI with specific flow
-heron --prompt <text> --flow <path>  # Non-interactive
-heron --serve                   # HTTP API server
-heron --version                 # Print version
 ```
 
 ## Development
