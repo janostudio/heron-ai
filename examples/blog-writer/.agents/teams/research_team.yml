@@ -1,0 +1,21 @@
+name: research_team
+description: "Research team: researcher + planner in parallel"
+
+stages:
+  - process: parallel
+    tasks:
+      - name: research_topic
+        agent: researcher
+        description: |
+          Research the topic thoroughly. Use Grep to search knowledge base.
+          Use Read to review materials. Use TodoWrite to track progress.
+          
+          Topic: {{.Input}}
+
+      - name: plan_outline
+        agent: planner
+        description: |
+          Create a detailed blog post outline. Use Read to review existing outlines.
+          Use TodoWrite to track sections. Use Write to save your draft.
+          
+          Topic: {{.Input}}

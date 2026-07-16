@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Cross-compile
+        run: |
+          mkdir -p dist
+          GOOS=linux   GOARCH=amd64 go build -ldflags="-X main.version=${GITHUB_REF#refs/tags/v}" -o dist/heron-linux-amd64     ./cmd/server/
+          GOOS=linux   GOARCH=arm64 go build -ldflags="-X main.version=${GITHUB_REF#refs/tags/v}" -o dist/heron-linux-arm64     ./cmd/server/
+          GOOS=darwin  GOARCH=amd64 go build -ldflags="-X main.version=${GITHUB_REF#refs/tags/v}" -o dist/heron-darwin-amd64    ./cmd/server/
+          GOOS=darwin  GOARCH=arm64 go build -ldflags="-X main.version=${GITHUB_REF#refs/tags/v}" -o dist/heron-darwin-arm64    ./cmd/server/
+          GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=${GITHUB_REF#refs/tags/v}" -o dist/heron-windows-amd64.exe ./cmd/server/
+
+      - name: Checksums
+        run: cd dist && sha256sum * > checksums.txt
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+      - name: Build npm package
+        run: |
+          mkdir -p dist/npm/bin
+          cp npm/package.json npm/install.js dist/npm/
+          cp npm/bin/heron dist/npm/bin/
+          chmod +x dist/npm/bin/heron
+          VERSION=${GITHUB_REF#refs/tags/v}
+          sed -i "s/\"version\": \"0.0.0-dev\"/\"version\": \"$VERSION\"/" dist/npm/package.json
+
+      - name: Publish to npm
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          cd dist/npm
+          npm publish --access public

@@ -1,0 +1,17 @@
+{
+  "model": "deepseek-v4-flash",
+  "models": [
+    {
+      "name": "deepseek-v4-flash",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "sk-2ccb9c75f98342d7a5d43c0f71e17251",
+      "max_tokens": 64000
+    },
+    {
+      "name": "deepseek-v4-pro",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "sk-2ccb9c75f98342d7a5d43c0f71e17251",
+      "max_tokens": 64000
+    }
+  ]
+}

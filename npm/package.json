@@ -1,0 +1,25 @@
+{
+  "name": "heron-ai",
+  "version": "0.0.0-dev",
+  "description": "Heron AI - Multi-Agent Generic Engine. Build, orchestrate, and evaluate AI agents.",
+  "keywords": ["heron", "ai", "agent", "multi-agent", "cli", "llm"],
+  "bin": {
+    "heron": "bin/heron"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "install.js",
+    "bin/heron",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/heron-ai/heron-ai"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

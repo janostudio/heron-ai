@@ -1,0 +1,32 @@
+name: blog_writer_flow
+description: "3-team pipeline: research → writing → review, with signal routing"
+
+loop_max_rounds: 0
+
+stages:
+  - name: research_stage
+    team: research_team
+    on_signal:
+      continue: writing_stage
+      wait_input: null
+      goal_achieved: null
+      goal_failed: null
+      goal_impossible: null
+
+  - name: writing_stage
+    team: writing_team
+    on_signal:
+      continue: review_stage
+      wait_input: null
+      goal_achieved: null
+      goal_failed: null
+      goal_impossible: null
+
+  - name: review_stage
+    team: review_team
+    on_signal:
+      continue: null
+      wait_input: null
+      goal_achieved: null
+      goal_failed: null
+      goal_impossible: null

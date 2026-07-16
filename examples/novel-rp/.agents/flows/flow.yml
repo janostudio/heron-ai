@@ -1,0 +1,42 @@
+name: novel_story
+description: "小说剧情推进流程"
+
+config_root: "examples/novel-rp/"
+loop_max_rounds: 10
+
+stages:
+  - name: opening
+    team: story_team
+    on_signal:
+      continue: development
+      wait_input: null
+      goal_achieved: null
+      goal_failed: null
+      goal_impossible: null
+
+  - name: development
+    team: story_team
+    on_signal:
+      continue: climax
+      wait_input: null
+      goal_achieved: null
+      goal_failed: null
+      goal_impossible: null
+
+  - name: climax
+    team: story_team
+    on_signal:
+      continue: ending
+      wait_input: null
+      goal_achieved: null
+      goal_failed: null
+      goal_impossible: null
+
+  - name: ending
+    team: story_team
+    on_signal:
+      continue: null
+      wait_input: null
+      goal_achieved: null
+      goal_failed: null
+      goal_impossible: null

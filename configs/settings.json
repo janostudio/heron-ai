@@ -1,0 +1,34 @@
+{
+  "flow": {
+    "loopMaxRounds": 0
+  },
+  "team": {
+    "maxParallelAgents": 10,
+    "maxParallelTeams": 1
+  },
+  "agent": {
+    "loopMaxRounds": 10,
+    "timeout": "120s",
+    "toolMode": "parallel",
+    "stream": true,
+    "permissions": {
+      "allow": [],
+      "deny": [],
+      "ask": []
+    }
+  },
+  "logging": {
+    "level": "info",
+    "output": "stdout"
+  },
+  "observability": {
+    "retentionDays": 30,
+    "eventBus": {
+      "bufferSize": 256,
+      "enablePersistence": false
+    }
+  },
+  "paths": {
+    "data": ".agents/data/"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "providers": [
+    {
+      "name": "openai",
+      "apiKey": "${OPENAI_API_KEY}",
+      "models": [
+        { "id": "gpt-4o", "maxTokens": 128000 },
+        { "id": "gpt-4o-mini", "maxTokens": 128000 }
+      ],
+      "default": "gpt-4o-mini"
+    }
+  ],
+  "defaultProvider": "openai"
+}
