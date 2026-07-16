@@ -63,7 +63,12 @@ Heron uses a `.agents/` directory for all configuration:
 }
 ```
 
-## Architecture
+## Documentation
+
+- [Usage Guide](./docs/usage.md) - CLI, TUI, and HTTP API
+- [Configuration](./docs/config.md) - Settings, models, flows
+- [Architecture](./docs/architecture.md) - Entity relationships and flow design
+- [Module Design](./docs/modules.md) - Package structure and layers
 
 ```
 Flow (orchestration)
