@@ -50,7 +50,9 @@ jobs:
           sed -i "s/\"version\": \"0.0.0-dev\"/\"version\": \"$VERSION\"/" dist/npm/package.json
 
       - name: Publish to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
           cd dist/npm
           npm publish --access public
