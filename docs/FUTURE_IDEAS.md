@@ -1203,7 +1203,199 @@ Team 执行完毕 → 结果返回全局主 Agent
 
 ---
 
-## 架构决策：执行中用户输入的路由
+## Idea 12: Tool 调用异步执行
+
+### 问题
+
+当前 Agent 的 Turn Loop 是同步的：LLM 返回 tool_calls → 逐个执行 → 结果追加到 messages → 下一轮 LLM。如果 Agent 需要调用 3 个独立工具（Read 3 个文件），必须串行等待，每个工具单独阻塞。
+
+最近 A2A（Agent-to-Agent）、MCP 等协议的趋势都是异步执行。
+
+### 设计
+
+Agent 的 Turn Loop 支持异步 tool 执行：
+
+```
+当前（同步）：
+  LLM → tool_call(Read A) → 等待 → tool_call(Read B) → 等待 → tool_call(Read C) → 等待
+  耗时：A + B + C
+
+未来（异步）：
+  LLM → tool_call(Read A) ─┐
+       tool_call(Read B) ─┼─ 并发执行
+       tool_call(Read C) ─┘
+  耗时：max(A, B, C)
+```
+
+### 实现
+
+```go
+type AsyncToolExecutor struct {
+    registry   *ToolRegistry
+    maxConcurrent int
+}
+
+func (e *AsyncToolExecutor) ExecuteBatch(ctx context.Context, calls []ToolCall) []ToolResult {
+    results := make([]ToolResult, len(calls))
+    var wg sync.WaitGroup
+    
+    sem := make(chan struct{}, e.maxConcurrent)
+    
+    for i, call := range calls {
+        wg.Add(1)
+        go func(idx int, tc ToolCall) {
+            defer wg.Done()
+            sem <- struct{}{}
+            defer func() { <-sem }()
+            
+            result, err := e.registry.Execute(ctx, tc.Name, tc.Arguments)
+            results[idx] = result
+        }(i, call)
+    }
+    
+    wg.Wait()
+    return results
+}
+```
+
+### 配置
+
+Agent 配置中声明 tool 执行模式：
+
+```yaml
+loop:
+  max_rounds: 5
+  tool_mode: parallel    # sequential | parallel
+  timeout: 120s
+  max_concurrent_tools: 5  # 最多同时执行 5 个工具
+```
+
+- `sequential`：当前行为，逐个执行
+- `parallel`：LLM 返回的所有 tool_calls 并发执行
+
+### 适用场景
+
+| 场景 | 模式 | 加速比 |
+|------|------|--------|
+| 读 5 个文件 | parallel | ~5x |
+| 搜索 3 个不同关键词 | parallel | ~3x |
+| 先读文件再写入（有依赖） | sequential | - |
+
+### 优先级
+**中 — 对执行速度有显著提升**
+
+---
+
+## Idea 13: 自动会话管理（用户无感知）
+
+### 问题
+
+当前用户需要感知"会话"概念——每次 `--prompt` 是新的 Run，`--run` 是恢复旧 Run。这不符合"直接对话"的体验。用户只想说话，不想管"这是第几个会话"。
+
+Claude Code 的做法是：自动检测当前项目上下文，决定是继续旧会话还是开新会话。用户不需要 `--resume` 或 `--run` 命令。
+
+### 设计
+
+引擎自动管理会话，用户无感知：
+
+```
+用户输入 "帮我写博客"
+  │
+  ▼
+引擎检查：当前目录下有没有活跃的会话？
+  ├── 有 → 检查上下文是否匹配
+  │   ├── 匹配（同主题） → 继续旧会话
+  │   └── 不匹配（新主题） → 自动开新会话，旧会话归档
+  └── 没有 → 自���开新会话
+```
+
+### 会话匹配规则
+
+```go
+type SessionManager struct {
+    sessions map[string]*Session
+    currentDir string
+}
+
+func (m *SessionManager) GetOrCreateSession(input string) *Session {
+    active := m.findActiveSession()
+    if active == nil {
+        return m.createSession()
+    }
+    
+    // Check if input is related to current session
+    if m.isRelated(active, input) {
+        return active // continue
+    }
+    
+    // New topic, archive old, create new
+    m.archiveSession(active)
+    return m.createSession()
+}
+
+func (m *SessionManager) isRelated(session *Session, input string) bool {
+    // Check: same directory? same flow? recent activity?
+    if time.Since(session.LastActivity) > 30*time.Minute {
+        return false // 超过 30 分钟不活跃，算新会话
+    }
+    
+    // Check: same flow config?
+    if session.FlowName != m.currentFlowName() {
+        return false
+    }
+    
+    return true // 默认继续
+}
+```
+
+### 会话标识
+
+不需要用户指定 run_id，引擎自动生成并管理：
+
+```
+.agents/data/
+├── 20260715-142941-blog/    # 自动生成的会话
+├── 20260716-093000-review/  # 自动生成的会话
+└── _active.json              # 当前活跃会话指针
+```
+
+`_active.json`：
+```json
+{
+  "session_id": "20260715-142941-blog",
+  "flow_name": "blog_writer_flow",
+  "last_activity": "2026-07-15T14:30:00Z",
+  "topic": "AI Agent 安全性最佳实践"
+}
+```
+
+### 用户命令（可选）
+
+用户通常不需要操作会话，但提供可选命令：
+
+| 命令 | 说明 |
+|------|------|
+| `/new` | 强制开新会话 |
+| `/history` | 列出历史会话 |
+| `/switch <id>` | 切换到指定会话 |
+
+### 对比
+
+| 操作 | 当前 | 未来 |
+|------|------|------|
+| 开始对话 | `heron --prompt xxx --flow xxx` | `heron` 直接说话 |
+| 继续对话 | `heron --run <id> --prompt xxx` | 自动检测，继续旧会话 |
+| 开新话题 | 手动记新 run_id | 自动检测不匹配，开新会话 |
+| 查看历史 | 手动找 data 目录 | `/history` 命令 |
+
+### 优先级
+**高 — 消除"会话"心智负担，实现真正的"直接对话"**
+
+---
+
+## 待补充
+
+> 后续新想法继续添加到这里## 架构决策：执行中用户输入的路由
 
 > 用户输入时，根据当前引擎状态自动路由到正确的目标。
 
