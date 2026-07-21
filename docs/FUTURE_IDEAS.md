@@ -370,6 +370,130 @@ Week 7-8:  Idea 3 Agent 测试            ← 质量保障
 
 ---
 
+## Idea 5: 主 Agent 分发 Team（而非只分发 Agent）
+
+### 问题
+Idea 4 中主 Agent 只能 dispatch 单个 Agent。但真实场景中，有些任务需要一整个 Team 协作（比如"写博客"需要 researcher + planner + writer 协作），单个 Agent 搞不定。
+
+### 设计
+
+主 Agent 的 dispatch 工具支持两种目标：
+
+```json
+// 分发给单个 Agent
+{"name": "dispatch", "arguments": {"agent": "researcher", "input": "..."}}
+
+// 分发给一个 Team（整个 Team 内部按 parallel/sequential 自动协作）
+{"name": "dispatch", "arguments": {"team": "blog_team", "input": "..."}}
+```
+
+执行流程：
+```
+用户："帮我写一篇关于 AI 安全的博客"
+  → 主 Agent 理解意图
+  → dispatch 给 blog_team（researcher 调研 + planner 大纲 → writer 写作）
+  → Team 内部协作完成
+  → 结果返回主 Agent
+  → 主 Agent 检查质量，不满意可以再 dispatch 给 reviewer
+  → 最终返回用户
+```
+
+### 与现有 Flow 的关系
+
+| 模式 | 谁决定执行顺序 | 适用场景 |
+|------|-------------|---------|
+| Flow 编排 | YAML 配置写死 | 固定流程、CI/CD |
+| 主 Agent + dispatch Agent | 主 Agent LLM 决策 | 动态任务、简单分发 |
+| 主 Agent + dispatch Team | 主 Agent LLM 决策 | 动态任务、复杂协作 |
+
+Team 在主 Agent 模式下变成**可复用的协作单元**，主 Agent 按需调用。
+
+### 架构影响
+
+- `dispatch` 工具参数增加 `team` 字段
+- 主 Agent 的 TurnLoop 调用 TeamRunner 而不只是 AgentRuntime
+- Team 执行完毕后结果回传主 Agent 作为 tool result
+
+---
+
+## Idea 6: 并发多个 Team
+
+### 问题
+Idea 5 只能一次 dispatch 一个 Team。但现实中用户可能同时要处理多件事：
+
+```
+用户："帮我做三件事：1. 写博客 2. 审查代码 3. 做市场调研"
+  → 主 Agent 拆解成 3 个独立任务
+  → 并发 dispatch 3 个 Team：blog_team / code_review_team / research_team
+  → 3 个 Team 同时执行
+  → 全部完成后主 Agent 汇总
+```
+
+### 设计
+
+主 Agent 在一轮内可以发起多个 dispatch（并发）：
+
+```json
+[
+  {"name": "dispatch", "arguments": {"team": "blog_team", "input": "写 AI 安全博客", "wait": true}},
+  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 auth.go", "wait": true}},
+  {"name": "dispatch", "arguments": {"team": "research_team", "input": "市场调研竞品", "wait": true}}
+]
+```
+
+三个 Team 并发执行，主 Agent 等待全部完成后汇总。
+
+### 并发层次
+
+```
+主 Agent
+  ├── Team A (blog_team)        ─┐
+  │   ├── Agent: researcher       │ Team 内部并发
+  │   ├── Agent: planner          │
+  │   └── Agent: writer          ─┘
+  ├── Team B (code_review_team)  ─┐
+  │   ├── Agent: security          │ Team 间并发
+  │   └── Agent: performance      ─┘
+  └── Team C (research_team)     ─┐
+      └── Agent: analyst          ─┘
+```
+
+**三层并发**：
+1. **Team 间并发**：主 Agent 同时 dispatch 多个 Team
+2. **Team 内并发**：Team 的 parallel stage 内多个 Agent 同时执行
+3. **Agent 复制并发**（Idea 2）：单个 Agent spawn 多个副本
+
+### 并发控制
+
+```go
+type ConcurrencyConfig struct {
+    MaxConcurrentTeams   int  // 主 Agent 同时调度的 Team 数上限
+    MaxConcurrentAgents  int  // 全局 Agent 并发上限
+    MaxSpawnPerAgent     int  // 单个 Agent 最多 spawn 副本数
+}
+```
+
+| 层级 | 默认上限 | 超限行为 |
+|------|---------|---------|
+| Team 间 | 5 | 排队等待 |
+| Team 内 parallel | 10 | 排队等待 |
+| Agent 复制 | 3 | 拒绝并提示主 Agent |
+
+### 与其他 Idea 的关系
+
+| Idea | 关系 |
+|------|------|
+| Idea 2（模型并发） | Agent 复制是最细粒度的并发，Team 并发是最粗粒度 |
+| Idea 4（主 Agent） | 主 Agent 是并发的发起者 |
+| Idea 5（dispatch Team） | Team 并发是 dispatch Team 的扩展 |
+
+### 优先级
+**中 — 依赖 Idea 4 和 Idea 5**
+
+---
+
 ## 待补充
+
+> 后续新想法继续添加到这里## 待补充
 
 > 后续新想法继续添加到这里
