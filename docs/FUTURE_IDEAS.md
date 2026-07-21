@@ -956,105 +956,75 @@ state_machine:
 
 ---
 
-## 架构决策：主 Agent 独家决策，Team/Agent 是纯执行单元
+## 架构决策（修正版）：分层调度是合理的，Team 自己的主 A 有内部调度权
 
-> 此决策**简化并覆盖** Idea 7、Idea 8 中"Team 入口 Agent 自主决策"的部分。
+> 本节修正上一版"主 Agent 独家决策"的过度简化。分层调度（Idea 7/8 的核心思想）是对的，重新明确分层边界。
 
-### 决策
+### 修正
 
-**所有调度/分发决策只由主 Agent 做。Team 和 Agent 不做决策，只处理任务。**
-
-否定的设计：
-- ❌ Idea 8 的"递归 Coordinator"——Team 入口 Agent 不再是"缩小版主 Agent"
-- ❌ Idea 7 的"入口 Agent 决定是否需要 HITL"——HITL 审批策略统一由主 Agent 管理
-- ❌ Team 内部"入口 Agent 自主决定 parallel/sequential"——Team 内部协作方式仍由**配置**决定（parallel/sequential 写在 YAML），不是 LLM 动态决策
-
-### 简化后的架构
+**每一层都有自己的"主 A"，但每个主 A 只管自己的作用域：**
 
 ```
-主 Agent（唯一决策者）
-  ├── 决定 dispatch 哪些 Team（Team 间并发）
-  ├── 决定同一 Team 要不要启动多个实例（Team 内多实例并发）
-  ├── 决定 HITL 审批策略（全局统一）
-  └── 汇总所有 Team 结果，交付给用户
-
-Team（纯执行单元，配置驱动）
-  ├── 内部 parallel/sequential 完全由 YAML 配置决定（现有设计不变）
-  ├── 不做任何调度决策
-  └── 执行完毕，把结果原样返回给主 Agent
-
-Agent（纯执行单元）
-  ├── 只处理分配给自己的任务
-  └── 不能 dispatch 别的 Agent 或 Team
+全局主 A（对话入口，用户直接聊天的对象）
+  ↓ 决定 dispatch 哪些 Team、并发几次
+Team 自己的主 A（Team 内部的调度者，用户/HITL 也可以直接找它聊天）
+  ↓ 决定 Team 内部的 Agent 怎么协作
+Worker Agent（纯执行单元，处理具体任务）
 ```
 
-### 三层并发的决策归属（更新）
+**关键澄清**：
+1. Team 自己的主 A（原 Idea 7/8 里叫"入口 Agent"）**确实有调度权**——它决定 Team 内部怎么分工、要不要并发、结果怎么汇总。这不是"纯执行单元"。
+2. 每一层的主 A 都可以被**外部直接对话**（Idea 1 的自由聊天 + 本次讨论的 HITL）。用户可以跳过全局主 A，直接找某个 Team 的主 A 聊天、审批。
+3. 这不是"取消分层"，而是**分层但职责边界清晰**：Team 主 A 的调度范围只在自己 Team 内部，不能跨 Team 调度别的 Team。
 
-| 层级 | 决策者（更新前 Idea 6） | 决策者（更新后） |
-|------|----------------------|-----------------|
-| Team 间并发 | 主 Agent | **主 Agent**（不变） |
-| Team 内多实例并发 | Team 入口 Agent | **主 Agent**（主 Agent 决定要不要多实例 dispatch 同一个 Team） |
-| Team 内 Agent 并发（parallel/sequential） | Team 入口 Agent 动态决定 | **YAML 配置**（静态，不由 LLM 决定） |
+### HITL 分层的正确理解
 
-### 为什么简化
-
-1. **架构更简单**：只有一个决策点，不需要 Idea 8 的递归结构和两套 Coordinator 代码
-2. **可预测性更高**：Team 内部执行方式在配置里能直接看到，不依赖 LLM 临时决策
-3. **调试更容易**：出问题只需要看主 Agent 的决策链路，不需要追踪每个 Team 内部的动态决策
-4. **HITL 更统一**：不需要 Idea 7 的分层审批，所有审批策略在主 Agent 一处管理
-5. **Team 复用性更好**：Team 配置是确定性的协作方案，行为可预期，适合被主 Agent 反复调用
-
-### Team 内多实例并发怎么实现
-
-主 Agent 决定"这个 Team 要跑几次"，然后并发 dispatch 同一个 Team 多次：
-
-```json
-// 主 Agent 识别到 5 个文件需要审查，同一个 Team 并发 5 次
-[
-  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 auth.go"}},
-  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 model.go"}},
-  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 handler.go"}},
-  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 storage.go"}},
-  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 config.go"}}
-]
-```
-
-不需要 Team 内部有"入口 Agent"去理解"我要跑几个实例"——**主 Agent 在最外层直接决定并发次数**。Team 本身对此无感知，只是被调用了 5 次。
-
-### HITL 统一管理
+之前说"HITL 统一由全局主 A 管理"是错的。正确的是：
 
 ```
-用户
-  ↓ 审批
-主 Agent（唯一 HITL 决策点）
-  ↓ 授权后执行
-Team → Agent（发起审批请求，但审批策略由主 Agent 统一配置）
+用户 ←── 可以直接对话 ──→ 全局主 A
+用户 ←── 可以直接对话 ──→ Team 的主 A（跳过全局主 A，直接审批/沟通）
+Team 的主 A ←── 内部审批 ──→ Worker Agent
 ```
 
-主 Agent 配置里定义全局审批策略：
+- **Worker Agent** 发起的 HITL 请求，先到自己 Team 的主 A
+- Team 主 A 可以自己按策略批准，也可以**转发给用户或全局主 A**
+- 用户可以**直接找 Team 的主 A** 聊天/审批，不需要总是经过全局主 A 中转
 
-```yaml
-name: master
-hitl_policy:
-  auto_approve:
-    - Read
-    - Grep
-    - Glob
-  require_approval:
-    - Write
-    - Delete
-  deny:
-    - "rm -rf"
-```
+这才是合理的分层：**决策权分层下放，但每一层都保留可被外部直达的接口**。
 
-Team/Agent 内部触发的 HITL 请求全部上浮到主 Agent，按这个策略统一处理，不需要 Team 自己判断。
+### Team 主 A 的调度权范围
 
-### Idea 7/8 保留价值
+Team 主 A（原"入口 Agent"）可以决定的：
+- ✅ 内部 Worker Agent 之间 parallel 还是 sequential（可以是配置默认值，Team 主 A 可以在运行时调整，比如识别到 5 个独立文件就转成 5 路并发）
+- ✅ 内部 HITL 审批策略（比如"这个 Team 内部的 Grep 操作不需要用户批准"）
+- ✅ 结果怎么汇总后返回给上层（全局主 A 或直接返回用户）
 
-Idea 7、8 中仍然有效的部分：
-- Team 需要有一个**返回结果的出口**（不一定叫"入口 Agent"，可以是 sequential 阶段最后一个 Agent，或者 TeamRunner 自动汇总）
-- 推理链路（Idea 9）依然有效，用于记录主 Agent 和各 Team 的执行历史，方便调试和跨 Team 查询
+Team 主 A **不能**决定的：
+- ❌ dispatch 别的 Team（跨 Team 调度是全局主 A 的职责）
+- ❌ 覆盖全局主 A 的顶层策略（比如全局强制"删除操作必须用户批准"，Team 主 A 不能自己豁免）
 
-Idea 7/8 中不再有效的部分：
-- "入口 Agent" 不再有决策权，只是配置里的一个普通 Agent（比如 sequential 阶段的汇总者）
-- 不存在"递归主 Agent"，只有一个全局主 Agent
+### 修正后的三层并发决策归属
+
+| 层级 | 决策者 | 说明 |
+|------|--------|------|
+| Team 间并发 | 全局主 A | 决定要 dispatch 哪些 Team，并发跑 |
+| Team 内多实例并发 | 全局主 A 或 Team 主 A | 全局主 A 可以直接并发 dispatch 同一 Team 多次；也可以只 dispatch 一次，让 **Team 主 A 自己决定内部要不要拆成多个实例处理**（比如一次性把 5 个文件路径都传给 Team，Team 主 A 自己决定并发审查） |
+| Team 内 Agent 并发 | Team 主 A | Team 主 A 动态决定内部 parallel/sequential，不是纯静态配置 |
+
+**两种模式都支持，看场景选择**：
+- 全局主 A 知道要拆几份 → 直接并发 dispatch N 次（Idea 6 原方案）
+- 全局主 A 不关心怎么拆，只给 Team 一个大任务 → Team 主 A 自己拆分调度（Idea 7/8 原方案）
+
+### 最终结论
+
+Idea 7、Idea 8 的**核心思想是对的**：
+- ✅ 每个 Team 有自己的主 A（决策者），不是纯执行单元
+- ✅ 递归结构成立：全局主 A 和 Team 主 A 用同一套 Coordinator 代码，只是作用域不同
+- ✅ HITL 分层：每一层都能处理自己范围内的审批，也能上报
+
+需要补充的澄清：
+- 🔧 每一层的主 A 都要支持被**外部直接对话**（不是只能通过上层中转）
+- 🔧 决策权边界清晰：Team 主 A 管自己内部，不能跨 Team
+
+之前"主 Agent 独家决策"的说法**已废弃**，以本节为准。
