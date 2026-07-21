@@ -953,3 +953,108 @@ state_machine:
 ## 待补充
 
 > 后续新想法继续添加到这里
+
+---
+
+## 架构决策：主 Agent 独家决策，Team/Agent 是纯执行单元
+
+> 此决策**简化并覆盖** Idea 7、Idea 8 中"Team 入口 Agent 自主决策"的部分。
+
+### 决策
+
+**所有调度/分发决策只由主 Agent 做。Team 和 Agent 不做决策，只处理任务。**
+
+否定的设计：
+- ❌ Idea 8 的"递归 Coordinator"——Team 入口 Agent 不再是"缩小版主 Agent"
+- ❌ Idea 7 的"入口 Agent 决定是否需要 HITL"——HITL 审批策略统一由主 Agent 管理
+- ❌ Team 内部"入口 Agent 自主决定 parallel/sequential"——Team 内部协作方式仍由**配置**决定（parallel/sequential 写在 YAML），不是 LLM 动态决策
+
+### 简化后的架构
+
+```
+主 Agent（唯一决策者）
+  ├── 决定 dispatch 哪些 Team（Team 间并发）
+  ├── 决定同一 Team 要不要启动多个实例（Team 内多实例并发）
+  ├── 决定 HITL 审批策略（全局统一）
+  └── 汇总所有 Team 结果，交付给用户
+
+Team（纯执行单元，配置驱动）
+  ├── 内部 parallel/sequential 完全由 YAML 配置决定（现有设计不变）
+  ├── 不做任何调度决策
+  └── 执行完毕，把结果原样返回给主 Agent
+
+Agent（纯执行单元）
+  ├── 只处理分配给自己的任务
+  └── 不能 dispatch 别的 Agent 或 Team
+```
+
+### 三层并发的决策归属（更新）
+
+| 层级 | 决策者（更新前 Idea 6） | 决策者（更新后） |
+|------|----------------------|-----------------|
+| Team 间并发 | 主 Agent | **主 Agent**（不变） |
+| Team 内多实例并发 | Team 入口 Agent | **主 Agent**（主 Agent 决定要不要多实例 dispatch 同一个 Team） |
+| Team 内 Agent 并发（parallel/sequential） | Team 入口 Agent 动态决定 | **YAML 配置**（静态，不由 LLM 决定） |
+
+### 为什么简化
+
+1. **架构更简单**：只有一个决策点，不需要 Idea 8 的递归结构和两套 Coordinator 代码
+2. **可预测性更高**：Team 内部执行方式在配置里能直接看到，不依赖 LLM 临时决策
+3. **调试更容易**：出问题只需要看主 Agent 的决策链路，不需要追踪每个 Team 内部的动态决策
+4. **HITL 更统一**：不需要 Idea 7 的分层审批，所有审批策略在主 Agent 一处管理
+5. **Team 复用性更好**：Team 配置是确定性的协作方案，行为可预期，适合被主 Agent 反复调用
+
+### Team 内多实例并发怎么实现
+
+主 Agent 决定"这个 Team 要跑几次"，然后并发 dispatch 同一个 Team 多次：
+
+```json
+// 主 Agent 识别到 5 个文件需要审查，同一个 Team 并发 5 次
+[
+  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 auth.go"}},
+  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 model.go"}},
+  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 handler.go"}},
+  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 storage.go"}},
+  {"name": "dispatch", "arguments": {"team": "code_review_team", "input": "审查 config.go"}}
+]
+```
+
+不需要 Team 内部有"入口 Agent"去理解"我要跑几个实例"——**主 Agent 在最外层直接决定并发次数**。Team 本身对此无感知，只是被调用了 5 次。
+
+### HITL 统一管理
+
+```
+用户
+  ↓ 审批
+主 Agent（唯一 HITL 决策点）
+  ↓ 授权后执行
+Team → Agent（发起审批请求，但审批策略由主 Agent 统一配置）
+```
+
+主 Agent 配置里定义全局审批策略：
+
+```yaml
+name: master
+hitl_policy:
+  auto_approve:
+    - Read
+    - Grep
+    - Glob
+  require_approval:
+    - Write
+    - Delete
+  deny:
+    - "rm -rf"
+```
+
+Team/Agent 内部触发的 HITL 请求全部上浮到主 Agent，按这个策略统一处理，不需要 Team 自己判断。
+
+### Idea 7/8 保留价值
+
+Idea 7、8 中仍然有效的部分：
+- Team 需要有一个**返回结果的出口**（不一定叫"入口 Agent"，可以是 sequential 阶段最后一个 Agent，或者 TeamRunner 自动汇总）
+- 推理链路（Idea 9）依然有效，用于记录主 Agent 和各 Team 的执行历史，方便调试和跨 Team 查询
+
+Idea 7/8 中不再有效的部分：
+- "入口 Agent" 不再有决策权，只是配置里的一个普通 Agent（比如 sequential 阶段的汇总者）
+- 不存在"递归主 Agent"，只有一个全局主 Agent
