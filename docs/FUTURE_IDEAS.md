@@ -197,6 +197,179 @@ Week 5-8:  Idea 3 Agent 测试（可并行） ← 质量基础设施
 
 ---
 
+## Idea 4: 主 Agent 驱动模式（而非纯流程编排）
+
+### 问题
+当前 Heron 从 Flow 编排起步——用户预定义 Stage → Team → Agent 的固定管线。但模型越来越强（Claude Sonnet 4、GPT-4o、DeepSeek V4），纯编排模式过于僵化：
+
+- 用户要写 YAML 定义每个 Stage 怎么走
+- Agent 无法根据任务复杂度自己决定调用谁、怎么协作
+- 真实场景中，"做什么"应该由模型决定，而不是配置文件写死
+
+Claude Code、Codex CLI 的成功证明：**主 Agent 自主决策 + 按需调度子 Agent** 才是正确方向。
+
+### 核心设计
+
+```
+用户输入 → 主 Agent（秘书/分发者）
+              │
+              ├── 自己处理（简单问题直接回答）
+              ├── 调用子 Agent A（"我需要调研，交给 researcher"）
+              ├── 调用子 Agent B（"需要写代码，交给 coder"）
+              ├── 并发调用多个子 Agent（Idea 2 的 spawn 能力）
+              └── 汇总子 Agent 结果，返回给用户
+```
+
+**主 Agent 的角色**：
+- **秘书**：理解用户意图，决定自己处理还是分发
+- **分发者**：把任务拆解，调度合适的子 Agent
+- **汇总者**：收集子 Agent 结果，综合后返回
+- **决策者**：根据子 Agent 的 signal 决定下一步
+
+### 与现有 Flow 的关系
+
+| 模式 | 触发方式 | 适用场景 |
+|------|---------|---------|
+| **主 Agent 模式**（新） | `heron` 不带 `--flow` | 日常对话、探索性任务、复杂决策 |
+| **Flow 编排模式**（现有） | `heron --flow xxx.yml` | 固定流程、CI/CD、批处理 |
+
+两种模式共存，不互斥。主 Agent 模式是默认入口，Flow 是高级选项。
+
+### 架构影响
+
+| 组件 | 改动 |
+|------|------|
+| 主 Agent | 新增 `master` agent 配置，有特殊的 `dispatch` 工具 |
+| TurnLoop | 主 Agent 的 loop 需要支持"调用子 Agent"作为一种特殊 tool call |
+| 子 Agent 调度 | 类似 Idea 2 的 spawn，但由主 Agent 主动发起 |
+| 无 Flow 时的执行 | main.go 默认进入主 Agent 模式，不经过 FlowEngine |
+| 上下文管理 | 主 Agent 持有全局上下文，子 Agent 拿到的是主 Agent 分发的片段 |
+
+### 关键接口
+
+```go
+// 主 Agent 的 dispatch 工具
+type DispatchTool struct {
+    agents map[string]types.AgentConfig  // 可调度的子 Agent
+}
+
+// 主 Agent 调用子 Agent 时的参数
+type DispatchParams struct {
+    AgentName string  // 要调用的子 Agent 名
+    Input     string  // 传给子 Agent 的任务描述
+    Wait      bool    // true=同步等待结果，false=异步 fire-and-forget
+}
+
+// 主 Agent 的 TurnLoop 扩展
+type MasterTurnLoop struct {
+    agentRuntime AgentRuntime
+    subAgents    map[string]types.AgentConfig
+    results      map[string]*types.AgentResult  // 异步结果收集
+}
+
+func (l *MasterTurnLoop) Run(ctx context.Context, input string) (*AgentResult, error) {
+    // 1. 主 Agent LLM 调用
+    // 2. 如果返回 dispatch tool call → 启动子 Agent
+    // 3. 收集子 Agent 结果，喂回主 Agent
+    // 4. 主 Agent 决定：继续 dispatch / 返回最终答案
+}
+```
+
+### 主 Agent 配置
+
+```yaml
+---
+name: master
+persona:
+  role: "首席助手"
+  goal: "理解用户意图，自主决策处理方式，必要时调度专家 Agent"
+  backstory: "你是用户的首席助手，负责理解需求、分配任务、汇总结果"
+model:
+  model: ${LLM_MODEL:-deepseek-v4-pro}
+  temperature: 0.5
+  max_tokens: 4096
+tools:
+  builtin:
+    - Read
+    - Write
+    - Grep
+    - Glob
+    - TodoWrite
+    - TodoRead
+  custom:
+    - dispatch    # 特殊工具：调度子 Agent
+loop:
+  max_rounds: 20  # 主 Agent 需要更多轮次
+  tool_mode: sequential
+  timeout: 600s
+handoffs:
+  - researcher
+  - coder
+  - reviewer
+  - writer
+---
+
+你是用户的首席助手。当用户提出问题时：
+
+1. **简单问题**：自己直接回答（知识问答、简单计算、翻译等）
+2. **需要调研**：dispatch 给 researcher，等待结果后汇总
+3. **需要写代码**：dispatch 给 coder，审查后返回
+4. **需要审查**：dispatch 给 reviewer，根据反馈修改
+5. **复杂任务**：拆解成多个子任务，并发 dispatch 给多个子 Agent
+
+决策原则：
+- 能自己做的不要分发
+- 分发时给出清晰的任务描述
+- 汇总时保持连贯性，不要简单拼接
+```
+
+### dispatch 工具
+
+主 Agent 通过 `dispatch` 工具调用子 Agent，就像调用普通工具一样：
+
+```json
+{
+  "name": "dispatch",
+  "arguments": {
+    "agent": "researcher",
+    "input": "调研 AI Agent 安全最佳实践",
+    "wait": true
+  }
+}
+```
+
+主 Agent 可以在一轮内多次 dispatch（串行或并发）：
+
+```json
+// 并发 dispatch
+[
+  {"name": "dispatch", "arguments": {"agent": "researcher", "input": "调研安全", "wait": true}},
+  {"name": "dispatch", "arguments": {"agent": "researcher", "input": "调研性能", "wait": true}}
+]
+```
+
+### 与其他 Idea 的关系
+
+| Idea | 关系 |
+|------|------|
+| Idea 1（自由聊天） | 主 Agent 模式本身就是自由聊天的核心——用户和主 Agent 对话 |
+| Idea 2（模型并发） | 主 Agent 的 dispatch 天然支持并发——一次 dispatch 多个子 Agent |
+| Idea 3（Agent 测试） | 主 Agent 模式下更容易测试——给定输入，验证主 Agent 的分发决策 |
+
+### 优先级
+**最高 — 应该是 Idea 1-3 的前置**
+
+主 Agent 模式改变的是用户入口体验：从"写 YAML 编排"变成"直接对话"。这是和 Claude Code 对标的核心能力。建议调整实施顺序：
+
+```
+Week 1-2:  Idea 4 主 Agent 模式         ← 默认入口，最高优先
+Week 3-4:  Idea 1 自由聊天 + HITL       ← 基于主 Agent 扩展
+Week 5-6:  Idea 2 模型并发              ← 主 Agent 的 dispatch 并发
+Week 7-8:  Idea 3 Agent 测试            ← 质量保障
+```
+
+---
+
 ## 待补充
 
 > 后续新想法继续添加到这里
