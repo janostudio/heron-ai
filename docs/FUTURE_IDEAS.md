@@ -1028,3 +1028,159 @@ Idea 7、Idea 8 的**核心思想是对的**：
 - 🔧 决策权边界清晰：Team 主 A 管自己内部，不能跨 Team
 
 之前"主 Agent 独家决策"的说法**已废弃**，以本节为准。
+
+---
+
+## Idea 11: 主 Agent 内置化——用户只需配置 Flow/Team/Agent
+
+### 问题
+
+Idea 4 提出主 Agent 模式，Idea 10 提出状态机，但一个关键问题没回答：**主 Agent 需要用户配置吗？**
+
+如果主 Agent 是用户配置的，那和普通 Agent 没区别——用户还是得写 YAML。这没有解决"零配置开箱即用"的问题。
+
+### 设计
+
+**主 Agent 是引擎内置的运行时组件，用户不需要配置它。**
+
+```
+用户视角（只需配置这些）：
+  Flow（可选，高级用法）
+  Team（核心配置，用户定义"怎么协作"）
+  Agent（核心配置，用户定义"谁能干活"）
+
+引擎内部（自动创建，用户无感知）：
+  全局主 Agent（内置调度器）
+    ↓ 自动管理
+  Team 自己的主 Agent（内置调度器，每个 Team 一个）
+    ↓ 自动管理
+  Worker Agent（用户配置的，处理具体任务）
+```
+
+**主 Agent 的职责**：
+1. **接收用户输入**——对话入口
+2. **理解意图**——调用 LLM 分析用户要什么
+3. **调度 Team**——dispatch 到合适的 Team
+4. **接收 Team 结果**——每个 Team 执行完毕，结果汇总到主 Agent
+5. **ReAct 决策**——评估结果质量，决定：
+   - 结果满意 → 直接交付给用户
+   - 结果不满意 → 再 dispatch 一轮（换 Team、重试、补充）
+   - 需要澄清 → 向用户提问
+6. **交付**——把最终结果给用户
+
+### 主 Agent 是固定逻辑，不是用户配置的 Agent
+
+```go
+// 引擎内置，不需要用户写 YAML
+type BuiltinMasterAgent struct {
+    state    MasterState          // 状态机（Idea 10）
+    teams    map[string]TeamConfig // 用户配置的 Team
+    llm      ModelProvider         // 使用默认模型
+    chain    *ReasoningChain      // 推理链路（Idea 9）
+    history  []Message             // 对话历史
+}
+
+// 固定的状态机，用户不需要配置
+func (m *BuiltinMasterAgent) Run(ctx context.Context, input string) (string, error) {
+    switch m.state {
+    case StateUnderstand:
+        // 调用 LLM 理解意图，匹配 Team
+        intent := m.llm.Analyze(input, m.teams)
+        m.planDispatch(intent)
+    case StateDispatch:
+        // 执行 dispatch
+        results := m.dispatchTeams()
+        m.state = StateReAct
+    case StateReAct:
+        // 评估结果，决定交付还是再调度
+        if m.isSatisfied(results) {
+            return m.deliver(results), nil
+        }
+        m.state = StateDispatch // 再调度
+    }
+}
+```
+
+### 用户配置的只有 Team 和 Agent
+
+用户视角的配置结构不变：
+
+```
+.agents/
+├── models.json         # 模型配置
+├── settings.json       # 引擎设置
+├── teams/              # 用户定义的 Team
+│   ├── blog_team.yml
+│   └── code_review_team.yml
+└── agents/             # 用户定义的 Agent
+    ├── researcher/
+    ├── writer/
+    └── reviewer/
+```
+
+**不需要** `flows/`（除非高级用户要用固定管线）和 `master_agent.md`（引擎内置）。
+
+### Team 自己的主 Agent 同理内置
+
+每个 Team 内部，引擎自动创建一个 Team 主 Agent：
+
+```yaml
+# 用户配置的 Team（不需要指定 entry）
+name: blog_team
+stages:
+  - process: parallel
+    tasks:
+      - name: research
+        agent: researcher
+      - name: plan
+        agent: planner
+  - process: sequential
+    tasks:
+      - name: write
+        agent: writer
+```
+
+引擎内部自动处理：
+1. 为 blog_team 创建一个内置 Team 主 Agent
+2. Team 主 Agent 接收全局主 Agent 的 dispatch
+3. Team 主 Agent 按 stages 配置调度 Worker Agent
+4. 调度逻辑是固定的（状态机），不依赖 LLM 动态决策
+5. 结果汇总后返回全局主 Agent
+
+### ReAct 循环：全局主 Agent 的核心逻辑
+
+```
+用户输入
+  ↓
+全局主 Agent 理解意图 → dispatch Team
+  ↓
+Team 执行完毕 → 结果返回全局主 Agent
+  ↓
+全局主 Agent ReAct 判断：
+  ├── 满意 → 交付用户
+  ├── 不满意 → 重新 dispatch（可能换 Team、补充信息）
+  └── 需要澄清 → 问用户
+```
+
+**ReAct 不是无限循环**——有最大轮次限制（`max_react_rounds: 3`），防止死循环。
+
+### 和现有设计的关系
+
+| 现有组件 | 变化 |
+|---------|------|
+| Flow | 变为可选（高级用法），默认不需要 |
+| Team | 不变，用户继续配置 |
+| Agent | 不变，用户继续配置 |
+| 主 Agent | **新组件，引擎内置，用户无感知** |
+| Team 主 Agent | **新组件，引擎内置，每个 Team 自动创建一个** |
+
+### 配置量对比
+
+| 模式 | 用户需要配置 |
+|------|-----------|
+| 当前 | Flow + Team + Agent（3 层） |
+| 新设计 | Team + Agent（2 层） |
+| 零配置 | 无（引擎内置默认 Team + Agent） |
+
+### 优先级
+**最高 — 直接决定用户体验是"写配置"还是"直接对话"**
