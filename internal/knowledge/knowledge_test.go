@@ -184,7 +184,7 @@ func TestKnowledgeExtractor_ExtractHighImportance(t *testing.T) {
 	idx := NewKnowledgeIndex()
 	extractor := NewKnowledgeExtractor(idx)
 
-	memories := []types.MemoryEntry{
+	memories := []types.MemoryObservation{
 		{
 			Content:    "The API rate limit is 100 requests per minute",
 			Importance: "high",
@@ -212,7 +212,7 @@ func TestKnowledgeExtractor_ExtractSkipsLowImportance(t *testing.T) {
 	idx := NewKnowledgeIndex()
 	extractor := NewKnowledgeExtractor(idx)
 
-	memories := []types.MemoryEntry{
+	memories := []types.MemoryObservation{
 		{
 			Content:    "low importance memory",
 			Importance: "low",
@@ -240,7 +240,7 @@ func TestKnowledgeExtractor_ExtractAddsToIndex(t *testing.T) {
 	idx := NewKnowledgeIndex()
 	extractor := NewKnowledgeExtractor(idx)
 
-	memories := []types.MemoryEntry{
+	memories := []types.MemoryObservation{
 		{
 			Content:    "Critical security vulnerability found",
 			Importance: "critical",

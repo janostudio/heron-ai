@@ -1,26 +1,39 @@
-name: story_team
-description: "故事创作团队：主角 + 反派 + 旁白"
+id: story_team
+goal: 推进当前小说剧情。
 
-stages:
-  - process: parallel
-    tasks:
-      - name: hero_act
-        agent: hero
-        description: "根据当前剧情，描述主角的行动和对话：{{.Plot}}"
-        expected_output: "主角的行动和对话"
-        output_format: text
+members:
+  hero_act:
+    type: subagent
+    agent: hero
+    responsibility: 根据当前剧情描述主角的行动和对话。
+    inputs:
+      team_user_message: true
+    output:
+      record: HeroAction
 
-      - name: villain_act
-        agent: villain
-        description: "根据当前剧情，描述反派的行动和对话：{{.Plot}}"
-        expected_output: "反派的行动和对话"
-        output_format: text
+  villain_act:
+    type: subagent
+    agent: villain
+    responsibility: 根据当前剧情描述反派的行动和对话。
+    inputs:
+      team_user_message: true
+    output:
+      record: VillainAction
 
-  - process: sequential
-    tasks:
-      - name: narrate
-        agent: narrator
-        description: "综合主角和反派的行动，推进剧情"
-        expected_output: "旁白叙述"
-        context: [hero_act, villain_act]
-        output_format: text
+  narrate:
+    type: subagent
+    agent: narrator
+    depends_on: [hero_act, villain_act]
+    responsibility: 综合主角和反派的行动，推进剧情并输出旁白。
+    inputs:
+      - from: hero_act
+        record: HeroAction
+      - from: villain_act
+        record: VillainAction
+    output:
+      record: StoryTurn
+
+output:
+  from: narrate
+  record: StoryTurn
+  scope: flow

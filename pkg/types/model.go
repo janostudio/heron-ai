@@ -12,8 +12,8 @@ type ModelProvider interface {
 type Message struct {
 	ID         string     `json:"id,omitempty"`
 	RoundNum   int        `json:"round_num,omitempty"`
-	AgentName  string     `json:"agent_name,omitempty"`
-	TeamName   string     `json:"team_name,omitempty"`
+	MemberID   string     `json:"member_id,omitempty"`
+	TeamID     string     `json:"team_id,omitempty"`
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`

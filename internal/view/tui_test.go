@@ -227,8 +227,8 @@ func TestTUIModel_InputHistory(t *testing.T) {
 func TestTUIModel_FlowResult_UpdatesState(t *testing.T) {
 	runner := &mockFlowRunner{
 		result: &FlowResult{
-			Stages: []StageOutput{
-				{StageName: "qa", TeamName: "default", Content: "Hello!"},
+			Teams: []TeamOutput{
+				{TeamID: "default", Reply: "Hello!"},
 			},
 			Usage: types.TokenUsage{
 				PromptTokens:     10,
@@ -660,8 +660,8 @@ func TestGetAvailableCommands(t *testing.T) {
 func TestFullFlow_UserMessage(t *testing.T) {
 	runner := &mockFlowRunner{
 		result: &FlowResult{
-			Stages: []StageOutput{
-				{StageName: "response", TeamName: "default", Content: "Hello, how can I help?"},
+			Teams: []TeamOutput{
+				{TeamID: "default", Reply: "Hello, how can I help?"},
 			},
 			Usage: types.TokenUsage{
 				PromptTokens:     5,
@@ -967,7 +967,7 @@ func TestSelfTest_Messages_AddAllTypes(t *testing.T) {
 	// Add all message types
 	model.addMessage(DisplayMessage{Role: RoleUser, Content: "user msg"})
 	model.addMessage(DisplayMessage{Role: RoleAssistant, Content: "assistant msg"})
-	model.addMessage(DisplayMessage{Role: RoleAgent, AgentName: "agent1", Content: "agent msg"})
+	model.addMessage(DisplayMessage{Role: RoleAgent, MemberID: "agent1", Content: "agent msg"})
 	model.addMessage(DisplayMessage{Role: RoleSystem, Content: "system msg"})
 	model.addMessage(DisplayMessage{Role: RoleUsage, Content: "100 tokens"})
 
@@ -1085,8 +1085,8 @@ func TestSelfTest_Running_InitialState(t *testing.T) {
 func TestSelfTest_Running_Transitions(t *testing.T) {
 	runner := &mockFlowRunner{
 		result: &FlowResult{
-			Stages: []StageOutput{{StageName: "qa", TeamName: "t1", Content: "ok"}},
-			Usage:  types.TokenUsage{TotalTokens: 10},
+			Teams: []TeamOutput{{TeamID: "t1", Reply: "ok"}},
+			Usage: types.TokenUsage{TotalTokens: 10},
 		},
 	}
 	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
@@ -1173,8 +1173,8 @@ func TestSelfTest_Usage_Accumulates(t *testing.T) {
 	// Simulate flow result via flowResultMsg
 	msg := flowResultMsg{
 		result: &FlowResult{
-			Stages: []StageOutput{{StageName: "qa", TeamName: "t1", Content: "ok"}},
-			Usage:  types.TokenUsage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150},
+			Teams: []TeamOutput{{TeamID: "t1", Reply: "ok"}},
+			Usage: types.TokenUsage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150},
 		},
 	}
 
@@ -1189,8 +1189,8 @@ func TestSelfTest_Usage_Accumulates(t *testing.T) {
 	// Second flow accumulates
 	msg2 := flowResultMsg{
 		result: &FlowResult{
-			Stages: []StageOutput{{StageName: "qa", TeamName: "t1", Content: "ok"}},
-			Usage:  types.TokenUsage{PromptTokens: 50, CompletionTokens: 25, TotalTokens: 75},
+			Teams: []TeamOutput{{TeamID: "t1", Reply: "ok"}},
+			Usage: types.TokenUsage{PromptTokens: 50, CompletionTokens: 25, TotalTokens: 75},
 		},
 	}
 
@@ -1208,8 +1208,8 @@ func TestSelfTest_Usage_Accumulates(t *testing.T) {
 func TestSelfTest_FullFlow_UserToAssistant(t *testing.T) {
 	runner := &mockFlowRunner{
 		result: &FlowResult{
-			Stages: []StageOutput{{StageName: "qa", TeamName: "default", Content: "Hello, I'm an AI assistant!"}},
-			Usage:  types.TokenUsage{TotalTokens: 42},
+			Teams: []TeamOutput{{TeamID: "default", Reply: "Hello, I'm an AI assistant!"}},
+			Usage: types.TokenUsage{TotalTokens: 42},
 		},
 	}
 	model := NewTUIModel("test-flow", "gpt-4", 1, 1, runner)
@@ -1230,8 +1230,8 @@ func TestSelfTest_FullFlow_UserToAssistant(t *testing.T) {
 	// Simulate flow completion
 	msg := flowResultMsg{
 		result: &FlowResult{
-			Stages: []StageOutput{{StageName: "qa", TeamName: "default", Content: "Hello!"}},
-			Usage:  types.TokenUsage{TotalTokens: 10},
+			Teams: []TeamOutput{{TeamID: "default", Reply: "Hello!"}},
+			Usage: types.TokenUsage{TotalTokens: 10},
 		},
 	}
 	updated, _ = model.Update(msg)
@@ -1255,8 +1255,8 @@ func TestSelfTest_FullFlow_MultipleRounds(t *testing.T) {
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model.Update(flowResultMsg{
 		result: &FlowResult{
-			Stages: []StageOutput{{StageName: "qa", TeamName: "t1", Content: "answer 1"}},
-			Usage:  types.TokenUsage{TotalTokens: 10},
+			Teams: []TeamOutput{{TeamID: "t1", Reply: "answer 1"}},
+			Usage: types.TokenUsage{TotalTokens: 10},
 		},
 	})
 
@@ -1265,8 +1265,8 @@ func TestSelfTest_FullFlow_MultipleRounds(t *testing.T) {
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model.Update(flowResultMsg{
 		result: &FlowResult{
-			Stages: []StageOutput{{StageName: "qa", TeamName: "t1", Content: "answer 2"}},
-			Usage:  types.TokenUsage{TotalTokens: 20},
+			Teams: []TeamOutput{{TeamID: "t1", Reply: "answer 2"}},
+			Usage: types.TokenUsage{TotalTokens: 20},
 		},
 	})
 
@@ -1323,10 +1323,10 @@ func TestSelfTest_FullFlow_MultiAgent(t *testing.T) {
 	// Simulate multi-agent result with 3 stages
 	model.Update(flowResultMsg{
 		result: &FlowResult{
-			Stages: []StageOutput{
-				{StageName: "security", TeamName: "review_team", Content: "security review"},
-				{StageName: "performance", TeamName: "review_team", Content: "performance review"},
-				{StageName: "aggregate", TeamName: "review_team", Content: "final report"},
+			Teams: []TeamOutput{
+				{TeamID: "review_team/security", Reply: "security review"},
+				{TeamID: "review_team/performance", Reply: "performance review"},
+				{TeamID: "review_team", Reply: "final report"},
 			},
 			Usage: types.TokenUsage{TotalTokens: 100},
 		},

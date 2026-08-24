@@ -7,52 +7,20 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-func TestConsolidationAgent_EmptyResults(t *testing.T) {
-	agent := NewConsolidationAgent()
-	result := agent.Consolidate(context.Background(), nil)
-	if result != "" {
-		t.Error("expected empty string for nil results")
+func TestRecordConsolidator_ConsolidatesSharedRecords(t *testing.T) {
+	consolidator := NewRecordConsolidator()
+	result := consolidator.Consolidate(context.Background(), []types.SharedRecord{
+		{Name: "Diagnosis", Summary: "Root cause found"},
+		{Name: "Verification", Summary: "Tests passed"},
+	})
+	if !contains(result, "Root cause found") || !contains(result, "Tests passed") {
+		t.Fatalf("expected both record summaries, got %q", result)
 	}
 }
 
-func TestConsolidationAgent_SingleResult(t *testing.T) {
-	agent := NewConsolidationAgent()
-	results := []types.AgentResult{{Raw: "Hello"}}
-	result := agent.Consolidate(context.Background(), results)
-	if result != "Hello" {
-		t.Errorf("expected 'Hello', got %q", result)
-	}
-}
-
-func TestConsolidationAgent_MultipleResults(t *testing.T) {
-	agent := NewConsolidationAgent()
-	results := []types.AgentResult{
-		{Raw: "First"},
-		{Raw: "Second"},
-	}
-	result := agent.Consolidate(context.Background(), results)
-	if !contains(result, "First") || !contains(result, "Second") {
-		t.Error("expected consolidated result to contain both inputs")
-	}
-}
-
-func TestExtractSignal_Priority(t *testing.T) {
-	agent := NewConsolidationAgent()
-	results := []types.AgentResult{
-		{Signal: types.SignalContinue},
-		{Signal: types.SignalGoalAchieved},
-	}
-	signal := agent.ExtractSignal(results)
-	if signal != types.SignalGoalAchieved {
-		t.Errorf("expected goal_achieved, got %s", signal)
-	}
-}
-
-func TestExtractSignal_Empty(t *testing.T) {
-	agent := NewConsolidationAgent()
-	signal := agent.ExtractSignal(nil)
-	if signal != types.SignalContinue {
-		t.Errorf("expected continue, got %s", signal)
+func TestRecordConsolidator_Empty(t *testing.T) {
+	if result := NewRecordConsolidator().Consolidate(context.Background(), nil); result != "" {
+		t.Fatalf("expected empty result, got %q", result)
 	}
 }
 

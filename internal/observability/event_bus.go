@@ -76,7 +76,7 @@ type BaseEvent struct {
 	timestamp time.Time
 }
 
-func (e BaseEvent) Type() string        { return e.eventType }
+func (e BaseEvent) Type() string         { return e.eventType }
 func (e BaseEvent) Timestamp() time.Time { return e.timestamp }
 
 func NewBaseEvent(eventType string) BaseEvent {
@@ -86,52 +86,55 @@ func NewBaseEvent(eventType string) BaseEvent {
 	}
 }
 
-// Common event types
-type RunStartedEvent struct {
+// Common event types. These are optional observability projections; the
+// authoritative persisted envelope is types.SessionEvent.
+type FlowSessionStartedEvent struct {
 	BaseEvent
-	RunID    string
-	FlowName string
+	FlowSessionID string
+	FlowID        string
 }
 
-type AgentStartedEvent struct {
+type MemberStartedEvent struct {
 	BaseEvent
-	RunID     string
-	RoundNum  int
-	TeamName  string
-	AgentName string
+	FlowSessionID string
+	FlowTurnID    string
+	TeamID        string
+	TeamTurnID    string
+	MemberID      string
+	MemberType    string
 }
 
-type LLMCallCompletedEvent struct {
+type ModelCallCompletedEvent struct {
 	BaseEvent
-	RunID             string
-	TeamName          string
-	AgentName         string
-	Model             string
-	PromptTokens      int
-	CompletionTokens  int
-	Duration          time.Duration
+	FlowSessionID    string
+	TeamID           string
+	MemberID         string
+	Model            string
+	PromptTokens     int
+	CompletionTokens int
+	Duration         time.Duration
 }
 
 type ErrorOccurredEvent struct {
 	BaseEvent
-	RunID      string
-	RoundNum   int
-	TeamName   string
-	AgentName  string
-	Layer      string
-	Module     string
-	ToolName   string
-	ErrorType  string
-	Error      string
-	StackTrace string
-	Context    string
+	FlowSessionID string
+	FlowTurnID    string
+	TeamID        string
+	MemberID      string
+	Layer         string
+	Module        string
+	ToolName      string
+	ErrorType     string
+	Error         string
+	StackTrace    string
+	Context       string
 }
 
 type ContextCompressedEvent struct {
 	BaseEvent
-	RunID        string
-	AgentName    string
-	Layer        string
-	BeforeTokens int
-	AfterTokens  int
+	FlowSessionID string
+	MemberID      string
+	Layer         string
+	BeforeTokens  int
+	AfterTokens   int
 }

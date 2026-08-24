@@ -1,19 +1,18 @@
 package types
 
 type AgentConfig struct {
-	Name        string            `yaml:"name" json:"name"`
-	Persona     PersonaConfig     `yaml:"persona" json:"persona"`
-	Model       ModelConfig       `yaml:"model" json:"model"`
-	Tools       ToolConfig        `yaml:"tools" json:"tools"`
-	Skills      []string          `yaml:"skills" json:"skills"`
-	Knowledge   []string          `yaml:"knowledge" json:"knowledge"`
-	Rules       []string          `yaml:"rules" json:"rules"`
-	Loop        LoopConfig        `yaml:"loop" json:"loop"`
-	Structured  *StructuredOutput `yaml:"structured_output,omitempty" json:"structured_output,omitempty"`
-	HITL        *HITLConfig       `yaml:"hitl,omitempty" json:"hitl,omitempty"`
-	Hooks       []HookConfig      `yaml:"hooks,omitempty" json:"hooks,omitempty"`
-	Handoffs    []string          `yaml:"handoffs,omitempty" json:"handoffs,omitempty"`
-	Body        string            `yaml:"-" json:"body"`
+	Name       string            `yaml:"name" json:"name"`
+	Persona    PersonaConfig     `yaml:"persona" json:"persona"`
+	Model      ModelConfig       `yaml:"model" json:"model"`
+	Tools      ToolConfig        `yaml:"tools" json:"tools"`
+	Skills     []string          `yaml:"skills" json:"skills"`
+	Knowledge  []string          `yaml:"knowledge" json:"knowledge"`
+	Rules      []string          `yaml:"rules" json:"rules"`
+	Loop       LoopConfig        `yaml:"loop" json:"loop"`
+	Structured *StructuredOutput `yaml:"structured_output,omitempty" json:"structured_output,omitempty"`
+	HITL       *HITLConfig       `yaml:"hitl,omitempty" json:"hitl,omitempty"`
+	Hooks      []HookConfig      `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+	Body       string            `yaml:"-" json:"body"`
 }
 
 type PersonaConfig struct {
@@ -38,9 +37,11 @@ type ToolConfig struct {
 }
 
 type LoopConfig struct {
-	MaxRounds int    `yaml:"max_rounds" json:"max_rounds"`
-	ToolMode  string `yaml:"tool_mode" json:"tool_mode"` // sequential | parallel
-	Timeout   string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	MaxRounds        int    `yaml:"max_rounds" json:"max_rounds"`
+	ToolExecution    string `yaml:"tool_execution,omitempty" json:"tool_execution,omitempty"` // sequential | parallel_safe
+	MaxParallelTools int    `yaml:"max_parallel_tools,omitempty" json:"max_parallel_tools,omitempty"`
+	MaxToolCalls     int    `yaml:"max_tool_calls,omitempty" json:"max_tool_calls,omitempty"`
+	Timeout          string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
 type StructuredOutput struct {

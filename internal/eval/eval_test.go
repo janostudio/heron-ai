@@ -6,62 +6,50 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-func TestEvalEngine_SignalEvaluation(t *testing.T) {
-	engine := NewEvalEngine()
-
-	runs := []types.TeamResult{
-		{Signal: types.SignalContinue},
-		{Signal: types.SignalGoalAchieved},
+func TestEngine_EvaluateRoute(t *testing.T) {
+	engine := NewEngine()
+	results := []types.TeamTurnResult{
+		{Next: &types.Route{Action: types.NextProceed}},
+		{Next: &types.Route{Action: types.NextComplete}},
 	}
-	expected := []types.Signal{types.SignalContinue, types.SignalGoalAchieved}
 
-	result := engine.EvaluateSignal(runs, expected)
+	result := engine.EvaluateRoute(results, []types.NextAction{
+		types.NextProceed,
+		types.NextComplete,
+	})
 	if !result.Passed {
-		t.Error("expected pass for matching signals")
+		t.Fatalf("expected route evaluation to pass: %#v", result)
 	}
 }
 
-func TestEvalEngine_SignalEvaluation_Mismatch(t *testing.T) {
-	engine := NewEvalEngine()
-
-	runs := []types.TeamResult{
-		{Signal: types.SignalContinue},
-		{Signal: types.SignalGoalAchieved},
+func TestEngine_EvaluateRouteMismatch(t *testing.T) {
+	engine := NewEngine()
+	results := []types.TeamTurnResult{
+		{Next: &types.Route{Action: types.NextProceed}},
+		{Next: &types.Route{Action: types.NextComplete}},
 	}
-	expected := []types.Signal{types.SignalGoalFailed, types.SignalGoalImpossible}
 
-	result := engine.EvaluateSignal(runs, expected)
+	result := engine.EvaluateRoute(results, []types.NextAction{
+		types.NextFail,
+		types.NextWaitInput,
+	})
 	if result.Passed {
-		t.Error("expected fail for mismatching signals")
+		t.Fatal("expected route evaluation to fail")
 	}
 }
 
-func TestEvalEngine_ToolUsage(t *testing.T) {
-	engine := NewEvalEngine()
-
-	runs := []types.TeamResult{
-		{Error: ""},
-		{Error: ""},
+func TestEngine_EvaluateFailures(t *testing.T) {
+	engine := NewEngine()
+	result := engine.EvaluateFailures([]types.TeamTurnResult{
+		{},
+		{Error: "member failed"},
+		{},
+		{Error: "timeout"},
+	})
+	if result.Details["error_rate"] != 0.5 {
+		t.Fatalf("expected error rate 0.5, got %v", result.Details["error_rate"])
 	}
-
-	result := engine.EvaluateToolUsage(runs)
-	if result.Score != 1.0 {
-		t.Errorf("expected score 1.0, got %f", result.Score)
-	}
-}
-
-func TestEvalEngine_ToolUsage_WithErrors(t *testing.T) {
-	engine := NewEvalEngine()
-
-	runs := []types.TeamResult{
-		{Error: ""},
-		{Error: "some error"},
-		{Error: ""},
-		{Error: "another error"},
-	}
-
-	result := engine.EvaluateToolUsage(runs)
-	if result.Score >= 1.0 {
-		t.Error("expected score < 1.0 with errors")
+	if !result.Passed {
+		t.Fatal("a 50% error rate meets the optional evaluation threshold")
 	}
 }

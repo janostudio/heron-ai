@@ -1,11 +1,16 @@
-name: qa_team
-description: "单 Agent 问答团队"
+id: qa_team
+goal: 回答用户的问题。
 
-stages:
-  - process: sequential
-    tasks:
-      - name: answer
-        agent: assistant
-        description: "回答用户的问题：{{.Input}}"
-        expected_output: "回答内容"
-        output_format: text
+members:
+  answer:
+    type: subagent
+    agent: assistant
+    responsibility: 回答用户的问题。
+    inputs:
+      user_message: true
+    output:
+      record: Answer
+
+output:
+  from: answer
+  record: Answer

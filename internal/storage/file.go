@@ -1,8 +1,6 @@
 package storage
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -114,80 +112,4 @@ func (fs *FileStoreImpl) List(dir string) ([]string, error) {
 		names = append(names, entry.Name())
 	}
 	return names, nil
-}
-
-// RunStateStore persists run state
-type RunStateStore struct {
-	fileStore FileStore
-}
-
-func NewRunStateStore(fileStore FileStore) *RunStateStore {
-	return &RunStateStore{fileStore: fileStore}
-}
-
-func (s *RunStateStore) Save(ctx context.Context, runID string, state interface{}) error {
-	data, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	return s.fileStore.Write(filepath.Join(".agents", "data", runID, "run_state.json"), data)
-}
-
-func (s *RunStateStore) Load(ctx context.Context, runID string, target interface{}) error {
-	data, err := s.fileStore.Read(filepath.Join(".agents", "data", runID, "run_state.json"))
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, target)
-}
-
-// RunLog manages append-only run history (run.jsonl)
-type RunLog struct {
-	fileStore FileStore
-}
-
-func NewRunLog(fileStore FileStore) *RunLog {
-	return &RunLog{fileStore: fileStore}
-}
-
-func (l *RunLog) Append(ctx context.Context, runID string, msg interface{}) error {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return l.fileStore.Append(filepath.Join(".agents", "data", runID, "run.jsonl"), data)
-}
-
-func (l *RunLog) Read(ctx context.Context, runID string, target interface{}) error {
-	data, err := l.fileStore.Read(filepath.Join(".agents", "data", runID, "run.jsonl"))
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, target)
-}
-
-// CheckpointManager manages checkpoints
-type CheckpointManager struct {
-	fileStore FileStore
-}
-
-func NewCheckpointManager(fileStore FileStore) *CheckpointManager {
-	return &CheckpointManager{fileStore: fileStore}
-}
-
-func (m *CheckpointManager) Save(ctx context.Context, cp interface{}) error {
-	data, err := json.Marshal(cp)
-	if err != nil {
-		return err
-	}
-	return m.fileStore.Write(filepath.Join("checkpoints", "latest.json"), data)
-}
-
-func (m *CheckpointManager) Load(ctx context.Context, target interface{}) error {
-	data, err := m.fileStore.Read(filepath.Join("checkpoints", "latest.json"))
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, target)
 }

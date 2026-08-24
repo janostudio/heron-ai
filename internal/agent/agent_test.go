@@ -11,11 +11,11 @@ import (
 )
 
 // ============================================================
-// SignalParser Tests
+// RouteParser Tests
 // ============================================================
 
-func TestSignalParser_Parse_Continue(t *testing.T) {
-	p := NewSignalParser()
+func TestRouteParser_Parse_Proceed(t *testing.T) {
+	p := NewRouteParser()
 
 	tests := []struct {
 		name  string
@@ -28,13 +28,13 @@ func TestSignalParser_Parse_Continue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, types.SignalContinue, p.Parse(tt.input))
+			assert.Equal(t, types.NextProceed, p.Parse(tt.input))
 		})
 	}
 }
 
-func TestSignalParser_Parse_WaitInput(t *testing.T) {
-	p := NewSignalParser()
+func TestRouteParser_Parse_WaitInput(t *testing.T) {
+	p := NewRouteParser()
 
 	tests := []struct {
 		name  string
@@ -46,69 +46,69 @@ func TestSignalParser_Parse_WaitInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, types.SignalWaitInput, p.Parse(tt.input))
+			assert.Equal(t, types.NextWaitInput, p.Parse(tt.input))
 		})
 	}
 }
 
-func TestSignalParser_Parse_GoalAchieved(t *testing.T) {
-	p := NewSignalParser()
+func TestRouteParser_Parse_Complete(t *testing.T) {
+	p := NewRouteParser()
 
-	assert.Equal(t, types.SignalGoalAchieved, p.Parse("done</goal_achieved>"))
-	assert.Equal(t, types.SignalGoalAchieved, p.Parse("done<goal_achieved/>"))
+	assert.Equal(t, types.NextComplete, p.Parse("done</goal_achieved>"))
+	assert.Equal(t, types.NextComplete, p.Parse("done<goal_achieved/>"))
 }
 
-func TestSignalParser_Parse_GoalFailed(t *testing.T) {
-	p := NewSignalParser()
+func TestRouteParser_Parse_Fail(t *testing.T) {
+	p := NewRouteParser()
 
-	assert.Equal(t, types.SignalGoalFailed, p.Parse("failed</goal_failed>"))
-	assert.Equal(t, types.SignalGoalFailed, p.Parse("failed<goal_failed/>"))
+	assert.Equal(t, types.NextFail, p.Parse("failed</goal_failed>"))
+	assert.Equal(t, types.NextFail, p.Parse("failed<goal_failed/>"))
 }
 
-func TestSignalParser_Parse_GoalImpossible(t *testing.T) {
-	p := NewSignalParser()
+func TestRouteParser_Parse_Impossible(t *testing.T) {
+	p := NewRouteParser()
 
-	assert.Equal(t, types.SignalGoalImpossible, p.Parse("impossible</goal_impossible>"))
-	assert.Equal(t, types.SignalGoalImpossible, p.Parse("impossible<goal_impossible/>"))
+	assert.Equal(t, types.NextFail, p.Parse("impossible</goal_impossible>"))
+	assert.Equal(t, types.NextFail, p.Parse("impossible<goal_impossible/>"))
 }
 
-func TestSignalParser_Parse_NoSignal(t *testing.T) {
-	p := NewSignalParser()
+func TestRouteParser_Parse_NoAction(t *testing.T) {
+	p := NewRouteParser()
 
-	assert.Equal(t, types.Signal(""), p.Parse("hello world"))
-	assert.Equal(t, types.Signal(""), p.Parse(""))
+	assert.Equal(t, types.NextAction(""), p.Parse("hello world"))
+	assert.Equal(t, types.NextAction(""), p.Parse(""))
 }
 
-func TestSignalParser_ParseWithMode_LoopMode(t *testing.T) {
-	p := NewSignalParser()
+func TestRouteParser_ParseWithMode_LoopMode(t *testing.T) {
+	p := NewRouteParser()
 
-	// No signal + loop mode = wait_input
-	signal, clean := p.ParseWithMode("hello", true)
-	assert.Equal(t, types.SignalWaitInput, signal)
+	// No action + loop mode = wait_input
+	action, clean := p.ParseWithMode("hello", true)
+	assert.Equal(t, types.NextWaitInput, action)
 	assert.Equal(t, "hello", clean)
 
-	// Explicit signal in loop mode
-	signal, clean = p.ParseWithMode("hello<continue/>", true)
-	assert.Equal(t, types.SignalContinue, signal)
-	assert.Equal(t, "hello", clean)
-}
-
-func TestSignalParser_ParseWithMode_NonLoopMode(t *testing.T) {
-	p := NewSignalParser()
-
-	// No signal + non-loop mode = continue
-	signal, clean := p.ParseWithMode("hello", false)
-	assert.Equal(t, types.SignalContinue, signal)
-	assert.Equal(t, "hello", clean)
-
-	// Explicit signal in non-loop mode
-	signal, clean = p.ParseWithMode("hello</wait_input>", false)
-	assert.Equal(t, types.SignalWaitInput, signal)
+	// Explicit action in loop mode
+	action, clean = p.ParseWithMode("hello<continue/>", true)
+	assert.Equal(t, types.NextProceed, action)
 	assert.Equal(t, "hello", clean)
 }
 
-func TestSignalParser_ParseWithMode_CleansTags(t *testing.T) {
-	p := NewSignalParser()
+func TestRouteParser_ParseWithMode_NonLoopMode(t *testing.T) {
+	p := NewRouteParser()
+
+	// No action + non-loop mode = proceed
+	action, clean := p.ParseWithMode("hello", false)
+	assert.Equal(t, types.NextProceed, action)
+	assert.Equal(t, "hello", clean)
+
+	// Explicit action in non-loop mode
+	action, clean = p.ParseWithMode("hello</wait_input>", false)
+	assert.Equal(t, types.NextWaitInput, action)
+	assert.Equal(t, "hello", clean)
+}
+
+func TestRouteParser_ParseWithMode_CleansTags(t *testing.T) {
+	p := NewRouteParser()
 
 	// All tags should be stripped
 	tests := []struct {
@@ -198,76 +198,6 @@ func TestGuardrailChecker_InputAndOutputRules(t *testing.T) {
 	assert.NoError(t, g.CheckInput("hello"))
 	assert.Error(t, g.CheckOutput("the secret is"))
 	assert.NoError(t, g.CheckOutput("hello"))
-}
-
-// ============================================================
-// HandoffRouter Tests
-// ============================================================
-
-func TestHandoffRouter_GetAgentExists(t *testing.T) {
-	agents := map[string]types.AgentConfig{
-		"coder": {Name: "coder", Handoffs: []string{"reviewer"}},
-	}
-	r := NewHandoffRouter(agents)
-
-	agent, err := r.GetAgent("coder")
-	require.NoError(t, err)
-	assert.Equal(t, "coder", agent.Name)
-}
-
-func TestHandoffRouter_GetAgentNotFound(t *testing.T) {
-	r := NewHandoffRouter(map[string]types.AgentConfig{})
-
-	_, err := r.GetAgent("unknown")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
-}
-
-func TestHandoffRouter_CanHandoffValid(t *testing.T) {
-	agents := map[string]types.AgentConfig{
-		"coder":    {Name: "coder", Handoffs: []string{"reviewer"}},
-		"reviewer": {Name: "reviewer"},
-	}
-	r := NewHandoffRouter(agents)
-
-	assert.True(t, r.CanHandoff("coder", "reviewer"))
-}
-
-func TestHandoffRouter_CanHandoffInvalid(t *testing.T) {
-	agents := map[string]types.AgentConfig{
-		"coder": {Name: "coder", Handoffs: []string{"reviewer"}},
-	}
-	r := NewHandoffRouter(agents)
-
-	assert.False(t, r.CanHandoff("coder", "tester"))
-}
-
-func TestHandoffRouter_CanHandoffSelfDenied(t *testing.T) {
-	agents := map[string]types.AgentConfig{
-		"coder": {Name: "coder", Handoffs: []string{"coder", "reviewer"}},
-	}
-	r := NewHandoffRouter(agents)
-
-	assert.False(t, r.CanHandoff("coder", "coder"))
-}
-
-func TestHandoffRouter_CanHandoffFromAgentNotFound(t *testing.T) {
-	r := NewHandoffRouter(map[string]types.AgentConfig{})
-
-	assert.False(t, r.CanHandoff("unknown", "anyone"))
-}
-
-func TestHandoffRouter_BuildContext(t *testing.T) {
-	r := NewHandoffRouter(nil)
-
-	history := []types.Message{
-		{Role: "user", Content: "hello"},
-	}
-	hc := r.BuildContext("do task", "some input", history)
-
-	assert.Equal(t, "do task", hc.Task)
-	assert.Equal(t, "some input", hc.Input)
-	assert.Len(t, hc.History, 1)
 }
 
 // ============================================================
@@ -409,7 +339,6 @@ func TestHookExecutor_HookConstants(t *testing.T) {
 	assert.Equal(t, "on_end", HookOnEnd)
 	assert.Equal(t, "on_tool_start", HookOnToolStart)
 	assert.Equal(t, "on_tool_end", HookOnToolEnd)
-	assert.Equal(t, "on_handoff", HookOnHandoff)
 	assert.Equal(t, "on_error", HookOnError)
 }
 
@@ -423,8 +352,8 @@ func TestStructuredOutputManager_ParseValidJSON(t *testing.T) {
 	schema := &types.StructuredOutput{
 		Type: "json_schema",
 		Schema: map[string]any{
-			"name":     map[string]any{"type": "string", "required": true},
-			"age":      map[string]any{"type": "number", "required": false},
+			"name": map[string]any{"type": "string", "required": true},
+			"age":  map[string]any{"type": "number", "required": false},
 		},
 	}
 
@@ -552,7 +481,7 @@ type mockPromptRenderer struct {
 	messages []types.Message
 }
 
-func (m *mockPromptRenderer) Render(agent types.AgentConfig, task types.TaskConfig, input string, rctx RenderContext) ([]types.Message, error) {
+func (m *mockPromptRenderer) Render(agent types.AgentConfig, req types.SubagentRequest, rctx RenderContext) ([]types.Message, error) {
 	return m.messages, nil
 }
 
@@ -567,24 +496,24 @@ func TestTurnLoop_Run_SimpleResponse(t *testing.T) {
 	}
 	toolExec := &mockToolExecutor{}
 	guardrail := NewGuardrailChecker(nil, nil)
-	signalParser := NewSignalParser()
+	routeParser := NewRouteParser()
 	hitl := NewHITLGate(5 * time.Minute)
 	hooks := NewHookExecutor()
 	prompt := &mockPromptRenderer{
 		messages: []types.Message{{Role: "user", Content: "hello"}},
 	}
 
-	loop := NewTurnLoop(model, toolExec, guardrail, signalParser, hitl, hooks, prompt)
+	loop := NewTurnLoop(model, toolExec, guardrail, routeParser, hitl, hooks, prompt)
 
 	agent := types.AgentConfig{
 		Name: "test-agent",
 		Loop: types.LoopConfig{MaxRounds: 5},
 	}
 
-	result, err := loop.Run(context.Background(), agent, types.TaskConfig{}, "hello")
+	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "hello"})
 	require.NoError(t, err)
-	assert.Equal(t, "Hello! How can I help?", result.Raw)
-	assert.Equal(t, types.SignalWaitInput, result.Signal) // maxRounds=5 > 1, loop mode defaults to wait_input
+	assert.Equal(t, "Hello! How can I help?", result.Reply)
+	assert.Equal(t, types.NextWaitInput, result.Next.Action) // maxRounds=5 > 1, loop mode defaults to wait_input
 	assert.Equal(t, 50, result.Usage.TotalTokens)
 }
 
@@ -601,7 +530,7 @@ func TestTurnLoop_Run_MaxRoundsDefault(t *testing.T) {
 		model,
 		&mockToolExecutor{},
 		NewGuardrailChecker(nil, nil),
-		NewSignalParser(),
+		NewRouteParser(),
 		NewHITLGate(5*time.Minute),
 		NewHookExecutor(),
 		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
@@ -612,9 +541,9 @@ func TestTurnLoop_Run_MaxRoundsDefault(t *testing.T) {
 		Loop: types.LoopConfig{MaxRounds: 0}, // should default to 3
 	}
 
-	result, err := loop.Run(context.Background(), agent, types.TaskConfig{}, "hello")
+	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "hello"})
 	require.NoError(t, err)
-	assert.Equal(t, types.SignalWaitInput, result.Signal) // loop mode
+	assert.Equal(t, types.NextWaitInput, result.Next.Action) // loop mode
 	assert.Equal(t, 30, result.Usage.TotalTokens)
 }
 
@@ -624,7 +553,7 @@ func TestTurnLoop_Run_ContextCanceled(t *testing.T) {
 		model,
 		&mockToolExecutor{},
 		NewGuardrailChecker(nil, nil),
-		NewSignalParser(),
+		NewRouteParser(),
 		NewHITLGate(5*time.Minute),
 		NewHookExecutor(),
 		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
@@ -638,7 +567,7 @@ func TestTurnLoop_Run_ContextCanceled(t *testing.T) {
 		Loop: types.LoopConfig{MaxRounds: 1},
 	}
 
-	_, err := loop.Run(ctx, agent, types.TaskConfig{}, "hello")
+	_, err := loop.Run(ctx, agent, types.SubagentRequest{Input: "hello"})
 	assert.Error(t, err)
 }
 
@@ -652,7 +581,7 @@ func TestTurnLoop_Run_GuardrailBlocksInput(t *testing.T) {
 		model,
 		&mockToolExecutor{},
 		guardrail,
-		NewSignalParser(),
+		NewRouteParser(),
 		NewHITLGate(5*time.Minute),
 		NewHookExecutor(),
 		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
@@ -663,7 +592,7 @@ func TestTurnLoop_Run_GuardrailBlocksInput(t *testing.T) {
 		Loop: types.LoopConfig{MaxRounds: 5},
 	}
 
-	result, err := loop.Run(context.Background(), agent, types.TaskConfig{}, "this is blocked")
+	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "this is blocked"})
 	require.NoError(t, err)
 	assert.Contains(t, result.Error, "input blocked")
 }
@@ -688,7 +617,7 @@ func TestTurnLoop_Run_ToolCallLoop(t *testing.T) {
 		model,
 		&mockToolExecutor{},
 		NewGuardrailChecker(nil, nil),
-		NewSignalParser(),
+		NewRouteParser(),
 		NewHITLGate(5*time.Minute),
 		NewHookExecutor(),
 		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
@@ -700,9 +629,9 @@ func TestTurnLoop_Run_ToolCallLoop(t *testing.T) {
 		Loop:  types.LoopConfig{MaxRounds: 5},
 	}
 
-	result, err := loop.Run(context.Background(), agent, types.TaskConfig{}, "hello")
+	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "hello"})
 	require.NoError(t, err)
-	assert.Equal(t, "Done reading", result.Raw)
+	assert.Equal(t, "Done reading", result.Reply)
 	assert.Equal(t, 150, result.Usage.TotalTokens)
 }
 
@@ -716,7 +645,7 @@ func TestTurnLoop_Run_BuildToolSchemas(t *testing.T) {
 		model,
 		&mockToolExecutor{},
 		NewGuardrailChecker(nil, nil),
-		NewSignalParser(),
+		NewRouteParser(),
 		NewHITLGate(5*time.Minute),
 		NewHookExecutor(),
 		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
@@ -729,7 +658,7 @@ func TestTurnLoop_Run_BuildToolSchemas(t *testing.T) {
 		Loop:  types.LoopConfig{MaxRounds: 1},
 	}
 
-	_, err := loop.Run(context.Background(), agent, types.TaskConfig{}, "hello")
+	_, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "hello"})
 	require.NoError(t, err)
 }
 
@@ -746,7 +675,7 @@ func TestTurnLoop_Run_SignalInResponse(t *testing.T) {
 		model,
 		&mockToolExecutor{},
 		NewGuardrailChecker(nil, nil),
-		NewSignalParser(),
+		NewRouteParser(),
 		NewHITLGate(5*time.Minute),
 		NewHookExecutor(),
 		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
@@ -757,8 +686,8 @@ func TestTurnLoop_Run_SignalInResponse(t *testing.T) {
 		Loop: types.LoopConfig{MaxRounds: 5},
 	}
 
-	result, err := loop.Run(context.Background(), agent, types.TaskConfig{}, "hello")
+	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "hello"})
 	require.NoError(t, err)
-	assert.Equal(t, types.SignalGoalAchieved, result.Signal)
-	assert.Equal(t, "Task completed successfully", result.Raw)
+	assert.Equal(t, types.NextComplete, result.Next.Action)
+	assert.Equal(t, "Task completed successfully", result.Reply)
 }

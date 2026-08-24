@@ -3,10 +3,14 @@ package knowledge
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/adrg/frontmatter"
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
+	"gopkg.in/yaml.v3"
 )
 
 // KnowledgeIndex manages knowledge entries with keyword-based search
@@ -21,8 +25,17 @@ func NewKnowledgeIndex() *KnowledgeIndex {
 
 // Add adds a knowledge entry to the index
 func (idx *KnowledgeIndex) Add(entry types.KnowledgeEntry) {
+	if entry.Status == "" {
+		entry.Status = "active"
+	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+	for i, existing := range idx.entries {
+		if existing.ID == entry.ID && entry.ID != "" {
+			idx.entries[i] = entry
+			return
+		}
+	}
 	idx.entries = append(idx.entries, entry)
 }
 
@@ -35,6 +48,9 @@ func (idx *KnowledgeIndex) Search(ctx context.Context, query string) ([]types.Kn
 	var results []types.KnowledgeEntry
 
 	for _, entry := range idx.entries {
+		if entry.Status == "deprecated" {
+			continue
+		}
 		if entryMatches(entry, queryLower) {
 			results = append(results, entry)
 		}
@@ -52,6 +68,9 @@ func (idx *KnowledgeIndex) SearchWithScope(ctx context.Context, query string, ag
 	var results []types.KnowledgeEntry
 
 	for _, entry := range idx.entries {
+		if entry.Status == "deprecated" {
+			continue
+		}
 		if !entryMatches(entry, queryLower) {
 			continue
 		}
@@ -62,6 +81,192 @@ func (idx *KnowledgeIndex) SearchWithScope(ctx context.Context, query string, ag
 	}
 
 	return results, nil
+}
+
+// MarkdownStore persists KnowledgeEntry as Markdown files with YAML
+// frontmatter. index.md is an index file and is not itself treated as a
+// knowledge entry.
+type MarkdownStore struct {
+	files storage.FileStore
+	root  string
+	mu    sync.Mutex
+}
+
+func NewMarkdownStore(files storage.FileStore, root string) *MarkdownStore {
+	return &MarkdownStore{files: files, root: filepath.Clean(root)}
+}
+
+func (s *MarkdownStore) Load(ctx context.Context) ([]types.KnowledgeEntry, error) {
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	paths, err := s.listMarkdown(s.root)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]types.KnowledgeEntry, 0, len(paths))
+	for _, path := range paths {
+		if filepath.Base(path) == "index.md" {
+			continue
+		}
+		data, err := s.files.Read(path)
+		if err != nil {
+			return nil, fmt.Errorf("read knowledge %s: %w", path, err)
+		}
+
+		var entry types.KnowledgeEntry
+		body, err := frontmatter.Parse(strings.NewReader(string(data)), &entry)
+		if err != nil {
+			return nil, fmt.Errorf("parse knowledge %s: %w", path, err)
+		}
+		entry.Content = strings.TrimSpace(string(body))
+		entry.Path = path
+		if entry.Status == "" {
+			entry.Status = "active"
+		}
+		if entry.ID == "" {
+			entry.ID = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func (s *MarkdownStore) Save(ctx context.Context, entry types.KnowledgeEntry) error {
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	if strings.TrimSpace(entry.ID) == "" {
+		return fmt.Errorf("knowledge id is required")
+	}
+	if entry.Status == "" {
+		entry.Status = "active"
+	}
+	if entry.Version <= 0 {
+		entry.Version = 1
+	}
+	if entry.Path == "" {
+		entry.Path = filepath.Join(s.root, entry.ID+".md")
+	}
+	if err := s.ensureWithinRoot(entry.Path); err != nil {
+		return err
+	}
+
+	data, err := encodeMarkdown(entry)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.files.Write(entry.Path, data)
+}
+
+func (s *MarkdownStore) RebuildIndex(ctx context.Context) error {
+	entries, err := s.Load(ctx)
+	if err != nil {
+		return err
+	}
+
+	var builder strings.Builder
+	builder.WriteString("# Knowledge Index\n\n")
+	builder.WriteString("> Generated index. Knowledge正文保存在同级 Markdown 文件中。\n\n")
+	for _, entry := range entries {
+		title := entry.Title
+		if title == "" {
+			title = entry.ID
+		}
+		summary := entry.Summary
+		if summary == "" {
+			summary = firstLine(entry.Content)
+		}
+		relative, relErr := filepath.Rel(s.root, entry.Path)
+		if relErr != nil {
+			relative = entry.Path
+		}
+		builder.WriteString(fmt.Sprintf("- [%s](%s) — %s\n", title, filepath.ToSlash(relative), summary))
+	}
+	return s.files.Write(filepath.Join(s.root, "index.md"), []byte(builder.String()))
+}
+
+func (s *MarkdownStore) listMarkdown(dir string) ([]string, error) {
+	names, err := s.files.List(dir)
+	if err != nil {
+		return nil, err
+	}
+	var result []string
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		if s.files.Exists(path) {
+			if filepath.Ext(name) == ".md" {
+				result = append(result, path)
+				continue
+			}
+			if filepath.Ext(name) == "" {
+				children, err := s.listMarkdown(path)
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, children...)
+			}
+		}
+	}
+	return result, nil
+}
+
+func (s *MarkdownStore) ensureWithinRoot(path string) error {
+	root := filepath.Clean(s.root)
+	target := filepath.Clean(path)
+	relative, err := filepath.Rel(root, target)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("knowledge path escapes root: %s", path)
+	}
+	return nil
+}
+
+func encodeMarkdown(entry types.KnowledgeEntry) ([]byte, error) {
+	frontmatterData := struct {
+		ID         string           `yaml:"id"`
+		Title      string           `yaml:"title,omitempty"`
+		Summary    string           `yaml:"summary,omitempty"`
+		Keys       []string         `yaml:"keys,omitempty"`
+		Scope      types.Scope      `yaml:"scope"`
+		Status     string           `yaml:"status"`
+		Path       string           `yaml:"path,omitempty"`
+		Basis      []types.BasisRef `yaml:"basis,omitempty"`
+		Version    int              `yaml:"version"`
+		Confidence string           `yaml:"confidence,omitempty"`
+		Source     string           `yaml:"source,omitempty"`
+	}{
+		ID: entry.ID, Title: entry.Title, Summary: entry.Summary,
+		Keys: entry.Keys, Scope: entry.Scope, Status: entry.Status,
+		Path: entry.Path, Basis: entry.Basis, Version: entry.Version,
+		Confidence: entry.Confidence, Source: entry.Source,
+	}
+	data, err := yaml.Marshal(frontmatterData)
+	if err != nil {
+		return nil, fmt.Errorf("marshal knowledge frontmatter: %w", err)
+	}
+	return []byte("---\n" + string(data) + "---\n\n" + strings.TrimSpace(entry.Content) + "\n"), nil
+}
+
+func firstLine(content string) string {
+	if index := strings.IndexByte(content, '\n'); index >= 0 {
+		return strings.TrimSpace(content[:index])
+	}
+	return strings.TrimSpace(content)
+}
+
+func contextErr(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
 }
 
 // List returns all knowledge entries
@@ -132,7 +337,7 @@ func NewKnowledgeExtractor(index *KnowledgeIndex) *KnowledgeExtractor {
 }
 
 // Extract converts memories into knowledge entries
-func (e *KnowledgeExtractor) Extract(ctx context.Context, memories []types.MemoryEntry) ([]types.KnowledgeEntry, error) {
+func (e *KnowledgeExtractor) Extract(ctx context.Context, memories []types.MemoryObservation) ([]types.KnowledgeEntry, error) {
 	var entries []types.KnowledgeEntry
 
 	for _, mem := range memories {

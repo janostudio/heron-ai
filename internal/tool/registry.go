@@ -12,6 +12,25 @@ type ToolRegistry struct {
 	tools map[string]types.Tool
 }
 
+// ExecutionSpec returns the safety declaration for a registered tool. The
+// registry keeps types.Tool backward-compatible while built-in and future
+// tools may optionally expose execution metadata.
+func (r *ToolRegistry) ExecutionSpec(name string) types.ToolExecutionSpec {
+	t, err := r.Lookup(name)
+	if err != nil {
+		return types.ToolExecutionSpec{Class: types.ToolSerial}
+	}
+	if classified, ok := t.(interface {
+		Execution() types.ToolExecutionSpec
+	}); ok {
+		spec := classified.Execution()
+		if spec.Class != "" {
+			return spec
+		}
+	}
+	return types.ToolExecutionSpec{Class: types.ToolSerial}
+}
+
 func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{tools: make(map[string]types.Tool)}
 }

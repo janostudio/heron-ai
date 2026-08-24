@@ -1,17 +1,20 @@
-name: writing_team
-description: "Writing team: writer creates the blog post from research and outline"
+id: writing_team
+goal: 根据调研和大纲撰写完整博客文章。
 
-stages:
-  - process: sequential
-    tasks:
-      - name: write_blog
-        agent: writer
-        description: |
-          Write a complete blog post based on the research and outline from the previous stage.
-          Use Read to review previous results. Use Write to save the final post.
-          Use TodoWrite to track progress.
-          
-          Requirements:
-          - 800-1500 words, engaging tone
-          - Follow the structured output format
-          - Include research facts and statistics
+members:
+  write_blog:
+    type: subagent
+    agent: writer
+    responsibility: 根据 ResearchReport 和 BlogOutline 撰写完整博客文章，并遵循长度、风格和事实要求。
+    inputs:
+      - from: research
+        record: ResearchReport
+      - from: research
+        record: BlogOutline
+    output:
+      record: BlogDraft
+
+output:
+  from: write_blog
+  record: BlogDraft
+  scope: flow

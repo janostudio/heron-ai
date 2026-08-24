@@ -171,8 +171,8 @@ func convertTools(tools []types.JSONSchema) []openai.Tool {
 		result[i] = openai.Tool{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
-				Name:        "",
-				Description: "",
+				Name:        t.Name,
+				Description: t.Description,
 				Parameters:  params,
 			},
 		}

@@ -2,6 +2,21 @@ package types
 
 import "context"
 
+// ToolExecutionClass controls whether multiple calls returned by one
+// ModelCall may run together.
+type ToolExecutionClass string
+
+const (
+	ToolReadOnly ToolExecutionClass = "read_only"
+	ToolSerial   ToolExecutionClass = "serial"
+)
+
+// ToolExecutionSpec is the runtime safety declaration for a Tool.
+type ToolExecutionSpec struct {
+	Class       ToolExecutionClass `yaml:"class" json:"class"`
+	MaxParallel int                `yaml:"max_parallel,omitempty" json:"max_parallel,omitempty"`
+}
+
 // Tool interface defines the contract for all tools
 type Tool interface {
 	Name() string
@@ -13,16 +28,20 @@ type Tool interface {
 
 // ToolResult represents the result of a tool execution
 type ToolResult struct {
-	Success bool   `json:"success"`
-	Content string `json:"content"`
-	Error   string `json:"error,omitempty"`
+	Success      bool                 `json:"success"`
+	Content      string               `json:"content"`
+	Error        string               `json:"error,omitempty"`
+	WorkspaceOps []WorkspaceOperation `json:"workspace_ops,omitempty"`
+	RecordRefs   []string             `json:"record_refs,omitempty"`
 }
 
 // JSONSchema represents a JSON Schema for tool parameters
 type JSONSchema struct {
-	Type       string                 `json:"type"`
-	Properties map[string]JSONProperty `json:"properties,omitempty"`
-	Required   []string               `json:"required,omitempty"`
+	Name        string                  `json:"name,omitempty"`
+	Description string                  `json:"description,omitempty"`
+	Type        string                  `json:"type"`
+	Properties  map[string]JSONProperty `json:"properties,omitempty"`
+	Required    []string                `json:"required,omitempty"`
 }
 
 type JSONProperty struct {

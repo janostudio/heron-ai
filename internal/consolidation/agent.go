@@ -1,67 +1,44 @@
+// Package consolidation contains optional helpers for combining explicit
+// SharedRecord values. Core TeamRuntime already performs configured output
+// selection and does not require a special Aggregator concept.
 package consolidation
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-type ConsolidationAgent struct{}
+type RecordConsolidator struct{}
 
-func NewConsolidationAgent() *ConsolidationAgent {
-	return &ConsolidationAgent{}
+func NewRecordConsolidator() *RecordConsolidator {
+	return &RecordConsolidator{}
 }
 
-// Consolidate combines multiple agent results into a coherent summary
-func (a *ConsolidationAgent) Consolidate(ctx context.Context, results []types.AgentResult) string {
-	if len(results) == 0 {
+func (c *RecordConsolidator) Consolidate(_ context.Context, records []types.SharedRecord) string {
+	if len(records) == 0 {
 		return ""
 	}
-
-	if len(results) == 1 {
-		return results[0].Raw
+	if len(records) == 1 {
+		return records[0].Summary
 	}
+
+	ordered := append([]types.SharedRecord(nil), records...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].Name < ordered[j].Name
+	})
 
 	var parts []string
-	parts = append(parts, "## Consolidated Results\n")
-
-	for i, result := range results {
-		parts = append(parts, "### Result "+string(rune('1'+i)))
-		parts = append(parts, result.Raw)
-		parts = append(parts, "")
-	}
-
-	return strings.Join(parts, "\n")
-}
-
-// ExtractSignal determines the dominant signal from multiple results
-func (a *ConsolidationAgent) ExtractSignal(results []types.AgentResult) types.Signal {
-	if len(results) == 0 {
-		return types.SignalContinue
-	}
-
-	signalCount := make(map[types.Signal]int)
-	for _, result := range results {
-		if result.Signal != "" {
-			signalCount[result.Signal]++
+	parts = append(parts, "## Shared Records")
+	for i, record := range ordered {
+		name := record.Name
+		if name == "" {
+			name = fmt.Sprintf("record-%d", i+1)
 		}
+		parts = append(parts, fmt.Sprintf("### %s\n%s", name, record.Summary))
 	}
-
-	// Priority: goal_achieved > goal_failed > goal_impossible > wait_input > continue
-	priority := []types.Signal{
-		types.SignalGoalAchieved,
-		types.SignalGoalFailed,
-		types.SignalGoalImpossible,
-		types.SignalWaitInput,
-		types.SignalContinue,
-	}
-
-	for _, sig := range priority {
-		if signalCount[sig] > 0 {
-			return sig
-		}
-	}
-
-	return types.SignalContinue
+	return strings.Join(parts, "\n\n")
 }

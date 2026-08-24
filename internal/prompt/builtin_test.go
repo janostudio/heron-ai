@@ -9,7 +9,7 @@ import (
 
 func TestBuiltinTemplates(t *testing.T) {
 	expectedNames := []string{
-		"task-management",
+		"execution-management",
 		"tool-usage",
 		"memory-management",
 		"knowledge-query",
@@ -20,7 +20,6 @@ func TestBuiltinTemplates(t *testing.T) {
 	if len(BuiltinTemplates) != len(expectedNames) {
 		t.Errorf("expected %d templates, got %d", len(expectedNames), len(BuiltinTemplates))
 	}
-
 	for _, name := range expectedNames {
 		if tmpl, ok := BuiltinTemplates[name]; !ok {
 			t.Errorf("missing template: %s", name)
@@ -32,23 +31,21 @@ func TestBuiltinTemplates(t *testing.T) {
 
 func TestGetTemplate(t *testing.T) {
 	for _, name := range []string{
-		"task-management",
+		"execution-management",
 		"tool-usage",
 		"memory-management",
 		"knowledge-query",
 		"perspective-isolation",
 		"output-format",
 	} {
-		tmpl := GetTemplate(name)
-		if tmpl == "" {
+		if tmpl := GetTemplate(name); tmpl == "" {
 			t.Errorf("GetTemplate(%q) returned empty", name)
 		}
 	}
 }
 
 func TestGetTemplateNonExistent(t *testing.T) {
-	tmpl := GetTemplate("nonexistent-template")
-	if tmpl != "" {
+	if tmpl := GetTemplate("nonexistent-template"); tmpl != "" {
 		t.Errorf("expected empty string for non-existent template, got %q", tmpl)
 	}
 }
@@ -56,23 +53,20 @@ func TestGetTemplateNonExistent(t *testing.T) {
 func TestListTemplates(t *testing.T) {
 	names := ListTemplates()
 	if len(names) != 6 {
-		t.Errorf("expected 6 template names, got %d", len(names))
+		t.Fatalf("expected 6 template names, got %d", len(names))
 	}
-
 	seen := make(map[string]bool)
 	for _, name := range names {
 		seen[name] = true
 	}
-
-	expected := []string{
-		"task-management",
+	for _, name := range []string{
+		"execution-management",
 		"tool-usage",
 		"memory-management",
 		"knowledge-query",
 		"perspective-isolation",
 		"output-format",
-	}
-	for _, name := range expected {
+	} {
 		if !seen[name] {
 			t.Errorf("expected template %q in list, but not found", name)
 		}
@@ -89,260 +83,129 @@ func TestBuildSystemPromptWithPersona(t *testing.T) {
 		},
 	}
 
-	prompt := r.BuildSystemPrompt(agent, nil, nil, "", "")
-	if !strings.Contains(prompt, "You are Software Engineer.") {
-		t.Error("system prompt missing role")
-	}
-	if !strings.Contains(prompt, "Your goal: Write clean code") {
-		t.Error("system prompt missing goal")
-	}
-	if !strings.Contains(prompt, "Background: Experienced in Go") {
-		t.Error("system prompt missing backstory")
-	}
-}
-
-func TestBuildSystemPromptEmptyPersona(t *testing.T) {
-	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{}
-
-	prompt := r.BuildSystemPrompt(agent, nil, nil, "", "")
-
-	if strings.Contains(prompt, "You are") {
-		t.Error("system prompt should not contain persona for empty config")
-	}
-	if strings.Contains(prompt, "Your goal") {
-		t.Error("system prompt should not contain goal for empty config")
+	prompt := r.BuildSystemPrompt(agent, RenderContext{})
+	for _, expected := range []string{
+		"You are Software Engineer.",
+		"Your goal: Write clean code",
+		"Background: Experienced in Go",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Errorf("system prompt missing %q:\n%s", expected, prompt)
+		}
 	}
 }
 
-func TestBuildSystemPromptWithTools(t *testing.T) {
+func TestBuildSystemPromptWithRuntimeContext(t *testing.T) {
 	r := NewPromptRenderer(nil)
 	agent := types.AgentConfig{
-		Persona: types.PersonaConfig{
-			Role: "Assistant",
-		},
-		Tools: types.ToolConfig{
-			Builtin: []string{"read_file", "write_file"},
-		},
-	}
-
-	prompt := r.BuildSystemPrompt(agent, nil, nil, "", "")
-	if !strings.Contains(prompt, "Tool Usage") {
-		t.Errorf("system prompt missing tool usage section:\n%s", prompt)
-	}
-}
-
-func TestBuildSystemPromptWithoutTools(t *testing.T) {
-	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{
-		Persona: types.PersonaConfig{
-			Role: "Assistant",
-		},
-	}
-
-	prompt := r.BuildSystemPrompt(agent, nil, nil, "", "")
-	if strings.Contains(prompt, "Tool Usage") {
-		t.Error("system prompt should not contain tool usage when no tools configured")
-	}
-}
-
-func TestBuildSystemPromptWithAgentState(t *testing.T) {
-	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{
-		Persona: types.PersonaConfig{
-			Role: "Assistant",
-		},
-	}
-
-	prompt := r.BuildSystemPrompt(agent, nil, nil, "Processing task #3", "")
-	if !strings.Contains(prompt, "Current State") {
-		t.Errorf("system prompt missing agent state:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "Processing task #3") {
-		t.Error("system prompt missing agent state content")
-	}
-}
-
-func TestBuildSystemPromptWithTeamState(t *testing.T) {
-	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{
-		Persona: types.PersonaConfig{
-			Role: "Assistant",
-		},
-	}
-
-	prompt := r.BuildSystemPrompt(agent, nil, nil, "", "Team Alpha is working")
-	if !strings.Contains(prompt, "Team Context") {
-		t.Errorf("system prompt missing team state:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "Team Alpha is working") {
-		t.Error("system prompt missing team state content")
-	}
-}
-
-func TestBuildSystemPromptWithStructuredOutput(t *testing.T) {
-	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{
-		Persona: types.PersonaConfig{
-			Role: "Assistant",
-		},
+		Persona: types.PersonaConfig{Role: "Assistant"},
+		Tools:   types.ToolConfig{Builtin: []string{"Read"}},
 		Structured: &types.StructuredOutput{
 			Type: "json",
 		},
 	}
 
-	prompt := r.BuildSystemPrompt(agent, nil, nil, "", "")
-	if !strings.Contains(prompt, "Output Format") {
-		t.Errorf("system prompt missing output format section:\n%s", prompt)
+	prompt := r.BuildSystemPrompt(agent, RenderContext{
+		TeamMemory:     "Team decided to run tests before editing.",
+		SubagentMemory: "The failing package is internal/api.",
+	})
+	for _, expected := range []string{
+		"Tool Usage",
+		"Output Format",
+		"Team Memory",
+		"Team decided to run tests before editing.",
+		"Subagent Memory",
+		"The failing package is internal/api.",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Errorf("system prompt missing %q:\n%s", expected, prompt)
+		}
 	}
 }
 
-func TestBuildSystemPromptWithHandoffs(t *testing.T) {
+func TestBuildSystemPromptWithEmptyDefinition(t *testing.T) {
 	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{
-		Persona: types.PersonaConfig{
-			Role: "Assistant",
-		},
-		Handoffs: []string{"agent-b", "agent-c"},
-	}
-
-	prompt := r.BuildSystemPrompt(agent, nil, nil, "", "")
-	if !strings.Contains(prompt, "Perspective Isolation") {
-		t.Errorf("system prompt missing perspective isolation section:\n%s", prompt)
+	prompt := r.BuildSystemPrompt(types.AgentConfig{}, RenderContext{})
+	if strings.Contains(prompt, "You are Software Engineer.") || strings.Contains(prompt, "Your goal: Write clean code") {
+		t.Errorf("empty Agent Definition should not contain persona:\n%s", prompt)
 	}
 }
 
-func TestBuildUserPromptWithTask(t *testing.T) {
+func TestBuildUserPromptWithResponsibilityAndInput(t *testing.T) {
 	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{}
-	task := types.TaskConfig{
-		Description: "Analyze the data",
+	prompt := r.BuildUserPrompt(types.AgentConfig{}, types.SubagentRequest{
+		Responsibility: "Analyze the data",
+		Input:          "Hello, world",
+	}, RenderContext{})
+	for _, expected := range []string{"## Responsibility", "Analyze the data", "## Input", "Hello, world"} {
+		if !strings.Contains(prompt, expected) {
+			t.Errorf("user prompt missing %q:\n%s", expected, prompt)
+		}
 	}
-
-	prompt := r.BuildUserPrompt(agent, task, "", RenderContext{})
-	if !strings.Contains(prompt, "Analyze the data") {
-		t.Errorf("user prompt missing task description:\n%s", prompt)
+	if strings.Contains(prompt, "## Task") {
+		t.Error("user prompt must not use the removed Task concept")
 	}
 }
 
-func TestBuildUserPromptWithInput(t *testing.T) {
+func TestBuildUserPromptWithRecordsKnowledgeAndMemory(t *testing.T) {
 	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{}
-	task := types.TaskConfig{}
-
-	prompt := r.BuildUserPrompt(agent, task, "Hello, world", RenderContext{})
-	if !strings.Contains(prompt, "Hello, world") {
-		t.Errorf("user prompt missing input:\n%s", prompt)
-	}
-}
-
-func TestBuildUserPromptWithKnowledge(t *testing.T) {
-	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{}
-	task := types.TaskConfig{}
-
-	rctx := RenderContext{
-		KnowledgeText: "The sky is blue",
-	}
-	prompt := r.BuildUserPrompt(agent, task, "", rctx)
-	if !strings.Contains(prompt, "The sky is blue") {
-		t.Errorf("user prompt missing knowledge:\n%s", prompt)
-	}
-}
-
-func TestBuildUserPromptWithMemories(t *testing.T) {
-	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{}
-	task := types.TaskConfig{}
-
-	rctx := RenderContext{
-		RecentMemories: "User prefers Python",
-	}
-	prompt := r.BuildUserPrompt(agent, task, "", rctx)
-	if !strings.Contains(prompt, "Recent Memories") {
-		t.Errorf("user prompt missing recent memories header:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "User prefers Python") {
-		t.Error("user prompt missing memory content")
-	}
-}
-
-func TestBuildUserPromptWithWorkerResults(t *testing.T) {
-	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{}
-	task := types.TaskConfig{}
-
-	rctx := RenderContext{
-		WorkerResults: []types.AgentResult{
-			{Raw: "Result from worker A"},
-			{Raw: "Result from worker B"},
-		},
-	}
-	prompt := r.BuildUserPrompt(agent, task, "", rctx)
-	if !strings.Contains(prompt, "Previous Results") {
-		t.Errorf("user prompt missing previous results header:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "Result from worker A") {
-		t.Error("user prompt missing worker A result")
-	}
-	if !strings.Contains(prompt, "Result from worker B") {
-		t.Error("user prompt missing worker B result")
+	prompt := r.BuildUserPrompt(types.AgentConfig{}, types.SubagentRequest{}, RenderContext{
+		KnowledgeText:  "The repository uses JSONL sessions.",
+		TeamMemory:     "The team already inspected the loader.",
+		SubagentMemory: "Keep changes small.",
+		Records: []types.SharedRecord{{
+			Name:    "DiagnosisReport",
+			Kind:    "diagnosis",
+			Summary: "The parser is missing a null check.",
+			Data:    map[string]any{"confidence": 0.9},
+		}},
+	})
+	for _, expected := range []string{
+		"The repository uses JSONL sessions.",
+		"## Team Memory",
+		"## Subagent Memory",
+		"## Shared Records",
+		"DiagnosisReport",
+		"The parser is missing a null check.",
+		"confidence: 0.9",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Errorf("user prompt missing %q:\n%s", expected, prompt)
+		}
 	}
 }
 
 func TestRender(t *testing.T) {
 	r := NewPromptRenderer(nil)
-	agent := types.AgentConfig{
-		Persona: types.PersonaConfig{
-			Role: "Assistant",
-			Goal: "Help the user",
+	messages, err := r.Render(
+		types.AgentConfig{Persona: types.PersonaConfig{Role: "Assistant"}},
+		types.SubagentRequest{
+			Responsibility: "Answer the question",
+			Input:          "What is Go?",
 		},
-	}
-	task := types.TaskConfig{
-		Description: "Answer the question",
-	}
-	input := "What is Go?"
-
-	messages, err := r.Render(agent, task, input, RenderContext{})
+		RenderContext{},
+	)
 	if err != nil {
 		t.Fatalf("Render returned error: %v", err)
 	}
-
 	if len(messages) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(messages))
 	}
-
-	if messages[0].Role != "system" {
-		t.Errorf("first message role should be system, got %q", messages[0].Role)
+	if messages[0].Role != "system" || messages[1].Role != "user" {
+		t.Fatalf("expected system then user messages, got %#v", messages)
 	}
-
-	if messages[1].Role != "user" {
-		t.Errorf("second message role should be user, got %q", messages[1].Role)
-	}
-
-	if messages[0].Content == "" {
-		t.Error("system message content is empty")
-	}
-
-	if messages[1].Content == "" {
-		t.Error("user message content is empty")
+	if messages[0].Content == "" || messages[1].Content == "" {
+		t.Error("rendered messages must not be empty")
 	}
 }
 
-func TestNewPromptRendererNil(t *testing.T) {
-	r := NewPromptRenderer(nil)
-	if r == nil {
-		t.Fatal("NewPromptRenderer returned nil")
+func TestNewPromptRenderer(t *testing.T) {
+	if renderer := NewPromptRenderer(nil); renderer == nil || renderer.templates == nil {
+		t.Error("NewPromptRenderer(nil) must initialize a renderer and template map")
 	}
-	if r.templates == nil {
-		t.Error("templates map should not be nil after NewPromptRenderer(nil)")
-	}
-}
-
-func TestNewPromptRendererWithTemplates(t *testing.T) {
 	custom := map[string]string{"custom": "content"}
-	r := NewPromptRenderer(custom)
-	if r.templates["custom"] != "content" {
+	renderer := NewPromptRenderer(custom)
+	if renderer.templates["custom"] != "content" {
 		t.Error("custom template not preserved")
 	}
 }

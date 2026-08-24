@@ -1,21 +1,30 @@
-name: research_team
-description: "Research team: researcher + planner in parallel"
+id: research_team
+goal: 同时完成主题调研和文章大纲。
 
-stages:
-  - process: parallel
-    tasks:
-      - name: research_topic
-        agent: researcher
-        description: |
-          Research the topic thoroughly. Use Grep to search knowledge base.
-          Use Read to review materials. Use TodoWrite to track progress.
-          
-          Topic: {{.Input}}
+members:
+  research_topic:
+    type: subagent
+    agent: researcher
+    responsibility: 调研用户给出的主题，搜索知识库并记录事实依据。
+    inputs:
+      user_message: true
+    output:
+      record: ResearchReport
 
-      - name: plan_outline
-        agent: planner
-        description: |
-          Create a detailed blog post outline. Use Read to review existing outlines.
-          Use TodoWrite to track sections. Use Write to save your draft.
-          
-          Topic: {{.Input}}
+  plan_outline:
+    type: subagent
+    agent: planner
+    responsibility: 根据用户主题设计详细博客大纲。
+    inputs:
+      user_message: true
+    output:
+      record: BlogOutline
+
+output:
+  records:
+    - from: research_topic
+      record: ResearchReport
+      scope: flow
+    - from: plan_outline
+      record: BlogOutline
+      scope: flow

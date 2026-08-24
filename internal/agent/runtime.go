@@ -7,47 +7,48 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// AgentRuntime is the interface for running agents
-type AgentRuntime interface {
-	Run(ctx context.Context, agent types.AgentConfig, task types.TaskConfig, input string) (*types.AgentResult, error)
+// SubagentRunner executes one V1 Subagent member. TeamRuntime owns routing
+// and record publication; this package only runs the model/tool loop.
+type SubagentRunner interface {
+	Run(ctx context.Context, agent types.AgentConfig, req types.SubagentRequest) (*types.SubagentResult, error)
 }
 
-// TurnLoop implements AgentRuntime with a tool-use loop
+// TurnLoop implements SubagentRunner with a bounded tool-use loop.
 type TurnLoop struct {
 	model          types.ModelProvider
 	toolExecutor   ToolExecutor
 	guardrail      *GuardrailChecker
-	signalParser   *SignalParser
+	routeParser    *RouteParser
 	hitl           *HITLGate
 	hooks          *HookExecutor
 	promptRenderer PromptRenderer
 }
 
-// ToolExecutor interface (to avoid circular dependency with tool package)
+// ToolExecutor is kept small so the agent package does not depend on the
+// concrete tool registry.
 type ToolExecutor interface {
 	Execute(ctx context.Context, name string, args map[string]any) (*types.ToolResult, error)
 }
 
-// PromptRenderer interface (to avoid circular dependency with prompt package)
+// PromptRenderer renders one Subagent prompt.
 type PromptRenderer interface {
-	Render(agent types.AgentConfig, task types.TaskConfig, input string, rctx RenderContext) ([]types.Message, error)
+	Render(agent types.AgentConfig, req types.SubagentRequest, rctx RenderContext) ([]types.Message, error)
 }
 
-// RenderContext holds context for prompt rendering
+// RenderContext holds the collaboration context visible to a Subagent.
 type RenderContext struct {
 	Variables      map[string]string
-	AgentStateText string
-	TeamStateText  string
-	RecentMemories string
+	TeamMemory     string
+	SubagentMemory string
 	KnowledgeText  string
-	WorkerResults  []types.AgentResult
+	Records        []types.SharedRecord
 }
 
 func NewTurnLoop(
 	model types.ModelProvider,
 	toolExecutor ToolExecutor,
 	guardrail *GuardrailChecker,
-	signalParser *SignalParser,
+	routeParser *RouteParser,
 	hitl *HITLGate,
 	hooks *HookExecutor,
 	promptRenderer PromptRenderer,
@@ -56,27 +57,48 @@ func NewTurnLoop(
 		model:          model,
 		toolExecutor:   toolExecutor,
 		guardrail:      guardrail,
-		signalParser:   signalParser,
+		routeParser:    routeParser,
 		hitl:           hitl,
 		hooks:          hooks,
 		promptRenderer: promptRenderer,
 	}
 }
 
-func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, task types.TaskConfig, input string) (*types.AgentResult, error) {
-	// Build initial messages
-	messages, err := t.promptRenderer.Render(agent, task, input, RenderContext{})
+// Run executes one SubagentTurn. A Subagent is request/response in V1:
+// multiple model/tool rounds are still internal to this one call and no
+// background mailbox or active-agent protocol is introduced.
+func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.SubagentRequest) (*types.SubagentResult, error) {
+	if t.model == nil {
+		return nil, fmt.Errorf("model provider is nil")
+	}
+	if t.promptRenderer == nil {
+		return nil, fmt.Errorf("prompt renderer is nil")
+	}
+	if t.routeParser == nil {
+		t.routeParser = NewRouteParser()
+	}
+
+	messages, err := t.promptRenderer.Render(agent, req, RenderContext{
+		Variables:      req.Variables,
+		TeamMemory:     req.TeamMemory,
+		SubagentMemory: req.SubagentMemory,
+		KnowledgeText:  req.KnowledgeText,
+		Records:        req.Records,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("render prompt: %w", err)
 	}
 
 	maxRounds := agent.Loop.MaxRounds
 	if maxRounds <= 0 {
-		maxRounds = 3 // default
+		maxRounds = 3
 	}
 
 	totalUsage := types.TokenUsage{}
 	toolSchemas := t.buildToolSchemas(agent)
+	var lastText string
+	var workspaceOps []types.WorkspaceOperation
+	toolCalls := 0
 
 	for round := 0; round < maxRounds; round++ {
 		select {
@@ -85,105 +107,162 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, task types.
 		default:
 		}
 
-		// Guardrail check on input
 		if round == 0 && t.guardrail != nil {
-			if err := t.guardrail.CheckInput(input); err != nil {
-				return &types.AgentResult{
-					Raw:   err.Error(),
+			if err := t.guardrail.CheckInput(req.Input); err != nil {
+				return &types.SubagentResult{
+					Reply: err.Error(),
 					Error: err.Error(),
+					Next:  &types.Route{Action: types.NextCoordinate, Reason: err.Error()},
 				}, nil
 			}
 		}
 
-		// Call LLM
 		resp, err := t.model.Chat(ctx, messages, toolSchemas, agent.Model)
 		if err != nil {
 			return nil, fmt.Errorf("llm chat: %w", err)
 		}
+		if resp == nil {
+			return nil, fmt.Errorf("model returned nil response")
+		}
 
 		totalUsage.PromptTokens += resp.Usage.PromptTokens
 		totalUsage.CompletionTokens += resp.Usage.CompletionTokens
+		totalUsage.ReasoningTokens += resp.Usage.ReasoningTokens
 		totalUsage.TotalTokens += resp.Usage.TotalTokens
+		lastText = resp.Text
 
-		// No tool calls -> final answer
 		if len(resp.ToolCalls) == 0 {
-			// Guardrail check on output
 			if t.guardrail != nil {
 				if err := t.guardrail.CheckOutput(resp.Text); err != nil {
-					return &types.AgentResult{
-						Raw:   resp.Text,
-						Error: err.Error(),
+					return &types.SubagentResult{
+						Reply:        resp.Text,
+						Error:        err.Error(),
+						Usage:        totalUsage,
+						WorkspaceOps: workspaceOps,
+						ToolCalls:    toolCalls,
+						Next:         &types.Route{Action: types.NextCoordinate, Reason: err.Error()},
 					}, nil
 				}
 			}
 
-			// Parse signal
-			signal, cleanText := t.signalParser.ParseWithMode(resp.Text, maxRounds > 1)
-
-			// Structured output if configured
+			action, cleanText := t.routeParser.ParseWithMode(resp.Text, maxRounds > 1)
 			var parsed any
 			if agent.Structured != nil {
 				parsed, err = NewStructuredOutputManager().ParseAndValidate(cleanText, agent.Structured)
 				if err != nil {
-					return &types.AgentResult{
-						Raw:   cleanText,
-						Error: fmt.Sprintf("structured output: %v", err),
+					return &types.SubagentResult{
+						Reply:        cleanText,
+						Error:        fmt.Sprintf("structured output: %v", err),
+						Usage:        totalUsage,
+						WorkspaceOps: workspaceOps,
+						ToolCalls:    toolCalls,
+						Next:         &types.Route{Action: types.NextCoordinate, Reason: err.Error()},
 					}, nil
 				}
 			}
 
-			return &types.AgentResult{
-				Raw:    cleanText,
-				Parsed: parsed,
-				Signal: signal,
-				Usage:  totalUsage,
+			return &types.SubagentResult{
+				Reply:        cleanText,
+				Parsed:       parsed,
+				Next:         routeFromAction(action),
+				Usage:        totalUsage,
+				WorkspaceOps: workspaceOps,
+				ToolCalls:    toolCalls,
 			}, nil
 		}
 
-		// Execute tool calls
-		for _, tc := range resp.ToolCalls {
-			result, err := t.toolExecutor.Execute(ctx, tc.Name, tc.Arguments)
-			if err != nil {
-				result = &types.ToolResult{
-					Success: false,
-					Error:   err.Error(),
-				}
-			}
+		toolCalls += len(resp.ToolCalls)
+		if req.MaxToolCalls > 0 && toolCalls > req.MaxToolCalls {
+			return &types.SubagentResult{
+				Reply:        "Subagent tool-call limit reached.",
+				Next:         &types.Route{Action: types.NextCoordinate, Reason: "tool-call limit reached"},
+				Usage:        totalUsage,
+				WorkspaceOps: workspaceOps,
+				ToolCalls:    toolCalls,
+				Error:        fmt.Sprintf("subagent exceeded max tool calls: %d", req.MaxToolCalls),
+			}, nil
+		}
 
-			// Add tool result to messages
-			messages = append(messages, types.Message{
-				Role:      "assistant",
-				Content:   resp.Text,
-				ToolCalls: []types.ToolCall{tc},
-			})
+		results := t.executeToolCalls(ctx, agent, req.MaxParallelTools, resp.ToolCalls)
+		messages = append(messages, types.Message{
+			Role:      "assistant",
+			Content:   resp.Text,
+			ToolCalls: resp.ToolCalls,
+		})
+		for i, call := range resp.ToolCalls {
+			result := results[i]
+			if result == nil {
+				result = &types.ToolResult{Success: false, Error: "tool returned nil result"}
+			}
 			messages = append(messages, types.Message{
 				Role:       "tool",
-				ToolCallID: tc.ID,
-				Content:    result.Content,
+				ToolCallID: call.ID,
+				Content:    toolResultContent(result),
 			})
+			workspaceOps = append(workspaceOps, result.WorkspaceOps...)
 		}
 	}
 
-	// Max rounds reached, return last response
-	signal, cleanText := t.signalParser.ParseWithMode("", true)
-	return &types.AgentResult{
-		Raw:    cleanText,
-		Signal: signal,
-		Usage:  totalUsage,
+	action, cleanText := t.routeParser.ParseWithMode(lastText, true)
+	return &types.SubagentResult{
+		Reply:        cleanText,
+		Next:         &types.Route{Action: action, Reason: "subagent loop limit reached"},
+		Usage:        totalUsage,
+		WorkspaceOps: workspaceOps,
+		ToolCalls:    toolCalls,
 	}, nil
+}
+
+func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig, maxParallel int, calls []types.ToolCall) []*types.ToolResult {
+	if batch, ok := t.toolExecutor.(BatchToolExecutor); ok && parallelToolsEnabled(agent) {
+		return NewToolBatchExecutor(batch, maxParallel, true).Execute(ctx, calls)
+	}
+
+	results := make([]*types.ToolResult, len(calls))
+	for i, call := range calls {
+		result, err := t.toolExecutor.Execute(ctx, call.Name, call.Arguments)
+		if err != nil {
+			result = &types.ToolResult{Success: false, Error: err.Error()}
+		}
+		if result == nil {
+			result = &types.ToolResult{Success: false, Error: "tool returned nil result"}
+		}
+		results[i] = result
+	}
+	return results
+}
+
+func toolResultContent(result *types.ToolResult) string {
+	if result.Content != "" {
+		return result.Content
+	}
+	if result.Error != "" {
+		return result.Error
+	}
+	return ""
+}
+
+func parallelToolsEnabled(agent types.AgentConfig) bool {
+	return agent.Loop.ToolExecution == "parallel_safe"
+}
+
+func routeFromAction(action types.NextAction) *types.Route {
+	if action == "" {
+		action = types.NextProceed
+	}
+	return &types.Route{Action: action}
 }
 
 func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema {
 	var schemas []types.JSONSchema
 
-	// Map of tool descriptions for builtin tools
 	builtinSchemas := map[string]types.JSONSchema{
-		"Read":      {Type: "object", Properties: map[string]types.JSONProperty{"file": {Type: "string", Description: "Path to the file to read"}}},
-		"Write":     {Type: "object", Properties: map[string]types.JSONProperty{"file": {Type: "string", Description: "Path to the file to write"}, "content": {Type: "string", Description: "Content to write"}}},
-		"Grep":      {Type: "object", Properties: map[string]types.JSONProperty{"pattern": {Type: "string", Description: "Pattern to search for"}, "path": {Type: "string", Description: "File or directory to search in"}}},
-		"Glob":      {Type: "object", Properties: map[string]types.JSONProperty{"pattern": {Type: "string", Description: "Glob pattern (e.g., *.go)"}}},
-		"TodoWrite": {Type: "object", Properties: map[string]types.JSONProperty{"items": {Type: "array", Description: "List of todo items"}}},
-		"TodoRead":  {Type: "object", Properties: map[string]types.JSONProperty{}},
+		"Read":      {Name: "Read", Type: "object", Properties: map[string]types.JSONProperty{"file": {Type: "string", Description: "Path to the file to read"}}},
+		"Write":     {Name: "Write", Type: "object", Properties: map[string]types.JSONProperty{"file": {Type: "string", Description: "Path to the file to write"}, "content": {Type: "string", Description: "Content to write"}}},
+		"Grep":      {Name: "Grep", Type: "object", Properties: map[string]types.JSONProperty{"pattern": {Type: "string", Description: "Pattern to search for"}, "path": {Type: "string", Description: "File or directory to search in"}}},
+		"Glob":      {Name: "Glob", Type: "object", Properties: map[string]types.JSONProperty{"pattern": {Type: "string", Description: "Glob pattern (e.g., *.go)"}}},
+		"TodoWrite": {Name: "TodoWrite", Type: "object", Properties: map[string]types.JSONProperty{"items": {Type: "array", Description: "List of todo items"}}},
+		"TodoRead":  {Name: "TodoRead", Type: "object", Properties: map[string]types.JSONProperty{}},
 	}
 
 	for _, toolName := range agent.Tools.Builtin {
@@ -191,6 +270,5 @@ func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema 
 			schemas = append(schemas, schema)
 		}
 	}
-
 	return schemas
 }

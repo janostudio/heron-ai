@@ -35,6 +35,5 @@ const (
 	HookOnEnd       = "on_end"
 	HookOnToolStart = "on_tool_start"
 	HookOnToolEnd   = "on_tool_end"
-	HookOnHandoff   = "on_handoff"
 	HookOnError     = "on_error"
 )

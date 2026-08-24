@@ -24,16 +24,16 @@ type FlowRunner interface {
 
 // FlowResult is the result returned by the flow runner
 type FlowResult struct {
-	Stages []StageOutput
-	Signal types.Signal
+	Teams  []TeamOutput
+	Status types.SessionStatus
 	Usage  types.TokenUsage
 }
 
-// StageOutput represents a single stage output for the TUI display
-type StageOutput struct {
-	StageName string
-	TeamName  string
-	Content   string
+// TeamOutput is the display projection for one TeamTurn.
+type TeamOutput struct {
+	TeamID  string
+	Reply   string
+	Records []types.SharedRecord
 }
 
 // ===== Message Types =====
@@ -52,7 +52,7 @@ const (
 // DisplayMessage is a message displayed in the TUI viewport
 type DisplayMessage struct {
 	Role      MessageRole
-	AgentName string
+	MemberID  string
 	Content   string
 	RoundNum  int
 	Timestamp time.Time
@@ -104,8 +104,8 @@ var (
 			Padding(0, 1)
 
 	assistantMsgStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("255")).
-			Padding(0, 1)
+				Foreground(lipgloss.Color("255")).
+				Padding(0, 1)
 
 	systemMsgStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
@@ -402,15 +402,15 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.totalUsage.TotalTokens += msg.result.Usage.TotalTokens
 			m.roundNum++
 
-			for i, stage := range msg.result.Stages {
+			for i, team := range msg.result.Teams {
 				m.addMessage(DisplayMessage{
 					Role:      RoleAgent,
-					AgentName: stage.TeamName + "/" + stage.StageName,
-					Content:   stage.Content,
+					MemberID:  team.TeamID,
+					Content:   team.Reply,
 					RoundNum:  m.roundNum,
 					Timestamp: time.Now(),
 				})
-				_ = agentStyle(i) // reserve for future per-agent coloring
+				_ = agentStyle(i)
 			}
 
 			if msg.result.Usage.TotalTokens > 0 {
@@ -582,7 +582,7 @@ func (m *TUIModel) renderMessages() {
 		case RoleAssistant:
 			lines = append(lines, assistantMsgStyle.Render(msg.Content))
 		case RoleAgent:
-			header := fmt.Sprintf("[%s]", msg.AgentName)
+			header := fmt.Sprintf("[%s]", msg.MemberID)
 			lines = append(lines, agentHeaderStyles[0].Render(header))
 			lines = append(lines, assistantMsgStyle.Render(msg.Content))
 		case RoleSystem:

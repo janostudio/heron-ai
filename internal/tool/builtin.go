@@ -3,21 +3,26 @@ package tool
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
+	"github.com/heron-ai/heron-engine/internal/workspace"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
 // ReadTool reads file contents
 type ReadTool struct {
-	baseDir string
+	workspace *workspace.Service
 }
 
-func NewReadTool(baseDir string) *ReadTool { return &ReadTool{baseDir: baseDir} }
-func (t *ReadTool) Name() string           { return "Read" }
-func (t *ReadTool) Description() string    { return "Read file contents" }
-func (t *ReadTool) NeedsApproval() bool    { return false }
+func NewReadTool(baseDir string) *ReadTool {
+	ws, _ := workspace.New(baseDir)
+	return &ReadTool{workspace: ws}
+}
+func (t *ReadTool) Name() string        { return "Read" }
+func (t *ReadTool) Description() string { return "Read file contents" }
+func (t *ReadTool) NeedsApproval() bool { return false }
+func (t *ReadTool) Execution() types.ToolExecutionSpec {
+	return types.ToolExecutionSpec{Class: types.ToolReadOnly}
+}
 func (t *ReadTool) Parameters() map[string]any {
 	return map[string]any{
 		"file": map[string]any{
@@ -31,22 +36,35 @@ func (t *ReadTool) Execute(ctx context.Context, params map[string]any) (*types.T
 	if file == "" {
 		return &types.ToolResult{Success: false, Error: "file parameter is required"}, nil
 	}
-	data, err := os.ReadFile(filepath.Join(t.baseDir, file))
+	if t.workspace == nil {
+		return &types.ToolResult{Success: false, Error: "workspace is not configured"}, nil
+	}
+	data, err := t.workspace.Read(ctx, workspace.ReadRequest{Path: file})
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
-	return &types.ToolResult{Success: true, Content: string(data)}, nil
+	return &types.ToolResult{
+		Success:      true,
+		Content:      data.Content,
+		WorkspaceOps: []types.WorkspaceOperation{data.Operation},
+	}, nil
 }
 
 // WriteTool writes file contents
 type WriteTool struct {
-	baseDir string
+	workspace *workspace.Service
 }
 
-func NewWriteTool(baseDir string) *WriteTool { return &WriteTool{baseDir: baseDir} }
-func (t *WriteTool) Name() string            { return "Write" }
-func (t *WriteTool) Description() string     { return "Write file contents" }
-func (t *WriteTool) NeedsApproval() bool     { return true }
+func NewWriteTool(baseDir string) *WriteTool {
+	ws, _ := workspace.New(baseDir)
+	return &WriteTool{workspace: ws}
+}
+func (t *WriteTool) Name() string        { return "Write" }
+func (t *WriteTool) Description() string { return "Write file contents" }
+func (t *WriteTool) NeedsApproval() bool { return true }
+func (t *WriteTool) Execution() types.ToolExecutionSpec {
+	return types.ToolExecutionSpec{Class: types.ToolSerial}
+}
 func (t *WriteTool) Parameters() map[string]any {
 	return map[string]any{
 		"file":    map[string]any{"type": "string", "description": "Path to the file to write"},
@@ -59,26 +77,38 @@ func (t *WriteTool) Execute(ctx context.Context, params map[string]any) (*types.
 	if file == "" {
 		return &types.ToolResult{Success: false, Error: "file parameter is required"}, nil
 	}
-	fullPath := filepath.Join(t.baseDir, file)
-	dir := filepath.Dir(fullPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if t.workspace == nil {
+		return &types.ToolResult{Success: false, Error: "workspace is not configured"}, nil
+	}
+	result, err := t.workspace.Write(ctx, workspace.WriteRequest{
+		Path:    file,
+		Content: content,
+	})
+	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
-	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
-		return &types.ToolResult{Success: false, Error: err.Error()}, nil
-	}
-	return &types.ToolResult{Success: true, Content: "File written successfully"}, nil
+	return &types.ToolResult{
+		Success:      true,
+		Content:      "File written successfully",
+		WorkspaceOps: []types.WorkspaceOperation{result.Operation},
+	}, nil
 }
 
 // GrepTool searches file contents
 type GrepTool struct {
-	baseDir string
+	workspace *workspace.Service
 }
 
-func NewGrepTool(baseDir string) *GrepTool { return &GrepTool{baseDir: baseDir} }
-func (t *GrepTool) Name() string           { return "Grep" }
-func (t *GrepTool) Description() string    { return "Search for a pattern in files" }
-func (t *GrepTool) NeedsApproval() bool    { return false }
+func NewGrepTool(baseDir string) *GrepTool {
+	ws, _ := workspace.New(baseDir)
+	return &GrepTool{workspace: ws}
+}
+func (t *GrepTool) Name() string        { return "Grep" }
+func (t *GrepTool) Description() string { return "Search for a pattern in files" }
+func (t *GrepTool) NeedsApproval() bool { return false }
+func (t *GrepTool) Execution() types.ToolExecutionSpec {
+	return types.ToolExecutionSpec{Class: types.ToolReadOnly}
+}
 func (t *GrepTool) Parameters() map[string]any {
 	return map[string]any{
 		"pattern": map[string]any{"type": "string", "description": "Pattern to search for"},
@@ -91,30 +121,42 @@ func (t *GrepTool) Execute(ctx context.Context, params map[string]any) (*types.T
 	if pattern == "" || searchPath == "" {
 		return &types.ToolResult{Success: false, Error: "pattern and path are required"}, nil
 	}
-	fullPath := filepath.Join(t.baseDir, searchPath)
-	data, err := os.ReadFile(fullPath)
+	if t.workspace == nil {
+		return &types.ToolResult{Success: false, Error: "workspace is not configured"}, nil
+	}
+	data, err := t.workspace.Read(ctx, workspace.ReadRequest{Path: searchPath})
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
-	content := string(data)
+	content := data.Content
 	var matches []string
 	for i, line := range splitLines(content) {
 		if contains(line, pattern) {
 			matches = append(matches, fmt.Sprintf("%d: %s", i+1, line))
 		}
 	}
-	return &types.ToolResult{Success: true, Content: joinLines(matches)}, nil
+	return &types.ToolResult{
+		Success:      true,
+		Content:      joinLines(matches),
+		WorkspaceOps: []types.WorkspaceOperation{data.Operation},
+	}, nil
 }
 
 // GlobTool matches file patterns
 type GlobTool struct {
-	baseDir string
+	workspace *workspace.Service
 }
 
-func NewGlobTool(baseDir string) *GlobTool { return &GlobTool{baseDir: baseDir} }
-func (t *GlobTool) Name() string           { return "Glob" }
-func (t *GlobTool) Description() string    { return "Find files matching a pattern" }
-func (t *GlobTool) NeedsApproval() bool    { return false }
+func NewGlobTool(baseDir string) *GlobTool {
+	ws, _ := workspace.New(baseDir)
+	return &GlobTool{workspace: ws}
+}
+func (t *GlobTool) Name() string        { return "Glob" }
+func (t *GlobTool) Description() string { return "Find files matching a pattern" }
+func (t *GlobTool) NeedsApproval() bool { return false }
+func (t *GlobTool) Execution() types.ToolExecutionSpec {
+	return types.ToolExecutionSpec{Class: types.ToolReadOnly}
+}
 func (t *GlobTool) Parameters() map[string]any {
 	return map[string]any{
 		"pattern": map[string]any{"type": "string", "description": "Glob pattern (e.g., *.go)"},
@@ -125,7 +167,10 @@ func (t *GlobTool) Execute(ctx context.Context, params map[string]any) (*types.T
 	if pattern == "" {
 		return &types.ToolResult{Success: false, Error: "pattern is required"}, nil
 	}
-	matches, err := filepath.Glob(filepath.Join(t.baseDir, pattern))
+	if t.workspace == nil {
+		return &types.ToolResult{Success: false, Error: "workspace is not configured"}, nil
+	}
+	matches, err := t.workspace.Glob(pattern)
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
@@ -135,10 +180,13 @@ func (t *GlobTool) Execute(ctx context.Context, params map[string]any) (*types.T
 // TodoWriteTool writes todo list
 type TodoWriteTool struct{}
 
-func NewTodoWriteTool() *TodoWriteTool  { return &TodoWriteTool{} }
-func (t *TodoWriteTool) Name() string   { return "TodoWrite" }
-func (t *TodoWriteTool) Description() string  { return "Write todo items" }
+func NewTodoWriteTool() *TodoWriteTool       { return &TodoWriteTool{} }
+func (t *TodoWriteTool) Name() string        { return "TodoWrite" }
+func (t *TodoWriteTool) Description() string { return "Write todo items" }
 func (t *TodoWriteTool) NeedsApproval() bool { return false }
+func (t *TodoWriteTool) Execution() types.ToolExecutionSpec {
+	return types.ToolExecutionSpec{Class: types.ToolSerial}
+}
 func (t *TodoWriteTool) Parameters() map[string]any {
 	return map[string]any{
 		"items": map[string]any{"type": "array", "description": "List of todo items"},
@@ -151,10 +199,13 @@ func (t *TodoWriteTool) Execute(ctx context.Context, params map[string]any) (*ty
 // TodoReadTool reads todo list
 type TodoReadTool struct{}
 
-func NewTodoReadTool() *TodoReadTool  { return &TodoReadTool{} }
-func (t *TodoReadTool) Name() string  { return "TodoRead" }
+func NewTodoReadTool() *TodoReadTool        { return &TodoReadTool{} }
+func (t *TodoReadTool) Name() string        { return "TodoRead" }
 func (t *TodoReadTool) Description() string { return "Read todo items" }
 func (t *TodoReadTool) NeedsApproval() bool { return false }
+func (t *TodoReadTool) Execution() types.ToolExecutionSpec {
+	return types.ToolExecutionSpec{Class: types.ToolReadOnly}
+}
 func (t *TodoReadTool) Parameters() map[string]any {
 	return map[string]any{}
 }

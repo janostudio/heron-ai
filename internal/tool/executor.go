@@ -35,6 +35,13 @@ func (e *ToolExecutor) Execute(ctx context.Context, name string, args map[string
 	return result, nil
 }
 
+// ExecutionSpec exposes the optional safety classification used by the V1
+// parallel-safe Tool scheduler. Unknown tools default to serial execution in
+// the registry.
+func (e *ToolExecutor) ExecutionSpec(name string) types.ToolExecutionSpec {
+	return e.registry.ExecutionSpec(name)
+}
+
 func (e *ToolExecutor) ExecuteWithApproval(ctx context.Context, name string, args map[string]any) (*types.ToolResult, error) {
 	t, err := e.registry.Lookup(name)
 	if err != nil {

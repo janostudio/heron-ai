@@ -47,6 +47,21 @@ func (s *SSEWriter) WriteEvent(event types.SSEEvent) error {
 	return nil
 }
 
+func (s *SSEWriter) WriteSessionEvent(event types.SessionEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(s.w, "id: %d\ndata: %s\n\n", event.Seq, data); err != nil {
+		return err
+	}
+	s.flusher.Flush()
+	return nil
+}
+
 func (s *SSEWriter) WriteChunk(content string) error {
 	return s.WriteEvent(types.SSEEvent{
 		Type:    "content",
@@ -54,10 +69,10 @@ func (s *SSEWriter) WriteChunk(content string) error {
 	})
 }
 
-func (s *SSEWriter) WriteAgentChunk(agentName, content string) error {
+func (s *SSEWriter) WriteMemberChunk(memberID, content string) error {
 	return s.WriteEvent(types.SSEEvent{
-		Type:      "agent_output",
-		AgentName: agentName,
-		Content:   content,
+		Type:     "member_output",
+		MemberID: memberID,
+		Content:  content,
 	})
 }
