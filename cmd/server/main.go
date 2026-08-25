@@ -26,6 +26,7 @@ func main() {
 	prompt := flag.String("prompt", "", "Run one FlowTurn and exit")
 	flow := flag.String("flow", "", "Flow config path (default: .agents/flows/default.yml)")
 	sessionID := flag.String("session", "", "Resume an existing FlowSession")
+	jsonRPC := flag.Bool("json-rpc", false, "Run a long-lived JSON-RPC 2.0 server over stdin/stdout")
 	port := flag.String("port", "", "HTTP server port (default: 8080)")
 	serve := flag.Bool("serve", false, "Start HTTP server mode")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
@@ -36,7 +37,22 @@ func main() {
 		return
 	}
 
+	if *jsonRPC && (*prompt != "" || *serve) {
+		fmt.Fprintln(os.Stderr, "Error: --json-rpc cannot be combined with --prompt or --serve")
+		os.Exit(1)
+	}
+
 	flowPath := resolveFlowPath(*flow)
+	if *jsonRPC {
+		if flowPath == "" {
+			fmt.Fprintln(os.Stderr, "Error: --json-rpc requires a new-format Flow config")
+			fmt.Fprintln(os.Stderr, "Use --flow .agents/flows/default.yml")
+			os.Exit(1)
+		}
+		runJSONRPC(flowPath)
+		return
+	}
+
 	if *serve {
 		startServer(flowPath, *port)
 		return
@@ -88,6 +104,8 @@ func startServer(flowPath, port string) {
 	mux.HandleFunc("/api/sessions/turn", handler.HandleTurn)
 	mux.HandleFunc("/api/status", handler.HandleStatus)
 	mux.HandleFunc("/api/stream", handler.HandleStream)
+	mux.HandleFunc("/api/recovery/status", handler.HandleRecoveryStatus)
+	mux.HandleFunc("/api/recovery", handler.HandleRecover)
 	mux.HandleFunc("/api/resume", handler.HandleResume)
 	mux.HandleFunc("/api/cancel", handler.HandleCancel)
 
@@ -113,15 +131,7 @@ func runPrompt(flowPath, sessionID, prompt string) {
 		os.Exit(1)
 	}
 
-	var result types.FlowTurnResult
-	if sessionID == "" {
-		result, err = bundle.Flow.Start(ctx, types.StartFlowRequest{
-			FlowID: bundle.Definitions.Flow.ID,
-			Input:  prompt,
-		})
-	} else {
-		result, err = bundle.Flow.Resume(ctx, sessionID, prompt)
-	}
+	result, err := executeFlowTurn(ctx, bundle.Flow, bundle.Definitions.Flow.ID, sessionID, prompt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running FlowTurn: %v\n", err)
 		os.Exit(1)
@@ -219,29 +229,34 @@ func buildCurrentRuntime(ctx context.Context, flowPath string) (*app.RuntimeBund
 	if err != nil {
 		return nil, "", fmt.Errorf("load .agents/models.json: %w", err)
 	}
-	modelName, baseURL, apiKey := resolveModel(models)
-	if apiKey == "" {
-		return nil, "", fmt.Errorf("OPENAI_API_KEY is not set")
+	if models == nil || len(models.Models) == 0 {
+		return nil, "", fmt.Errorf("models.json has no models")
+	}
+	for i := range models.Models {
+		models.Models[i].APIKey = resolveAPIKey(models.Models[i].APIKey, os.Getenv("OPENAI_API_KEY"))
+	}
+	defaultProfile, err := resolveModelProfile(models)
+	if err != nil {
+		return nil, "", err
+	}
+	if defaultProfile.APIKey == "" {
+		return nil, "", fmt.Errorf("API key for default model %q is not set", defaultProfile.Name)
 	}
 
-	provider := model.NewOpenAIProvider(apiKey, baseURL, modelName)
+	provider, err := model.NewProviderRouter(models.Model, models.Models)
+	if err != nil {
+		return nil, "", fmt.Errorf("build model providers: %w", err)
+	}
 	bundle, err := app.BuildRuntime(ctx, definitions, provider, ".")
 	if err != nil {
 		return nil, "", err
 	}
-	return bundle, modelName, nil
-}
-
-type ModelEntry struct {
-	Name      string `json:"name"`
-	BaseURL   string `json:"base_url"`
-	APIKey    string `json:"api_key"`
-	MaxTokens int    `json:"max_tokens"`
+	return bundle, provider.DefaultModel(), nil
 }
 
 type ModelsConfig struct {
-	Model  string       `json:"model"`
-	Models []ModelEntry `json:"models"`
+	Model  string               `json:"model"`
+	Models []types.ModelProfile `json:"models"`
 }
 
 func loadModelsConfig() (*ModelsConfig, error) {
@@ -256,33 +271,19 @@ func loadModelsConfig() (*ModelsConfig, error) {
 	return &config, nil
 }
 
-func resolveModel(config *ModelsConfig) (name, baseURL, apiKey string) {
-	name = "gpt-4o-mini"
-	baseURL = "https://api.openai.com/v1"
-	apiKey = os.Getenv("OPENAI_API_KEY")
-	if config == nil {
-		return
+func resolveModelProfile(config *ModelsConfig) (types.ModelProfile, error) {
+	if config == nil || len(config.Models) == 0 {
+		return types.ModelProfile{}, fmt.Errorf("models.json has no models")
 	}
-
-	for _, item := range config.Models {
-		if item.Name != config.Model {
-			continue
+	selected := strings.TrimSpace(config.Model)
+	if selected != "" {
+		for _, item := range config.Models {
+			if item.Name == selected || item.ID == selected {
+				return item, nil
+			}
 		}
-		name = item.Name
-		if item.BaseURL != "" {
-			baseURL = item.BaseURL
-		}
-		apiKey = resolveAPIKey(item.APIKey, apiKey)
-		return
 	}
-	if len(config.Models) > 0 {
-		name = config.Models[0].Name
-		if config.Models[0].BaseURL != "" {
-			baseURL = config.Models[0].BaseURL
-		}
-		apiKey = resolveAPIKey(config.Models[0].APIKey, apiKey)
-	}
-	return
+	return config.Models[0], nil
 }
 
 func resolveAPIKey(configured, fallback string) string {
@@ -290,7 +291,10 @@ func resolveAPIKey(configured, fallback string) string {
 		if value := os.Getenv(strings.TrimSuffix(strings.TrimPrefix(configured, "${"), "}")); value != "" {
 			return value
 		}
-		return fallback
+		// An explicit environment reference must not silently fall back to a
+		// key for another provider (for example ANTHROPIC_API_KEY -> the
+		// process's OPENAI_API_KEY).
+		return ""
 	}
 	if configured != "" {
 		return configured

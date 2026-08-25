@@ -78,6 +78,8 @@ func (r *Route) UnmarshalYAML(node *yaml.Node) error {
 type FlowTurn struct {
 	ID            string     `yaml:"id" json:"id"`
 	FlowSessionID string     `yaml:"flow_session_id" json:"flow_session_id"`
+	Attempt       int        `yaml:"attempt" json:"attempt"`
+	RecoveryOf    string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
 	Input         string     `yaml:"input" json:"input"`
 	Status        TurnStatus `yaml:"status" json:"status"`
 	Next          *Route     `yaml:"next,omitempty" json:"next,omitempty"`
@@ -92,6 +94,8 @@ type TeamTurn struct {
 	FlowTurnID    string     `yaml:"flow_turn_id" json:"flow_turn_id"`
 	TeamSessionID string     `yaml:"team_session_id" json:"team_session_id"`
 	TeamID        string     `yaml:"team_id" json:"team_id"`
+	Attempt       int        `yaml:"attempt" json:"attempt"`
+	RecoveryOf    string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
 	CallerTeam    string     `yaml:"caller_team,omitempty" json:"caller_team,omitempty"`
 	Status        TurnStatus `yaml:"status" json:"status"`
 	Next          *Route     `yaml:"next,omitempty" json:"next,omitempty"`
@@ -107,6 +111,8 @@ type SubagentTurn struct {
 	TeamTurnID        string     `yaml:"team_turn_id" json:"team_turn_id"`
 	SubagentSessionID string     `yaml:"subagent_session_id" json:"subagent_session_id"`
 	MemberID          string     `yaml:"member_id" json:"member_id"`
+	Attempt           int        `yaml:"attempt" json:"attempt"`
+	RecoveryOf        string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
 	Status            TurnStatus `yaml:"status" json:"status"`
 	RecordIDs         []string   `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
 	StartedAt         time.Time  `yaml:"started_at" json:"started_at"`
@@ -118,6 +124,8 @@ type CommandTurn struct {
 	ID         string     `yaml:"id" json:"id"`
 	TeamTurnID string     `yaml:"team_turn_id" json:"team_turn_id"`
 	MemberID   string     `yaml:"member_id" json:"member_id"`
+	Attempt    int        `yaml:"attempt" json:"attempt"`
+	RecoveryOf string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
 	Status     TurnStatus `yaml:"status" json:"status"`
 	RecordIDs  []string   `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
 	StartedAt  time.Time  `yaml:"started_at" json:"started_at"`
@@ -129,6 +137,8 @@ type WebhookTurn struct {
 	ID         string     `yaml:"id" json:"id"`
 	TeamTurnID string     `yaml:"team_turn_id" json:"team_turn_id"`
 	MemberID   string     `yaml:"member_id" json:"member_id"`
+	Attempt    int        `yaml:"attempt" json:"attempt"`
+	RecoveryOf string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
 	Status     TurnStatus `yaml:"status" json:"status"`
 	RecordIDs  []string   `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
 	StartedAt  time.Time  `yaml:"started_at" json:"started_at"`

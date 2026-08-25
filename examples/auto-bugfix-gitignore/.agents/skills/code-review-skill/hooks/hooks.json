@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "(?i)(代码评审|代码审查|code\\s*review|review\\s*(this\\s*)?PR|review\\s*(this\\s*)?MR|评审\\s*(这个)?\\s*(PR|MR|合并请求)|帮我\\s*(做)?\\s*(代码)?\\s*review|帮我\\s*评审)",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "用户请求进行代码评审。请使用 code-review 技能来自动获取 PR 变更并进行逐行评审"
+          }
+        ]
+      }
+    ]
+  }
+}

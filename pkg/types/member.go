@@ -8,7 +8,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// MemberType identifies how a Team member is executed.
+// MemberType is an internal compatibility type for one Team call. The public
+// configuration vocabulary is Agent / Command / Webhook call.
 //
 // V1 deliberately has only three member types. A persistent, actively
 // communicating "agent" is reserved for a future runtime and is not a valid
@@ -21,23 +22,33 @@ const (
 	MemberWebhook  MemberType = "webhook"
 )
 
-// CommandSpec describes a command member.
+// CommandSpec describes a command call.
 type CommandSpec struct {
-	Command string            `yaml:"command" json:"command"`
-	Args    []string          `yaml:"args,omitempty" json:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
-	Timeout string            `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Command        string            `yaml:"command" json:"command"`
+	Args           []string          `yaml:"args,omitempty" json:"args,omitempty"`
+	Env            map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	Timeout        string            `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	IdempotencyKey string            `yaml:"idempotency_key,omitempty" json:"idempotency_key,omitempty"`
+	ReplayPolicy   string            `yaml:"replay_policy,omitempty" json:"replay_policy,omitempty"` // never | idempotent | allow
 }
 
-// WebhookSpec describes a webhook member.
+// WebhookSpec describes a webhook call.
 type WebhookSpec struct {
-	URL     string            `yaml:"url" json:"url"`
-	Method  string            `yaml:"method,omitempty" json:"method,omitempty"`
-	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
-	Timeout string            `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	URL            string            `yaml:"url" json:"url"`
+	Method         string            `yaml:"method,omitempty" json:"method,omitempty"`
+	Headers        map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Timeout        string            `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	IdempotencyKey string            `yaml:"idempotency_key,omitempty" json:"idempotency_key,omitempty"`
+	ReplayPolicy   string            `yaml:"replay_policy,omitempty" json:"replay_policy,omitempty"` // never | idempotent | allow
 }
 
-// InputSpec describes the context a Team or Member may receive.
+const (
+	ReplayNever      = "never"
+	ReplayIdempotent = "idempotent"
+	ReplayAllow      = "allow"
+)
+
+// InputSpec describes the context a Team or call may receive.
 //
 // V1 accepts both a compact mapping form and an explicit list of bindings:
 //
@@ -79,7 +90,7 @@ func (s *InputSpec) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-// InputBinding selects one named SharedRecord visible to a Team or Member.
+// InputBinding selects one named SharedRecord visible to a Team or call.
 //
 // From is intentionally a string reference for now. The config validator will
 // resolve whether it refers to the flow, team, member, or a named producer.
@@ -100,7 +111,7 @@ type RecordView struct {
 	Adapter  string   `yaml:"adapter,omitempty" json:"adapter,omitempty"`
 }
 
-// OutputSpec describes which results a member or Team publishes.
+// OutputSpec describes which results a call or Team publishes.
 //
 // Record is the convenient one-record form. Records is the explicit form used
 // when a Team publishes several named records.
@@ -112,14 +123,14 @@ type OutputSpec struct {
 	Publish bool            `yaml:"publish,omitempty" json:"publish,omitempty"`
 }
 
-// OutputBinding promotes a member result to a named SharedRecord.
+// OutputBinding promotes a call result to a named SharedRecord.
 type OutputBinding struct {
 	From   string `yaml:"from" json:"from"`
 	Record string `yaml:"record" json:"record"`
 	Scope  string `yaml:"scope,omitempty" json:"scope,omitempty"`
 }
 
-// Member is a Team execution member.
+// Member is an internal compatibility representation for one Team call.
 //
 // AgentID points to an Agent Definition when Type is subagent. Command and
 // Webhook contain the corresponding deterministic execution specification.
@@ -155,6 +166,8 @@ func (m *Member) UnmarshalYAML(node *yaml.Node) error {
 		URL            string            `yaml:"url"`
 		Method         string            `yaml:"method"`
 		Headers        map[string]string `yaml:"headers"`
+		IdempotencyKey string            `yaml:"idempotency_key"`
+		ReplayPolicy   string            `yaml:"replay_policy"`
 		DependsOn      []string          `yaml:"depends_on"`
 		Inputs         InputSpec         `yaml:"inputs"`
 		Output         OutputSpec        `yaml:"output"`
@@ -171,7 +184,7 @@ func (m *Member) UnmarshalYAML(node *yaml.Node) error {
 		case yaml.ScalarNode:
 			var commandText string
 			if err := raw.Command.Decode(&commandText); err != nil {
-				return fmt.Errorf("member %q: decode command: %w", raw.ID, err)
+				return fmt.Errorf("call %q: decode command: %w", raw.ID, err)
 			}
 			command = &CommandSpec{Command: commandText}
 		case yaml.MappingNode:
@@ -181,18 +194,18 @@ func (m *Member) UnmarshalYAML(node *yaml.Node) error {
 			}
 			command = &spec
 		default:
-			return fmt.Errorf("member %q: command must be a string or mapping", raw.ID)
+			return fmt.Errorf("call %q: command must be a string or mapping", raw.ID)
 		}
 	}
 
 	var webhook *WebhookSpec
 	if raw.Webhook.Kind != 0 {
 		if raw.Webhook.Kind != yaml.MappingNode {
-			return fmt.Errorf("member %q: webhook must be a mapping", raw.ID)
+			return fmt.Errorf("call %q: webhook must be a mapping", raw.ID)
 		}
 		var spec WebhookSpec
 		if err := raw.Webhook.Decode(&spec); err != nil {
-			return fmt.Errorf("member %q: decode webhook: %w", raw.ID, err)
+			return fmt.Errorf("call %q: decode webhook: %w", raw.ID, err)
 		}
 		webhook = &spec
 	}
@@ -211,10 +224,12 @@ func (m *Member) UnmarshalYAML(node *yaml.Node) error {
 	}
 	if m.Webhook == nil && strings.TrimSpace(raw.URL) != "" {
 		m.Webhook = &WebhookSpec{
-			URL:     raw.URL,
-			Method:  raw.Method,
-			Headers: raw.Headers,
-			Timeout: raw.Timeout,
+			URL:            raw.URL,
+			Method:         raw.Method,
+			Headers:        raw.Headers,
+			Timeout:        raw.Timeout,
+			IdempotencyKey: raw.IdempotencyKey,
+			ReplayPolicy:   raw.ReplayPolicy,
 		}
 	}
 	return nil
@@ -224,37 +239,57 @@ func (m *Member) UnmarshalYAML(node *yaml.Node) error {
 // complete Flow graph.
 func (m Member) Validate() error {
 	if strings.TrimSpace(m.ID) == "" {
-		return fmt.Errorf("member id is required")
+		return fmt.Errorf("call id is required")
 	}
 
 	switch m.Type {
 	case MemberSubagent:
 		if strings.TrimSpace(m.AgentID) == "" {
-			return fmt.Errorf("subagent member %q: agent is required", m.ID)
+			return fmt.Errorf("subagent call %q: agent is required", m.ID)
 		}
 		if m.Command != nil || m.Webhook != nil {
-			return fmt.Errorf("subagent member %q: command/webhook must be empty", m.ID)
+			return fmt.Errorf("subagent call %q: command/webhook must be empty", m.ID)
 		}
 	case MemberCommand:
 		if m.Command == nil || strings.TrimSpace(m.Command.Command) == "" {
-			return fmt.Errorf("command member %q: command is required", m.ID)
+			return fmt.Errorf("command call %q: command is required", m.ID)
+		}
+		if err := validateReplayPolicy(m.Command.ReplayPolicy, m.Command.IdempotencyKey); err != nil {
+			return fmt.Errorf("command call %q: %w", m.ID, err)
 		}
 		if strings.TrimSpace(m.AgentID) != "" || m.Webhook != nil {
-			return fmt.Errorf("command member %q: agent/webhook must be empty", m.ID)
+			return fmt.Errorf("command call %q: agent/webhook must be empty", m.ID)
 		}
 	case MemberWebhook:
 		if m.Webhook == nil || strings.TrimSpace(m.Webhook.URL) == "" {
-			return fmt.Errorf("webhook member %q: url is required", m.ID)
+			return fmt.Errorf("webhook call %q: url is required", m.ID)
+		}
+		if err := validateReplayPolicy(m.Webhook.ReplayPolicy, m.Webhook.IdempotencyKey); err != nil {
+			return fmt.Errorf("webhook call %q: %w", m.ID, err)
 		}
 		if _, err := url.ParseRequestURI(m.Webhook.URL); err != nil {
-			return fmt.Errorf("webhook member %q: invalid url: %w", m.ID, err)
+			return fmt.Errorf("webhook call %q: invalid url: %w", m.ID, err)
 		}
 		if strings.TrimSpace(m.AgentID) != "" || m.Command != nil {
-			return fmt.Errorf("webhook member %q: agent/command must be empty", m.ID)
+			return fmt.Errorf("webhook call %q: agent/command must be empty", m.ID)
 		}
 	default:
-		return fmt.Errorf("member %q: unsupported type %q", m.ID, m.Type)
+		return fmt.Errorf("call %q: unsupported type %q", m.ID, m.Type)
 	}
 
 	return nil
+}
+
+func validateReplayPolicy(policy, idempotencyKey string) error {
+	switch policy {
+	case "", ReplayNever, ReplayAllow:
+		return nil
+	case ReplayIdempotent:
+		if strings.TrimSpace(idempotencyKey) == "" {
+			return fmt.Errorf("replay_policy idempotent requires idempotency_key")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported replay_policy %q", policy)
+	}
 }

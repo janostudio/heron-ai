@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -78,8 +79,12 @@ func (r *Runtime) HandleInput(ctx context.Context, sessionID string, input strin
 	}
 	if session.Status == types.SessionCompleted ||
 		session.Status == types.SessionFailed ||
-		session.Status == types.SessionCancelled {
+		session.Status == types.SessionCancelled ||
+		session.Status == types.SessionInterrupted {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is already %s", session.ID, session.Status)
+	}
+	if interrupted, err := r.RecoveryStatus(ctx, sessionID); err == nil && len(interrupted.Interrupted) > 0 {
+		return types.FlowTurnResult{}, fmt.Errorf("flow session %q has unfinished execution; use recovery status first", sessionID)
 	}
 	return r.runTurn(ctx, session, input)
 }
@@ -92,7 +97,126 @@ func (r *Runtime) Resume(ctx context.Context, sessionID string, input string) (t
 	if session.Status != types.SessionWaitingInput {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is not waiting for input", session.ID)
 	}
+	if interrupted, err := r.RecoveryStatus(ctx, sessionID); err == nil && len(interrupted.Interrupted) > 0 {
+		return types.FlowTurnResult{}, fmt.Errorf("flow session %q has unfinished execution; use recovery status first", sessionID)
+	}
 	return r.runTurn(ctx, session, input)
+}
+
+func (r *Runtime) RecoveryStatus(ctx context.Context, sessionID string) (types.RecoveryStatus, error) {
+	session, err := r.loadSession(ctx, sessionID)
+	if err != nil {
+		return types.RecoveryStatus{}, err
+	}
+	replay, err := r.sessions.Replay(ctx, sessionID)
+	if err != nil {
+		return types.RecoveryStatus{}, err
+	}
+	interrupted := interruptedExecutions(replay.Events)
+	history := recoveryHistory(replay.Events)
+	if len(interrupted) > 0 &&
+		session.Status != types.SessionCompleted &&
+		session.Status != types.SessionFailed &&
+		session.Status != types.SessionCancelled {
+		session.Status = types.SessionInterrupted
+	}
+	return types.RecoveryStatus{
+		Session:         session,
+		Interrupted:     interrupted,
+		RecoveryHistory: history,
+	}, nil
+}
+
+func (r *Runtime) Recover(ctx context.Context, sessionID string, req types.RecoveryRequest) (types.FlowTurnResult, error) {
+	status, err := r.RecoveryStatus(ctx, sessionID)
+	if err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	if req.Action == types.RecoveryInspect {
+		return types.FlowTurnResult{
+			Session: status.Session,
+			Error:   recoverySummary(status.Interrupted),
+		}, nil
+	}
+	if req.Action != types.RecoveryWait &&
+		req.Action != types.RecoveryCoordinate &&
+		req.Action != types.RecoveryRetry {
+		return types.FlowTurnResult{}, fmt.Errorf("unsupported recovery action %q", req.Action)
+	}
+	if len(status.Interrupted) == 0 {
+		return types.FlowTurnResult{Session: status.Session}, nil
+	}
+
+	target, err := selectInterrupted(status.Interrupted, req.TargetTurnID)
+	if err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	if err := r.appendSessionEvent(ctx, sessionID, types.SessionEvent{
+		Type:          types.EventRecoveryRequested,
+		FlowSessionID: sessionID,
+		TeamID:        target.TeamID,
+		TeamTurnID:    target.TeamTurnID,
+		MemberID:      target.MemberID,
+		MemberTurnID:  target.MemberTurnID,
+		Attempt:       target.Attempt + 1,
+		RecoveryOf:    recoveryTargetID(target),
+		Payload:       map[string]any{"request": req, "target": target},
+	}); err != nil {
+		return types.FlowTurnResult{}, err
+	}
+
+	switch req.Action {
+	case types.RecoveryWait:
+		session, err := r.loadSession(ctx, sessionID)
+		if err != nil {
+			return types.FlowTurnResult{}, err
+		}
+		session.Status = types.SessionInterrupted
+		session.UpdatedAt = time.Now().UTC()
+		if err := r.appendSessionEvent(ctx, sessionID, types.SessionEvent{
+			Type:          types.EventFlowSessionUpdated,
+			FlowSessionID: sessionID,
+			Payload:       map[string]any{"session": session},
+		}); err != nil {
+			return types.FlowTurnResult{}, err
+		}
+		return types.FlowTurnResult{Session: session, Error: target.RetryReason}, nil
+	case types.RecoveryCoordinate:
+		if target.TeamID == "" {
+			return types.FlowTurnResult{}, fmt.Errorf("interrupted %s cannot coordinate because no Team was recorded", target.Kind)
+		}
+		result, runErr := r.runTurnWithActivations(ctx, status.Session, recoveryInput(req, target), []activation{{
+			teamID:     coordinatorID(r.definitions.Flow),
+			callerTeam: target.CallerTeam,
+			force:      true,
+			attempt:    target.Attempt + 1,
+			recoveryOf: recoveryTargetID(target),
+		}})
+		if runErr != nil {
+			return result, runErr
+		}
+		return result, r.appendRecoveryCompleted(ctx, sessionID, target, req)
+	case types.RecoveryRetry:
+		if !req.AllowSideEffectReplay {
+			return types.FlowTurnResult{}, fmt.Errorf("retry requires allow_side_effect_replay=true; replay may repeat workspace or external side effects")
+		}
+		if target.TeamID == "" {
+			return types.FlowTurnResult{}, fmt.Errorf("interrupted %s cannot be retried because no Team was recorded", target.Kind)
+		}
+		result, runErr := r.runTurnWithActivations(ctx, status.Session, recoveryInput(req, target), []activation{{
+			teamID:     target.TeamID,
+			callerTeam: target.CallerTeam,
+			force:      true,
+			attempt:    target.Attempt + 1,
+			recoveryOf: recoveryTargetID(target),
+		}})
+		if runErr != nil {
+			return result, runErr
+		}
+		return result, r.appendRecoveryCompleted(ctx, sessionID, target, req)
+	default:
+		return types.FlowTurnResult{}, fmt.Errorf("unsupported recovery action %q", req.Action)
+	}
 }
 
 func (r *Runtime) Cancel(ctx context.Context, sessionID string) error {
@@ -115,10 +239,25 @@ func (r *Runtime) Cancel(ctx context.Context, sessionID string) error {
 }
 
 func (r *Runtime) Status(ctx context.Context, sessionID string) (types.FlowSession, error) {
-	return r.loadSession(ctx, sessionID)
+	status, err := r.RecoveryStatus(ctx, sessionID)
+	if err != nil {
+		return types.FlowSession{}, err
+	}
+	return status.Session, nil
 }
 
 func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input string) (types.FlowTurnResult, error) {
+	return r.runTurnWithActivations(ctx, session, input, []activation{
+		{teamID: r.definitions.Flow.EntryTeamID},
+	})
+}
+
+func (r *Runtime) runTurnWithActivations(
+	ctx context.Context,
+	session types.FlowSession,
+	input string,
+	initial []activation,
+) (types.FlowTurnResult, error) {
 	if err := r.validateDependencies(session.FlowID); err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -128,9 +267,21 @@ func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input 
 
 	session.Status = types.SessionRunning
 	session.UpdatedAt = time.Now().UTC()
+	flowAttempt := 1
+	recoveryOf := ""
+	for _, initialActivation := range initial {
+		if initialActivation.attempt > flowAttempt {
+			flowAttempt = initialActivation.attempt
+		}
+		if recoveryOf == "" {
+			recoveryOf = initialActivation.recoveryOf
+		}
+	}
 	turn := types.FlowTurn{
 		ID:            newID("ft"),
 		FlowSessionID: session.ID,
+		Attempt:       flowAttempt,
+		RecoveryOf:    recoveryOf,
 		Input:         input,
 		Status:        types.TurnRunning,
 		StartedAt:     time.Now().UTC(),
@@ -147,7 +298,12 @@ func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input 
 		Type:          types.EventFlowTurnStarted,
 		FlowSessionID: session.ID,
 		FlowTurnID:    turn.ID,
-		Payload:       map[string]any{"turn": turn},
+		Attempt:       turn.Attempt,
+		RecoveryOf:    turn.RecoveryOf,
+		Payload: map[string]any{
+			"turn":  turn,
+			"input": input,
+		},
 	}); err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -156,15 +312,26 @@ func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input 
 		Session: session,
 		Turn:    turn,
 	}
-	queue := []activation{{teamID: r.definitions.Flow.EntryTeamID}}
+	attempts := make(map[string]int)
+	queue := make([]activation, 0, len(initial))
+	enqueue := func(next activation) {
+		if next.attempt <= 0 {
+			attempts[next.teamID]++
+			next.attempt = attempts[next.teamID]
+		} else if next.attempt > attempts[next.teamID] {
+			attempts[next.teamID] = next.attempt
+		}
+		queue = append(queue, next)
+	}
+	for _, activation := range initial {
+		enqueue(activation)
+	}
 	completedTeams := make(map[string]bool)
 	allRecords, err := r.loadHistoricalFlowRecords(ctx, session.ID)
 	if err != nil {
 		return r.finishTurn(ctx, result, types.SessionFailed, err)
 	}
 	teamTurns := 0
-	memberTurns := 0
-	toolCalls := 0
 
 	for len(queue) > 0 {
 		if err := contextErr(ctx); err != nil {
@@ -172,7 +339,8 @@ func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input 
 		}
 
 		ready, blocked := takeReadyActivations(queue, completedTeams, r.definitions.Flow)
-		queue = blocked
+		ready, deferred := limitActivations(ready, r.limits.WithDefaults().MaxParallelTeams)
+		queue = append(deferred, blocked...)
 		if len(ready) == 0 {
 			return r.finishTurn(ctx, result, types.SessionFailed, errors.New("flow activation graph cannot make progress"))
 		}
@@ -214,16 +382,6 @@ func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input 
 
 		for _, execution := range executions {
 			teamResult := execution.result
-			memberTurns += len(teamResult.MemberResults)
-			for _, memberResult := range teamResult.MemberResults {
-				toolCalls += memberResult.ToolCalls
-			}
-			if memberTurns > r.limits.MaxMemberTurns {
-				return r.finishTurn(ctx, result, types.SessionFailed, fmt.Errorf("flow turn exceeded max member turns: %d", r.limits.MaxMemberTurns))
-			}
-			if toolCalls > r.limits.MaxToolCalls {
-				return r.finishTurn(ctx, result, types.SessionFailed, fmt.Errorf("flow turn exceeded max tool calls: %d", r.limits.MaxToolCalls))
-			}
 			result.TeamResults = append(result.TeamResults, teamResult)
 			result.Reply = joinReply(result.Reply, teamResult.Reply)
 			allRecords = append(allRecords, teamResult.Records...)
@@ -255,7 +413,7 @@ func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input 
 					targets = []string{coordinatorID(r.definitions.Flow)}
 				}
 				for _, target := range targets {
-					queue = append(queue, activation{teamID: target, callerTeam: execution.activation.teamID})
+					enqueue(activation{teamID: target, callerTeam: execution.activation.teamID})
 				}
 			case types.NextActivate:
 				if !execution.binding.Coordinator {
@@ -267,7 +425,7 @@ func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input 
 					continue
 				}
 				for _, target := range next.Teams {
-					queue = append(queue, activation{teamID: target, callerTeam: execution.activation.teamID})
+					enqueue(activation{teamID: target, callerTeam: execution.activation.teamID})
 				}
 			case types.NextReturn:
 				target := next.CallerTeam
@@ -277,9 +435,9 @@ func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input 
 				if target == "" {
 					target = coordinatorID(r.definitions.Flow)
 				}
-				queue = append(queue, activation{teamID: target, callerTeam: execution.activation.teamID})
+				enqueue(activation{teamID: target, callerTeam: execution.activation.teamID})
 			case types.NextCoordinate:
-				queue = append(queue, activation{teamID: coordinatorID(r.definitions.Flow), callerTeam: execution.activation.teamID})
+				enqueue(activation{teamID: coordinatorID(r.definitions.Flow), callerTeam: execution.activation.teamID})
 			case types.NextWaitInput:
 				hasWaitInput = true
 			case types.NextComplete:
@@ -316,6 +474,9 @@ func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input 
 type activation struct {
 	teamID     string
 	callerTeam string
+	force      bool
+	attempt    int
+	recoveryOf string
 }
 
 type teamExecution struct {
@@ -334,13 +495,26 @@ func takeReadyActivations(
 	blocked := make([]activation, 0, len(queue))
 	for _, current := range queue {
 		binding, ok := flow.Teams[current.teamID]
-		if !ok || dependenciesCompleted(binding.DependsOn, completed) {
+		if current.force || !ok || dependenciesCompleted(binding.DependsOn, completed) {
 			ready = append(ready, current)
 			continue
 		}
 		blocked = append(blocked, current)
 	}
 	return ready, blocked
+}
+
+func limitActivations(items []activation, max int) ([]activation, []activation) {
+	if max <= 0 || len(items) <= max {
+		return items, nil
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].teamID == items[j].teamID {
+			return items[i].attempt < items[j].attempt
+		}
+		return items[i].teamID < items[j].teamID
+	})
+	return items[:max], items[max:]
 }
 
 func (r *Runtime) executeTeamTurn(
@@ -377,6 +551,8 @@ func (r *Runtime) executeTeamTurn(
 		FlowTurnID:    flowTurn.ID,
 		TeamSessionID: teamSession.ID,
 		TeamID:        current.teamID,
+		Attempt:       current.attempt,
+		RecoveryOf:    current.recoveryOf,
 		CallerTeam:    current.callerTeam,
 		Status:        types.TurnRunning,
 		StartedAt:     time.Now().UTC(),
@@ -391,7 +567,13 @@ func (r *Runtime) executeTeamTurn(
 		FlowTurnID:    flowTurn.ID,
 		TeamSessionID: teamSession.ID,
 		TeamTurnID:    teamTurn.ID,
-		Payload:       map[string]any{"team_turn": teamTurn},
+		TeamID:        teamTurn.TeamID,
+		Attempt:       teamTurn.Attempt,
+		RecoveryOf:    teamTurn.RecoveryOf,
+		Payload: map[string]any{
+			"team_turn": teamTurn,
+			"input":     teamInput(input, binding.Inputs),
+		},
 	}); err != nil {
 		return execution, err
 	}
@@ -475,6 +657,8 @@ func (r *Runtime) executeTeamTurn(
 		FlowTurnID:    flowTurn.ID,
 		TeamSessionID: teamSession.ID,
 		TeamTurnID:    teamTurn.ID,
+		Attempt:       teamTurn.Attempt,
+		RecoveryOf:    teamTurn.RecoveryOf,
 		Payload:       map[string]any{"team_session": teamSession},
 	}); err != nil {
 		return execution, err
@@ -588,9 +772,227 @@ func sessionStatusForTurn(status types.TurnStatus) types.SessionStatus {
 		return types.SessionCancelled
 	case types.TurnFailed:
 		return types.SessionFailed
+	case types.TurnWaitingApproval:
+		return types.SessionInterrupted
 	default:
 		return types.SessionRunning
 	}
+}
+
+func interruptedExecutions(events []types.SessionEvent) []types.InterruptedExecution {
+	type started struct {
+		event types.SessionEvent
+		input string
+	}
+	startedMembers := make(map[string]started)
+	startedTeams := make(map[string]started)
+	startedFlows := make(map[string]started)
+	completedMembers := make(map[string]bool)
+	completedTeams := make(map[string]bool)
+	completedFlows := make(map[string]bool)
+	resolvedMembers := make(map[string]bool)
+	resolvedTeams := make(map[string]bool)
+	resolvedFlows := make(map[string]bool)
+
+	for _, event := range events {
+		switch event.Type {
+		case types.EventFlowTurnStarted:
+			startedFlows[event.FlowTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
+		case types.EventFlowTurnCompleted:
+			completedFlows[event.FlowTurnID] = true
+		case types.EventTeamTurnStarted:
+			startedTeams[event.TeamTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
+		case types.EventTeamTurnCompleted:
+			completedTeams[event.TeamTurnID] = true
+		case types.EventSubagentTurnStarted, types.EventCommandTurnStarted, types.EventWebhookTurnStarted:
+			startedMembers[event.MemberTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
+		case types.EventSubagentTurnCompleted, types.EventCommandTurnCompleted, types.EventWebhookTurnCompleted:
+			completedMembers[event.MemberTurnID] = true
+		case types.EventRecoveryCompleted:
+			if event.MemberTurnID != "" {
+				resolvedMembers[event.MemberTurnID] = true
+			}
+			if event.TeamTurnID != "" {
+				resolvedTeams[event.TeamTurnID] = true
+			}
+			if event.FlowTurnID != "" {
+				resolvedFlows[event.FlowTurnID] = true
+			}
+		}
+	}
+
+	var interrupted []types.InterruptedExecution
+	interruptedTeamIDs := make(map[string]bool)
+	interruptedFlowIDs := make(map[string]bool)
+	for turnID, item := range startedMembers {
+		if completedMembers[turnID] ||
+			resolvedMembers[turnID] ||
+			resolvedTeams[item.event.TeamTurnID] ||
+			resolvedFlows[item.event.FlowTurnID] {
+			continue
+		}
+		execution := interruptedFromEvent("member_turn", item.event, item.input)
+		interrupted = append(interrupted, execution)
+		interruptedTeamIDs[item.event.TeamTurnID] = true
+		interruptedFlowIDs[item.event.FlowTurnID] = true
+	}
+	for turnID, item := range startedTeams {
+		if completedTeams[turnID] || resolvedTeams[turnID] || interruptedTeamIDs[turnID] {
+			continue
+		}
+		execution := interruptedFromEvent("team_turn", item.event, item.input)
+		interrupted = append(interrupted, execution)
+		interruptedFlowIDs[item.event.FlowTurnID] = true
+	}
+	for turnID, item := range startedFlows {
+		if completedFlows[turnID] || resolvedFlows[turnID] || interruptedFlowIDs[turnID] {
+			continue
+		}
+		interrupted = append(interrupted, interruptedFromEvent("flow_turn", item.event, item.input))
+	}
+	sortInterrupted(interrupted)
+	return interrupted
+}
+
+func interruptedFromEvent(kind string, event types.SessionEvent, input string) types.InterruptedExecution {
+	safe := kind == "flow_turn" || kind == "team_turn"
+	reason := "member execution may have side effects; inspect before retry"
+	if safe {
+		reason = "retrying the containing Team/Flow may repeat downstream work"
+	}
+	return types.InterruptedExecution{
+		Kind:         kind,
+		FlowTurnID:   event.FlowTurnID,
+		TeamID:       event.TeamID,
+		TeamTurnID:   event.TeamTurnID,
+		MemberID:     event.MemberID,
+		MemberTurnID: event.MemberTurnID,
+		MemberType:   event.MemberType,
+		Attempt:      event.Attempt,
+		RecoveryOf:   event.RecoveryOf,
+		StartedSeq:   event.Seq,
+		StartedAt:    event.CreatedAt,
+		Input:        input,
+		CallerTeam:   payloadString(event.Payload, "caller_team"),
+		StartedEvent: event.Type,
+		SafeToRetry:  safe,
+		RetryReason:  reason,
+	}
+}
+
+func payloadString(payload map[string]any, key string) string {
+	if payload == nil {
+		return ""
+	}
+	value, ok := payload[key]
+	if !ok {
+		return ""
+	}
+	text, _ := value.(string)
+	return text
+}
+
+func sortInterrupted(items []types.InterruptedExecution) {
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].MemberTurnID+items[i].TeamTurnID+items[i].FlowTurnID <
+			items[j].MemberTurnID+items[j].TeamTurnID+items[j].FlowTurnID
+	})
+}
+
+func recoveryHistory(events []types.SessionEvent) []types.RecoveryEvent {
+	history := make([]types.RecoveryEvent, 0)
+	for _, event := range events {
+		var status string
+		switch event.Type {
+		case types.EventRecoveryRequested:
+			status = "requested"
+		case types.EventRecoveryCompleted:
+			status = "completed"
+		default:
+			continue
+		}
+		recovery, _ := event.Payload["request"].(map[string]any)
+		if recovery == nil {
+			recovery = map[string]any{}
+		}
+		action, _ := recovery["action"].(string)
+		target, _ := recovery["target_turn_id"].(string)
+		reason, _ := recovery["reason"].(string)
+		history = append(history, types.RecoveryEvent{
+			Seq:          event.Seq,
+			EventID:      event.EventID,
+			Status:       status,
+			Action:       types.RecoveryAction(action),
+			TargetTurnID: target,
+			Attempt:      event.Attempt,
+			Reason:       reason,
+			CreatedAt:    event.CreatedAt,
+		})
+	}
+	return history
+}
+
+func recoveryTargetID(target types.InterruptedExecution) string {
+	if target.MemberTurnID != "" {
+		return target.MemberTurnID
+	}
+	if target.TeamTurnID != "" {
+		return target.TeamTurnID
+	}
+	return target.FlowTurnID
+}
+
+func selectInterrupted(items []types.InterruptedExecution, target string) (types.InterruptedExecution, error) {
+	if target != "" {
+		for _, item := range items {
+			if item.MemberTurnID == target || item.TeamTurnID == target || item.FlowTurnID == target {
+				return item, nil
+			}
+		}
+		return types.InterruptedExecution{}, fmt.Errorf("interrupted turn %q not found", target)
+	}
+	if len(items) == 1 {
+		return items[0], nil
+	}
+	return types.InterruptedExecution{}, fmt.Errorf("multiple interrupted executions; target_turn_id is required")
+}
+
+func recoveryInput(req types.RecoveryRequest, target types.InterruptedExecution) string {
+	if strings.TrimSpace(req.Input) != "" {
+		return req.Input
+	}
+	if strings.TrimSpace(req.Reason) != "" {
+		return req.Reason
+	}
+	return target.Input
+}
+
+func recoverySummary(items []types.InterruptedExecution) string {
+	if len(items) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d interrupted execution(s) require explicit recovery action", len(items))
+}
+
+func (r *Runtime) appendRecoveryCompleted(
+	ctx context.Context,
+	sessionID string,
+	target types.InterruptedExecution,
+	request types.RecoveryRequest,
+) error {
+	return r.appendSessionEvent(ctx, sessionID, types.SessionEvent{
+		Type:          types.EventRecoveryCompleted,
+		FlowSessionID: sessionID,
+		FlowTurnID:    target.FlowTurnID,
+		TeamID:        target.TeamID,
+		TeamTurnID:    target.TeamTurnID,
+		MemberID:      target.MemberID,
+		MemberTurnID:  target.MemberTurnID,
+		MemberType:    target.MemberType,
+		Attempt:       target.Attempt + 1,
+		RecoveryOf:    recoveryTargetID(target),
+		Payload:       map[string]any{"request": request, "target": target},
+	})
 }
 
 func (r *Runtime) validateDependencies(flowID string) error {

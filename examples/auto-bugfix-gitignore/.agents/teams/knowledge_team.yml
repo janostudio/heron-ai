@@ -1,0 +1,38 @@
+id: knowledge_team
+goal: 将本次已验证的经验以固定格式沉淀为长期 Knowledge。
+memory:
+  enabled: true
+  max_items: 20
+  max_chars: 8000
+
+calls:
+  persist:
+    type: command
+    command:
+      command: "bash .agents/scripts/record_learning.sh"
+      timeout: 30s
+      idempotency_key: "knowledge-${flow_turn_id}"
+      replay_policy: idempotent
+    inputs:
+      flow_records: [DiagnosisReport, ChangeSet, VerificationReport, ReviewReport]
+    output:
+      record: KnowledgeWrite
+
+  summarize:
+    type: subagent
+    agent: knowledge-learner
+    depends_on: [persist]
+    responsibility: 检查 KnowledgeWrite 和当前知识文件，输出 KnowledgePersisted，不重复写入整个会话。
+    inputs:
+      flow_records: [KnowledgeWrite, ReviewReport, VerificationReport]
+    output:
+      record: KnowledgePersisted
+
+output:
+  records:
+    - from: persist
+      record: KnowledgeWrite
+      scope: flow
+    - from: summarize
+      record: KnowledgePersisted
+      scope: flow

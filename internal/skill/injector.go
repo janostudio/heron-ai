@@ -1,5 +1,7 @@
 package skill
 
+import "strings"
+
 type SkillInjector struct {
 	registry *SkillRegistry
 }
@@ -18,6 +20,14 @@ func (i *SkillInjector) Inject(skillNames []string) (prompts []string, tools []s
 			prompts = append(prompts, skill.Body)
 		}
 		tools = append(tools, skill.Tools...)
+		if skill.AllowedTools != "" {
+			for _, tool := range strings.Split(skill.AllowedTools, ",") {
+				tool = strings.TrimSpace(tool)
+				if tool != "" {
+					tools = append(tools, tool)
+				}
+			}
+		}
 	}
 	return prompts, tools
 }

@@ -151,7 +151,14 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session_id is required", http.StatusBadRequest)
 		return
 	}
-	replay, err := h.sessions.Replay(r.Context(), sessionID)
+	streamCtx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	lastID := int64(0)
+	if value := r.Header.Get("Last-Event-ID"); value != "" {
+		_, _ = fmt.Sscanf(value, "%d", &lastID)
+	}
+
+	events, err := h.sessions.Subscribe(streamCtx, sessionID, lastID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -161,18 +168,57 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	lastID := int64(0)
-	if value := r.Header.Get("Last-Event-ID"); value != "" {
-		_, _ = fmt.Sscanf(value, "%d", &lastID)
-	}
-	for _, event := range replay.Events {
-		if event.Seq <= lastID {
-			continue
-		}
+	for event := range events {
 		if err := writer.WriteSessionEvent(event); err != nil {
 			return
 		}
+		if event.Type == types.EventFlowTurnCompleted {
+			return
+		}
 	}
+}
+
+func (h *Handler) HandleRecoveryStatus(w http.ResponseWriter, r *http.Request) {
+	recovery, ok := h.runtime.(types.RecoveryRuntime)
+	if !ok {
+		http.Error(w, "RecoveryRuntime is not configured", http.StatusNotImplemented)
+		return
+	}
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		http.Error(w, "session_id is required", http.StatusBadRequest)
+		return
+	}
+	status, err := recovery.RecoveryStatus(r.Context(), sessionID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, status)
+}
+
+func (h *Handler) HandleRecover(w http.ResponseWriter, r *http.Request) {
+	recovery, ok := h.runtime.(types.RecoveryRuntime)
+	if !ok {
+		http.Error(w, "RecoveryRuntime is not configured", http.StatusNotImplemented)
+		return
+	}
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		http.Error(w, "session_id is required", http.StatusBadRequest)
+		return
+	}
+	var req types.RecoveryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := recovery.Recover(r.Context(), sessionID, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, result)
 }
 
 func (h *Handler) HandleResume(w http.ResponseWriter, r *http.Request) {

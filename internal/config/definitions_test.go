@@ -118,3 +118,107 @@ members:
 	})
 	require.ErrorContains(t, err, `references missing agent definition "missing-agent"`)
 }
+
+func TestLoadDefinitionsLoadsDirectoryAgentWithPrivateKnowledgeAndRules(t *testing.T) {
+	root := t.TempDir()
+	agentsDir := filepath.Join(root, ".agents", "agents")
+	teamsDir := filepath.Join(root, ".agents", "teams")
+	flowsDir := filepath.Join(root, ".agents", "flows")
+	require.NoError(t, os.MkdirAll(filepath.Join(agentsDir, "assistant", "knowledge"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(agentsDir, "assistant", "rules"), 0755))
+	require.NoError(t, os.MkdirAll(teamsDir, 0755))
+	require.NoError(t, os.MkdirAll(flowsDir, 0755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(flowsDir, "default.yml"), []byte(`
+id: flow
+entry: default
+teams:
+  default:
+    team: default-team
+    coordinator: true
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
+id: default-team
+members:
+  assistant:
+    type: subagent
+    agent: assistant
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "assistant", "AGENT.md"), []byte(`---
+name: assistant
+persona:
+  role: assistant
+  goal: answer
+---
+Answer using the private knowledge directory.
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "assistant", "knowledge", "index.md"), []byte("# Assistant Knowledge Index\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "assistant", "knowledge", "domain.md"), []byte(`---
+id: domain
+title: Domain
+keys: [domain]
+scope:
+  type: agents
+  agents: [assistant]
+---
+Private domain knowledge.
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "assistant", "rules", "private.md"), []byte(`---
+id: private
+type: hard
+scope:
+  type: agents
+  agents: [assistant]
+priority: 10
+---
+Keep the answer concise.
+`), 0644))
+
+	definitions, err := NewConfigLoader(root).LoadDefinitions(context.Background(), DefinitionsLoadRequest{
+		FlowPath: filepath.Join(flowsDir, "default.yml"),
+	})
+	require.NoError(t, err)
+	require.Contains(t, definitions.Agents, "assistant")
+	require.Equal(t, "assistant", definitions.Agents["assistant"].Name)
+	require.Contains(t, definitions.Rules, "private")
+}
+
+func TestLoadDefinitionsLoadsRuntimeLimits(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents", "agents"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents", "teams"), 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents", "flows"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "settings.json"), []byte(`{
+  "runtime": {
+    "max_team_turns": 7,
+    "max_calls_per_team_turn": 8,
+    "max_agent_rounds": 99,
+    "max_parallel_teams": 3,
+    "max_parallel_calls": 4,
+    "max_parallel_tools": 4
+  }
+}`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "flows", "default.yml"), []byte(`
+id: flow
+entry: default
+teams:
+  default:
+    team: default-team
+    coordinator: true
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "teams", "default.yml"), []byte(`
+id: default-team
+members: {}
+`), 0644))
+
+	definitions, err := NewConfigLoader(root).LoadDefinitions(context.Background(), DefinitionsLoadRequest{
+		FlowPath: filepath.Join(root, ".agents", "flows", "default.yml"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, 7, definitions.Limits.MaxTeamTurns)
+	require.Equal(t, 8, definitions.Limits.MaxCallsPerTeamTurn)
+	require.Equal(t, 99, definitions.Limits.MaxAgentRounds)
+	require.Equal(t, 3, definitions.Limits.MaxParallelTeams)
+	require.Equal(t, 4, definitions.Limits.MaxParallelCalls)
+	require.Equal(t, 4, definitions.Limits.MaxParallelTools)
+}

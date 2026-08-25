@@ -1,0 +1,13 @@
+# Fixture runtime data
+.agents/data/
+
+# Nested Git repository created by setup-fixture.sh
+project/.git/
+
+# Local environment and generated fixture files
+project/.env
+project/.env.local
+project/.pytest_cache/
+project/__pycache__/
+project/dist/
+project/.idea/

@@ -31,6 +31,20 @@ func (e *WebhookExecutor) Execute(ctx context.Context, req types.MemberRequest) 
 	if req.Member.Webhook == nil || strings.TrimSpace(req.Member.Webhook.URL) == "" {
 		return types.MemberResult{Status: types.TurnFailed, Error: "webhook url is required"}, fmt.Errorf("webhook url is required for member %q", req.Member.ID)
 	}
+	if req.RecoveryOf != "" && req.Member.Webhook.ReplayPolicy != types.ReplayAllow && req.Member.Webhook.ReplayPolicy != types.ReplayIdempotent {
+		return types.MemberResult{
+			Status: types.TurnFailed,
+			Error:  "webhook replay is not allowed by replay_policy",
+		}, fmt.Errorf("webhook member %q replay policy is %q", req.Member.ID, req.Member.Webhook.ReplayPolicy)
+	}
+	if req.RecoveryOf != "" &&
+		req.Member.Webhook.ReplayPolicy == types.ReplayIdempotent &&
+		strings.TrimSpace(req.Member.Webhook.IdempotencyKey) == "" {
+		return types.MemberResult{
+			Status: types.TurnFailed,
+			Error:  "webhook idempotent replay requires idempotency_key",
+		}, fmt.Errorf("webhook member %q idempotent replay requires idempotency_key", req.Member.ID)
+	}
 
 	payload := map[string]any{
 		"input":           req.Input,
@@ -61,6 +75,9 @@ func (e *WebhookExecutor) Execute(ctx context.Context, req types.MemberRequest) 
 		return types.MemberResult{Status: types.TurnFailed, Error: err.Error()}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if key := strings.TrimSpace(req.Member.Webhook.IdempotencyKey); key != "" {
+		httpReq.Header.Set("Idempotency-Key", resolveTemplate(key, req))
+	}
 	for name, value := range req.Member.Webhook.Headers {
 		httpReq.Header.Set(name, value)
 	}

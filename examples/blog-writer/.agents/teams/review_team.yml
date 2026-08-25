@@ -1,7 +1,7 @@
 id: review_team
 goal: 审校并润色博客文章。
 
-members:
+calls:
   review_blog:
     type: subagent
     agent: editor

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "(?i)(修复|fix|bug|缺陷|issue|解决问题|处理.*issue|修.*bug|定位.*问题|排查.*问题)",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "在开始修复 Bug 之前，请按分类加载相关知识：\n1. 根据 Issue 标题判断分类（chat-flow/agent-comm/ui-render/file-upload/websocket/store-sync/api-request/style-layout/other）\n2. 运行 python3 .codebuddy/skills/self-evolving/scripts/learn.py --suggest-files <category> 获取建议文件列表\n3. 按建议读取对应的 knowledge/ 文件（不要全量读取）\n4. 重点查看 knowledge/patterns.md 是否有已知的问题模式\n\n修复完成后，运行 learn.py 记录修复知识。如方案迭代，用 --supersede 更新记录。"
+          }
+        ]
+      }
+    ]
+  }
+}

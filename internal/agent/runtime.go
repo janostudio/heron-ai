@@ -13,7 +13,7 @@ type SubagentRunner interface {
 	Run(ctx context.Context, agent types.AgentConfig, req types.SubagentRequest) (*types.SubagentResult, error)
 }
 
-// TurnLoop implements SubagentRunner with a bounded tool-use loop.
+// TurnLoop implements one AgentTurn with a bounded Model/Tool loop.
 type TurnLoop struct {
 	model          types.ModelProvider
 	toolExecutor   ToolExecutor
@@ -41,6 +41,8 @@ type RenderContext struct {
 	TeamMemory     string
 	SubagentMemory string
 	KnowledgeText  string
+	SkillText      string
+	RuleText       string
 	Records        []types.SharedRecord
 }
 
@@ -64,7 +66,7 @@ func NewTurnLoop(
 	}
 }
 
-// Run executes one SubagentTurn. A Subagent is request/response in V1:
+// Run executes one AgentTurn. A Subagent is request/response in V1:
 // multiple model/tool rounds are still internal to this one call and no
 // background mailbox or active-agent protocol is introduced.
 func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.SubagentRequest) (*types.SubagentResult, error) {
@@ -83,6 +85,8 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.S
 		TeamMemory:     req.TeamMemory,
 		SubagentMemory: req.SubagentMemory,
 		KnowledgeText:  req.KnowledgeText,
+		SkillText:      req.SkillText,
+		RuleText:       req.RuleText,
 		Records:        req.Records,
 	})
 	if err != nil {
@@ -91,7 +95,13 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.S
 
 	maxRounds := agent.Loop.MaxRounds
 	if maxRounds <= 0 {
-		maxRounds = 3
+		maxRounds = req.MaxAgentRounds
+	}
+	if maxRounds <= 0 {
+		maxRounds = 200
+	}
+	if req.MaxAgentRounds > 0 && maxRounds > req.MaxAgentRounds {
+		maxRounds = req.MaxAgentRounds
 	}
 
 	totalUsage := types.TokenUsage{}
@@ -117,7 +127,9 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.S
 			}
 		}
 
-		resp, err := t.model.Chat(ctx, messages, toolSchemas, agent.Model)
+		modelConfig := agent.Model
+		modelConfig.ResponseFormat = agent.Structured
+		resp, err := t.model.Chat(ctx, messages, toolSchemas, modelConfig)
 		if err != nil {
 			return nil, fmt.Errorf("llm chat: %w", err)
 		}
@@ -160,28 +172,29 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.S
 					}, nil
 				}
 			}
+			route := routeFromAction(action)
+			if parsedRoute := routeFromParsed(parsed); parsedRoute != nil {
+				route = parsedRoute
+			}
+			reply := cleanText
+			if parsedReply := stringFromParsed(parsed, "reply"); parsedReply != "" {
+				reply = parsedReply
+			}
 
 			return &types.SubagentResult{
-				Reply:        cleanText,
+				Reply:        reply,
 				Parsed:       parsed,
-				Next:         routeFromAction(action),
+				Next:         route,
 				Usage:        totalUsage,
 				WorkspaceOps: workspaceOps,
 				ToolCalls:    toolCalls,
 			}, nil
 		}
 
+		// ToolCalls remains an observation metric. The safety boundary for one
+		// AgentTurn is the bounded model/tool loop above (maxRounds), not a
+		// global count of individual tool calls.
 		toolCalls += len(resp.ToolCalls)
-		if req.MaxToolCalls > 0 && toolCalls > req.MaxToolCalls {
-			return &types.SubagentResult{
-				Reply:        "Subagent tool-call limit reached.",
-				Next:         &types.Route{Action: types.NextCoordinate, Reason: "tool-call limit reached"},
-				Usage:        totalUsage,
-				WorkspaceOps: workspaceOps,
-				ToolCalls:    toolCalls,
-				Error:        fmt.Sprintf("subagent exceeded max tool calls: %d", req.MaxToolCalls),
-			}, nil
-		}
 
 		results := t.executeToolCalls(ctx, agent, req.MaxParallelTools, resp.ToolCalls)
 		messages = append(messages, types.Message{
@@ -204,6 +217,37 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.S
 	}
 
 	action, cleanText := t.routeParser.ParseWithMode(lastText, true)
+	if agent.Structured != nil {
+		parsed, parseErr := NewStructuredOutputManager().ParseAndValidate(cleanText, agent.Structured)
+		if parseErr != nil {
+			return &types.SubagentResult{
+				Reply:        cleanText,
+				Error:        fmt.Sprintf("structured output: %v", parseErr),
+				Usage:        totalUsage,
+				WorkspaceOps: workspaceOps,
+				ToolCalls:    toolCalls,
+				Next:         &types.Route{Action: types.NextCoordinate, Reason: parseErr.Error()},
+			}, nil
+		}
+
+		route := routeFromAction(action)
+		if parsedRoute := routeFromParsed(parsed); parsedRoute != nil {
+			route = parsedRoute
+		}
+		reply := cleanText
+		if parsedReply := stringFromParsed(parsed, "reply"); parsedReply != "" {
+			reply = parsedReply
+		}
+		return &types.SubagentResult{
+			Reply:        reply,
+			Parsed:       parsed,
+			Next:         route,
+			Usage:        totalUsage,
+			WorkspaceOps: workspaceOps,
+			ToolCalls:    toolCalls,
+		}, nil
+	}
+
 	return &types.SubagentResult{
 		Reply:        cleanText,
 		Next:         &types.Route{Action: action, Reason: "subagent loop limit reached"},
@@ -251,6 +295,51 @@ func routeFromAction(action types.NextAction) *types.Route {
 		action = types.NextProceed
 	}
 	return &types.Route{Action: action}
+}
+
+func routeFromParsed(parsed any) *types.Route {
+	object, ok := parsed.(map[string]any)
+	if !ok {
+		return nil
+	}
+	value, ok := object["next"]
+	if !ok {
+		value = object
+	}
+	next, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	action, _ := next["action"].(string)
+	if action == "" {
+		return nil
+	}
+	route := &types.Route{
+		Action:     types.NextAction(action),
+		Reason:     stringFromMap(next, "reason"),
+		CallerTeam: stringFromMap(next, "caller_team"),
+	}
+	if rawTeams, ok := next["teams"].([]any); ok {
+		for _, raw := range rawTeams {
+			if team, ok := raw.(string); ok {
+				route.Teams = append(route.Teams, team)
+			}
+		}
+	}
+	return route
+}
+
+func stringFromParsed(parsed any, key string) string {
+	object, ok := parsed.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return stringFromMap(object, key)
+}
+
+func stringFromMap(object map[string]any, key string) string {
+	value, _ := object[key].(string)
+	return value
 }
 
 func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema {

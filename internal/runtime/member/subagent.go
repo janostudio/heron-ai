@@ -48,8 +48,10 @@ func (e *SubagentExecutor) Execute(ctx context.Context, req types.MemberRequest)
 		TeamMemory:       req.TeamMemory,
 		SubagentMemory:   req.SubagentMemory,
 		KnowledgeText:    req.KnowledgeText,
+		SkillText:        req.SkillText,
+		RuleText:         req.RuleText,
 		Variables:        req.Variables,
-		MaxToolCalls:     req.Limits.WithDefaults().MaxToolCalls,
+		MaxAgentRounds:   req.Limits.WithDefaults().MaxAgentRounds,
 		MaxParallelTools: req.Limits.WithDefaults().MaxParallelTools,
 	})
 	if err != nil {

@@ -143,3 +143,65 @@ func TestNovelRPExampleUsesRepeatedTeamActivation(t *testing.T) {
 	require.Equal(t, "narrate", team.Output.From)
 	require.Len(t, definitions.Agents, 3)
 }
+
+func TestAutoBugfixGitignoreExampleUsesNativeAgentsSkillsScriptsAndDeterministicCommands(t *testing.T) {
+	definitions := loadDefinitions(t, "auto-bugfix-gitignore", ".agents/flows/auto_bugfix.yml")
+
+	require.Equal(t, "auto_bugfix_gitignore", definitions.Flow.ID)
+	require.Equal(t, "default", definitions.Flow.EntryTeamID)
+	require.Equal(t, 20, definitions.Limits.MaxTeamTurns)
+	require.Equal(t, 20, definitions.Limits.MaxCallsPerTeamTurn)
+	require.Equal(t, 200, definitions.Limits.MaxAgentRounds)
+
+	require.ElementsMatch(t,
+		[]string{"default", "diagnose", "challenge", "fix", "test", "review", "learn", "audit"},
+		keys(definitions.Flow.Teams),
+	)
+	require.Len(t, definitions.Agents, 10)
+	require.ElementsMatch(t,
+		[]string{
+			"root-cause-analysis-skill",
+			"challenge-review",
+			"code-fix",
+			"verification",
+			"code-review",
+			"knowledge-learning",
+			"gitignore-diagnostics",
+			"workspace-exploration",
+			"session-observation",
+			"backend-test",
+			"self-evolving",
+			"code-review-skill",
+		},
+		keys(definitions.Skills),
+	)
+	require.Contains(t, definitions.Rules, "safety")
+
+	testTeam := definitions.Teams["test_team"]
+	require.Equal(t, types.MemberCommand, testTeam.Members["check_ignore"].Type)
+	require.Equal(t, types.ReplayIdempotent, testTeam.Members["check_ignore"].Command.ReplayPolicy)
+	require.Equal(t, "gitignore-check-${flow_turn_id}", testTeam.Members["check_ignore"].Command.IdempotencyKey)
+	require.Equal(t, types.ReplayIdempotent, testTeam.Members["check_status"].Command.ReplayPolicy)
+	require.Equal(t, "git-status-${flow_turn_id}", testTeam.Members["check_status"].Command.IdempotencyKey)
+	require.ElementsMatch(t,
+		[]string{"VerificationReport", "GitStatusReport"},
+		[]string{
+			testTeam.Output.Records[0].Record,
+			testTeam.Output.Records[1].Record,
+		},
+	)
+
+	fixTeam := definitions.Teams["fix_team"]
+	require.Equal(t, types.MemberSubagent, fixTeam.Members["fix"].Type)
+	require.Equal(t, "code-fixer", fixTeam.Members["fix"].AgentID)
+	require.ElementsMatch(t, []string{"code-fix", "gitignore-diagnostics"}, definitions.Agents["code-fixer"].Skills)
+	require.ElementsMatch(t, []string{"safety", "fix-boundary"}, definitions.Agents["code-fixer"].Rules)
+}
+
+func keys[T any](values map[string]T) []string {
+	result := make([]string, 0, len(values))
+	for key := range values {
+		result = append(result, key)
+	}
+	return result
+}

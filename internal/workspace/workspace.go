@@ -143,6 +143,7 @@ type CommandRequest struct {
 	TurnID  string
 	Command string
 	Args    []string
+	Env     []string
 	Stdin   string
 }
 
@@ -166,6 +167,9 @@ func (s *Service) Run(ctx context.Context, req CommandRequest) (CommandResult, e
 		cmd = exec.CommandContext(ctx, req.Command, req.Args...)
 	}
 	cmd.Dir = s.root
+	if len(req.Env) > 0 {
+		cmd.Env = req.Env
+	}
 	cmd.Stdin = strings.NewReader(req.Stdin)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout

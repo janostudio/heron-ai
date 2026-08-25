@@ -1,7 +1,7 @@
 id: writing_team
 goal: 根据调研和大纲撰写完整博客文章。
 
-members:
+calls:
   write_blog:
     type: subagent
     agent: writer

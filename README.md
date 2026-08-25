@@ -35,6 +35,7 @@ heron --prompt "Hello" --flow .agents/flows/default.yml
 - [Architecture](./docs/ARCHITECTURE.md) - How Heron works under the hood
 - [Configuration](./docs/CONFIGURATION.md) - All config options explained
 - [CLI Usage](./docs/CLI.md) - Command reference
+- [CLI JSON-RPC](./docs/CONNECT-CLI-JSONRPC.md) - JSON-RPC/JSONL integration for external CLI callers
 - [Examples Guide](./examples/) - Full working examples
 
 ## Configuration
@@ -45,7 +46,7 @@ Heron uses a `.agents/` directory for all configuration:
 .agents/
 ├── flows/         # Flow definitions (YAML)
 ├── teams/         # Team configurations (YAML)
-├── agents/        # Agent definitions (Markdown + YAML)
+├── agents/        # Agent directories (<id>/AGENT.md + extensions)
 ├── skills/        # Skill definitions
 ├── knowledge/     # Knowledge base files
 ├── rules/         # Global rules
@@ -57,13 +58,15 @@ Heron uses a `.agents/` directory for all configuration:
 
 ```json
 {
-  "model": "deepseek-v4-flash",
+  "model": "hy3-ioa",
   "models": [
     {
-      "name": "deepseek-v4-flash",
-      "base_url": "https://api.deepseek.com/v1",
+      "id": "hy3-ioa",
+      "name": "hy3-ioa",
+      "protocol": "openai_chat",
+      "base_url": "https://api.openai.com/v1",
       "api_key": "${OPENAI_API_KEY}",
-      "max_tokens": 64000
+      "maxOutputTokens": 64000
     }
   ]
 }

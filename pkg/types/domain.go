@@ -37,11 +37,13 @@ type FlowTeamBinding struct {
 	OnProceed   *Route    `yaml:"on_proceed,omitempty" json:"on_proceed,omitempty"`
 }
 
-// Team is the V1 Team definition. A Team coordinates members; it does not
-// require a default or aggregator member.
+// Team is the V1 Team definition. A Team directly coordinates Agent,
+// Command, and Webhook calls. Members is retained as an internal/legacy
+// decoding alias; new configuration should use Calls.
 type Team struct {
 	ID      string            `yaml:"id" json:"id"`
-	Members map[string]Member `yaml:"members" json:"members"`
+	Members map[string]Member `yaml:"members,omitempty" json:"-"`
+	Calls   map[string]Member `yaml:"calls,omitempty" json:"calls,omitempty"`
 	Inputs  InputSpec         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	Output  OutputSpec        `yaml:"output,omitempty" json:"output,omitempty"`
 	Outputs OutputSpec        `yaml:"outputs,omitempty" json:"outputs,omitempty"`
@@ -62,9 +64,16 @@ func (o OutputSpec) IsZero() bool {
 	return o.From == "" && o.Record == "" && len(o.Records) == 0 && !o.Publish
 }
 
-// Normalize fills member IDs from the Team member map keys. The config loader
-// should call this immediately after decoding a Team.
+// Normalize fills call IDs from the Team call map keys. The config loader
+// should call this immediately after decoding a Team. Internally the
+// scheduler still uses Members so the executor abstraction stays private.
 func (t *Team) Normalize() {
+	if len(t.Members) == 0 && len(t.Calls) > 0 {
+		t.Members = t.Calls
+	}
+	if len(t.Calls) == 0 && len(t.Members) > 0 {
+		t.Calls = t.Members
+	}
 	for name, member := range t.Members {
 		if member.ID == "" {
 			member.ID = name
@@ -82,14 +91,15 @@ func (t Team) Validate() error {
 	if strings.TrimSpace(t.ID) == "" {
 		return fmt.Errorf("team id is required")
 	}
+	t.Normalize()
 
 	memberNames := make(map[string]struct{}, len(t.Members))
 	for name, member := range t.Members {
 		if strings.TrimSpace(name) == "" {
-			return fmt.Errorf("team %q: member name is required", t.ID)
+			return fmt.Errorf("team %q: call name is required", t.ID)
 		}
 		if member.ID != name {
-			return fmt.Errorf("team %q: member key %q does not match member id %q", t.ID, name, member.ID)
+			return fmt.Errorf("team %q: call key %q does not match call id %q", t.ID, name, member.ID)
 		}
 		if err := member.Validate(); err != nil {
 			return fmt.Errorf("team %q: %w", t.ID, err)
@@ -100,10 +110,10 @@ func (t Team) Validate() error {
 	for _, member := range t.Members {
 		for _, dependency := range member.DependsOn {
 			if _, ok := memberNames[dependency]; !ok {
-				return fmt.Errorf("team %q: member %q depends on unknown member %q", t.ID, member.ID, dependency)
+				return fmt.Errorf("team %q: call %q depends on unknown call %q", t.ID, member.ID, dependency)
 			}
 			if dependency == member.ID {
-				return fmt.Errorf("team %q: member %q cannot depend on itself", t.ID, member.ID)
+				return fmt.Errorf("team %q: call %q cannot depend on itself", t.ID, member.ID)
 			}
 		}
 	}
@@ -120,37 +130,37 @@ func (t Team) Validate() error {
 func validateTeamOutputs(t Team) error {
 	validateBinding := func(binding OutputBinding) error {
 		if strings.TrimSpace(binding.From) == "" {
-			return fmt.Errorf("output record %q: from member is required", binding.Record)
+			return fmt.Errorf("output record %q: from call is required", binding.Record)
 		}
 		if _, ok := t.Members[binding.From]; !ok {
-			return fmt.Errorf("output references unknown member %q", binding.From)
+			return fmt.Errorf("output references unknown call %q", binding.From)
 		}
 		if strings.TrimSpace(binding.Record) == "" {
-			return fmt.Errorf("output from member %q: record is required", binding.From)
+			return fmt.Errorf("output from call %q: record is required", binding.From)
 		}
 		return nil
 	}
 
 	if !t.Output.IsZero() && len(t.Output.Records) == 0 {
 		if strings.TrimSpace(t.Output.From) == "" {
-			return fmt.Errorf("output: from member is required")
+			return fmt.Errorf("output: from call is required")
 		}
 		if _, ok := t.Members[t.Output.From]; !ok {
-			return fmt.Errorf("output references unknown member %q", t.Output.From)
+			return fmt.Errorf("output references unknown call %q", t.Output.From)
 		}
 		if strings.TrimSpace(t.Output.Record) == "" {
-			return fmt.Errorf("output from member %q: record is required", t.Output.From)
+			return fmt.Errorf("output from call %q: record is required", t.Output.From)
 		}
 	}
 	if !t.Outputs.IsZero() && len(t.Outputs.Records) == 0 {
 		if strings.TrimSpace(t.Outputs.From) == "" {
-			return fmt.Errorf("outputs: from member is required")
+			return fmt.Errorf("outputs: from call is required")
 		}
 		if _, ok := t.Members[t.Outputs.From]; !ok {
-			return fmt.Errorf("outputs references unknown member %q", t.Outputs.From)
+			return fmt.Errorf("outputs references unknown call %q", t.Outputs.From)
 		}
 		if strings.TrimSpace(t.Outputs.Record) == "" {
-			return fmt.Errorf("outputs from member %q: record is required", t.Outputs.From)
+			return fmt.Errorf("outputs from call %q: record is required", t.Outputs.From)
 		}
 	}
 
@@ -179,7 +189,7 @@ func validateAcyclicMemberDependencies(members map[string]Member) error {
 	visit = func(memberID string) error {
 		switch states[memberID] {
 		case visiting:
-			return fmt.Errorf("member dependency cycle detected at %q", memberID)
+			return fmt.Errorf("call dependency cycle detected at %q", memberID)
 		case visited:
 			return nil
 		}

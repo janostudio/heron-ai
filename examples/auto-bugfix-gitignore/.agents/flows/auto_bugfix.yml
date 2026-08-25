@@ -1,0 +1,74 @@
+id: auto_bugfix_gitignore
+entry: default
+
+teams:
+  default:
+    team: default_team
+    coordinator: true
+    can_activate: [diagnose, challenge, fix, test, review, learn, audit]
+    inputs:
+      user_message: true
+      flow_records:
+        - GitSnapshot
+        - ExplorationReport
+        - DiagnosisReport
+        - ChallengeReport
+        - ChangeSet
+        - VerificationReport
+        - GitStatusReport
+        - TestDecision
+        - ReviewReport
+        - KnowledgePersisted
+        - AuditReport
+    on_proceed:
+      action: complete
+
+  diagnose:
+    team: diagnose_team
+    depends_on: [default]
+    inputs:
+      user_message: true
+      flow_records: [GitSnapshot, ExplorationReport, DiagnosisReport, ChallengeReport]
+    on_proceed: [challenge]
+
+  challenge:
+    team: challenge_team
+    depends_on: [diagnose]
+    inputs:
+      flow_records: [GitSnapshot, ExplorationReport, DiagnosisReport]
+    on_proceed: [fix]
+
+  fix:
+    team: fix_team
+    depends_on: [challenge]
+    inputs:
+      flow_records: [DiagnosisReport, ChallengeReport, SkepticReport, VerificationReport, TestDecision, ReviewReport]
+    on_proceed: [test]
+
+  test:
+    team: test_team
+    depends_on: [fix]
+    inputs:
+      flow_records: [ChangeSet, VerificationReport, GitStatusReport, TestDecision]
+    on_proceed: [review]
+
+  review:
+    team: review_team
+    depends_on: [test]
+    inputs:
+      flow_records: [ChangeSet, VerificationReport, GitStatusReport, TestDecision]
+    on_proceed: [learn]
+
+  learn:
+    team: knowledge_team
+    depends_on: [review]
+    inputs:
+      flow_records: [DiagnosisReport, ChangeSet, VerificationReport, ReviewReport]
+    on_proceed: [audit]
+
+  audit:
+    team: audit_team
+    depends_on: [learn]
+    inputs:
+      flow_records: [KnowledgePersisted, ReviewReport]
+    on_proceed: [default]

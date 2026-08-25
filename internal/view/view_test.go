@@ -123,7 +123,7 @@ func TestHandler_HandleTurn(t *testing.T) {
 func TestHandler_HandleStreamReplaysFromLastEventID(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	writer := storage.NewJSONLSessionWriter(fileStore)
-	for _, eventType := range []string{"one", "two", "three"} {
+	for _, eventType := range []string{"one", "two", types.EventFlowTurnCompleted} {
 		if _, err := writer.Append(context.Background(), "fs-1", types.SessionEvent{Type: eventType}); err != nil {
 			t.Fatal(err)
 		}
@@ -139,10 +139,47 @@ func TestHandler_HandleStreamReplaysFromLastEventID(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, `"type":"one"`) || !strings.Contains(body, `"type":"two"`) || !strings.Contains(body, `"type":"three"`) {
+	if strings.Contains(body, `"type":"one"`) || !strings.Contains(body, `"type":"two"`) || !strings.Contains(body, `"type":"flow_turn.completed"`) {
 		t.Fatalf("unexpected SSE replay: %s", body)
 	}
 	if !strings.Contains(body, "id: 2") || !strings.Contains(body, "id: 3") {
 		t.Fatalf("missing event ids: %s", body)
 	}
+}
+
+func TestHandler_HandleRecoveryStatus(t *testing.T) {
+	runtime := &recoveryHandlerRuntime{}
+	handler := NewRuntimeHandler(runtime)
+	req := httptest.NewRequest(http.MethodGet, "/recovery/status?session_id=fs-1", nil)
+	rec := httptest.NewRecorder()
+
+	handler.HandleRecoveryStatus(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var status types.RecoveryStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatalf("decode recovery status: %v", err)
+	}
+	if status.Session.ID != "fs-1" || len(status.Interrupted) != 1 {
+		t.Fatalf("unexpected recovery status: %#v", status)
+	}
+}
+
+type recoveryHandlerRuntime struct{ handlerFlowRuntime }
+
+func (r *recoveryHandlerRuntime) RecoveryStatus(context.Context, string) (types.RecoveryStatus, error) {
+	return types.RecoveryStatus{
+		Session: types.FlowSession{ID: "fs-1", Status: types.SessionInterrupted},
+		Interrupted: []types.InterruptedExecution{{
+			Kind:         "member_turn",
+			MemberTurnID: "mt-1",
+			SafeToRetry:  false,
+		}},
+	}, nil
+}
+
+func (r *recoveryHandlerRuntime) Recover(context.Context, string, types.RecoveryRequest) (types.FlowTurnResult, error) {
+	return types.FlowTurnResult{Session: types.FlowSession{ID: "fs-1"}}, nil
 }

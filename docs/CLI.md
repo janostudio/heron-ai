@@ -10,11 +10,14 @@ heron --flow .agents/flows/default.yml
 # Non-interactive mode
 heron --prompt "Hello" --flow .agents/flows/default.yml
 
+# Long-lived JSON-RPC over stdin/stdout
+heron --json-rpc --flow .agents/flows/default.yml
+
 # HTTP server mode
 heron --serve --port 8080
 
-# Resume a previous run
-heron --run <run_id> --prompt "Continue..."
+# Resume a waiting FlowSession
+heron --prompt "Continue..." --session <flow_session_id> --flow .agents/flows/default.yml
 
 # Version
 heron --version
@@ -86,17 +89,47 @@ Endpoints:
 - `POST /api/run/{id}/resume` - Resume after wait_input
 - `POST /api/run/{id}/cancel` - Cancel run
 
+## JSON-RPC CLI Mode
+
+`--json-rpc` starts a long-lived CLI process for external callers such as
+`heron-connect`. It uses JSON-RPC 2.0 messages framed as JSONL/NDJSON:
+
+```bash
+heron --json-rpc --flow .agents/flows/default.yml
+```
+
+stdin:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"turn","params":{"input":"检查项目"}}
+```
+
+stdout:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"session_id":"fs_001","flow_turn_id":"ft_001","status":"completed","reply":"已完成检查。"}}
+```
+
+Rules:
+
+- one complete JSON object per line;
+- stdout contains protocol messages only;
+- logs go to stderr;
+- the first `turn` without `session_id` creates a FlowSession;
+- later turns send the returned `session_id`;
+- `session.jsonl` and `evidence.jsonl` remain internal storage formats and
+  are not sent directly over stdout.
+
 ## Runtime Data
 
-Each run produces data in `.agents/data/{runID}/`:
+Each FlowSession produces data in `.agents/data/sessions/<flow_session_id>/`:
 
 ```
-.agents/data/{runID}/
-├── run.jsonl          # Conversation log
-├── run_state.json     # Run metadata
-└── sessions/
-    └── {team}-{agent}/
-        └── state.json # Agent state
+.agents/data/sessions/<flow_session_id>/
+├── session.jsonl      # Complete append-only session event log
+└── evidence.jsonl     # Flow-scope SharedRecord history
 ```
 
-Run IDs are auto-generated as `YYYYMMDD-HHMMSS-XXXXXX`.
+`session.jsonl` is used for replay and recovery. `evidence.jsonl` is a
+queryable summary of Flow-scope records. These storage files are separate from
+the JSON-RPC/JSONL stdin/stdout transport.

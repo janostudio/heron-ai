@@ -167,7 +167,7 @@ func TestTeamValidateRejectsUnknownMemberDependency(t *testing.T) {
 	}
 
 	err := team.Validate()
-	if err == nil || !strings.Contains(err.Error(), "depends on unknown member") {
+	if err == nil || !strings.Contains(err.Error(), "depends on unknown call") {
 		t.Fatalf("expected unknown member dependency error, got %v", err)
 	}
 }
@@ -192,7 +192,7 @@ func TestTeamValidateRejectsMemberDependencyCycle(t *testing.T) {
 	}
 
 	err := team.Validate()
-	if err == nil || !strings.Contains(err.Error(), "member dependency cycle detected") {
+	if err == nil || !strings.Contains(err.Error(), "call dependency cycle detected") {
 		t.Fatalf("expected member dependency cycle error, got %v", err)
 	}
 }
@@ -215,7 +215,7 @@ func TestTeamValidateRejectsUnknownOutputMember(t *testing.T) {
 	}
 
 	err := team.Validate()
-	if err == nil || !strings.Contains(err.Error(), "output references unknown member") {
+	if err == nil || !strings.Contains(err.Error(), "output references unknown call") {
 		t.Fatalf("expected unknown output member error, got %v", err)
 	}
 }
@@ -270,6 +270,36 @@ func TestMemberValidateRejectsMixedOrInvalidDefinitions(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %v", tt.want, err)
 			}
 		})
+	}
+}
+
+func TestMemberValidateRequiresIdempotencyKeyForIdempotentReplay(t *testing.T) {
+	member := Member{
+		ID:   "verify",
+		Type: MemberCommand,
+		Command: &CommandSpec{
+			Command:      "git status --short",
+			ReplayPolicy: ReplayIdempotent,
+		},
+	}
+	err := member.Validate()
+	if err == nil || !strings.Contains(err.Error(), "idempotency_key") {
+		t.Fatalf("expected idempotency key validation error, got %v", err)
+	}
+}
+
+func TestMemberValidateAcceptsIdempotentReplayWithKey(t *testing.T) {
+	member := Member{
+		ID:   "verify",
+		Type: MemberCommand,
+		Command: &CommandSpec{
+			Command:        "git status --short",
+			ReplayPolicy:   ReplayIdempotent,
+			IdempotencyKey: "verify-${flow_turn_id}",
+		},
+	}
+	if err := member.Validate(); err != nil {
+		t.Fatalf("expected valid idempotent command, got %v", err)
 	}
 }
 

@@ -1,7 +1,7 @@
 id: review_team
 goal: 安全和性能并行审查，最后生成综合报告。
 
-members:
+calls:
   security_review:
     type: subagent
     agent: security-reviewer

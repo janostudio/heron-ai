@@ -9,6 +9,7 @@ const (
 	SessionCreated      SessionStatus = "created"
 	SessionRunning      SessionStatus = "running"
 	SessionWaitingInput SessionStatus = "waiting_input"
+	SessionInterrupted  SessionStatus = "interrupted"
 	SessionCompleted    SessionStatus = "completed"
 	SessionFailed       SessionStatus = "failed"
 	SessionCancelled    SessionStatus = "cancelled"

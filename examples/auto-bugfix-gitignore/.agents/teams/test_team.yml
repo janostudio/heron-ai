@@ -1,0 +1,54 @@
+id: test_team
+goal: 用确定性脚本验证忽略规则和项目文件边界，再由 Agent 解释事实。
+memory:
+  enabled: true
+  max_items: 20
+  max_chars: 8000
+
+calls:
+  check_ignore:
+    type: command
+    command:
+      command: "bash .agents/scripts/verify_gitignore.sh"
+      timeout: 30s
+      idempotency_key: "gitignore-check-${flow_turn_id}"
+      replay_policy: idempotent
+    inputs:
+      flow_records: [ChangeSet]
+    output:
+      record: VerificationReport
+
+  check_status:
+    type: command
+    command:
+      command: "bash .agents/scripts/check_project_scope.sh"
+      timeout: 30s
+      idempotency_key: "git-status-${flow_turn_id}"
+      replay_policy: idempotent
+    depends_on: [check_ignore]
+    inputs:
+      flow_records: [ChangeSet]
+    output:
+      record: GitStatusReport
+
+  explain:
+    type: subagent
+    agent: test-runner
+    depends_on: [check_status]
+    responsibility: 只根据 VerificationReport 和 GitStatusReport 判断是否通过验收，不重新猜测或执行测试。
+    inputs:
+      flow_records: [ChangeSet, VerificationReport, GitStatusReport]
+    output:
+      record: TestDecision
+
+output:
+  records:
+    - from: check_ignore
+      record: VerificationReport
+      scope: flow
+    - from: check_status
+      record: GitStatusReport
+      scope: flow
+    - from: explain
+      record: TestDecision
+      scope: flow

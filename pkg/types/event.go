@@ -14,9 +14,12 @@ type SessionEvent struct {
 	FlowTurnID    string         `json:"flow_turn_id,omitempty"`
 	TeamSessionID string         `json:"team_session_id,omitempty"`
 	TeamTurnID    string         `json:"team_turn_id,omitempty"`
+	TeamID        string         `json:"team_id,omitempty"`
 	MemberID      string         `json:"member_id,omitempty"`
 	MemberTurnID  string         `json:"member_turn_id,omitempty"`
 	MemberType    MemberType     `json:"member_type,omitempty"`
+	Attempt       int            `json:"attempt,omitempty"`
+	RecoveryOf    string         `json:"recovery_of,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	Payload       map[string]any `json:"payload,omitempty"`
 }
@@ -45,5 +48,7 @@ const (
 	EventWorkspaceOperation     = "workspace.operation"
 	EventRouteResolved          = "route.resolved"
 	EventSharedRecordPublished  = "shared_record.published"
+	EventRecoveryRequested      = "recovery.requested"
+	EventRecoveryCompleted      = "recovery.completed"
 	EventMemoryUpdated          = "memory.updated"
 )

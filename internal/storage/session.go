@@ -27,6 +27,7 @@ type SessionReplay struct {
 type SessionWriter interface {
 	Append(ctx context.Context, sessionID string, event types.SessionEvent) (types.SessionEvent, error)
 	Replay(ctx context.Context, sessionID string) (*SessionReplay, error)
+	Subscribe(ctx context.Context, sessionID string, afterSeq int64) (<-chan types.SessionEvent, error)
 }
 
 // JSONLSessionWriter is a single-writer implementation backed by the current
@@ -36,12 +37,15 @@ type JSONLSessionWriter struct {
 	fileStore FileStore
 	mu        sync.Mutex
 	nextSeq   map[string]int64
+	subs      map[string]map[int]chan types.SessionEvent
+	nextSubID int
 }
 
 func NewJSONLSessionWriter(fileStore FileStore) *JSONLSessionWriter {
 	return &JSONLSessionWriter{
 		fileStore: fileStore,
 		nextSeq:   make(map[string]int64),
+		subs:      make(map[string]map[int]chan types.SessionEvent),
 	}
 }
 
@@ -90,7 +94,75 @@ func (w *JSONLSessionWriter) Append(ctx context.Context, sessionID string, event
 	if err := w.fileStore.Append(path, data); err != nil {
 		return types.SessionEvent{}, fmt.Errorf("append session event: %w", err)
 	}
+	w.publishLocked(sessionID, event)
 	return event, nil
+}
+
+func (w *JSONLSessionWriter) Subscribe(ctx context.Context, sessionID string, afterSeq int64) (<-chan types.SessionEvent, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, errors.New("session id is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	w.mu.Lock()
+	replay, err := w.replayLocked(sessionID)
+	if errors.Is(err, ErrNotFound) {
+		w.mu.Unlock()
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		w.mu.Unlock()
+		return nil, err
+	}
+	ch := make(chan types.SessionEvent, len(replay.Events)+64)
+	w.nextSubID++
+	subID := w.nextSubID
+	if w.subs[sessionID] == nil {
+		w.subs[sessionID] = make(map[int]chan types.SessionEvent)
+	}
+	w.subs[sessionID][subID] = ch
+	if replay != nil {
+		for _, event := range replay.Events {
+			if event.Seq > afterSeq {
+				ch <- event
+			}
+		}
+	}
+	w.mu.Unlock()
+
+	go func() {
+		<-ctx.Done()
+		w.mu.Lock()
+		if subscribers := w.subs[sessionID]; subscribers != nil {
+			if _, exists := subscribers[subID]; exists {
+				delete(subscribers, subID)
+				close(ch)
+				if len(subscribers) == 0 {
+					delete(w.subs, sessionID)
+				}
+			}
+		}
+		w.mu.Unlock()
+	}()
+	return ch, nil
+}
+
+func (w *JSONLSessionWriter) publishLocked(sessionID string, event types.SessionEvent) {
+	for subID, ch := range w.subs[sessionID] {
+		select {
+		case ch <- event:
+		default:
+			// Disconnect slow subscribers. They can reconnect with
+			// Last-Event-ID and receive the missed events from JSONL.
+			delete(w.subs[sessionID], subID)
+			close(ch)
+		}
+	}
+	if len(w.subs[sessionID]) == 0 {
+		delete(w.subs, sessionID)
+	}
 }
 
 func (w *JSONLSessionWriter) Replay(ctx context.Context, sessionID string) (*SessionReplay, error) {

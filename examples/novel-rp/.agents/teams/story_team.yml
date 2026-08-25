@@ -1,7 +1,7 @@
 id: story_team
 goal: 推进当前小说剧情。
 
-members:
+calls:
   hero_act:
     type: subagent
     agent: hero

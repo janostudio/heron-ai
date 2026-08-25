@@ -1,22 +1,63 @@
 # Agent Configuration
 
-Agents are the core workers. Defined in Markdown with YAML frontmatter.
+Agents are reusable model and prompt definitions. Every Agent uses a
+directory. The main configuration file is always `AGENT.md`; private
+knowledge, rules, memory and future extensions live beside it.
 
-## File Forms
+## Standard Directory Form
 
-### Single file (simple agents)
-```
-.agents/agents/my_agent.md
-```
-
-### Directory form (self-contained agents)
 ```
 .agents/agents/my_agent/
-├── AGENT.md              # Agent definition
+├── AGENT.md              # Required Agent definition
 ├── knowledge/            # Private knowledge
+│   ├── index.md          # Knowledge index
 │   └── domain.md
 └── rules/                # Private rules
     └── guidelines.md
+```
+
+An Agent directory may also contain:
+
+```text
+.agents/agents/my_agent/
+├── skills/               # Agent-local skills, when needed
+├── memory/               # Optional persistent memory files
+├── scripts/              # Agent-local helper scripts
+└── extensions/           # Optional Agent-specific extensions
+```
+
+Only `AGENT.md` is required. Other directories are optional and are loaded by
+the corresponding extension.
+
+### Canonical path
+
+```text
+.agents/agents/<agent-id>/AGENT.md
+```
+
+The directory name is the Agent's storage identity. The `name` in frontmatter
+must match the directory name. This keeps each Agent's knowledge and rules
+isolated and makes the configuration easy to locate.
+
+### Legacy compatibility
+
+Older projects may still contain:
+
+```text
+.agents/agents/my_agent.md
+```
+
+Heron continues to read this path for migration compatibility. New projects
+and new Agent definitions must use the directory form. A project should not
+define both `my_agent.md` and `my_agent/AGENT.md` with the same Agent name.
+
+Migration:
+
+```text
+my_agent.md
+  → my_agent/AGENT.md
+  → mkdir my_agent/knowledge
+  → create my_agent/knowledge/index.md
 ```
 
 ## Full Configuration
@@ -30,10 +71,9 @@ persona:
   backstory: "Experienced researcher with 10 years of expertise"
 model:
   model: ${LLM_MODEL:-deepseek-v4-flash}
-  temperature: 0.3
-  max_tokens: 2048
-  api_key: ${OPENAI_API_KEY}
-  base_url: ${OPENAI_BASE_URL:-https://api.deepseek.com/v1}
+  # 可选：未配置时从 models.json 继承
+  # temperature: 0.3
+  # max_output_tokens: 8192
 tools:
   builtin:
     - Read
@@ -76,6 +116,12 @@ Agent body text (Markdown). Template variables available:
 {{range .Rules}} - {{.Content}} {{end}}
 ```
 
+The content above belongs in:
+
+```text
+.agents/agents/my_agent/AGENT.md
+```
+
 ## Fields
 
 ### persona
@@ -91,10 +137,15 @@ Agent body text (Markdown). Template variables available:
 | Field | Type | Description |
 |-------|------|-------------|
 | `model` | string | Model name. Supports `${VAR:-default}` |
-| `temperature` | float | 0.0-1.0. Lower = more deterministic |
-| `max_tokens` | integer | Max response tokens |
-| `api_key` | string | API key. Supports `${ENV_VAR}` |
-| `base_url` | string | API base URL |
+| `temperature` | float | 覆盖 models.json 的默认值 |
+| `top_p` | float | 覆盖模型默认 top-p |
+| `top_k` | integer | 覆盖模型默认 top-k |
+| `repetition_penalty` | float | 覆盖模型默认重复惩罚 |
+| `reasoning` | object | 覆盖模型默认推理配置 |
+| `max_output_tokens` | integer | 覆盖模型的单次输出上限 |
+| `max_tokens` | integer | 旧字段兼容；新配置使用 `max_output_tokens` |
+| `api_key` | string | 特殊场景覆盖模型 API Key |
+| `base_url` | string | 特殊场景覆盖模型 API 地址 |
 
 ### tools
 
@@ -139,3 +190,17 @@ Built-in tools: `Read`, `Write`, `Grep`, `Glob`, `TodoWrite`, `TodoRead`
 ### handoffs
 
 List of agent names this agent can delegate tasks to.
+
+## Private Knowledge
+
+Private Agent knowledge belongs below the Agent directory:
+
+```text
+.agents/agents/my_agent/knowledge/
+├── index.md
+└── domain.md
+```
+
+`index.md` is the navigation/index file and is not itself treated as a
+knowledge entry. Agent-private knowledge is loaded with the Agent's scope and
+is not automatically exposed to other Agents.

@@ -32,6 +32,20 @@ func (e *CommandExecutor) Execute(ctx context.Context, req types.MemberRequest) 
 	if e.workspace == nil {
 		return types.MemberResult{Status: types.TurnFailed, Error: "workspace is not configured"}, fmt.Errorf("workspace is not configured")
 	}
+	if req.RecoveryOf != "" && req.Member.Command.ReplayPolicy != types.ReplayAllow && req.Member.Command.ReplayPolicy != types.ReplayIdempotent {
+		return types.MemberResult{
+			Status: types.TurnFailed,
+			Error:  "command replay is not allowed by replay_policy",
+		}, fmt.Errorf("command member %q replay policy is %q", req.Member.ID, req.Member.Command.ReplayPolicy)
+	}
+	if req.RecoveryOf != "" &&
+		req.Member.Command.ReplayPolicy == types.ReplayIdempotent &&
+		strings.TrimSpace(req.Member.Command.IdempotencyKey) == "" {
+		return types.MemberResult{
+			Status: types.TurnFailed,
+			Error:  "command idempotent replay requires idempotency_key",
+		}, fmt.Errorf("command member %q idempotent replay requires idempotency_key", req.Member.ID)
+	}
 
 	command := req.Member.Command.Command
 	args := req.Member.Command.Args
@@ -45,6 +59,7 @@ func (e *CommandExecutor) Execute(ctx context.Context, req types.MemberRequest) 
 		TurnID:  memberTurnID(req),
 		Command: command,
 		Args:    args,
+		Env:     commandEnv(req),
 		Stdin:   req.Input,
 	})
 	output := execution.Stdout
@@ -64,6 +79,7 @@ func (e *CommandExecutor) Execute(ctx context.Context, req types.MemberRequest) 
 		result.Error = err.Error()
 	}
 	if recordName := req.Member.Output.Record; recordName != "" {
+		passed := commandPassed(err, execution.ExitCode, output, errorOutput)
 		result.Records = []types.SharedRecord{newMemberRecord(
 			req,
 			recordName,
@@ -73,7 +89,7 @@ func (e *CommandExecutor) Execute(ctx context.Context, req types.MemberRequest) 
 				"exit_code": execution.ExitCode,
 				"stdout":    output,
 				"stderr":    errorOutput,
-				"passed":    err == nil && execution.ExitCode == 0,
+				"passed":    passed,
 			},
 		)}
 	}
@@ -85,4 +101,16 @@ func (e *CommandExecutor) Execute(ctx context.Context, req types.MemberRequest) 
 		}}
 	}
 	return result, nil
+}
+
+func commandPassed(err error, exitCode int, stdout, stderr string) bool {
+	if err != nil || exitCode != 0 {
+		return false
+	}
+	// Deterministic verification scripts may intentionally publish a failed
+	// business assertion with process exit 0 so the Team can inspect and route
+	// it. Preserve that fact in SharedRecord.data instead of reporting passed.
+	output := strings.ToLower(stdout + "\n" + stderr)
+	return !strings.Contains(output, "result failed") &&
+		!strings.Contains(output, "status=failed")
 }

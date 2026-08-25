@@ -376,6 +376,45 @@ func TestStructuredOutputManager_ParseInvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "parse structured output")
 }
 
+func TestStructuredOutputManager_ParseMarkdownFencedJSON(t *testing.T) {
+	m := NewStructuredOutputManager()
+	schema := &types.StructuredOutput{
+		Type: "json_schema",
+		Schema: map[string]any{
+			"reply": map[string]any{"type": "string", "required": true},
+			"next":  map[string]any{"type": "object", "required": true},
+		},
+	}
+
+	result, err := m.ParseAndValidate("结论如下：\n\n```json\n"+
+		`{"message_to_user":"已收到","next":{"action":"activate","teams":["diagnose"]}}`+
+		"\n```\n", schema)
+	require.NoError(t, err)
+
+	resultMap, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "已收到", resultMap["reply"])
+	assert.NotNil(t, resultMap["next"])
+}
+
+func TestStructuredOutputManager_ParseJSONAfterExplanation(t *testing.T) {
+	m := NewStructuredOutputManager()
+	schema := &types.StructuredOutput{
+		Type: "json_schema",
+		Schema: map[string]any{
+			"reply": map[string]any{"type": "string", "required": true},
+		},
+	}
+
+	result, err := m.ParseAndValidate(
+		`我会继续处理。
+{"reply":"继续","next":{"action":"proceed"}}`,
+		schema,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "继续", result.(map[string]any)["reply"])
+}
+
 func TestStructuredOutputManager_NilSchemaReturnsRaw(t *testing.T) {
 	m := NewStructuredOutputManager()
 
@@ -517,8 +556,9 @@ func TestTurnLoop_Run_SimpleResponse(t *testing.T) {
 	assert.Equal(t, 50, result.Usage.TotalTokens)
 }
 
-func TestTurnLoop_Run_MaxRoundsDefault(t *testing.T) {
-	// Agent with MaxRounds=0 should default to 3
+func TestTurnLoop_Run_MaxAgentRoundsLimit(t *testing.T) {
+	// The runtime-wide limit is applied to one AgentTurn. This test uses 3
+	// explicitly so the mock can exercise the limit without running 200 rounds.
 	model := &mockModelProvider{
 		responses: []types.ChatResponse{
 			{Text: "round 1", ToolCalls: []types.ToolCall{{ID: "1", Name: "Read", Arguments: map[string]any{"file": "test.txt"}}}, Usage: types.TokenUsage{TotalTokens: 10}},
@@ -536,12 +576,12 @@ func TestTurnLoop_Run_MaxRoundsDefault(t *testing.T) {
 		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
 	)
 
-	agent := types.AgentConfig{
-		Name: "test-agent",
-		Loop: types.LoopConfig{MaxRounds: 0}, // should default to 3
-	}
+	agent := types.AgentConfig{Name: "test-agent"}
 
-	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "hello"})
+	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{
+		Input:          "hello",
+		MaxAgentRounds: 3,
+	})
 	require.NoError(t, err)
 	assert.Equal(t, types.NextWaitInput, result.Next.Action) // loop mode
 	assert.Equal(t, 30, result.Usage.TotalTokens)

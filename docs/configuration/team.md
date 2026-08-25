@@ -1,76 +1,119 @@
 # Team Configuration
 
-A team defines how agents collaborate. Supports parallel and sequential execution.
+`Flow` 负责调度 Team，Team 负责组织自己的 Agent、Command 和 Webhook。
+不再引入 `Member`、`Worker` 或 `Aggregator` 作为用户需要理解的领域概念。
 
 ## Structure
 
 ```yaml
-name: research_team
+id: diagnose_team
+goal: 通过快照、探索和分析形成诊断结论。
 
-stages:
-  - process: parallel
-    tasks:
-      - name: research_topic
-        agent: researcher
-        description: "Research: {{.Input}}"
+calls:
+  snapshot:
+    type: command
+    command:
+      command: bash .agents/scripts/git_snapshot.sh
+      timeout: 30s
+    output:
+      record: GitSnapshot
 
-      - name: plan_outline
-        agent: planner
-        description: "Plan outline: {{.Input}}"
+  explorer:
+    type: subagent
+    agent: explorer
+    responsibility: 只读检查 Workspace，补充诊断事实。
+    output:
+      record: ExplorationReport
 
-  - process: sequential
-    tasks:
-      - name: write_blog
-        agent: writer
-        description: "Write blog based on research and outline"
+  diagnose:
+    type: subagent
+    agent: root-cause-analyst
+    depends_on: [snapshot, explorer]
+    inputs:
+      flow_records: [GitSnapshot, ExplorationReport]
+    output:
+      record: DiagnosisReport
+
+output:
+  from: diagnose
+  record: DiagnosisReport
+  scope: flow
+```
+
+`calls` 只是 Team 内配置的调用集合，不是一个额外的协作层级。
+调用的类型由 `type` 决定：
+
+```text
+subagent → 调用本地 Agent，内部运行 Model / Tool Loop
+command  → 调用固定 Shell
+webhook  → 调用固定 URL
 ```
 
 ## Fields
 
 | Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Team identifier |
-| `stages` | array | Ordered stages (parallel then sequential) |
+|---|---|---|
+| `id` | string | Team identifier |
+| `goal` | string | Team 目标 |
+| `calls` | object | Team 内的 Agent、Command、Webhook 配置 |
+| `output` | object | Team 对外发布的 SharedRecord |
+| `memory` | object | 可选 Team Memory 配置 |
 
-### Stage
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `process` | string | `parallel` or `sequential` |
-| `tasks` | array | Tasks to execute |
-
-### Task
+### Call
 
 | Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Task identifier |
-| `agent` | string | Agent name to assign |
-| `description` | string | Task description. Supports `{{.Input}}` template |
+|---|---|---|
+| `type` | string | `subagent`、`command` 或 `webhook` |
+| `agent` | string | `subagent` 使用的 Agent 定义 |
+| `command` | string/object | `command` 类型使用的 Shell |
+| `webhook` / `url` | object/string | `webhook` 类型使用的 URL |
+| `depends_on` | array | Team 内其他调用的名称 |
+| `inputs` | object/array | 显式输入和 SharedRecord |
+| `output` | object | 本次调用发布的 SharedRecord |
+| `responsibility` | string | Agent 的职责说明 |
+| `timeout` | string | 本次调用超时时间 |
 
-## Process Types
+## 调度规则
 
-### parallel
-All tasks run concurrently. Agents have **zero communication** during execution.
-
-```
-researcher ─┐
-            ├─ concurrent, independent
-planner ────┘
-```
-
-### sequential
-Tasks run in order. Each task receives the previous task's output as context.
-
-```
-researcher → planner → writer
+```text
+没有依赖的调用 → 自动并行
+有依赖的调用   → 依赖完成后执行
+依赖多个调用   → 读取声明的 SharedRecord 后执行
 ```
 
-## File Location
+Team 不要求必须有默认 Agent，也不要求必须有汇总 Agent：
 
-Teams are YAML files in `.agents/teams/`:
+```text
+Review Team
+  ├── Security Agent
+  ├── Performance Agent
+  └── Maintainability Agent
 ```
-.agents/teams/
-├── research_team.yml
-├── writing_team.yml
-└── review_team.yml
+
+如果需要汇总，配置一个普通的 Agent 即可，不需要特殊的
+`default_agent`、`worker` 或 `aggregator` 类型。
+
+## SharedRecord
+
+Team 内外的信息通过 SharedRecord 传递：
+
+```text
+Diagnose Team
+  → DiagnosisReport
+
+Fix Team
+  ← DiagnosisReport
+  → ChangeSet
+
+Test Team
+  ← ChangeSet
+  → VerificationReport
 ```
+
+调用不会自动读取全部历史。需要什么信息，就在 `inputs` 中声明什么信息。
+
+## Compatibility
+
+当前运行时内部仍保留旧的 `Member` 类型和 `members` 配置读取能力，用于兼容
+旧配置和事件恢复；新配置和文档统一使用 `calls`，用户只需要理解
+`Flow → Team → Agent / Command / Webhook`。

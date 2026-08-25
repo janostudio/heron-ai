@@ -54,6 +54,8 @@ type RenderContext struct {
 	TeamMemory     string
 	SubagentMemory string
 	KnowledgeText  string
+	SkillText      string
+	RuleText       string
 	Records        []types.SharedRecord
 }
 
@@ -95,6 +97,13 @@ func (p *PromptRenderer) BuildSystemPrompt(agent types.AgentConfig, rctx RenderC
 		parts = append(parts, agent.Body)
 	}
 
+	if rctx.RuleText != "" {
+		parts = append(parts, "## Rules\n"+rctx.RuleText)
+	}
+	if rctx.SkillText != "" {
+		parts = append(parts, "## Skills\n"+rctx.SkillText)
+	}
+
 	// Tool usage instructions
 	if len(agent.Tools.Builtin) > 0 {
 		parts = append(parts, GetTemplate("tool-usage"))
@@ -110,6 +119,7 @@ func (p *PromptRenderer) BuildSystemPrompt(agent types.AgentConfig, rctx RenderC
 	// Output format
 	if agent.Structured != nil {
 		parts = append(parts, GetTemplate("output-format"))
+		parts = append(parts, structuredOutputContract(agent.Structured))
 	}
 
 	if rctx.TeamMemory != "" {
@@ -258,3 +268,18 @@ Your output must follow the specified structured format.
 - Ensure all required fields are present
 - Follow the schema exactly
 - If you cannot provide a value, use an appropriate default or null`
+
+func structuredOutputContract(schema *types.StructuredOutput) string {
+	if schema == nil {
+		return ""
+	}
+	return "## Strict Structured Output Contract\n" +
+		"Return exactly one JSON object and nothing else.\n" +
+		"Do not write an explanation before or after it.\n" +
+		"Do not use Markdown fences such as ```json.\n" +
+		"Do not return a second JSON object.\n" +
+		"Do not return YAML.\n" +
+		"The first character must be { and the last character must be }.\n" +
+		"If a field is unavailable, use an empty string, empty array, false, or null according to its type.\n" +
+		"The runtime will reject prose, Markdown, YAML, and empty responses."
+}

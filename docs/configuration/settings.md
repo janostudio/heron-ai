@@ -68,3 +68,29 @@ Engine behavior configuration. Optional - defaults are used if not present.
 | `default_loop.max_rounds` | integer | `10` | Default max LLM turns per agent |
 | `default_loop.timeout` | string | `120s` | Default agent timeout |
 | `default_loop.tool_mode` | string | `sequential` | Tool execution mode |
+
+## Flow / Team / AgentTurn limits
+
+```json
+{
+  "runtime": {
+    "max_team_turns": 20,
+    "max_calls_per_team_turn": 20,
+    "max_agent_rounds": 200,
+    "max_parallel_teams": 20,
+    "max_parallel_calls": 20,
+    "max_parallel_tools": 20
+  }
+}
+```
+
+These limits have different scopes:
+
+| Field | Scope | Meaning |
+|---|---|---|
+| `max_team_turns` | one `FlowTurn` | Maximum TeamTurns scheduled by this FlowTurn |
+| `max_calls_per_team_turn` | one `TeamTurn` | Maximum Agent/Command/Webhook calls executed by this TeamTurn |
+| `max_agent_rounds` | one `AgentTurn` | Maximum Model/Tool loop iterations inside one Subagent AgentTurn |
+
+`max_parallel_teams`, `max_parallel_calls`, and `max_parallel_tools` only limit concurrency. They do
+not change the counted units. The default values are `20 / 20 / 200`.

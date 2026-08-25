@@ -8,6 +8,40 @@ type ModelProvider interface {
 	ChatStream(ctx context.Context, messages []Message, tools []JSONSchema, config ModelConfig) (<-chan ChatChunk, error)
 }
 
+// ModelProfile describes the capabilities and defaults advertised for one
+// model by the global .agents/models.json registry. Optional generation
+// values are pointers so "not declared" is different from an explicit zero.
+type ModelProfile struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Protocol  string `json:"protocol,omitempty"`
+	BaseURL   string `json:"base_url,omitempty"`
+	ModelsURL string `json:"models_url,omitempty"`
+	APIKey    string `json:"api_key,omitempty"`
+
+	MaxAllowedSize  int `json:"maxAllowedSize,omitempty"`
+	MaxInputTokens  int `json:"maxInputTokens,omitempty"`
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+	MaxTokens       int `json:"max_tokens,omitempty"` // Deprecated registry alias.
+
+	Temperature       *float64         `json:"temperature,omitempty"`
+	TopP              *float64         `json:"top_p,omitempty"`
+	TopK              *int             `json:"top_k,omitempty"`
+	RepetitionPenalty *float64         `json:"repetition_penalty,omitempty"`
+	OnlyReasoning     bool             `json:"onlyReasoning,omitempty"`
+	Reasoning         *ReasoningConfig `json:"reasoning,omitempty"`
+
+	SupportsImages            *bool `json:"supportsImages,omitempty"`
+	SupportsReasoning         *bool `json:"supportsReasoning,omitempty"`
+	SupportsToolCall          *bool `json:"supportsToolCall,omitempty"`
+	SupportsTemperature       *bool `json:"supportsTemperature,omitempty"`
+	SupportsTopP              *bool `json:"supportsTopP,omitempty"`
+	SupportsTopK              *bool `json:"supportsTopK,omitempty"`
+	SupportsRepetitionPenalty *bool `json:"supportsRepetitionPenalty,omitempty"`
+	SupportsStructuredOutput  *bool `json:"supportsStructuredOutput,omitempty"`
+}
+
 // Message represents a chat message
 type Message struct {
 	ID         string     `json:"id,omitempty"`

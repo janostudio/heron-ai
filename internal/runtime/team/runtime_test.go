@@ -177,6 +177,49 @@ func TestRuntimeReturnsCoordinateWhenMemberFails(t *testing.T) {
 	require.Contains(t, result.Error, "test failed")
 }
 
+func TestRuntimeLimitsCallsPerTeamTurnNotAcrossFlow(t *testing.T) {
+	executor := newFakeMemberExecutor(types.MemberCommand)
+	registry := member.NewRegistry()
+	require.NoError(t, registry.Register(executor))
+	runtime := NewRuntime(registry)
+
+	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
+		Team: types.Team{
+			ID: "diagnose",
+			Members: map[string]types.Member{
+				"snapshot": {
+					ID:   "snapshot",
+					Type: types.MemberCommand,
+					Command: &types.CommandSpec{
+						Command: "snapshot",
+					},
+				},
+				"explore": {
+					ID:   "explore",
+					Type: types.MemberCommand,
+					Command: &types.CommandSpec{
+						Command: "explore",
+					},
+				},
+				"inspect": {
+					ID:        "inspect",
+					Type:      types.MemberCommand,
+					DependsOn: []string{"snapshot", "explore"},
+					Command: &types.CommandSpec{
+						Command: "inspect",
+					},
+				},
+			},
+		},
+		Limits: types.RuntimeLimits{
+			MaxCallsPerTeamTurn: 2,
+			MaxParallelCalls:    2,
+		},
+	})
+	require.ErrorContains(t, err, "team turn exceeded max calls: 2")
+	require.Equal(t, types.NextCoordinate, result.Next.Action)
+}
+
 type failingMemberExecutor struct{}
 
 func (e *failingMemberExecutor) Type() types.MemberType {

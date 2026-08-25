@@ -1,7 +1,7 @@
 id: research_team
 goal: 同时完成主题调研和文章大纲。
 
-members:
+calls:
   research_topic:
     type: subagent
     agent: researcher

@@ -1,7 +1,7 @@
 id: qa_team
 goal: 回答用户的问题。
 
-members:
+calls:
   answer:
     type: subagent
     agent: assistant

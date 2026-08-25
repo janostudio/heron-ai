@@ -52,8 +52,13 @@ scope:
 
 ### Agent-private knowledge
 ```
-.agents/agents/researcher/knowledge/
-└── research-methods.md
+.agents/agents/researcher/
+├── AGENT.md
+└── knowledge/
+    ├── index.md
+    └── research-methods.md
 ```
 
-Agent-private knowledge is automatically loaded when the agent runs.
+Agent-private knowledge is automatically loaded when the Agent runs. The
+`index.md` file is the navigation file and is not itself treated as a
+knowledge entry.

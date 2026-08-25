@@ -11,6 +11,7 @@ import (
 	"github.com/heron-ai/heron-engine/internal/knowledge"
 	"github.com/heron-ai/heron-engine/internal/memory"
 	"github.com/heron-ai/heron-engine/internal/runtime/member"
+	"github.com/heron-ai/heron-engine/internal/skill"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -23,6 +24,8 @@ type Runtime struct {
 	agents    map[string]types.AgentConfig
 	memories  *memory.Store
 	knowledge *knowledge.KnowledgeInjector
+	skills    *skill.SkillInjector
+	rules     map[string]types.RuleItem
 	sessions  storage.SessionWriter
 }
 
@@ -45,6 +48,19 @@ func (r *Runtime) SetMemoryStore(store *memory.Store) {
 // otherwise depend on its storage format.
 func (r *Runtime) SetKnowledgeInjector(injector *knowledge.KnowledgeInjector) {
 	r.knowledge = injector
+}
+
+// SetSkillInjector wires the optional reusable prompt/tool bundle extension.
+// Skills remain an Agent concern; TeamRuntime only resolves them at the
+// member boundary.
+func (r *Runtime) SetSkillInjector(injector *skill.SkillInjector) {
+	r.skills = injector
+}
+
+// SetRuleDefinitions wires the global rule definitions. Rules are rendered
+// into the Subagent prompt without becoming a second orchestration protocol.
+func (r *Runtime) SetRuleDefinitions(rules map[string]types.RuleItem) {
+	r.rules = rules
 }
 
 func (r *Runtime) SetSessionWriter(writer storage.SessionWriter) {
@@ -86,6 +102,8 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 	completed := make(map[string]bool, len(req.Team.Members))
 	var allRecords []types.SharedRecord
 	var allReply []string
+	teamCalls := 0
+	limits := req.Limits.WithDefaults()
 
 	for len(remaining) > 0 {
 		if err := contextErr(ctx); err != nil {
@@ -95,12 +113,18 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		}
 
 		ready := readyMembers(remaining, completed)
-		ready = limitMembers(ready, req.Limits.WithDefaults().MaxParallelMembers)
+		ready = limitMembers(ready, limits.MaxParallelCalls)
 		if len(ready) == 0 {
-			result.Error = "team member dependency graph cannot make progress"
+			result.Error = "team call dependency graph cannot make progress"
 			result.Next = &types.Route{Action: types.NextFail, Reason: result.Error}
 			return result, fmt.Errorf("%s", result.Error)
 		}
+		if teamCalls+len(ready) > limits.MaxCallsPerTeamTurn {
+			result.Error = fmt.Sprintf("team turn exceeded max calls: %d", limits.MaxCallsPerTeamTurn)
+			result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
+			return result, fmt.Errorf("%s", result.Error)
+		}
+		teamCalls += len(ready)
 
 		batchResults, err := r.runBatch(ctx, req, ready, result.MemberResults)
 		if err != nil {
@@ -171,17 +195,10 @@ func (r *Runtime) runBatch(
 				Input:         buildMemberInput(req.Input, req.Records, previous, configured),
 				Records:       selectMemberRecords(req.Records, previous, configured),
 				MemberTurnID:  fmt.Sprintf("%s:%s", req.TeamTurn.ID, configured.ID),
+				Attempt:       req.TeamTurn.Attempt,
+				RecoveryOf:    req.TeamTurn.RecoveryOf,
 				WorkspaceRoot: req.WorkspaceRoot,
 				Limits:        req.Limits,
-			}
-			if err := r.appendMemberStarted(ctx, memberReq); err != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				results[name] = types.MemberResult{Status: types.TurnFailed, Error: err.Error()}
-				mu.Unlock()
-				return
 			}
 			if r.memories != nil && req.Team.Memory.Enabled {
 				teamSnapshot, memoryErr := r.memories.LoadTeam(ctx, req.FlowSession.ID, req.Team.ID)
@@ -227,6 +244,12 @@ func (r *Runtime) runBatch(
 					mu.Unlock()
 					return
 				}
+				if r.skills != nil {
+					prompts, tools := r.skills.Inject(agent.Skills)
+					memberReq.SkillText = strings.Join(prompts, "\n\n")
+					agent.Tools.Builtin = appendUnique(agent.Tools.Builtin, tools...)
+				}
+				memberReq.RuleText = renderRules(r.rules, agent.Rules, configured.AgentID, req.Team.ID)
 				memberReq.AgentDefinition = &agent
 				if r.memories != nil && req.Team.Memory.Enabled {
 					snapshot, memoryErr := r.memories.LoadSubagent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
@@ -243,6 +266,15 @@ func (r *Runtime) runBatch(
 				}
 			}
 
+			if err := r.appendMemberStarted(ctx, memberReq); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				results[name] = types.MemberResult{Status: types.TurnFailed, Error: err.Error()}
+				mu.Unlock()
+				return
+			}
 			memberResult, err := r.executors.Execute(ctx, memberReq)
 			if err == nil && memberResult.Status == types.TurnCompleted && r.memories != nil && req.Team.Memory.Enabled {
 				if memoryErr := r.saveSubagentMemory(ctx, req, configured, memberReq.SubagentMemory, memberResult); memoryErr != nil {
@@ -295,9 +327,12 @@ func (r *Runtime) appendMemberStarted(ctx context.Context, req types.MemberReque
 			FlowTurnID:    req.FlowTurn.ID,
 			TeamSessionID: req.TeamSession.ID,
 			TeamTurnID:    req.TeamTurn.ID,
+			TeamID:        req.TeamTurn.TeamID,
 			MemberID:      req.Member.ID,
 			MemberTurnID:  req.MemberTurnID,
 			MemberType:    req.Member.Type,
+			Attempt:       req.Attempt,
+			RecoveryOf:    req.RecoveryOf,
 			Payload:       map[string]any{"subagent_session": subagentSession},
 		}); err != nil {
 			return err
@@ -309,10 +344,16 @@ func (r *Runtime) appendMemberStarted(ctx context.Context, req types.MemberReque
 		FlowTurnID:    req.FlowTurn.ID,
 		TeamSessionID: req.TeamSession.ID,
 		TeamTurnID:    req.TeamTurn.ID,
+		TeamID:        req.TeamTurn.TeamID,
 		MemberID:      req.Member.ID,
 		MemberTurnID:  req.MemberTurnID,
 		MemberType:    req.Member.Type,
-		Payload:       map[string]any{"member": req.Member},
+		Attempt:       req.Attempt,
+		RecoveryOf:    req.RecoveryOf,
+		Payload: map[string]any{
+			"member": req.Member,
+			"input":  req.Input,
+		},
 	})
 	return err
 }
@@ -333,6 +374,7 @@ func (r *Runtime) appendMemberCompleted(ctx context.Context, req types.MemberReq
 		FlowTurnID:    req.FlowTurn.ID,
 		TeamSessionID: req.TeamSession.ID,
 		TeamTurnID:    req.TeamTurn.ID,
+		TeamID:        req.TeamTurn.TeamID,
 		MemberID:      req.Member.ID,
 		MemberTurnID:  req.MemberTurnID,
 		MemberType:    req.Member.Type,
@@ -392,6 +434,66 @@ func renderMemory(snapshot types.MemorySnapshot) string {
 	appendList("Decisions", snapshot.Decisions)
 	appendList("Next Steps", snapshot.NextSteps)
 	return strings.Join(sections, "\n\n")
+}
+
+func renderRules(definitions map[string]types.RuleItem, names []string, agentID, teamID string) string {
+	if len(definitions) == 0 || len(names) == 0 {
+		return ""
+	}
+
+	var sections []string
+	for _, name := range names {
+		rule, ok := definitions[name]
+		if !ok || !ruleVisible(rule, agentID, teamID) || strings.TrimSpace(rule.Content) == "" {
+			continue
+		}
+		label := rule.ID
+		if rule.Type != "" {
+			label += " (" + rule.Type + ")"
+		}
+		sections = append(sections, "### "+label+"\n"+strings.TrimSpace(rule.Content))
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+func ruleVisible(rule types.RuleItem, agentID, teamID string) bool {
+	switch rule.Scope.Type {
+	case "", "all":
+		return true
+	case "team":
+		return contains(rule.Scope.Teams, teamID)
+	case "agents":
+		return contains(rule.Scope.Agents, agentID)
+	default:
+		return false
+	}
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUnique(values []string, extra ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(extra))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range extra {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		values = append(values, value)
+		seen[value] = struct{}{}
+	}
+	return values
 }
 
 func readyMembers(remaining map[string]types.Member, completed map[string]bool) map[string]types.Member {

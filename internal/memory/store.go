@@ -139,7 +139,33 @@ func (s *Store) save(ctx context.Context, path string, snapshot types.MemorySnap
 		}
 	}
 	if len(data) > maxChars {
-		return fmt.Errorf("memory exceeds max_chars=%d", maxChars)
+		// Memory is a bounded hint, not a reason to fail the whole TeamTurn.
+		// Keep the newest compact facts and truncate individual text fields as
+		// a final safety valve. The complete reply remains in session/evidence.
+		snapshot = ReduceForSize(snapshot, maxChars)
+		data, err = encode(snapshot)
+		if err != nil {
+			return err
+		}
+	}
+	if len(data) > maxChars {
+		// The YAML/body headings have a fixed overhead. If the configured cap
+		// is smaller than that overhead, persist an empty bounded snapshot
+		// rather than failing the member execution.
+		snapshot.Goal = ""
+		snapshot.Confirmed = nil
+		snapshot.OpenQuestions = nil
+		snapshot.Decisions = nil
+		snapshot.NextSteps = nil
+		snapshot.Workspace = nil
+		snapshot.RecordIDs = nil
+		data, err = encode(snapshot)
+		if err != nil {
+			return err
+		}
+	}
+	if len(data) > maxChars {
+		return fmt.Errorf("memory exceeds max_chars=%d after reduction", maxChars)
 	}
 	return s.files.Write(path, data)
 }
@@ -167,6 +193,42 @@ func ReduceAggressively(snapshot types.MemorySnapshot) types.MemorySnapshot {
 	snapshot.RecordIDs = tail(snapshot.RecordIDs, 10)
 	if len(snapshot.Goal) > 1000 {
 		snapshot.Goal = snapshot.Goal[:1000]
+	}
+	return snapshot
+}
+
+// ReduceForSize makes memory best-effort bounded even when a model returns a
+// long explanatory reply. It intentionally drops old lists before shortening
+// the current goal, because session.jsonl and SharedRecord remain authoritative.
+func ReduceForSize(snapshot types.MemorySnapshot, maxChars int) types.MemorySnapshot {
+	if maxChars <= 0 {
+		maxChars = defaultSubagentMaxChars
+	}
+	snapshot.Confirmed = tail(snapshot.Confirmed, 2)
+	snapshot.OpenQuestions = tail(snapshot.OpenQuestions, 2)
+	snapshot.Decisions = tail(snapshot.Decisions, 2)
+	snapshot.NextSteps = tail(snapshot.NextSteps, 2)
+	snapshot.Workspace = tail(snapshot.Workspace, 2)
+	snapshot.RecordIDs = tail(snapshot.RecordIDs, 5)
+
+	trim := func(value string, limit int) string {
+		if len(value) <= limit {
+			return value
+		}
+		return value[:limit] + "…"
+	}
+	snapshot.Goal = trim(snapshot.Goal, maxChars/5)
+	for i := range snapshot.Confirmed {
+		snapshot.Confirmed[i] = trim(snapshot.Confirmed[i], maxChars/5)
+	}
+	for i := range snapshot.NextSteps {
+		snapshot.NextSteps[i] = trim(snapshot.NextSteps[i], maxChars/5)
+	}
+	for i := range snapshot.Decisions {
+		snapshot.Decisions[i] = trim(snapshot.Decisions[i], maxChars/5)
+	}
+	for i := range snapshot.OpenQuestions {
+		snapshot.OpenQuestions[i] = trim(snapshot.OpenQuestions[i], maxChars/5)
 	}
 	return snapshot
 }

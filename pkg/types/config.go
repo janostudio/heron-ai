@@ -6,6 +6,7 @@ type EngineConfig struct {
 	Settings SettingsConfig    `json:"settings"`
 	Models   []ProviderConfig  `json:"models"`
 	MCP      []MCPServerConfig `json:"mcp,omitempty"`
+	Runtime  RuntimeLimits     `json:"runtime,omitempty"`
 }
 
 type SettingsConfig struct {

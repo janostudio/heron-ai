@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -74,6 +75,38 @@ func TestJSONLSessionWriterIgnoresPartialFinalLine(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, replay.Events, 1)
 	require.Equal(t, int64(1), replay.LastSeq)
+}
+
+func TestJSONLSessionWriterSubscribeReplaysAndPublishes(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	writer := NewJSONLSessionWriter(store)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, err := writer.Append(context.Background(), "flow-1", types.SessionEvent{Type: "one"})
+	require.NoError(t, err)
+
+	events, err := writer.Subscribe(ctx, "flow-1", 1)
+	require.NoError(t, err)
+
+	_, err = writer.Append(context.Background(), "flow-1", types.SessionEvent{Type: "two"})
+	require.NoError(t, err)
+
+	select {
+	case event := <-events:
+		require.Equal(t, int64(2), event.Seq)
+		require.Equal(t, "two", event.Type)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for live session event")
+	}
+
+	cancel()
+	select {
+	case _, ok := <-events:
+		require.False(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("subscription did not close after context cancellation")
+	}
 }
 
 func TestJSONLEvidenceStorePublishesAndReadsLatestRecord(t *testing.T) {

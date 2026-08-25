@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/adrg/frontmatter"
 	"gopkg.in/yaml.v3"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -52,17 +53,43 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 		return nil, fmt.Errorf("load agents: %w", err)
 	}
 
+	skills, err := l.loadSkillDefinitions(filepath.Join(configRoot, "skills"))
+	if err != nil {
+		return nil, fmt.Errorf("load skills: %w", err)
+	}
+
+	rules, err := l.loadRuleDefinitions(filepath.Join(configRoot, "rules"))
+	if err != nil {
+		return nil, fmt.Errorf("load rules: %w", err)
+	}
+	agentRules, err := l.loadAgentRuleDefinitions(filepath.Join(configRoot, "agents"))
+	if err != nil {
+		return nil, fmt.Errorf("load agent rules: %w", err)
+	}
+	for name, rule := range agentRules {
+		if _, exists := rules[name]; exists {
+			return nil, fmt.Errorf("duplicate rule definition %q", name)
+		}
+		rules[name] = rule
+	}
+
 	if err := flow.ValidateWithTeams(teams); err != nil {
 		return nil, fmt.Errorf("validate definitions: %w", err)
 	}
 	if err := validateSubagentDefinitions(flow, teams, agents); err != nil {
 		return nil, fmt.Errorf("validate subagents: %w", err)
 	}
+	if err := validateAgentSupportDefinitions(flow, teams, agents, skills, rules); err != nil {
+		return nil, fmt.Errorf("validate agent support: %w", err)
+	}
 
 	return &types.Definitions{
 		Flow:   flow,
 		Teams:  teams,
 		Agents: agents,
+		Skills: skills,
+		Rules:  rules,
+		Limits: l.LoadRuntimeLimits(),
 	}, nil
 }
 
@@ -144,6 +171,14 @@ func (l *ConfigLoader) loadAgentDefinitions(dir string) (map[string]types.AgentC
 
 	for _, name := range files {
 		path := filepath.Join(dir, name)
+		// Canonical layout:
+		//
+		//   .agents/agents/<agent-id>/AGENT.md
+		//
+		// Flat <agent-id>.md files remain readable for migration
+		// compatibility, but new Agent definitions must use the directory
+		// form so private knowledge, rules and extensions have one stable
+		// home.
 		if filepath.Ext(name) == ".md" {
 			agent, err := l.loadAgent(path)
 			if err != nil {
@@ -155,6 +190,9 @@ func (l *ConfigLoader) loadAgentDefinitions(dir string) (map[string]types.AgentC
 			continue
 		}
 
+		if filepath.Ext(name) != "" {
+			continue
+		}
 		agentPath := filepath.Join(path, "AGENT.md")
 		if !l.fileStore.Exists(agentPath) {
 			continue
@@ -182,6 +220,113 @@ func addAgentDefinition(agents map[string]types.AgentConfig, agent types.AgentCo
 	return nil
 }
 
+func (l *ConfigLoader) loadSkillDefinitions(dir string) (map[string]types.Skill, error) {
+	skills := make(map[string]types.Skill)
+	if !l.fileStore.Exists(dir) {
+		return skills, nil
+	}
+
+	files, err := l.fileStore.List(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range files {
+		if filepath.Ext(name) != "" {
+			continue
+		}
+		path := filepath.Join(dir, name, "SKILL.md")
+		if !l.fileStore.Exists(path) {
+			continue
+		}
+		skill, err := l.loadSkill(path)
+		if err != nil {
+			return nil, fmt.Errorf("decode %s: %w", name, err)
+		}
+		if strings.TrimSpace(skill.Name) == "" {
+			skill.Name = name
+		}
+		if _, exists := skills[skill.Name]; exists {
+			return nil, fmt.Errorf("duplicate skill definition %q", skill.Name)
+		}
+		skills[skill.Name] = *skill
+	}
+	return skills, nil
+}
+
+func (l *ConfigLoader) loadSkill(path string) (*types.Skill, error) {
+	data, err := l.fileStore.Read(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var skill types.Skill
+	body, err := frontmatter.Parse(strings.NewReader(string(data)), &skill)
+	if err != nil {
+		return nil, err
+	}
+	skill.Body = strings.TrimSpace(string(body))
+	return &skill, nil
+}
+
+func (l *ConfigLoader) loadRuleDefinitions(dir string) (map[string]types.RuleItem, error) {
+	rules := make(map[string]types.RuleItem)
+	if !l.fileStore.Exists(dir) {
+		return rules, nil
+	}
+
+	files, err := l.fileStore.List(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range files {
+		if filepath.Ext(name) != ".md" {
+			continue
+		}
+		rule, err := l.loadRule(filepath.Join(dir, name))
+		if err != nil {
+			return nil, fmt.Errorf("decode %s: %w", name, err)
+		}
+		if strings.TrimSpace(rule.ID) == "" {
+			rule.ID = strings.TrimSuffix(name, filepath.Ext(name))
+		}
+		if _, exists := rules[rule.ID]; exists {
+			return nil, fmt.Errorf("duplicate rule definition %q", rule.ID)
+		}
+		rules[rule.ID] = *rule
+	}
+	return rules, nil
+}
+
+func (l *ConfigLoader) loadAgentRuleDefinitions(agentsDir string) (map[string]types.RuleItem, error) {
+	rules := make(map[string]types.RuleItem)
+	if !l.fileStore.Exists(agentsDir) {
+		return rules, nil
+	}
+
+	agents, err := l.fileStore.List(agentsDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, agentName := range agents {
+		ruleDir := filepath.Join(agentsDir, agentName, "rules")
+		nested, err := l.loadRuleDefinitions(ruleDir)
+		if err != nil {
+			return nil, err
+		}
+		for name, rule := range nested {
+			if _, exists := rules[name]; exists {
+				return nil, fmt.Errorf("duplicate rule definition %q", name)
+			}
+			rules[name] = rule
+		}
+	}
+	// A directory-form Agent may reference a shared rule file from its own
+	// sibling rules directory. If a flat Agent file references a rule that is
+	// not present in .agents/rules, keep validation permissive because the
+	// legacy examples historically used that field as prompt metadata.
+	return rules, nil
+}
+
 func validateSubagentDefinitions(flow types.Flow, teams map[string]types.Team, agents map[string]types.AgentConfig) error {
 	for flowTeamName, binding := range flow.Teams {
 		team, ok := teams[binding.TeamID]
@@ -199,6 +344,41 @@ func validateSubagentDefinitions(flow types.Flow, teams map[string]types.Team, a
 					memberName,
 					member.AgentID,
 				)
+			}
+		}
+	}
+	return nil
+}
+
+func validateAgentSupportDefinitions(
+	flow types.Flow,
+	teams map[string]types.Team,
+	agents map[string]types.AgentConfig,
+	skills map[string]types.Skill,
+	rules map[string]types.RuleItem,
+) error {
+	for flowTeamName, binding := range flow.Teams {
+		team, ok := teams[binding.TeamID]
+		if !ok {
+			return fmt.Errorf("flow team %q references missing definition %q", flowTeamName, binding.TeamID)
+		}
+		for memberName, member := range team.Members {
+			if member.Type != types.MemberSubagent {
+				continue
+			}
+			agent, ok := agents[member.AgentID]
+			if !ok {
+				return fmt.Errorf("team %q member %q references missing agent %q", binding.TeamID, memberName, member.AgentID)
+			}
+			for _, skillName := range agent.Skills {
+				if _, ok := skills[skillName]; !ok {
+					return fmt.Errorf("agent %q references missing skill %q", agent.Name, skillName)
+				}
+			}
+			for _, ruleName := range agent.Rules {
+				if _, ok := rules[ruleName]; !ok {
+					continue
+				}
 			}
 		}
 	}

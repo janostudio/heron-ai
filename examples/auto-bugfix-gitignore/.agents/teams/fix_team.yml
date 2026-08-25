@@ -1,0 +1,21 @@
+id: fix_team
+goal: 根据已通过挑战的诊断，以最小差异修改 project/.gitignore。
+memory:
+  enabled: true
+  max_items: 20
+  max_chars: 8000
+
+calls:
+  fix:
+    type: subagent
+    agent: code-fixer
+    responsibility: 仅在 ChallengeReport.verdict=supported 时修改 project/.gitignore，并输出 ChangeSet。
+    inputs:
+      flow_records: [DiagnosisReport, ChallengeReport, SkepticReport, VerificationReport, TestDecision, ReviewReport]
+    output:
+      record: ChangeSet
+
+output:
+  from: fix
+  record: ChangeSet
+  scope: flow

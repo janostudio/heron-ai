@@ -2,12 +2,13 @@ package types
 
 // Skill is an optional prompt/tool bundle loaded by the Skill extension.
 type Skill struct {
-	Name        string   `yaml:"name" json:"name"`
-	Description string   `yaml:"description" json:"description"`
-	Tools       []string `yaml:"tools" json:"tools"`
-	Knowledge   []string `yaml:"knowledge,omitempty" json:"knowledge,omitempty"`
-	Prompt      string   `yaml:"-" json:"prompt"`
-	Body        string   `yaml:"-" json:"body"`
+	Name         string   `yaml:"name" json:"name"`
+	Description  string   `yaml:"description" json:"description"`
+	Tools        []string `yaml:"tools" json:"tools"`
+	AllowedTools string   `yaml:"allowed-tools,omitempty" json:"allowed_tools,omitempty"`
+	Knowledge    []string `yaml:"knowledge,omitempty" json:"knowledge,omitempty"`
+	Prompt       string   `yaml:"-" json:"prompt"`
+	Body         string   `yaml:"-" json:"body"`
 }
 
 type SkillSummary struct {

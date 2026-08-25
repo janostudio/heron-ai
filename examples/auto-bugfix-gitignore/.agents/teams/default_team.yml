@@ -1,0 +1,31 @@
+id: default_team
+goal: 作为唯一协调入口，决定是否启动、回退、询问用户或结束 auto-bugfix。
+memory:
+  enabled: true
+  max_items: 20
+  max_chars: 12000
+
+calls:
+  coordinator:
+    type: subagent
+    agent: default-coordinator
+    responsibility: 根据用户输入和当前 Flow Records 判断是否启动诊断、要求补充信息或结束流程。
+    inputs:
+      user_message: true
+      flow_records:
+        - GitSnapshot
+        - ExplorationReport
+        - DiagnosisReport
+        - ChallengeReport
+        - ChangeSet
+        - VerificationReport
+        - GitStatusReport
+        - ReviewReport
+        - KnowledgePersisted
+    output:
+      record: CoordinatorReply
+
+output:
+  from: coordinator
+  record: CoordinatorReply
+  scope: flow

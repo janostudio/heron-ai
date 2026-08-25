@@ -1,0 +1,35 @@
+id: challenge_team
+goal: 独立挑战 DiagnosisReport，阻止没有证据或会误伤源码的修复。
+memory:
+  enabled: true
+  max_items: 20
+  max_chars: 8000
+
+calls:
+  challenge:
+    type: subagent
+    agent: challenger
+    responsibility: 审查 DiagnosisReport、GitSnapshot 和 ExplorationReport，输出 ChallengeReport。
+    inputs:
+      flow_records: [GitSnapshot, ExplorationReport, DiagnosisReport]
+    output:
+      record: ChallengeReport
+
+  skeptic:
+    type: subagent
+    agent: challenge-skeptic
+    depends_on: [challenge]
+    responsibility: 对 ChallengeReport 做事前事故推演，检查隐藏假设和安全边界，输出 SkepticReport。
+    inputs:
+      flow_records: [DiagnosisReport, ChallengeReport]
+    output:
+      record: SkepticReport
+
+output:
+  records:
+    - from: challenge
+      record: ChallengeReport
+      scope: flow
+    - from: skeptic
+      record: SkepticReport
+      scope: flow

@@ -1,21 +1,29 @@
 package types
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
-// SubagentRequest is the explicit input to one SubagentTurn. It contains the
-// member responsibility and the collaboration context visible to the
-// Subagent. The business payload remains inside SharedRecord.Data.
+// SubagentRequest is the explicit input to one AgentTurn executed by a
+// subagent member. It contains the member responsibility and the
+// collaboration context visible to the Agent. The business payload remains
+// inside SharedRecord.Data.
 type SubagentRequest struct {
-	MemberID         string
-	AgentID          string
-	Responsibility   string
-	Input            string
-	Records          []SharedRecord
-	TeamMemory       string
-	SubagentMemory   string
-	KnowledgeText    string
-	Variables        map[string]string
-	MaxToolCalls     int
+	MemberID       string
+	AgentID        string
+	Responsibility string
+	Input          string
+	Records        []SharedRecord
+	TeamMemory     string
+	SubagentMemory string
+	KnowledgeText  string
+	SkillText      string
+	RuleText       string
+	Variables      map[string]string
+	// MaxAgentRounds is the maximum number of model/tool loop iterations
+	// allowed inside this one AgentTurn.
+	MaxAgentRounds   int
 	MaxParallelTools int
 }
 
@@ -43,8 +51,12 @@ type MemberRequest struct {
 	TeamMemory      string
 	SubagentMemory  string
 	KnowledgeText   string
+	SkillText       string
+	RuleText        string
 	Variables       map[string]string
 	MemberTurnID    string
+	Attempt         int
+	RecoveryOf      string
 	WorkspaceRoot   string
 	Limits          RuntimeLimits
 }
@@ -119,30 +131,63 @@ type FlowTurnResult struct {
 // a new orchestration concept: the flow may still choose any valid static or
 // dynamic route within these bounds.
 type RuntimeLimits struct {
-	MaxTeamTurns       int `json:"max_team_turns"`
-	MaxMemberTurns     int `json:"max_member_turns"`
-	MaxToolCalls       int `json:"max_tool_calls"`
-	MaxParallelMembers int `json:"max_parallel_members"`
-	MaxParallelTools   int `json:"max_parallel_tools"`
+	MaxTeamTurns        int `json:"max_team_turns"`
+	MaxCallsPerTeamTurn int `json:"max_calls_per_team_turn"`
+	MaxAgentRounds      int `json:"max_agent_rounds"`
+	MaxParallelTeams    int `json:"max_parallel_teams"`
+	MaxParallelCalls    int `json:"max_parallel_calls"`
+	// Tool parallelism is inside one AgentTurn and is not a Flow/Team
+	// orchestration level.
+	MaxParallelTools int `json:"max_parallel_tools"`
 }
 
 func (l RuntimeLimits) WithDefaults() RuntimeLimits {
 	if l.MaxTeamTurns <= 0 {
 		l.MaxTeamTurns = 20
 	}
-	if l.MaxMemberTurns <= 0 {
-		l.MaxMemberTurns = 20
+	if l.MaxCallsPerTeamTurn <= 0 {
+		l.MaxCallsPerTeamTurn = 20
 	}
-	if l.MaxToolCalls <= 0 {
-		l.MaxToolCalls = 200
+	if l.MaxAgentRounds <= 0 {
+		l.MaxAgentRounds = 200
 	}
-	if l.MaxParallelMembers <= 0 {
-		l.MaxParallelMembers = 20
+	if l.MaxParallelTeams <= 0 {
+		l.MaxParallelTeams = 20
+	}
+	if l.MaxParallelCalls <= 0 {
+		l.MaxParallelCalls = 20
 	}
 	if l.MaxParallelTools <= 0 {
 		l.MaxParallelTools = 20
 	}
 	return l
+}
+
+// UnmarshalJSON keeps old settings readable while the public vocabulary uses
+// Flow → Team → Agent/Command/Webhook. The old names are migration aliases,
+// not part of the current configuration contract.
+func (l *RuntimeLimits) UnmarshalJSON(data []byte) error {
+	type current RuntimeLimits
+	var raw struct {
+		current
+		LegacyMemberTurns     int `json:"max_member_turns"`
+		LegacyToolCalls       int `json:"max_tool_calls"`
+		LegacyParallelMembers int `json:"max_parallel_members"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*l = RuntimeLimits(raw.current)
+	if l.MaxCallsPerTeamTurn <= 0 {
+		l.MaxCallsPerTeamTurn = raw.LegacyMemberTurns
+	}
+	if l.MaxAgentRounds <= 0 {
+		l.MaxAgentRounds = raw.LegacyToolCalls
+	}
+	if l.MaxParallelCalls <= 0 {
+		l.MaxParallelCalls = raw.LegacyParallelMembers
+	}
+	return nil
 }
 
 // FlowRuntime owns FlowSession and FlowTurn lifecycle.

@@ -16,8 +16,8 @@ import (
 // --- Mock ModelProvider ---
 
 type mockProvider struct {
-	name    string
-	chatFn  func(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error)
+	name     string
+	chatFn   func(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error)
 	streamFn func(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (<-chan types.ChatChunk, error)
 }
 

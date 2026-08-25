@@ -1,0 +1,10 @@
+{
+  "runtime": {
+    "max_team_turns": 20,
+    "max_calls_per_team_turn": 20,
+    "max_agent_rounds": 200,
+    "max_parallel_teams": 20,
+    "max_parallel_calls": 20,
+    "max_parallel_tools": 20
+  }
+}
