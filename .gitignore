@@ -32,5 +32,8 @@ Thumbs.db
 # Build artifacts
 dist/
 
+# Local integration fixture (never commit)
+/examples/auto-bugfix-gitignore/
+
 # Dependencies
 vendor/
