@@ -24,6 +24,7 @@ Thumbs.db
 
 # Runtime data
 .agents/data/
+**/.agents/data/
 
 # Local model registry / credentials
 .agents/models.json
@@ -35,6 +36,9 @@ Thumbs.db
 
 # Build artifacts
 dist/
+
+# Local service output from examples
+**/project/service.log
 
 # Local integration fixture (never commit)
 /examples/auto-bugfix-gitignore/
