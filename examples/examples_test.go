@@ -219,6 +219,30 @@ func TestAutoBugfixGitignoreExampleUsesNativeAgentsSkillsScriptsAndDeterministic
 	require.ElementsMatch(t, []string{"safety", "fix-boundary"}, definitions.Agents["code-fixer"].Rules)
 }
 
+func TestAutoBugfixGitignoreExampleHasLowComplexityMultiAgentSmokeFlow(t *testing.T) {
+	definitions := loadDefinitions(t, "auto-bugfix-gitignore", ".agents/flows/multi_agent_smoke.yml")
+
+	require.Equal(t, "auto_bugfix_multi_agent_smoke", definitions.Flow.ID)
+	require.Equal(t, "diagnose", definitions.Flow.EntryTeamID)
+	require.Len(t, definitions.Flow.Teams, 2)
+	require.True(t, definitions.Flow.Teams["diagnose"].Coordinator)
+	require.Equal(t, []string{"review"}, definitions.Flow.Teams["diagnose"].OnProceed.Teams)
+	require.Equal(t, []string{"diagnose"}, definitions.Flow.Teams["review"].DependsOn)
+	require.Equal(t, types.NextComplete, definitions.Flow.Teams["review"].OnProceed.Action)
+
+	diagnose := definitions.Teams["diagnose_team"]
+	require.Equal(t, types.CallCommand, diagnose.Calls["git_snapshot"].Type)
+	require.Equal(t, types.CallAgent, diagnose.Calls["explorer"].Type)
+	require.Equal(t, types.CallAgent, diagnose.Calls["inspect"].Type)
+	require.Equal(t, []string{"git_snapshot", "explorer"}, diagnose.Calls["inspect"].DependsOn)
+
+	review := definitions.Teams["collab_review_team"]
+	require.Len(t, review.Calls, 1)
+	require.Equal(t, types.CallAgent, review.Calls["review"].Type)
+	require.Equal(t, "challenger", review.Calls["review"].AgentID)
+	require.Equal(t, "ChallengeReport", review.Calls["review"].Output.Record)
+}
+
 func keys[T any](values map[string]T) []string {
 	result := make([]string, 0, len(values))
 	for key := range values {

@@ -1,0 +1,20 @@
+id: collab_review_team
+goal: 使用一个独立 Agent 复核 Diagnose Team 产出的事实和根因，不修改工作区。
+
+calls:
+  review:
+    type: agent
+    agent: challenger
+    responsibility: 独立复核 GitSnapshot、ExplorationReport 和 DiagnosisReport，确认根因和最小修复范围，输出 ChallengeReport。
+    inputs:
+      flow_records:
+        - GitSnapshot
+        - ExplorationReport
+        - DiagnosisReport
+    output:
+      record: ChallengeReport
+
+output:
+  from: review
+  record: ChallengeReport
+  scope: flow
