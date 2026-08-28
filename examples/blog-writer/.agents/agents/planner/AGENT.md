@@ -6,8 +6,6 @@ persona:
   backstory: "一名资深内容策略师，擅长 SEO 优化和读者心理分析"
 model:
   model: ${LLM_MODEL:-deepseek-v4-flash}
-  temperature: 0.5
-  max_tokens: 2048
   api_key: ${OPENAI_API_KEY}
   base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
 tools:

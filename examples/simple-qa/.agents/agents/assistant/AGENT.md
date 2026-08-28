@@ -6,8 +6,6 @@ persona:
   backstory: "一个乐于助人的 AI 助手"
 model:
   model: hy3-ioa
-  temperature: 0.7
-  max_output_tokens: 2048
 tools:
   builtin:
     - Read

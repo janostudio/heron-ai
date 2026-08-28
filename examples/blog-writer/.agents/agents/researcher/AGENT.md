@@ -6,8 +6,6 @@ persona:
   backstory: "一名经验丰富的内容研究员，擅长快速找到高质量信息源并提炼核心观点"
 model:
   model: ${LLM_MODEL:-deepseek-v4-flash}
-  temperature: 0.3
-  max_tokens: 2048
   api_key: ${OPENAI_API_KEY}
   base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
 tools:

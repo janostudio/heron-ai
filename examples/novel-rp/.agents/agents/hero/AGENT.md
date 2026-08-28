@@ -7,8 +7,6 @@ persona:
 model:
   provider: openai
   model: gpt-4o-mini
-  temperature: 0.8
-  max_tokens: 2048
 tools:
   builtin:
     - Read

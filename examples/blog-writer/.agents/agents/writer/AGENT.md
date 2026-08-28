@@ -6,8 +6,6 @@ persona:
   backstory: "一名拥有10年经验的专业撰稿人，曾为多个知名科技博客供稿"
 model:
   model: ${LLM_MODEL:-deepseek-v4-flash}
-  temperature: 0.7
-  max_tokens: 4096
   api_key: ${OPENAI_API_KEY}
   base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
 tools:

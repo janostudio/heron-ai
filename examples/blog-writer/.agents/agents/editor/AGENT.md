@@ -6,8 +6,6 @@ persona:
   backstory: "一名拥有15年经验的出版编辑，擅长内容审校和质量把控"
 model:
   model: ${LLM_MODEL:-deepseek-v4-flash}
-  temperature: 0.3
-  max_tokens: 2048
   api_key: ${OPENAI_API_KEY}
   base_url: ${OPENAI_BASE_URL:-https://api.deepseek.com/v1}
 tools:
