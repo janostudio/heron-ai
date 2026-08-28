@@ -45,3 +45,6 @@ dist/
 
 # Dependencies
 vendor/
+
+heron-connect.toml
+.heron-connect.toml.lock
