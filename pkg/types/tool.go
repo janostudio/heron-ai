@@ -30,12 +30,17 @@ type Tool interface {
 
 // ToolResult represents the result of a tool execution
 type ToolResult struct {
-	Success         bool                  `json:"success"`
-	Content         string                `json:"content"`
-	Error           string                `json:"error,omitempty"`
-	Metadata        map[string]any        `json:"metadata,omitempty"`
+	Success  bool           `json:"success"`
+	Content  string         `json:"content"`
+	Error    string         `json:"error,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Next is an orchestration route the Tool wants the runtime to follow.
+	// Execution gates use wait_tool / wait_approval; a mid-execution pause
+	// for user input is expressed through PendingInput instead, because the
+	// session lifecycle is a runtime decision rather than a route action.
 	Next            *Route                `json:"next,omitempty"`
 	PendingApproval *AgentPendingApproval `json:"pending_approval,omitempty"`
+	PendingInput    *AgentPendingInput    `json:"pending_input,omitempty"`
 	WorkspaceOps    []WorkspaceOperation  `json:"workspace_ops,omitempty"`
 	RecordRefs      []string              `json:"record_refs,omitempty"`
 }

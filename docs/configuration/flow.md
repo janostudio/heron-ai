@@ -1,60 +1,75 @@
 # Flow Configuration
 
-A flow defines the execution pipeline - a sequence of stages with signal-based routing.
+A flow binds Team definitions into one execution graph and identifies the
+entry Team. Flow execution state belongs to FlowSession and is persisted in
+`session.jsonl`.
 
 ## Structure
 
 ```yaml
-name: blog_writer_flow
-loop_max_rounds: 0
+id: blog_writer_flow
+entry: research
 
-stages:
-  - name: research_stage
+teams:
+  research:
     team: research_team
-    on_signal:
-      continue: writing_stage
-      wait_input: null
-      goal_achieved: null
-      goal_failed: null
-      goal_impossible: null
+    coordinator: true
+    inputs:
+      user_message: true
+    on_proceed: [writing]
 
-  - name: writing_stage
+  writing:
     team: writing_team
-    on_signal:
-      continue: review_stage
+    depends_on: [research]
+    inputs:
+      - from: research
+        record: ResearchReport
+    on_proceed: [review]
 
-  - name: review_stage
+  review:
     team: review_team
-    on_signal:
-      continue: null  # Terminal stage
+    depends_on: [writing]
+    inputs:
+      - from: writing
+        record: BlogDraft
 ```
 
 ## Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Flow identifier |
-| `loop_max_rounds` | integer | Max rounds (0 = unlimited) |
-| `stages` | array | Ordered list of stages |
+| `id` | string | Flow identifier |
+| `entry` | string | Flow-local name of the entry Team |
+| `teams` | map | Team bindings, keyed by Flow-local Team name |
 
-### Stage
+### Team binding
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Stage identifier |
-| `team` | string | Team name to execute |
-| `on_signal` | object | Signal routing rules |
+| `team` | string | Team definition under `.agents/teams/` |
+| `coordinator` | bool | Marks the single coordinator Team |
+| `can_activate` | []string | Teams this binding may activate |
+| `depends_on` | []string | Teams that must finish first |
+| `inputs` | object/list | User message and SharedRecord inputs |
+| `on_proceed` | list or object | Fixed routing when the Team ends with `proceed` |
 
-### on_signal
+### on_proceed
 
-| Signal | Value | Effect |
-|--------|-------|--------|
-| `continue` | stage name | Route to this stage |
-| `continue` | null | End pipeline |
-| `wait_input` | stage name or null | Pause for user input |
-| `goal_achieved` | stage name or null | End successfully |
-| `goal_failed` | stage name or null | End with failure |
-| `goal_impossible` | stage name or null | End, task impossible |
+`on_proceed` selects the next orchestration step when a TeamTurn ends with
+the default `proceed` route. The list form means "activate these Teams":
+
+```yaml
+on_proceed: [writing, review]
+```
+
+The mapping form may set `action` and `teams` explicitly. `action` only
+allows orchestration actions: `proceed`, `return`, `coordinate`,
+`activate`, `fail`.
+
+Session lifecycle is not configurable: a normally finished turn always
+leaves the FlowSession in `waiting_input` so the client can continue the
+same `session_id`. Configuring `complete` or `wait_input` in `on_proceed`
+is a load-time validation error.
 
 ## File Location
 

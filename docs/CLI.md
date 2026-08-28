@@ -107,7 +107,7 @@ stdin:
 stdout:
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"session_id":"fs_001","flow_turn_id":"ft_001","status":"completed","reply":"已完成检查。"}}
+{"jsonrpc":"2.0","id":1,"result":{"session_id":"fs_001","flow_turn_id":"ft_001","status":"waiting_input","reply":"已完成检查。"}}
 ```
 
 Rules:
@@ -116,7 +116,9 @@ Rules:
 - stdout contains protocol messages only;
 - logs go to stderr;
 - the first `turn` without `session_id` creates a FlowSession;
-- later turns send the returned `session_id`;
+- later turns send the returned `session_id`; a normally finished turn
+  leaves the session in `waiting_input`, so the same `session_id` can be
+  reused as a permanent chat thread ID;
 - `session.jsonl` and `evidence.jsonl` remain internal storage formats and
   are not sent directly over stdout.
 

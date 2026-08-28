@@ -116,7 +116,7 @@ heron --prompt "请检查项目中的 .gitignore"
 Flow: auto_bugfix_gitignore
 Model: hy3-ioa
 FlowSession: fs_xxx
-Status: completed
+Status: waiting_input
 
 已经完成检查。
 
@@ -377,21 +377,21 @@ bundle.Flow.Resume(ctx, sessionID, input)
 
 当前运行时的 Session 状态边界：
 
-| Session 状态 | `turn` 行为 |
-|---|---|
-| `waiting_input` | 调用 `Resume`，继续同一个 FlowSession |
-| `created` / `running` | 调用 `HandleInput` |
-| `completed` | 终态，不能继续；下一次请求应省略 `session_id` 创建新 FlowSession |
-| `failed` | 终态，不能继续；应修正输入后创建新 FlowSession，或使用显式 Recovery API |
-| `cancelled` | 终态，不能继续；创建新 FlowSession |
-| `interrupted` | 需要先执行 Recovery，不能直接发送普通 `turn` |
+| Session 状态 | 含义 | `turn` 行为 |
+|---|---|---|
+| `waiting_input` | 轮次正常结束（可续聊），或 Team 中途暂停等待用户输入 | 继续同一个 FlowSession |
+| `created` / `running` | 会话已建立或正在执行 | 调用 `HandleInput` |
+| `waiting_approval` | 中途审批门禁 | 必须先响应审批（ResumeApproval），不能直接发送普通 `turn` |
+| `failed` | 终态 | 修正输入后创建新 FlowSession，或使用显式 Recovery API |
+| `cancelled` | 终态 | 创建新 FlowSession |
+| `interrupted` | 存在未完成的执行 | 需要先执行 Recovery，不能直接发送普通 `turn` |
+| `completed` | 仅出现在旧数据回放中 | 新引擎不再产生该状态；旧 `completed` 会话也可以继续同一个 FlowSession |
 
-因此，`heron-connect` 不应无条件永久复用同一个 `session_id`。收到终态响应后，应根据业务决定：
-
-```text
-等待用户继续同一流程 → 使用 Recovery 或新的 FlowSession
-开始新的用户任务     → 不携带 session_id
-```
+会话生命周期由运行时决定：轮次正常结束一律可续，`on_proceed` 不再提供
+`complete` / `wait_input` 之类的生命周期动作。因此 `heron-connect` 可以把
+同一个 `session_id` 当作永久聊天线程 ID 一直复用；只有会话进入
+`failed` / `cancelled` / `interrupted` 之后，才需要按业务决定使用 Recovery
+或省略 `session_id` 开启新 FlowSession。
 
 ## 7. JSON-RPC 响应格式
 
@@ -404,7 +404,7 @@ bundle.Flow.Resume(ctx, sessionID, input)
   "result": {
     "session_id": "fs_123456",
     "flow_turn_id": "ft_123456",
-    "status": "completed",
+    "status": "waiting_input",
     "reply": "已经完成 .gitignore 检查和修复。",
     "records": [
       {
@@ -422,7 +422,7 @@ bundle.Flow.Resume(ctx, sessionID, input)
 |---|---|---|
 | `session_id` | string | FlowSession ID |
 | `flow_turn_id` | string | 本次 FlowTurn ID |
-| `status` | string | `completed`、`waiting_input`、`failed`、`cancelled` 等 |
+| `status` | string | `waiting_input`、`waiting_approval`、`failed`、`cancelled` 等；`completed` 仅存在于旧数据回放 |
 | `reply` | string | 用户可见的最终回复 |
 | `records` | array | 可选的记录摘要 |
 | `error` | string | 可选的业务错误信息 |
@@ -812,7 +812,9 @@ heron-connect 保存 session_id
   → Heron 从 session.jsonl 恢复 FlowSession
   → 继续处理新输入
 
-如果上一次响应的状态是 `completed`、`failed` 或 `cancelled`，则不要把该 ID 当作永久聊天线程 ID；下一次新任务应省略 `session_id`。
+轮次正常结束的会话（waiting_input）可以一直复用同一个 session_id 继续对话。
+只有上一次响应的状态是 `failed` 或 `cancelled` 时，才不要把该 ID 当作
+永久聊天线程 ID；下一次新任务应省略 `session_id`。
 ```
 
 ### 12.1 传输 Schema
@@ -927,19 +929,19 @@ heron --json-rpc --flow .agents/flows/auto_bugfix.yml
 输出：
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"session_id":"fs_001","flow_turn_id":"ft_001","status":"completed","reply":"已完成检查。"}}
+{"jsonrpc":"2.0","id":1,"result":{"session_id":"fs_001","flow_turn_id":"ft_001","status":"waiting_input","reply":"已完成检查。"}}
 ```
 
-新的输入（上一轮已完成，因此创建新的 FlowSession）：
+新的输入（轮次正常结束，继续同一个 FlowSession）：
 
 ```json
-{"jsonrpc":"2.0","id":2,"method":"turn","params":{"input":"继续修复并运行验证"}}
+{"jsonrpc":"2.0","id":2,"method":"turn","params":{"session_id":"fs_001","input":"继续修复并运行验证"}}
 ```
 
 输出：
 
 ```json
-{"jsonrpc":"2.0","id":2,"result":{"session_id":"fs_002","flow_turn_id":"ft_002","status":"completed","reply":"已完成修复并通过验证。"}}
+{"jsonrpc":"2.0","id":2,"result":{"session_id":"fs_001","flow_turn_id":"ft_002","status":"waiting_input","reply":"已完成修复并通过验证。"}}
 ```
 
 错误：

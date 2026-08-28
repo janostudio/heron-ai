@@ -88,8 +88,100 @@ You coordinate the request.
 	require.Equal(t, types.CallWebhook, definitions.Teams["verify-team"].Calls["notify"].Type)
 }
 
-func TestLoadDefinitionsRejectsMissingAgentDefinition(t *testing.T) {
+func TestLoadDefinitionsRejectsLifecycleOnProceedActions(t *testing.T) {
+	for _, action := range []string{"complete", "wait_input"} {
+		t.Run(action, func(t *testing.T) {
+			root := t.TempDir()
+			teamsDir := filepath.Join(root, ".agents", "teams")
+			flowsDir := filepath.Join(root, ".agents", "flows")
+			require.NoError(t, os.MkdirAll(teamsDir, 0755))
+			require.NoError(t, os.MkdirAll(flowsDir, 0755))
+
+			require.NoError(t, os.WriteFile(filepath.Join(flowsDir, "default.yml"), []byte(`
+id: flow
+entry: default
+teams:
+  default:
+    team: default-team
+    coordinator: true
+    on_proceed:
+      action: `+action+`
+`), 0644))
+			require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
+id: default-team
+calls: {}
+`), 0644))
+
+			_, err := NewConfigLoader(root).LoadDefinitions(context.Background(), DefinitionsLoadRequest{
+				FlowPath: filepath.Join(flowsDir, "default.yml"),
+			})
+			require.ErrorContains(t, err, "会话生命周期不再可配置")
+			require.ErrorContains(t, err, action)
+		})
+	}
+}
+
+func TestLoadDefinitionsRejectsUnknownOnProceedAction(t *testing.T) {
 	root := t.TempDir()
+	teamsDir := filepath.Join(root, ".agents", "teams")
+	flowsDir := filepath.Join(root, ".agents", "flows")
+	require.NoError(t, os.MkdirAll(teamsDir, 0755))
+	require.NoError(t, os.MkdirAll(flowsDir, 0755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(flowsDir, "default.yml"), []byte(`
+id: flow
+entry: default
+teams:
+  default:
+    team: default-team
+    coordinator: true
+    on_proceed:
+      action: wait_tool
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
+id: default-team
+calls: {}
+`), 0644))
+
+	_, err := NewConfigLoader(root).LoadDefinitions(context.Background(), DefinitionsLoadRequest{
+		FlowPath: filepath.Join(flowsDir, "default.yml"),
+	})
+	require.ErrorContains(t, err, "not an orchestration action")
+}
+
+func TestLoadDefinitionsAcceptsOrchestrationOnProceedActions(t *testing.T) {
+	for _, action := range []string{"proceed", "return", "coordinate", "activate", "fail"} {
+		t.Run(action, func(t *testing.T) {
+			root := t.TempDir()
+			teamsDir := filepath.Join(root, ".agents", "teams")
+			flowsDir := filepath.Join(root, ".agents", "flows")
+			require.NoError(t, os.MkdirAll(teamsDir, 0755))
+			require.NoError(t, os.MkdirAll(flowsDir, 0755))
+
+			require.NoError(t, os.WriteFile(filepath.Join(flowsDir, "default.yml"), []byte(`
+id: flow
+entry: default
+teams:
+  default:
+    team: default-team
+    coordinator: true
+    on_proceed:
+      action: `+action+`
+`), 0644))
+			require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
+id: default-team
+calls: {}
+`), 0644))
+
+			_, err := NewConfigLoader(root).LoadDefinitions(context.Background(), DefinitionsLoadRequest{
+				FlowPath: filepath.Join(flowsDir, "default.yml"),
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestLoadDefinitionsRejectsMissingAgentDefinition(t *testing.T) {	root := t.TempDir()
 	agentsDir := filepath.Join(root, ".agents", "agents")
 	teamsDir := filepath.Join(root, ".agents", "teams")
 	flowsDir := filepath.Join(root, ".agents", "flows")

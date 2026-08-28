@@ -162,7 +162,7 @@ func TestCodeNavToolRejectsOutsideWorkspaceAndHelperFailure(t *testing.T) {
 	require.Contains(t, result.Error, "codenav failed")
 }
 
-func TestAskUserQuestionToolReturnsWaitRoute(t *testing.T) {
+func TestAskUserQuestionToolReturnsPendingInput(t *testing.T) {
 	tool := NewAskUserQuestionTool()
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"question":     "Which port should be used?",
@@ -172,7 +172,12 @@ func TestAskUserQuestionToolReturnsWaitRoute(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, result.Success)
-	require.Equal(t, "wait_input", string(result.Next.Action))
+	require.Nil(t, result.Next)
+	require.NotNil(t, result.PendingInput)
+	require.Equal(t, "Which port should be used?", result.PendingInput.Question)
+	require.Equal(t, []string{"3000", "5173"}, result.PendingInput.Options)
+	require.Equal(t, "Port", result.PendingInput.Header)
+	require.False(t, result.PendingInput.MultiSelect)
 	require.Equal(t, "Which port should be used?", result.Metadata["question"])
 }
 

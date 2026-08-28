@@ -122,8 +122,11 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	if err != nil {
 		return types.FlowTurnResult{}, err
 	}
-	if session.Status == types.SessionCompleted ||
-		session.Status == types.SessionFailed ||
+	// Completed is deliberately absent from the rejection list: it only
+	// exists in sessions recorded before the lifecycle refactor, and those
+	// legacy sessions stay continuable with the same session_id. A normally
+	// finished turn is always left in waiting_input.
+	if session.Status == types.SessionFailed ||
 		session.Status == types.SessionCancelled ||
 		session.Status == types.SessionInterrupted ||
 		session.Status == types.SessionWaitingApproval {
@@ -628,12 +631,11 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		}
 
 		// Resolve all routes after the batch has finished. A parallel batch
-		// must not terminate on the first branch's complete/wait decision and
+		// must not terminate on the first branch's wait decision and
 		// accidentally discard sibling results.
 		hasWaitInput := false
 		hasWaitTool := false
 		hasWaitApproval := false
-		hasComplete := false
 		var routeFailure error
 		var resolvedRoute *types.Route
 		for _, execution := range executions {
@@ -642,6 +644,12 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				next = &types.Route{Action: types.NextProceed}
 			}
 			resolvedRoute = next
+			if execution.result.Turn.Status == types.TurnWaitingInput {
+				// The Team paused mid-execution for user input. Do not route
+				// it onward; the FlowTurn ends resumable instead.
+				hasWaitInput = true
+				continue
+			}
 			switch next.Action {
 			case types.NextProceed:
 				targets := fixedTargets(execution.binding)
@@ -678,14 +686,10 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				enqueue(activation{teamID: target, callerTeam: execution.activation.teamID})
 			case types.NextCoordinate:
 				enqueue(activation{teamID: coordinatorID(r.definitions.Flow), callerTeam: execution.activation.teamID})
-			case types.NextWaitInput:
-				hasWaitInput = true
 			case types.NextWaitTool:
 				hasWaitTool = true
 			case types.NextWaitApproval:
 				hasWaitApproval = true
-			case types.NextComplete:
-				hasComplete = true
 			case types.NextFail:
 				if routeFailure == nil {
 					routeFailure = errors.New(next.Reason)
@@ -709,14 +713,14 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				return r.finishTurn(ctx, result, types.SessionWaitingTool, nil)
 			case hasWaitInput:
 				return r.finishTurn(ctx, result, types.SessionWaitingInput, nil)
-			case hasComplete:
-				return r.finishTurn(ctx, result, types.SessionCompleted, nil)
 			}
 		}
 	}
 
 	result.Turn.RecordIDs = recordIDs(result.Records)
-	return r.finishTurn(ctx, result, types.SessionCompleted, nil)
+	// A normally finished FlowTurn stays continuable: the session lifecycle
+	// is a runtime decision, not a Flow configuration.
+	return r.finishTurn(ctx, result, types.SessionWaitingInput, nil)
 }
 
 type activation struct {
@@ -883,14 +887,18 @@ func (r *Runtime) executeTeamTurn(
 		next = binding.OnProceed
 	}
 	now := time.Now().UTC()
+	// Capture the Team runtime's turn status before replacing the TeamTurn
+	// record below: the flow layer owns the record, but only the Team knows
+	// whether it paused mid-execution (for example through the
+	// AskUserQuestion Tool).
+	teamTurnStatus := teamResult.Turn.Status
 	teamResult.Next = next
 	teamResult.Turn = teamTurn
 	teamResult.Turn.Next = next
-	waitingInput := teamResult.Turn.Status == types.TurnWaitingInput ||
-		next.Action == types.NextWaitInput
-	waitingTool := teamResult.Turn.Status == types.TurnWaitingTool ||
+	waitingInput := teamTurnStatus == types.TurnWaitingInput
+	waitingTool := teamTurnStatus == types.TurnWaitingTool ||
 		next.Action == types.NextWaitTool
-	waitingApproval := teamResult.Turn.Status == types.TurnWaitingApproval ||
+	waitingApproval := teamTurnStatus == types.TurnWaitingApproval ||
 		next.Action == types.NextWaitApproval
 	teamResult.Turn.Status = types.TurnCompleted
 	if waitingApproval {
@@ -1110,6 +1118,10 @@ func interruptedExecutions(events []types.SessionEvent) []types.InterruptedExecu
 			startedFlows[event.FlowTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
 		case types.EventFlowTurnCompleted:
 			completedFlows[event.FlowTurnID] = true
+		case types.EventFlowTurnWaitingInput, types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
+			// A FlowTurn that ended waiting is not interrupted; it stays
+			// resumable by design.
+			waitingFlows[event.FlowTurnID] = true
 		case types.EventTeamTurnStarted:
 			startedTeams[event.TeamTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
 		case types.EventTeamTurnCompleted:

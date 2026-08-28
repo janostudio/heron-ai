@@ -81,7 +81,7 @@ func testFlowTurnResult(status types.SessionStatus, reply string) types.FlowTurn
 
 func TestJSONRPCServerTurnStartsNewSession(t *testing.T) {
 	stub := &jsonRPCFlowRuntimeStub{
-		startResult: testFlowTurnResult(types.SessionCompleted, "done"),
+		startResult: testFlowTurnResult(types.SessionWaitingInput, "done"),
 	}
 	var output bytes.Buffer
 	server := newJSONRPCServer(stub, "test-flow", &output)
@@ -119,7 +119,7 @@ func TestJSONRPCServerContinuesSessionWithCorrectMethod(t *testing.T) {
 	t.Run("waiting input uses resume", func(t *testing.T) {
 		stub := &jsonRPCFlowRuntimeStub{
 			status:       types.FlowSession{ID: "fs-1", Status: types.SessionWaitingInput},
-			resumeResult: testFlowTurnResult(types.SessionCompleted, "resumed"),
+			resumeResult: testFlowTurnResult(types.SessionWaitingInput, "resumed"),
 		}
 		var output bytes.Buffer
 		server := newJSONRPCServer(stub, "test-flow", &output)
@@ -137,7 +137,7 @@ func TestJSONRPCServerContinuesSessionWithCorrectMethod(t *testing.T) {
 	t.Run("running session uses handle input", func(t *testing.T) {
 		stub := &jsonRPCFlowRuntimeStub{
 			status:       types.FlowSession{ID: "fs-1", Status: types.SessionRunning},
-			handleResult: testFlowTurnResult(types.SessionCompleted, "handled"),
+			handleResult: testFlowTurnResult(types.SessionWaitingInput, "handled"),
 		}
 		var output bytes.Buffer
 		server := newJSONRPCServer(stub, "test-flow", &output)
@@ -151,11 +151,32 @@ func TestJSONRPCServerContinuesSessionWithCorrectMethod(t *testing.T) {
 			t.Fatalf("resume=%d handle=%d", stub.resumeCalls, stub.handleCalls)
 		}
 	})
+
+	// Legacy sessions recorded before the lifecycle refactor can still be
+	// continued with the same session_id: completed is no longer a sealed
+	// terminal state.
+	t.Run("legacy completed session uses handle input", func(t *testing.T) {
+		stub := &jsonRPCFlowRuntimeStub{
+			status:       types.FlowSession{ID: "fs-1", Status: types.SessionCompleted},
+			handleResult: testFlowTurnResult(types.SessionWaitingInput, "handled"),
+		}
+		var output bytes.Buffer
+		server := newJSONRPCServer(stub, "test-flow", &output)
+		err := server.Serve(context.Background(), strings.NewReader(
+			`{"jsonrpc":"2.0","id":3,"method":"turn","params":{"session_id":"fs-1","input":"continue"}}`+"\n",
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stub.handleCalls != 1 || stub.resumeCalls != 0 {
+			t.Fatalf("resume=%d handle=%d", stub.resumeCalls, stub.handleCalls)
+		}
+	})
 }
 
 func TestJSONRPCServerIgnoresNotifications(t *testing.T) {
 	stub := &jsonRPCFlowRuntimeStub{
-		startResult: testFlowTurnResult(types.SessionCompleted, "done"),
+		startResult: testFlowTurnResult(types.SessionWaitingInput, "done"),
 	}
 	var output bytes.Buffer
 	server := newJSONRPCServer(stub, "test-flow", &output)
@@ -197,7 +218,7 @@ func TestValidJSONRPCID(t *testing.T) {
 
 func TestJSONRPCServerReturnsProtocolErrorsAndContinues(t *testing.T) {
 	stub := &jsonRPCFlowRuntimeStub{
-		startResult: testFlowTurnResult(types.SessionCompleted, "done"),
+		startResult: testFlowTurnResult(types.SessionWaitingInput, "done"),
 	}
 	var output bytes.Buffer
 	server := newJSONRPCServer(stub, "test-flow", &output)

@@ -28,5 +28,3 @@ teams:
     depends_on: [climax]
     inputs:
       user_message: true
-    on_proceed:
-      action: complete

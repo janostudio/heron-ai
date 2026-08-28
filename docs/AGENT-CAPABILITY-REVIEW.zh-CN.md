@@ -288,7 +288,7 @@ type AgentBudget struct {
 {
   "reply": "任务结果",
   "next": {
-    "action": "complete",
+    "action": "proceed",
     "reason": "验证通过"
   }
 }

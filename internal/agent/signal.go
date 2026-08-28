@@ -20,10 +20,12 @@ func (p *RouteParser) Parse(text string) types.NextAction {
 	switch {
 	case strings.HasSuffix(text, "</continue>") || strings.Contains(text, "<continue/>"):
 		return types.NextProceed
-	case strings.HasSuffix(text, "</wait_input>") || strings.Contains(text, "<wait_input/>"):
-		return types.NextWaitInput
-	case strings.HasSuffix(text, "</goal_achieved>") || strings.Contains(text, "<goal_achieved/>"):
-		return types.NextComplete
+	case strings.HasSuffix(text, "</wait_input>") || strings.Contains(text, "<wait_input/>"),
+		strings.HasSuffix(text, "</goal_achieved>") || strings.Contains(text, "<goal_achieved/>"):
+		// Waiting for more user input or reaching the goal both end the
+		// reply. A finished turn is always resumable, so neither marker
+		// selects a special route anymore; they end the turn normally.
+		return types.NextProceed
 	case strings.HasSuffix(text, "</goal_failed>") || strings.Contains(text, "<goal_failed/>"):
 		return types.NextFail
 	case strings.HasSuffix(text, "</goal_impossible>") || strings.Contains(text, "<goal_impossible/>"):
@@ -35,8 +37,7 @@ func (p *RouteParser) Parse(text string) types.NextAction {
 
 // ParseWithMode returns the route action and clean model text. A plain model
 // response is a completed Agent answer and therefore proceeds normally. The
-// Agent enters waiting_input only through an explicit wait marker or through
-// the AskUserQuestion Tool.
+// Agent enters waiting_input only through the AskUserQuestion Tool.
 func (p *RouteParser) ParseWithMode(text string, loopMode bool) (types.NextAction, string) {
 	action := p.Parse(text)
 	if action != "" {

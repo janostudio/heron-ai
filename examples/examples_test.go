@@ -81,7 +81,9 @@ func TestBlogWriterExampleUsesTeamRoutingAndSharedRecords(t *testing.T) {
 	require.True(t, definitions.Flow.Teams["research"].Coordinator)
 	require.Equal(t, []string{"writing"}, definitions.Flow.Teams["research"].OnProceed.Teams)
 	require.Equal(t, []string{"review"}, definitions.Flow.Teams["writing"].OnProceed.Teams)
-	require.Equal(t, types.NextComplete, definitions.Flow.Teams["review"].OnProceed.Action)
+	// Session lifecycle is no longer configurable: the terminal team has no
+	// on_proceed action, and a finished turn always stays resumable.
+	require.Nil(t, definitions.Flow.Teams["review"].OnProceed)
 
 	research := definitions.Teams["research_team"]
 	require.Len(t, research.Calls, 2)
@@ -132,7 +134,8 @@ func TestNovelRPExampleUsesRepeatedTeamActivation(t *testing.T) {
 		binding := definitions.Flow.Teams[item.name]
 		require.Equal(t, item.depends, binding.DependsOn, item.name)
 		if item.next == "" {
-			require.Equal(t, types.NextComplete, binding.OnProceed.Action, item.name)
+			// The terminal team no longer declares an on_proceed action.
+			require.Nil(t, binding.OnProceed, item.name)
 		} else {
 			require.Equal(t, []string{item.next}, binding.OnProceed.Teams, item.name)
 		}

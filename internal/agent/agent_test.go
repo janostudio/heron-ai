@@ -37,9 +37,11 @@ func TestRouteParser_Parse_Proceed(t *testing.T) {
 	}
 }
 
-func TestRouteParser_Parse_WaitInput(t *testing.T) {
+func TestRouteParser_Parse_WaitInputEndsAsProceed(t *testing.T) {
 	p := NewRouteParser()
 
+	// The wait_input marker still ends the model reply, but a finished turn
+	// is always resumable now, so it no longer selects a special route.
 	tests := []struct {
 		name  string
 		input string
@@ -50,16 +52,16 @@ func TestRouteParser_Parse_WaitInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, types.NextWaitInput, p.Parse(tt.input))
+			assert.Equal(t, types.NextProceed, p.Parse(tt.input))
 		})
 	}
 }
 
-func TestRouteParser_Parse_Complete(t *testing.T) {
+func TestRouteParser_Parse_GoalAchievedEndsAsProceed(t *testing.T) {
 	p := NewRouteParser()
 
-	assert.Equal(t, types.NextComplete, p.Parse("done</goal_achieved>"))
-	assert.Equal(t, types.NextComplete, p.Parse("done<goal_achieved/>"))
+	assert.Equal(t, types.NextProceed, p.Parse("done</goal_achieved>"))
+	assert.Equal(t, types.NextProceed, p.Parse("done<goal_achieved/>"))
 }
 
 func TestRouteParser_Parse_Fail(t *testing.T) {
@@ -106,9 +108,10 @@ func TestRouteParser_ParseWithMode_NonLoopMode(t *testing.T) {
 	assert.Equal(t, types.NextProceed, action)
 	assert.Equal(t, "hello", clean)
 
-	// Explicit action in non-loop mode
+	// Explicit action in non-loop mode: the wait_input marker ends the turn
+	// like a normal completed answer.
 	action, clean = p.ParseWithMode("hello</wait_input>", false)
-	assert.Equal(t, types.NextWaitInput, action)
+	assert.Equal(t, types.NextProceed, action)
 	assert.Equal(t, "hello", clean)
 }
 
@@ -937,9 +940,9 @@ func TestTurnLoop_Run_AskUserQuestionSavesCheckpointAndResumes(t *testing.T) {
 	store := &memoryCheckpointStore{}
 	tools := &recordingToolExecutor{
 		result: &types.ToolResult{
-			Success: true,
-			Content: `{"question":"Continue?"}`,
-			Next:    &types.Route{Action: types.NextWaitInput},
+			Success:      true,
+			Content:      `{"question":"Continue?"}`,
+			PendingInput: &types.AgentPendingInput{Question: "Continue?"},
 		},
 	}
 	loop := NewTurnLoop(
@@ -1475,6 +1478,8 @@ func TestTurnLoop_Run_SignalInResponse(t *testing.T) {
 
 	result, err := loop.Run(context.Background(), agent, types.AgentRequest{ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "hello"}}})
 	require.NoError(t, err)
-	assert.Equal(t, types.NextComplete, result.Next.Action)
+	// The goal_achieved marker ends the reply; the turn ends like any normal
+	// answer and stays resumable, so the route is a plain proceed.
+	assert.Equal(t, types.NextProceed, result.Next.Action)
 	assert.Equal(t, "Task completed successfully", result.Reply)
 }

@@ -10,12 +10,12 @@ func TestEngine_EvaluateRoute(t *testing.T) {
 	engine := NewEngine()
 	results := []types.TeamTurnResult{
 		{Next: &types.Route{Action: types.NextProceed}},
-		{Next: &types.Route{Action: types.NextComplete}},
+		{Next: &types.Route{Action: types.NextReturn}},
 	}
 
 	result := engine.EvaluateRoute(results, []types.NextAction{
 		types.NextProceed,
-		types.NextComplete,
+		types.NextReturn,
 	})
 	if !result.Passed {
 		t.Fatalf("expected route evaluation to pass: %#v", result)
@@ -26,12 +26,12 @@ func TestEngine_EvaluateRouteMismatch(t *testing.T) {
 	engine := NewEngine()
 	results := []types.TeamTurnResult{
 		{Next: &types.Route{Action: types.NextProceed}},
-		{Next: &types.Route{Action: types.NextComplete}},
+		{Next: &types.Route{Action: types.NextReturn}},
 	}
 
 	result := engine.EvaluateRoute(results, []types.NextAction{
 		types.NextFail,
-		types.NextWaitInput,
+		types.NextWaitTool,
 	})
 	if result.Passed {
 		t.Fatal("expected route evaluation to fail")

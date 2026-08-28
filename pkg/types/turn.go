@@ -28,10 +28,8 @@ const (
 	NextProceed      NextAction = "proceed"
 	NextReturn       NextAction = "return"
 	NextCoordinate   NextAction = "coordinate"
-	NextWaitInput    NextAction = "wait_input"
 	NextWaitTool     NextAction = "wait_tool"
 	NextWaitApproval NextAction = "wait_approval"
-	NextComplete     NextAction = "complete"
 	NextFail         NextAction = "fail"
 	NextActivate     NextAction = "activate"
 )

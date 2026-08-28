@@ -10,8 +10,9 @@ import (
 )
 
 // AskUserQuestion is an Agent-facing pause request. The Tool itself does not
-// block waiting for a UI; it returns a wait_input route so FlowRuntime can
-// suspend the current session and later resume it with user input.
+// block waiting for a UI; it returns a pending input request so the Agent
+// saves a waiting checkpoint and FlowRuntime can suspend the current session
+// and later resume it with user input.
 type AskUserQuestionTool struct{}
 
 func NewAskUserQuestionTool() *AskUserQuestionTool {
@@ -58,7 +59,12 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, params map[string]any
 		Success:  true,
 		Content:  string(data),
 		Metadata: payload,
-		Next:     &types.Route{Action: types.NextWaitInput, Reason: "user question requires input"},
+		PendingInput: &types.AgentPendingInput{
+			Question:    question,
+			Options:     options,
+			Header:      stringParam(params, "header"),
+			MultiSelect: boolParam(params, "multi_select"),
+		},
 	}, nil
 }
 

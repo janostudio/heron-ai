@@ -14,11 +14,29 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-type fakeTeamRuntime struct{}
+// fakeTeamRuntime drives the activation flow: the coordinator activates
+// "verify" once, "verify" returns to its caller, and the coordinator then
+// ends the turn with a plain proceed. A finished turn must leave the session
+// in waiting_input so the same FlowSession stays continuable.
+type fakeTeamRuntime struct {
+	mu        sync.Mutex
+	activated bool
+}
 
-func (fakeTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
+func (f *fakeTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
 	switch req.TeamTurn.TeamID {
 	case "default":
+		f.mu.Lock()
+		activated := f.activated
+		f.activated = true
+		f.mu.Unlock()
+		if activated {
+			return types.TeamTurnResult{
+				Turn:  req.TeamTurn,
+				Reply: "coordination finished",
+				Next:  &types.Route{Action: types.NextProceed},
+			}, nil
+		}
 		return types.TeamTurnResult{
 			Turn:  req.TeamTurn,
 			Reply: "starting diagnosis",
@@ -41,7 +59,7 @@ func (fakeTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.
 			Turn:    req.TeamTurn,
 			Reply:   "verification passed",
 			Records: []types.SharedRecord{record},
-			Next:    &types.Route{Action: types.NextComplete},
+			Next:    &types.Route{Action: types.NextReturn},
 		}, nil
 	default:
 		return types.TeamTurnResult{
@@ -80,26 +98,26 @@ func testDefinitions() *types.Definitions {
 	}
 }
 
-func TestRuntimeStartsActivatesAndCompletesFlow(t *testing.T) {
+func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
 	evidenceStore := storage.NewJSONLEvidenceStore(fileStore)
-	runtime := NewRuntime(testDefinitions(), fakeTeamRuntime{}, sessionWriter, evidenceStore, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, evidenceStore, t.TempDir())
 
 	result, err := runtime.Start(context.Background(), types.StartFlowRequest{
 		FlowID: "code-fix",
 		Input:  "verify the change",
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.SessionCompleted, result.Session.Status)
-	require.Equal(t, types.TurnCompleted, result.Turn.Status)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+	require.Equal(t, types.TurnWaitingInput, result.Turn.Status)
 	require.Contains(t, result.Reply, "verification passed")
-	require.Len(t, result.TeamResults, 2)
+	require.Len(t, result.TeamResults, 3)
 	require.Len(t, result.Records, 1)
 
 	status, err := runtime.Status(context.Background(), result.Session.ID)
 	require.NoError(t, err)
-	require.Equal(t, types.SessionCompleted, status.Status)
+	require.Equal(t, types.SessionWaitingInput, status.Status)
 
 	replay, err := sessionWriter.Replay(context.Background(), result.Session.ID)
 	require.NoError(t, err)
@@ -111,15 +129,98 @@ func TestRuntimeStartsActivatesAndCompletesFlow(t *testing.T) {
 	require.Equal(t, "VerificationReport", records[0].Name)
 }
 
-func TestRuntimeResumeRequiresWaitingInput(t *testing.T) {
+// TestRuntimeSessionStaysResumableAcrossTurns is the regression test for the
+// incident where on_proceed action=complete sealed a FlowSession after a
+// normal turn and clients were rejected when continuing with session_id.
+// Under the new contract a normally finished turn always leaves the session
+// continuable, no matter what the Flow configuration says.
+func TestRuntimeSessionStaysResumableAcrossTurns(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+
+	first, err := runtime.Start(context.Background(), types.StartFlowRequest{
+		FlowID: "code-fix",
+		Input:  "verify the change",
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.SessionWaitingInput, first.Session.Status)
+
+	second, err := runtime.HandleInput(context.Background(), first.Session.ID, "one more thing")
+	require.NoError(t, err)
+	require.Equal(t, first.Session.ID, second.Session.ID)
+	require.Equal(t, types.SessionWaitingInput, second.Session.Status)
+
+	third, err := runtime.Resume(context.Background(), first.Session.ID, "continue")
+	require.NoError(t, err)
+	require.Equal(t, first.Session.ID, third.Session.ID)
+	require.Equal(t, types.SessionWaitingInput, third.Session.Status)
+}
+
+func TestRuntimeResumeRejectsCancelledSession(t *testing.T) {
+	fileStore := storage.NewFileStore(t.TempDir())
+	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
 
 	result, err := runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "code-fix"})
 	require.NoError(t, err)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+	require.NoError(t, runtime.Cancel(context.Background(), result.Session.ID))
 	_, err = runtime.Resume(context.Background(), result.Session.ID, "continue")
 	require.ErrorContains(t, err, "not waiting for input")
+}
+
+// waitingInputTeamRuntime simulates a non-coordinator Team pausing
+// mid-execution for user input (the AskUserQuestion Tool path): the
+// CallResult carries TurnWaitingInput status and no wait route action. The
+// FlowRuntime must suspend the session on the Turn status alone instead of
+// routing the paused Team onward to the coordinator.
+type waitingInputTeamRuntime struct{}
+
+func (waitingInputTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
+	if req.TeamTurn.TeamID != "verify" {
+		return types.TeamTurnResult{
+			Turn:  req.TeamTurn,
+			Reply: "starting diagnosis",
+			Next: &types.Route{
+				Action: types.NextActivate,
+				Teams:  []string{"verify"},
+			},
+		}, nil
+	}
+	return types.TeamTurnResult{
+		Turn: types.TeamTurn{
+			ID:     req.TeamTurn.ID,
+			TeamID: req.TeamTurn.TeamID,
+			Status: types.TurnWaitingInput,
+		},
+		Next: &types.Route{Action: types.NextProceed},
+		CallResults: map[string]types.CallResult{
+			"assistant": {
+				Status:       types.TurnWaitingInput,
+				CallTurnID:   "tt:assistant",
+				AgentID:      "assistant",
+				CheckpointID: "checkpoint-input",
+				Reply:        `{"question":"Continue?"}`,
+			},
+		},
+		Reply: `{"question":"Continue?"}`,
+	}, nil
+}
+
+func TestRuntimeTeamWaitingInputStatusSuspendsSession(t *testing.T) {
+	fileStore := storage.NewFileStore(t.TempDir())
+	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
+	runtime := NewRuntime(testDefinitions(), waitingInputTeamRuntime{}, sessionWriter, nil, t.TempDir())
+
+	result, err := runtime.Start(context.Background(), types.StartFlowRequest{
+		FlowID: "code-fix", Input: "needs a question answered",
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+	require.Len(t, result.TeamResults, 2)
+	require.Equal(t, "verify", result.TeamResults[1].Turn.TeamID)
+	require.Equal(t, types.TurnWaitingInput, result.TeamResults[1].Turn.Status)
 }
 
 type aggregateResumeTeamRuntime struct {
@@ -166,7 +267,7 @@ func (r *aggregateResumeTeamRuntime) Run(_ context.Context, req types.TeamTurnRe
 	}
 	return types.TeamTurnResult{
 		Turn: req.TeamTurn,
-		Next: &types.Route{Action: types.NextComplete},
+		Next: &types.Route{Action: types.NextProceed},
 		CallResults: map[string]types.CallResult{
 			"agent-a": {Status: types.TurnCompleted, Reply: "a resumed"},
 			"agent-b": {Status: types.TurnCompleted, Reply: "b resumed"},
@@ -214,7 +315,7 @@ func TestRuntimeResumeAggregatesMultipleToolTasks(t *testing.T) {
 
 	resumed, err := runtime.Resume(context.Background(), first.Session.ID, "")
 	require.NoError(t, err)
-	require.Equal(t, types.SessionCompleted, resumed.Session.Status)
+	require.Equal(t, types.SessionWaitingInput, resumed.Session.Status)
 	require.Equal(t, 1, teamRuntime.resumes)
 	require.Len(t, teamRuntime.lastReq.ResumeCalls, 2)
 	require.Contains(t, resumed.Reply, "all agents resumed")
@@ -254,7 +355,7 @@ func (r *approvalTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) 
 		return types.TeamTurnResult{
 			Turn:  req.TeamTurn,
 			Reply: "approved tool completed",
-			Next:  &types.Route{Action: types.NextComplete},
+			Next:  &types.Route{Action: types.NextProceed},
 			CallResults: map[string]types.CallResult{
 				"danger": {
 					Status:   types.TurnCompleted,
@@ -313,7 +414,7 @@ func TestRuntimeResumeApprovalResumesWaitingAgentCall(t *testing.T) {
 		context.Background(), first.Session.ID, "approval-1", true, "approved by tester",
 	)
 	require.NoError(t, err)
-	require.Equal(t, types.SessionCompleted, resumed.Session.Status)
+	require.Equal(t, types.SessionWaitingInput, resumed.Session.Status)
 	require.True(t, teamRuntime.resumed)
 	require.Contains(t, resumed.Reply, "approved tool completed")
 }
@@ -338,7 +439,7 @@ func TestRuntimeResumeApprovalPreservesAuditingFields(t *testing.T) {
 	}
 	resumed, err := runtime.ResumeApprovalWithResponse(context.Background(), first.Session.ID, decision)
 	require.NoError(t, err)
-	require.Equal(t, types.SessionCompleted, resumed.Session.Status)
+	require.Equal(t, types.SessionWaitingInput, resumed.Session.Status)
 
 	require.NotEmpty(t, resumed.TeamResults)
 	var approval *types.HITLResponse
@@ -369,7 +470,7 @@ func TestRuntimeResumeApprovalRejectsUnknownApproval(t *testing.T) {
 func TestRuntimeRecoveryStatusFindsInterruptedCall(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
 
 	sessionID := "fs-interrupted"
 	now := time.Now().UTC()
@@ -414,7 +515,7 @@ func TestRuntimeRecoveryStatusFindsInterruptedCall(t *testing.T) {
 func TestRuntimeBlocksNormalInputUntilInterruptedExecutionIsRecovered(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
 
 	sessionID := "fs-interrupted-input"
 	now := time.Now().UTC()
@@ -445,7 +546,7 @@ func TestRuntimeBlocksNormalInputUntilInterruptedExecutionIsRecovered(t *testing
 func TestRuntimeRecoveryRetryRequiresExplicitSideEffectPermission(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
 
 	sessionID := "fs-retry-policy"
 	now := time.Now().UTC()
@@ -479,7 +580,7 @@ func TestRuntimeRecoveryRetryRequiresExplicitSideEffectPermission(t *testing.T) 
 func TestRuntimeRecoveryRetryRunsContainingTeamAndMarksRecoveryComplete(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
 
 	sessionID := "fs-retry"
 	now := time.Now().UTC()
@@ -510,7 +611,7 @@ func TestRuntimeRecoveryRetryRunsContainingTeamAndMarksRecoveryComplete(t *testi
 		Input:                 "retry verify",
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.SessionCompleted, result.Session.Status)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
 	require.Contains(t, result.Reply, "verification passed")
 
 	status, err := runtime.RecoveryStatus(context.Background(), sessionID)

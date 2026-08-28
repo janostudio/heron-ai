@@ -25,5 +25,3 @@ teams:
     inputs:
       - from: writing
         record: BlogDraft
-    on_proceed:
-      action: complete

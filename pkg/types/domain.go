@@ -249,6 +249,9 @@ func (f Flow) Validate() error {
 			}
 		}
 		if team.OnProceed != nil {
+			if err := validateOnProceedAction(team.OnProceed.Action); err != nil {
+				return fmt.Errorf("flow %q: team %q: %w", f.ID, name, err)
+			}
 			for _, target := range team.OnProceed.Teams {
 				if _, ok := f.Teams[target]; !ok {
 					return fmt.Errorf("flow %q: team %q on_proceed references unknown team %q", f.ID, name, target)
@@ -283,6 +286,20 @@ func (f Flow) ValidateWithTeams(teams map[string]Team) error {
 		}
 	}
 	return nil
+}
+
+// validateOnProceedAction keeps session lifecycle decisions out of Flow
+// configuration. on_proceed may only choose the next orchestration step;
+// whether a finished FlowTurn stays continuable is decided by the runtime.
+func validateOnProceedAction(action NextAction) error {
+	switch action {
+	case "", NextProceed, NextReturn, NextCoordinate, NextActivate, NextFail:
+		return nil
+	case "complete", "wait_input":
+		return fmt.Errorf("on_proceed.action %q is not supported: 会话生命周期不再可配置，轮次结束一律可续，请删除该键", action)
+	default:
+		return fmt.Errorf("on_proceed.action %q is not an orchestration action (proceed/return/coordinate/activate/fail)", action)
+	}
 }
 
 func validateAcyclicTeamDependencies(teams map[string]FlowTeamBinding) error {

@@ -682,11 +682,25 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		}
 		waitingForContinuation := false
 		for _, toolResult := range results {
-			if toolResult == nil || toolResult.Next == nil || toolResult.Next.Action == types.NextProceed {
+			if toolResult == nil {
 				continue
 			}
-			waitingForContinuation = toolResult.Next.Action == types.NextWaitInput ||
-				toolResult.Next.Action == types.NextWaitApproval ||
+			if toolResult.PendingInput != nil {
+				waiting := &types.AgentResult{
+					Status:       types.TurnWaitingInput,
+					Reply:        toolResultContent(toolResult),
+					Next:         toolResult.Next,
+					Usage:        totalUsage,
+					WorkspaceOps: workspaceOps,
+					ToolCalls:    toolCalls,
+				}
+				return t.saveWaitingCheckpoint(ctx, agent, req, contextManager, budget, totalUsage, round+1, lastText, workspaceOps, toolCalls, waiting,
+					loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools))
+			}
+			if toolResult.Next == nil || toolResult.Next.Action == types.NextProceed {
+				continue
+			}
+			waitingForContinuation = toolResult.Next.Action == types.NextWaitApproval ||
 				toolResult.Next.Action == types.NextWaitTool
 			agentResult := &types.AgentResult{
 				Status:          statusForRoute(toolResult.Next),
@@ -696,10 +710,6 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				WorkspaceOps:    workspaceOps,
 				ToolCalls:       toolCalls,
 				PendingApproval: toolResult.PendingApproval,
-			}
-			if toolResult.Next.Action == types.NextWaitInput {
-				return t.saveWaitingCheckpoint(ctx, agent, req, contextManager, budget, totalUsage, round+1, lastText, workspaceOps, toolCalls, agentResult,
-					loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools))
 			}
 			if toolResult.Next.Action == types.NextWaitApproval {
 				return t.saveApprovalCheckpoint(ctx, agent, req, contextManager, budget, totalUsage, round+1, lastText, workspaceOps, agentResult,
@@ -713,7 +723,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 					waiting := &types.AgentResult{
 						Status: types.TurnWaitingInput,
 						Reply:  "Agent appears stuck: " + stuckReason,
-						Next:   &types.Route{Action: types.NextWaitInput, Reason: stuckReason},
+						Next:   &types.Route{Action: types.NextProceed, Reason: stuckReason},
 						Usage:  totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls,
 					}
 					return t.saveWaitingCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
@@ -983,7 +993,7 @@ func (t *TurnLoop) saveToolCheckpoint(
 }
 
 func pendingInputFromResult(result *types.AgentResult) *types.AgentPendingInput {
-	if result == nil || result.Next == nil || result.Next.Action != types.NextWaitInput {
+	if result == nil || result.Status != types.TurnWaitingInput {
 		return nil
 	}
 	pending := &types.AgentPendingInput{Question: result.Reply}
@@ -1014,9 +1024,6 @@ func pendingInputFromResult(result *types.AgentResult) *types.AgentPendingInput 
 func statusForRoute(route *types.Route) types.TurnStatus {
 	if route == nil {
 		return types.TurnCompleted
-	}
-	if route.Action == types.NextWaitInput {
-		return types.TurnWaitingInput
 	}
 	if route.Action == types.NextWaitTool {
 		return types.TurnWaitingTool

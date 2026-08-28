@@ -7,5 +7,3 @@ teams:
     coordinator: true
     inputs:
       user_message: true
-    on_proceed:
-      action: complete
