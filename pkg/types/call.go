@@ -8,18 +8,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// MemberType is an internal compatibility type for one Team call. The public
-// configuration vocabulary is Agent / Command / Webhook call.
+// CallType identifies the execution target of one Team call.
 //
-// V1 deliberately has only three member types. A persistent, actively
-// communicating "agent" is reserved for a future runtime and is not a valid
-// V1 member type.
-type MemberType string
+// A Call is a Team execution item. It may invoke an Agent, a Shell Command,
+// or a Webhook. It is not an additional orchestration layer.
+type CallType string
 
 const (
-	MemberSubagent MemberType = "subagent"
-	MemberCommand  MemberType = "command"
-	MemberWebhook  MemberType = "webhook"
+	CallAgent   CallType = "agent"
+	CallCommand CallType = "command"
+	CallWebhook CallType = "webhook"
 )
 
 // CommandSpec describes a command call.
@@ -48,7 +46,7 @@ const (
 	ReplayAllow      = "allow"
 )
 
-// InputSpec describes the context a Team or call may receive.
+// InputSpec describes the context a Team or Call may receive.
 //
 // V1 accepts both a compact mapping form and an explicit list of bindings:
 //
@@ -90,10 +88,10 @@ func (s *InputSpec) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-// InputBinding selects one named SharedRecord visible to a Team or call.
+// InputBinding selects one named SharedRecord visible to a Team or Call.
 //
 // From is intentionally a string reference for now. The config validator will
-// resolve whether it refers to the flow, team, member, or a named producer.
+// resolve whether it refers to the flow, team, call, or a named producer.
 type InputBinding struct {
 	From            string     `yaml:"from,omitempty" json:"from,omitempty"`
 	Record          string     `yaml:"record,omitempty" json:"record,omitempty"`
@@ -111,7 +109,7 @@ type RecordView struct {
 	Adapter  string   `yaml:"adapter,omitempty" json:"adapter,omitempty"`
 }
 
-// OutputSpec describes which results a call or Team publishes.
+// OutputSpec describes which results a Call or Team publishes.
 //
 // Record is the convenient one-record form. Records is the explicit form used
 // when a Team publishes several named records.
@@ -130,13 +128,13 @@ type OutputBinding struct {
 	Scope  string `yaml:"scope,omitempty" json:"scope,omitempty"`
 }
 
-// Member is an internal compatibility representation for one Team call.
+// Call is one Team execution definition.
 //
-// AgentID points to an Agent Definition when Type is subagent. Command and
+// AgentID points to an Agent Definition when Type is CallAgent. Command and
 // Webhook contain the corresponding deterministic execution specification.
-type Member struct {
+type Call struct {
 	ID             string       `yaml:"id" json:"id"`
-	Type           MemberType   `yaml:"type" json:"type"`
+	Type           CallType     `yaml:"type" json:"type"`
 	AgentID        string       `yaml:"agent,omitempty" json:"agent,omitempty"`
 	Command        *CommandSpec `yaml:"command,omitempty" json:"command,omitempty"`
 	Webhook        *WebhookSpec `yaml:"webhook,omitempty" json:"webhook,omitempty"`
@@ -156,10 +154,10 @@ type Member struct {
 //
 //	webhook:
 //	  url: https://example.test/hook
-func (m *Member) UnmarshalYAML(node *yaml.Node) error {
+func (c *Call) UnmarshalYAML(node *yaml.Node) error {
 	var raw struct {
 		ID             string            `yaml:"id"`
-		Type           MemberType        `yaml:"type"`
+		Type           CallType          `yaml:"type"`
 		AgentID        string            `yaml:"agent"`
 		Command        yaml.Node         `yaml:"command"`
 		Webhook        yaml.Node         `yaml:"webhook"`
@@ -190,7 +188,7 @@ func (m *Member) UnmarshalYAML(node *yaml.Node) error {
 		case yaml.MappingNode:
 			var spec CommandSpec
 			if err := raw.Command.Decode(&spec); err != nil {
-				return fmt.Errorf("member %q: decode command: %w", raw.ID, err)
+				return fmt.Errorf("call %q: decode command: %w", raw.ID, err)
 			}
 			command = &spec
 		default:
@@ -210,7 +208,7 @@ func (m *Member) UnmarshalYAML(node *yaml.Node) error {
 		webhook = &spec
 	}
 
-	*m = Member{
+	*c = Call{
 		ID:             raw.ID,
 		Type:           raw.Type,
 		AgentID:        raw.AgentID,
@@ -222,8 +220,8 @@ func (m *Member) UnmarshalYAML(node *yaml.Node) error {
 		Responsibility: raw.Responsibility,
 		Timeout:        raw.Timeout,
 	}
-	if m.Webhook == nil && strings.TrimSpace(raw.URL) != "" {
-		m.Webhook = &WebhookSpec{
+	if c.Webhook == nil && strings.TrimSpace(raw.URL) != "" {
+		c.Webhook = &WebhookSpec{
 			URL:            raw.URL,
 			Method:         raw.Method,
 			Headers:        raw.Headers,
@@ -237,44 +235,44 @@ func (m *Member) UnmarshalYAML(node *yaml.Node) error {
 
 // Validate checks the type-specific invariants that are independent of the
 // complete Flow graph.
-func (m Member) Validate() error {
-	if strings.TrimSpace(m.ID) == "" {
+func (c Call) Validate() error {
+	if strings.TrimSpace(c.ID) == "" {
 		return fmt.Errorf("call id is required")
 	}
 
-	switch m.Type {
-	case MemberSubagent:
-		if strings.TrimSpace(m.AgentID) == "" {
-			return fmt.Errorf("subagent call %q: agent is required", m.ID)
+	switch c.Type {
+	case CallAgent:
+		if strings.TrimSpace(c.AgentID) == "" {
+			return fmt.Errorf("agent call %q: agent is required", c.ID)
 		}
-		if m.Command != nil || m.Webhook != nil {
-			return fmt.Errorf("subagent call %q: command/webhook must be empty", m.ID)
+		if c.Command != nil || c.Webhook != nil {
+			return fmt.Errorf("agent call %q: command/webhook must be empty", c.ID)
 		}
-	case MemberCommand:
-		if m.Command == nil || strings.TrimSpace(m.Command.Command) == "" {
-			return fmt.Errorf("command call %q: command is required", m.ID)
+	case CallCommand:
+		if c.Command == nil || strings.TrimSpace(c.Command.Command) == "" {
+			return fmt.Errorf("command call %q: command is required", c.ID)
 		}
-		if err := validateReplayPolicy(m.Command.ReplayPolicy, m.Command.IdempotencyKey); err != nil {
-			return fmt.Errorf("command call %q: %w", m.ID, err)
+		if err := validateReplayPolicy(c.Command.ReplayPolicy, c.Command.IdempotencyKey); err != nil {
+			return fmt.Errorf("command call %q: %w", c.ID, err)
 		}
-		if strings.TrimSpace(m.AgentID) != "" || m.Webhook != nil {
-			return fmt.Errorf("command call %q: agent/webhook must be empty", m.ID)
+		if strings.TrimSpace(c.AgentID) != "" || c.Webhook != nil {
+			return fmt.Errorf("command call %q: agent/webhook must be empty", c.ID)
 		}
-	case MemberWebhook:
-		if m.Webhook == nil || strings.TrimSpace(m.Webhook.URL) == "" {
-			return fmt.Errorf("webhook call %q: url is required", m.ID)
+	case CallWebhook:
+		if c.Webhook == nil || strings.TrimSpace(c.Webhook.URL) == "" {
+			return fmt.Errorf("webhook call %q: url is required", c.ID)
 		}
-		if err := validateReplayPolicy(m.Webhook.ReplayPolicy, m.Webhook.IdempotencyKey); err != nil {
-			return fmt.Errorf("webhook call %q: %w", m.ID, err)
+		if err := validateReplayPolicy(c.Webhook.ReplayPolicy, c.Webhook.IdempotencyKey); err != nil {
+			return fmt.Errorf("webhook call %q: %w", c.ID, err)
 		}
-		if _, err := url.ParseRequestURI(m.Webhook.URL); err != nil {
-			return fmt.Errorf("webhook call %q: invalid url: %w", m.ID, err)
+		if _, err := url.ParseRequestURI(c.Webhook.URL); err != nil {
+			return fmt.Errorf("webhook call %q: invalid url: %w", c.ID, err)
 		}
-		if strings.TrimSpace(m.AgentID) != "" || m.Command != nil {
-			return fmt.Errorf("webhook call %q: agent/command must be empty", m.ID)
+		if strings.TrimSpace(c.AgentID) != "" || c.Command != nil {
+			return fmt.Errorf("webhook call %q: agent/command must be empty", c.ID)
 		}
 	default:
-		return fmt.Errorf("call %q: unsupported type %q", m.ID, m.Type)
+		return fmt.Errorf("call %q: unsupported type %q", c.ID, c.Type)
 	}
 
 	return nil

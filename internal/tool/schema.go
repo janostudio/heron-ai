@@ -19,6 +19,12 @@ func GenerateSchema(t types.Tool) types.JSONSchema {
 			if d, ok := paramMap["description"].(string); ok {
 				prop.Description = d
 			}
+			if required, ok := paramMap["required"].(bool); ok && required {
+				schema.Required = append(schema.Required, name)
+			}
+			if enum, ok := stringSlice(paramMap["enum"]); ok {
+				prop.Enum = enum
+			}
 			schema.Properties[name] = prop
 		}
 	}

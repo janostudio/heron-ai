@@ -99,6 +99,32 @@ func (r *ProviderRouter) ChatStream(ctx context.Context, messages []types.Messag
 	return provider.ChatStream(ctx, messages, tools, effective)
 }
 
+// SetMediaResolver wires the durable upload store into every provider owned by
+// the router. Providers resolve media only while building their wire request.
+func (r *ProviderRouter) SetMediaResolver(resolver types.MediaResolver) {
+	for _, provider := range r.providers {
+		if setter, ok := provider.(types.MediaResolverSetter); ok {
+			setter.SetMediaResolver(resolver)
+		}
+	}
+}
+
+// MaxInputTokens exposes the selected profile's context capacity to the
+// Agent ContextManager without expanding the ModelProvider interface.
+func (r *ProviderRouter) MaxInputTokens(config types.ModelConfig) int {
+	if config.MaxInputTokens > 0 {
+		return config.MaxInputTokens
+	}
+	modelName := strings.TrimSpace(config.Model)
+	if modelName == "" {
+		modelName = r.defaultModel
+	}
+	if profile, ok := r.profiles[modelName]; ok {
+		return profile.MaxInputTokens
+	}
+	return 0
+}
+
 func (r *ProviderRouter) DefaultModel() string {
 	return r.defaultModel
 }

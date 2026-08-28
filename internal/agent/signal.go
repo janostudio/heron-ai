@@ -33,9 +33,10 @@ func (p *RouteParser) Parse(text string) types.NextAction {
 	}
 }
 
-// ParseWithMode returns the route action and clean model text. An omitted
-// action means "wait for the user" in a bounded multi-round Subagent loop,
-// and "proceed" in a single-round execution.
+// ParseWithMode returns the route action and clean model text. A plain model
+// response is a completed Agent answer and therefore proceeds normally. The
+// Agent enters waiting_input only through an explicit wait marker or through
+// the AskUserQuestion Tool.
 func (p *RouteParser) ParseWithMode(text string, loopMode bool) (types.NextAction, string) {
 	action := p.Parse(text)
 	if action != "" {
@@ -51,9 +52,6 @@ func (p *RouteParser) ParseWithMode(text string, loopMode bool) (types.NextActio
 			clean = strings.ReplaceAll(clean, tag, "")
 		}
 		return action, strings.TrimSpace(clean)
-	}
-	if loopMode {
-		return types.NextWaitInput, text
 	}
 	return types.NextProceed, text
 }

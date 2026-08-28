@@ -37,18 +37,16 @@ type FlowTeamBinding struct {
 	OnProceed   *Route    `yaml:"on_proceed,omitempty" json:"on_proceed,omitempty"`
 }
 
-// Team is the V1 Team definition. A Team directly coordinates Agent,
-// Command, and Webhook calls. Members is retained as an internal/legacy
-// decoding alias; new configuration should use Calls.
+// Team is the V1 Team definition. A Team directly coordinates Calls. Each
+// Call targets an Agent, Shell Command, or Webhook.
 type Team struct {
-	ID      string            `yaml:"id" json:"id"`
-	Members map[string]Member `yaml:"members,omitempty" json:"-"`
-	Calls   map[string]Member `yaml:"calls,omitempty" json:"calls,omitempty"`
-	Inputs  InputSpec         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
-	Output  OutputSpec        `yaml:"output,omitempty" json:"output,omitempty"`
-	Outputs OutputSpec        `yaml:"outputs,omitempty" json:"outputs,omitempty"`
-	Memory  MemoryConfig      `yaml:"memory,omitempty" json:"memory,omitempty"`
-	Goal    string            `yaml:"goal,omitempty" json:"goal,omitempty"`
+	ID      string          `yaml:"id" json:"id"`
+	Calls   map[string]Call `yaml:"calls,omitempty" json:"calls,omitempty"`
+	Inputs  InputSpec       `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	Output  OutputSpec      `yaml:"output,omitempty" json:"output,omitempty"`
+	Outputs OutputSpec      `yaml:"outputs,omitempty" json:"outputs,omitempty"`
+	Memory  MemoryConfig    `yaml:"memory,omitempty" json:"memory,omitempty"`
+	Goal    string          `yaml:"goal,omitempty" json:"goal,omitempty"`
 }
 
 // MemoryConfig is the small core-facing configuration slot for the optional
@@ -64,20 +62,13 @@ func (o OutputSpec) IsZero() bool {
 	return o.From == "" && o.Record == "" && len(o.Records) == 0 && !o.Publish
 }
 
-// Normalize fills call IDs from the Team call map keys. The config loader
-// should call this immediately after decoding a Team. Internally the
-// scheduler still uses Members so the executor abstraction stays private.
+// Normalize fills Call IDs from the Team call map keys. The config loader
+// should call this immediately after decoding a Team.
 func (t *Team) Normalize() {
-	if len(t.Members) == 0 && len(t.Calls) > 0 {
-		t.Members = t.Calls
-	}
-	if len(t.Calls) == 0 && len(t.Members) > 0 {
-		t.Calls = t.Members
-	}
-	for name, member := range t.Members {
-		if member.ID == "" {
-			member.ID = name
-			t.Members[name] = member
+	for name, call := range t.Calls {
+		if call.ID == "" {
+			call.ID = name
+			t.Calls[name] = call
 		}
 	}
 	if t.Output.IsZero() && !t.Outputs.IsZero() {
@@ -85,7 +76,7 @@ func (t *Team) Normalize() {
 	}
 }
 
-// Validate checks a Team and all of its members without requiring a complete
+// Validate checks a Team and all of its Calls without requiring a complete
 // Flow graph.
 func (t Team) Validate() error {
 	if strings.TrimSpace(t.ID) == "" {
@@ -93,31 +84,31 @@ func (t Team) Validate() error {
 	}
 	t.Normalize()
 
-	memberNames := make(map[string]struct{}, len(t.Members))
-	for name, member := range t.Members {
+	callNames := make(map[string]struct{}, len(t.Calls))
+	for name, call := range t.Calls {
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("team %q: call name is required", t.ID)
 		}
-		if member.ID != name {
-			return fmt.Errorf("team %q: call key %q does not match call id %q", t.ID, name, member.ID)
+		if call.ID != name {
+			return fmt.Errorf("team %q: call key %q does not match call id %q", t.ID, name, call.ID)
 		}
-		if err := member.Validate(); err != nil {
+		if err := call.Validate(); err != nil {
 			return fmt.Errorf("team %q: %w", t.ID, err)
 		}
-		memberNames[name] = struct{}{}
+		callNames[name] = struct{}{}
 	}
 
-	for _, member := range t.Members {
-		for _, dependency := range member.DependsOn {
-			if _, ok := memberNames[dependency]; !ok {
-				return fmt.Errorf("team %q: call %q depends on unknown call %q", t.ID, member.ID, dependency)
+	for _, call := range t.Calls {
+		for _, dependency := range call.DependsOn {
+			if _, ok := callNames[dependency]; !ok {
+				return fmt.Errorf("team %q: call %q depends on unknown call %q", t.ID, call.ID, dependency)
 			}
-			if dependency == member.ID {
-				return fmt.Errorf("team %q: call %q cannot depend on itself", t.ID, member.ID)
+			if dependency == call.ID {
+				return fmt.Errorf("team %q: call %q cannot depend on itself", t.ID, call.ID)
 			}
 		}
 	}
-	if err := validateAcyclicMemberDependencies(t.Members); err != nil {
+	if err := validateAcyclicCallDependencies(t.Calls); err != nil {
 		return fmt.Errorf("team %q: %w", t.ID, err)
 	}
 	if err := validateTeamOutputs(t); err != nil {
@@ -132,7 +123,7 @@ func validateTeamOutputs(t Team) error {
 		if strings.TrimSpace(binding.From) == "" {
 			return fmt.Errorf("output record %q: from call is required", binding.Record)
 		}
-		if _, ok := t.Members[binding.From]; !ok {
+		if _, ok := t.Calls[binding.From]; !ok {
 			return fmt.Errorf("output references unknown call %q", binding.From)
 		}
 		if strings.TrimSpace(binding.Record) == "" {
@@ -145,7 +136,7 @@ func validateTeamOutputs(t Team) error {
 		if strings.TrimSpace(t.Output.From) == "" {
 			return fmt.Errorf("output: from call is required")
 		}
-		if _, ok := t.Members[t.Output.From]; !ok {
+		if _, ok := t.Calls[t.Output.From]; !ok {
 			return fmt.Errorf("output references unknown call %q", t.Output.From)
 		}
 		if strings.TrimSpace(t.Output.Record) == "" {
@@ -156,7 +147,7 @@ func validateTeamOutputs(t Team) error {
 		if strings.TrimSpace(t.Outputs.From) == "" {
 			return fmt.Errorf("outputs: from call is required")
 		}
-		if _, ok := t.Members[t.Outputs.From]; !ok {
+		if _, ok := t.Calls[t.Outputs.From]; !ok {
 			return fmt.Errorf("outputs references unknown call %q", t.Outputs.From)
 		}
 		if strings.TrimSpace(t.Outputs.Record) == "" {
@@ -177,35 +168,35 @@ func validateTeamOutputs(t Team) error {
 	return nil
 }
 
-func validateAcyclicMemberDependencies(members map[string]Member) error {
+func validateAcyclicCallDependencies(calls map[string]Call) error {
 	const (
 		unvisited = 0
 		visiting  = 1
 		visited   = 2
 	)
 
-	states := make(map[string]int, len(members))
+	states := make(map[string]int, len(calls))
 	var visit func(string) error
-	visit = func(memberID string) error {
-		switch states[memberID] {
+	visit = func(callID string) error {
+		switch states[callID] {
 		case visiting:
-			return fmt.Errorf("call dependency cycle detected at %q", memberID)
+			return fmt.Errorf("call dependency cycle detected at %q", callID)
 		case visited:
 			return nil
 		}
 
-		states[memberID] = visiting
-		for _, dependency := range members[memberID].DependsOn {
+		states[callID] = visiting
+		for _, dependency := range calls[callID].DependsOn {
 			if err := visit(dependency); err != nil {
 				return err
 			}
 		}
-		states[memberID] = visited
+		states[callID] = visited
 		return nil
 	}
 
-	for memberID := range members {
-		if err := visit(memberID); err != nil {
+	for callID := range calls {
+		if err := visit(callID); err != nil {
 			return err
 		}
 	}
@@ -273,7 +264,7 @@ func (f Flow) Validate() error {
 }
 
 // ValidateWithTeams validates a Flow together with its reusable Team
-// definitions and their member dependencies.
+// definitions and their call dependencies.
 func (f Flow) ValidateWithTeams(teams map[string]Team) error {
 	if err := f.Validate(); err != nil {
 		return err

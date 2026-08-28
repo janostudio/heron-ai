@@ -25,6 +25,9 @@ type Runtime struct {
 	evidence    storage.EvidenceStore
 	workspace   string
 	limits      types.RuntimeLimits
+	tasks       types.ToolTaskStore
+	media       types.MediaStore
+	resumeMu    sync.Mutex
 }
 
 func NewRuntime(
@@ -48,12 +51,50 @@ func (r *Runtime) SetLimits(limits types.RuntimeLimits) {
 	r.limits = limits.WithDefaults()
 }
 
+func (r *Runtime) SetTaskStore(tasks types.ToolTaskStore) {
+	r.tasks = tasks
+}
+
+func (r *Runtime) SetMediaStore(store types.MediaStore) {
+	r.media = store
+}
+
+func (r *Runtime) persistContextBlocks(ctx context.Context, blocks []types.ContextBlock) ([]types.ContextBlock, error) {
+	if len(blocks) == 0 || r.media == nil {
+		return blocks, nil
+	}
+	result := make([]types.ContextBlock, len(blocks))
+	for i, block := range blocks {
+		result[i] = block
+		if len(block.Parts) == 0 {
+			continue
+		}
+		result[i].Parts = make([]types.ContentPart, len(block.Parts))
+		for j, part := range block.Parts {
+			result[i].Parts[j] = part
+			if part.Media == nil {
+				continue
+			}
+			stored, err := r.media.Store(ctx, *part.Media)
+			if err != nil {
+				return nil, err
+			}
+			result[i].Parts[j].Media = &stored
+		}
+	}
+	return result, nil
+}
+
 func (r *Runtime) Start(ctx context.Context, req types.StartFlowRequest) (types.FlowTurnResult, error) {
 	if err := r.validateDependencies(req.FlowID); err != nil {
 		return types.FlowTurnResult{}, err
 	}
 	if strings.TrimSpace(req.FlowID) == "" {
 		req.FlowID = r.definitions.Flow.ID
+	}
+	blocks, err := r.persistContextBlocks(ctx, req.ContextBlocks)
+	if err != nil {
+		return types.FlowTurnResult{}, err
 	}
 	session := types.FlowSession{
 		ID:        newID("fs"),
@@ -69,10 +110,14 @@ func (r *Runtime) Start(ctx context.Context, req types.StartFlowRequest) (types.
 	}); err != nil {
 		return types.FlowTurnResult{}, err
 	}
-	return r.runTurn(ctx, session, req.Input)
+	return r.runTurnWithContext(ctx, session, req.Input, blocks)
 }
 
 func (r *Runtime) HandleInput(ctx context.Context, sessionID string, input string) (types.FlowTurnResult, error) {
+	return r.HandleInputWithContext(ctx, sessionID, input, nil)
+}
+
+func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
 	session, err := r.loadSession(ctx, sessionID)
 	if err != nil {
 		return types.FlowTurnResult{}, err
@@ -80,27 +125,202 @@ func (r *Runtime) HandleInput(ctx context.Context, sessionID string, input strin
 	if session.Status == types.SessionCompleted ||
 		session.Status == types.SessionFailed ||
 		session.Status == types.SessionCancelled ||
-		session.Status == types.SessionInterrupted {
+		session.Status == types.SessionInterrupted ||
+		session.Status == types.SessionWaitingApproval {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is already %s", session.ID, session.Status)
 	}
 	if interrupted, err := r.RecoveryStatus(ctx, sessionID); err == nil && len(interrupted.Interrupted) > 0 {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q has unfinished execution; use recovery status first", sessionID)
 	}
-	return r.runTurn(ctx, session, input)
+	persisted, err := r.persistContextBlocks(ctx, blocks)
+	if err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	return r.runTurnWithContext(ctx, session, input, persisted)
 }
 
 func (r *Runtime) Resume(ctx context.Context, sessionID string, input string) (types.FlowTurnResult, error) {
+	return r.ResumeWithContext(ctx, sessionID, input, nil)
+}
+
+func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
+	r.resumeMu.Lock()
+	defer r.resumeMu.Unlock()
+
 	session, err := r.loadSession(ctx, sessionID)
 	if err != nil {
 		return types.FlowTurnResult{}, err
 	}
-	if session.Status != types.SessionWaitingInput {
-		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is not waiting for input", session.ID)
+	if session.Status == types.SessionWaitingApproval {
+		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is waiting for approval; approval resume is not configured", session.ID)
+	}
+	if session.Status != types.SessionWaitingInput &&
+		session.Status != types.SessionWaitingTool {
+		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is not waiting for input or tool", session.ID)
 	}
 	if interrupted, err := r.RecoveryStatus(ctx, sessionID); err == nil && len(interrupted.Interrupted) > 0 {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q has unfinished execution; use recovery status first", sessionID)
 	}
-	return r.runTurn(ctx, session, input)
+	persistedBlocks, err := r.persistContextBlocks(ctx, blocks)
+	if err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	replay, err := r.sessions.Replay(ctx, sessionID)
+	if err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	pending, ok := pendingAgentResume(replay.Events)
+	if pendingTeam, teamOK := pendingTeamResume(replay.Events); teamOK {
+		if pendingTeam.FlowTurnID != "" {
+			if ready, err := r.pendingTasksReady(ctx, pendingTeam.PendingToolTasks); err != nil {
+				return types.FlowTurnResult{}, err
+			} else if !ready {
+				return types.FlowTurnResult{
+					Session:          session,
+					PendingToolTasks: pendingTeam.PendingToolTasks,
+					Turn: types.FlowTurn{
+						FlowSessionID: session.ID,
+						Status:        types.TurnWaitingTool,
+					},
+				}, nil
+			}
+		}
+		resumeResults := make(map[string]types.CallResult)
+		for callID, callResult := range pendingTeam.CallResults {
+			if callResult.Status == types.TurnCompleted {
+				resumeResults[callID] = callResult
+			}
+		}
+		resumeCalls := make(map[string]types.TeamCallResume, len(pendingTeam.PendingToolTasks))
+		for _, pendingTask := range pendingTeam.PendingToolTasks {
+			resumeCalls[pendingTask.CallID] = types.TeamCallResume{
+				CallTurnID:   pendingTask.CallTurnID,
+				CheckpointID: pendingTask.CheckpointID,
+				TaskID:       pendingTask.TaskID,
+			}
+		}
+		return r.runTurnWithActivationsAndContext(ctx, session, input, persistedBlocks, []activation{{
+			teamID:        pendingTeam.TeamID,
+			callerTeam:    pendingTeam.CallerTeam,
+			force:         true,
+			attempt:       pendingTeam.Attempt + 1,
+			resumeResults: resumeResults,
+			resumeCalls:   resumeCalls,
+		}})
+	}
+	if !ok {
+		return r.runTurnWithContext(ctx, session, input, persistedBlocks)
+	}
+	return r.runTurnWithActivationsAndContext(ctx, session, input, persistedBlocks, []activation{{
+		teamID:             pending.TeamID,
+		callerTeam:         pending.CallerTeam,
+		force:              true,
+		attempt:            pending.Attempt + 1,
+		resumeCallID:       pending.CallID,
+		resumeCheckpointID: pending.CheckpointID,
+		resumeInput:        input,
+		resumeCallTurnID:   pending.CallTurnID,
+		resumeTaskID:       pending.TaskID,
+	}})
+}
+
+func (r *Runtime) ResumeApproval(ctx context.Context, sessionID, approvalID string, approved bool, reason string) (types.FlowTurnResult, error) {
+	return r.ResumeApprovalWithResponse(ctx, sessionID, types.HITLResponse{
+		RequestID: approvalID,
+		Approved:  approved,
+		Reason:    reason,
+		Channel:   "http",
+	})
+}
+
+// ResumeApprovalWithResponse is the auditable approval entry point. Approval
+// requests are durable and intentionally never expire; callers decide in
+// order by passing the request ID found in the latest waiting state.
+func (r *Runtime) ResumeApprovalWithResponse(ctx context.Context, sessionID string, decision types.HITLResponse) (types.FlowTurnResult, error) {
+	r.resumeMu.Lock()
+	defer r.resumeMu.Unlock()
+
+	session, err := r.loadSession(ctx, sessionID)
+	if err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	if session.Status != types.SessionWaitingApproval {
+		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is not waiting for approval", sessionID)
+	}
+	replay, err := r.sessions.Replay(ctx, sessionID)
+	if err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	pending, ok := pendingTeamResume(replay.Events)
+	if !ok {
+		return types.FlowTurnResult{}, fmt.Errorf("flow session %q has no pending approval", sessionID)
+	}
+	if len(pending.PendingApprovals) > 0 &&
+		pending.PendingApprovals[0].RequestID != decision.RequestID {
+		return types.FlowTurnResult{}, fmt.Errorf(
+			"approval %q is not pending or is not next; process approval %q first",
+			decision.RequestID, pending.PendingApprovals[0].RequestID,
+		)
+	}
+	for callID, callResult := range pending.CallResults {
+		if callResult.Status != types.TurnWaitingApproval ||
+			callResult.PendingApproval == nil ||
+			callResult.PendingApproval.RequestID != decision.RequestID {
+			continue
+		}
+		resumeResults := make(map[string]types.CallResult)
+		for siblingID, sibling := range pending.CallResults {
+			if siblingID != callID && sibling.Status == types.TurnCompleted {
+				resumeResults[siblingID] = sibling
+			}
+		}
+		if decision.DecidedAt.IsZero() {
+			decision.DecidedAt = time.Now().UTC()
+		}
+		return r.runTurnWithActivations(ctx, session, "", []activation{{
+			teamID:             pending.TeamID,
+			callerTeam:         pending.CallerTeam,
+			force:              true,
+			attempt:            pending.Attempt + 1,
+			resumeCallID:       callID,
+			resumeCheckpointID: callResult.CheckpointID,
+			resumeCallTurnID:   callResult.CallTurnID,
+			resumeApprovalID:   decision.RequestID,
+			resumeApproval:     &decision,
+			resumeResults:      resumeResults,
+			resumeCalls: map[string]types.TeamCallResume{
+				callID: {
+					CallTurnID:   callResult.CallTurnID,
+					CheckpointID: callResult.CheckpointID,
+					ApprovalID:   decision.RequestID,
+					Approval:     &decision,
+				},
+			},
+		}})
+	}
+	return types.FlowTurnResult{}, fmt.Errorf("approval %q is not pending in flow session %q", decision.RequestID, sessionID)
+}
+
+func (r *Runtime) pendingTasksReady(ctx context.Context, pending []types.PendingToolTask) (bool, error) {
+	if len(pending) == 0 {
+		return true, nil
+	}
+	if r.tasks == nil {
+		return false, errors.New("tool task store is not configured")
+	}
+	for _, item := range pending {
+		if item.TaskID == "" {
+			return false, fmt.Errorf("pending Tool task for call %q has no task id", item.CallID)
+		}
+		task, err := r.tasks.Load(ctx, item.TaskID)
+		if err != nil {
+			return false, err
+		}
+		if task.Status == types.ToolTaskQueued || task.Status == types.ToolTaskRunning {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (r *Runtime) RecoveryStatus(ctx context.Context, sessionID string) (types.RecoveryStatus, error) {
@@ -156,8 +376,8 @@ func (r *Runtime) Recover(ctx context.Context, sessionID string, req types.Recov
 		FlowSessionID: sessionID,
 		TeamID:        target.TeamID,
 		TeamTurnID:    target.TeamTurnID,
-		MemberID:      target.MemberID,
-		MemberTurnID:  target.MemberTurnID,
+		CallID:        target.CallID,
+		CallTurnID:    target.CallTurnID,
 		Attempt:       target.Attempt + 1,
 		RecoveryOf:    recoveryTargetID(target),
 		Payload:       map[string]any{"request": req, "target": target},
@@ -247,7 +467,11 @@ func (r *Runtime) Status(ctx context.Context, sessionID string) (types.FlowSessi
 }
 
 func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input string) (types.FlowTurnResult, error) {
-	return r.runTurnWithActivations(ctx, session, input, []activation{
+	return r.runTurnWithContext(ctx, session, input, nil)
+}
+
+func (r *Runtime) runTurnWithContext(ctx context.Context, session types.FlowSession, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
+	return r.runTurnWithActivationsAndContext(ctx, session, input, blocks, []activation{
 		{teamID: r.definitions.Flow.EntryTeamID},
 	})
 }
@@ -256,6 +480,16 @@ func (r *Runtime) runTurnWithActivations(
 	ctx context.Context,
 	session types.FlowSession,
 	input string,
+	initial []activation,
+) (types.FlowTurnResult, error) {
+	return r.runTurnWithActivationsAndContext(ctx, session, input, nil, initial)
+}
+
+func (r *Runtime) runTurnWithActivationsAndContext(
+	ctx context.Context,
+	session types.FlowSession,
+	input string,
+	blocks []types.ContextBlock,
 	initial []activation,
 ) (types.FlowTurnResult, error) {
 	if err := r.validateDependencies(session.FlowID); err != nil {
@@ -283,6 +517,7 @@ func (r *Runtime) runTurnWithActivations(
 		Attempt:       flowAttempt,
 		RecoveryOf:    recoveryOf,
 		Input:         input,
+		ContextBlocks: blocks,
 		Status:        types.TurnRunning,
 		StartedAt:     time.Now().UTC(),
 	}
@@ -364,6 +599,7 @@ func (r *Runtime) runTurnWithActivations(
 					current,
 					input,
 					allRecords,
+					blocks,
 				)
 				executions[index] = execution
 				if executionErr != nil {
@@ -383,6 +619,8 @@ func (r *Runtime) runTurnWithActivations(
 		for _, execution := range executions {
 			teamResult := execution.result
 			result.TeamResults = append(result.TeamResults, teamResult)
+			result.PendingToolTasks = append(result.PendingToolTasks, teamResult.PendingToolTasks...)
+			result.PendingApprovals = append(result.PendingApprovals, teamResult.PendingApprovals...)
 			result.Reply = joinReply(result.Reply, teamResult.Reply)
 			allRecords = append(allRecords, teamResult.Records...)
 			result.Records = append(result.Records, teamResult.Records...)
@@ -393,6 +631,8 @@ func (r *Runtime) runTurnWithActivations(
 		// must not terminate on the first branch's complete/wait decision and
 		// accidentally discard sibling results.
 		hasWaitInput := false
+		hasWaitTool := false
+		hasWaitApproval := false
 		hasComplete := false
 		var routeFailure error
 		var resolvedRoute *types.Route
@@ -440,6 +680,10 @@ func (r *Runtime) runTurnWithActivations(
 				enqueue(activation{teamID: coordinatorID(r.definitions.Flow), callerTeam: execution.activation.teamID})
 			case types.NextWaitInput:
 				hasWaitInput = true
+			case types.NextWaitTool:
+				hasWaitTool = true
+			case types.NextWaitApproval:
+				hasWaitApproval = true
 			case types.NextComplete:
 				hasComplete = true
 			case types.NextFail:
@@ -459,6 +703,10 @@ func (r *Runtime) runTurnWithActivations(
 		if len(queue) == 0 {
 			result.Turn.RecordIDs = recordIDs(result.Records)
 			switch {
+			case hasWaitApproval:
+				return r.finishTurn(ctx, result, types.SessionWaitingApproval, nil)
+			case hasWaitTool:
+				return r.finishTurn(ctx, result, types.SessionWaitingTool, nil)
 			case hasWaitInput:
 				return r.finishTurn(ctx, result, types.SessionWaitingInput, nil)
 			case hasComplete:
@@ -472,11 +720,20 @@ func (r *Runtime) runTurnWithActivations(
 }
 
 type activation struct {
-	teamID     string
-	callerTeam string
-	force      bool
-	attempt    int
-	recoveryOf string
+	teamID             string
+	callerTeam         string
+	force              bool
+	attempt            int
+	recoveryOf         string
+	resumeCallID       string
+	resumeCheckpointID string
+	resumeInput        string
+	resumeCallTurnID   string
+	resumeTaskID       string
+	resumeApprovalID   string
+	resumeApproval     *types.HITLResponse
+	resumeResults      map[string]types.CallResult
+	resumeCalls        map[string]types.TeamCallResume
 }
 
 type teamExecution struct {
@@ -524,6 +781,7 @@ func (r *Runtime) executeTeamTurn(
 	current activation,
 	input string,
 	records []types.SharedRecord,
+	blocks []types.ContextBlock,
 ) (teamExecution, error) {
 	execution := teamExecution{activation: current}
 
@@ -579,25 +837,39 @@ func (r *Runtime) executeTeamTurn(
 	}
 
 	teamResult, runErr := r.teams.Run(ctx, types.TeamTurnRequest{
-		FlowSession:   session,
-		FlowTurn:      flowTurn,
-		TeamSession:   teamSession,
-		TeamTurn:      teamTurn,
-		Binding:       binding,
-		Team:          team,
-		Input:         teamInput(input, binding.Inputs),
-		Records:       selectFlowRecords(records, binding.Inputs),
-		WorkspaceRoot: r.workspace,
-		Limits:        r.limits,
+		FlowSession:        session,
+		FlowTurn:           flowTurn,
+		TeamSession:        teamSession,
+		TeamTurn:           teamTurn,
+		Binding:            binding,
+		Team:               team,
+		Input:              teamInput(input, binding.Inputs),
+		ContextBlocks:      blocks,
+		Records:            selectFlowRecords(records, binding.Inputs),
+		WorkspaceRoot:      r.workspace,
+		Limits:             r.limits,
+		ResumeCallID:       current.resumeCallID,
+		ResumeCheckpointID: current.resumeCheckpointID,
+		ResumeInput:        current.resumeInput,
+		ResumeCallTurnID:   current.resumeCallTurnID,
+		ResumeTaskID:       current.resumeTaskID,
+		ResumeApprovalID:   current.resumeApprovalID,
+		ResumeApproval:     current.resumeApproval,
+		ResumeResults:      current.resumeResults,
+		ResumeCalls:        current.resumeCalls,
 	})
 	if runErr != nil {
 		teamResult.Error = runErr.Error()
 		if teamResult.Next == nil {
-			teamResult.Next = &types.Route{
-				Action: types.NextCoordinate,
-				Reason: runErr.Error(),
-			}
+			teamResult.Next = &types.Route{Action: types.NextCoordinate, Reason: runErr.Error()}
 		}
+		// A coordinator cannot coordinate itself after it has failed. Without
+		// this guard a failed single-Team Flow loops until MaxTeamTurns.
+		if teamResult.Next.Action == types.NextCoordinate &&
+			current.teamID == coordinatorID(r.definitions.Flow) {
+			teamResult.Next = &types.Route{Action: types.NextFail, Reason: runErr.Error()}
+		}
+		teamResult.Turn.Status = types.TurnFailed
 	}
 
 	next := teamResult.Next
@@ -614,7 +886,20 @@ func (r *Runtime) executeTeamTurn(
 	teamResult.Next = next
 	teamResult.Turn = teamTurn
 	teamResult.Turn.Next = next
+	waitingInput := teamResult.Turn.Status == types.TurnWaitingInput ||
+		next.Action == types.NextWaitInput
+	waitingTool := teamResult.Turn.Status == types.TurnWaitingTool ||
+		next.Action == types.NextWaitTool
+	waitingApproval := teamResult.Turn.Status == types.TurnWaitingApproval ||
+		next.Action == types.NextWaitApproval
 	teamResult.Turn.Status = types.TurnCompleted
+	if waitingApproval {
+		teamResult.Turn.Status = types.TurnWaitingApproval
+	} else if waitingTool {
+		teamResult.Turn.Status = types.TurnWaitingTool
+	} else if waitingInput {
+		teamResult.Turn.Status = types.TurnWaitingInput
+	}
 	if teamResult.Error != "" {
 		teamResult.Turn.Status = types.TurnFailed
 	}
@@ -639,12 +924,23 @@ func (r *Runtime) executeTeamTurn(
 		}
 	}
 
+	eventType := types.EventTeamTurnCompleted
+	if waitingApproval && teamResult.Error == "" {
+		eventType = types.EventTeamTurnWaitingApproval
+	} else if waitingTool && teamResult.Error == "" {
+		eventType = types.EventTeamTurnWaitingTool
+	} else if waitingInput && teamResult.Error == "" {
+		eventType = types.EventTeamTurnWaitingInput
+	}
 	if err := r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
-		Type:          types.EventTeamTurnCompleted,
+		Type:          eventType,
 		FlowSessionID: session.ID,
 		FlowTurnID:    flowTurn.ID,
 		TeamSessionID: teamSession.ID,
 		TeamTurnID:    teamTurn.ID,
+		TeamID:        teamTurn.TeamID,
+		Attempt:       teamTurn.Attempt,
+		RecoveryOf:    teamTurn.RecoveryOf,
 		Payload:       map[string]any{"team_result": teamResult},
 	}); err != nil {
 		return execution, err
@@ -686,8 +982,17 @@ func (r *Runtime) finishTurn(
 	if runErr != nil {
 		result.Error = runErr.Error()
 	}
+	eventType := types.EventFlowTurnCompleted
+	switch status {
+	case types.SessionWaitingInput:
+		eventType = types.EventFlowTurnWaitingInput
+	case types.SessionWaitingTool:
+		eventType = types.EventFlowTurnWaitingTool
+	case types.SessionWaitingApproval:
+		eventType = types.EventFlowTurnWaitingApproval
+	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, types.SessionEvent{
-		Type:          types.EventFlowTurnCompleted,
+		Type:          eventType,
 		FlowSessionID: result.Session.ID,
 		FlowTurnID:    result.Turn.ID,
 		Payload:       map[string]any{"session": result.Session, "turn": result.Turn},
@@ -768,12 +1073,14 @@ func sessionStatusForTurn(status types.TurnStatus) types.SessionStatus {
 		return types.SessionCompleted
 	case types.TurnWaitingInput:
 		return types.SessionWaitingInput
+	case types.TurnWaitingTool:
+		return types.SessionWaitingTool
 	case types.TurnCancelled:
 		return types.SessionCancelled
 	case types.TurnFailed:
 		return types.SessionFailed
 	case types.TurnWaitingApproval:
-		return types.SessionInterrupted
+		return types.SessionWaitingApproval
 	default:
 		return types.SessionRunning
 	}
@@ -784,13 +1091,16 @@ func interruptedExecutions(events []types.SessionEvent) []types.InterruptedExecu
 		event types.SessionEvent
 		input string
 	}
-	startedMembers := make(map[string]started)
+	startedCalls := make(map[string]started)
 	startedTeams := make(map[string]started)
 	startedFlows := make(map[string]started)
-	completedMembers := make(map[string]bool)
+	completedCalls := make(map[string]bool)
 	completedTeams := make(map[string]bool)
 	completedFlows := make(map[string]bool)
-	resolvedMembers := make(map[string]bool)
+	waitingCalls := make(map[string]bool)
+	waitingTeams := make(map[string]bool)
+	waitingFlows := make(map[string]bool)
+	resolvedCalls := make(map[string]bool)
 	resolvedTeams := make(map[string]bool)
 	resolvedFlows := make(map[string]bool)
 
@@ -804,13 +1114,20 @@ func interruptedExecutions(events []types.SessionEvent) []types.InterruptedExecu
 			startedTeams[event.TeamTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
 		case types.EventTeamTurnCompleted:
 			completedTeams[event.TeamTurnID] = true
-		case types.EventSubagentTurnStarted, types.EventCommandTurnStarted, types.EventWebhookTurnStarted:
-			startedMembers[event.MemberTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
-		case types.EventSubagentTurnCompleted, types.EventCommandTurnCompleted, types.EventWebhookTurnCompleted:
-			completedMembers[event.MemberTurnID] = true
+		case types.EventTeamTurnWaitingInput, types.EventTeamTurnWaitingTool, types.EventTeamTurnWaitingApproval:
+			waitingTeams[event.TeamTurnID] = true
+			waitingFlows[event.FlowTurnID] = true
+		case types.EventAgentTurnStarted, types.EventCommandTurnStarted, types.EventWebhookTurnStarted:
+			startedCalls[event.CallTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
+		case types.EventAgentTurnCompleted, types.EventCommandTurnCompleted, types.EventWebhookTurnCompleted:
+			completedCalls[event.CallTurnID] = true
+		case types.EventAgentTurnWaitingInput, types.EventAgentTurnWaitingTool, types.EventAgentTurnWaitingApproval:
+			waitingCalls[event.CallTurnID] = true
+			waitingTeams[event.TeamTurnID] = true
+			waitingFlows[event.FlowTurnID] = true
 		case types.EventRecoveryCompleted:
-			if event.MemberTurnID != "" {
-				resolvedMembers[event.MemberTurnID] = true
+			if event.CallTurnID != "" {
+				resolvedCalls[event.CallTurnID] = true
 			}
 			if event.TeamTurnID != "" {
 				resolvedTeams[event.TeamTurnID] = true
@@ -824,20 +1141,21 @@ func interruptedExecutions(events []types.SessionEvent) []types.InterruptedExecu
 	var interrupted []types.InterruptedExecution
 	interruptedTeamIDs := make(map[string]bool)
 	interruptedFlowIDs := make(map[string]bool)
-	for turnID, item := range startedMembers {
-		if completedMembers[turnID] ||
-			resolvedMembers[turnID] ||
+	for turnID, item := range startedCalls {
+		if completedCalls[turnID] ||
+			waitingCalls[turnID] ||
+			resolvedCalls[turnID] ||
 			resolvedTeams[item.event.TeamTurnID] ||
 			resolvedFlows[item.event.FlowTurnID] {
 			continue
 		}
-		execution := interruptedFromEvent("member_turn", item.event, item.input)
+		execution := interruptedFromEvent("call_turn", item.event, item.input)
 		interrupted = append(interrupted, execution)
 		interruptedTeamIDs[item.event.TeamTurnID] = true
 		interruptedFlowIDs[item.event.FlowTurnID] = true
 	}
 	for turnID, item := range startedTeams {
-		if completedTeams[turnID] || resolvedTeams[turnID] || interruptedTeamIDs[turnID] {
+		if completedTeams[turnID] || waitingTeams[turnID] || resolvedTeams[turnID] || interruptedTeamIDs[turnID] {
 			continue
 		}
 		execution := interruptedFromEvent("team_turn", item.event, item.input)
@@ -845,7 +1163,7 @@ func interruptedExecutions(events []types.SessionEvent) []types.InterruptedExecu
 		interruptedFlowIDs[item.event.FlowTurnID] = true
 	}
 	for turnID, item := range startedFlows {
-		if completedFlows[turnID] || resolvedFlows[turnID] || interruptedFlowIDs[turnID] {
+		if completedFlows[turnID] || waitingFlows[turnID] || resolvedFlows[turnID] || interruptedFlowIDs[turnID] {
 			continue
 		}
 		interrupted = append(interrupted, interruptedFromEvent("flow_turn", item.event, item.input))
@@ -856,7 +1174,7 @@ func interruptedExecutions(events []types.SessionEvent) []types.InterruptedExecu
 
 func interruptedFromEvent(kind string, event types.SessionEvent, input string) types.InterruptedExecution {
 	safe := kind == "flow_turn" || kind == "team_turn"
-	reason := "member execution may have side effects; inspect before retry"
+	reason := "call execution may have side effects; inspect before retry"
 	if safe {
 		reason = "retrying the containing Team/Flow may repeat downstream work"
 	}
@@ -865,9 +1183,9 @@ func interruptedFromEvent(kind string, event types.SessionEvent, input string) t
 		FlowTurnID:   event.FlowTurnID,
 		TeamID:       event.TeamID,
 		TeamTurnID:   event.TeamTurnID,
-		MemberID:     event.MemberID,
-		MemberTurnID: event.MemberTurnID,
-		MemberType:   event.MemberType,
+		CallID:       event.CallID,
+		CallTurnID:   event.CallTurnID,
+		CallType:     event.CallType,
 		Attempt:      event.Attempt,
 		RecoveryOf:   event.RecoveryOf,
 		StartedSeq:   event.Seq,
@@ -892,10 +1210,152 @@ func payloadString(payload map[string]any, key string) string {
 	return text
 }
 
+type pendingAgentResumeInfo struct {
+	FlowTurnID   string
+	TeamID       string
+	TeamTurnID   string
+	CallID       string
+	CallTurnID   string
+	CallerTeam   string
+	Attempt      int
+	CheckpointID string
+	TaskID       string
+	Status       types.TurnStatus
+}
+
+type pendingTeamResumeInfo struct {
+	FlowTurnID       string
+	TeamID           string
+	TeamTurnID       string
+	CallerTeam       string
+	Attempt          int
+	CallResults      map[string]types.CallResult
+	PendingToolTasks []types.PendingToolTask
+	PendingApprovals []types.AgentPendingApproval
+}
+
+func pendingTeamResume(events []types.SessionEvent) (pendingTeamResumeInfo, bool) {
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		if event.Type != types.EventTeamTurnWaitingTool &&
+			event.Type != types.EventTeamTurnWaitingApproval {
+			continue
+		}
+		info := pendingTeamResumeInfo{
+			FlowTurnID:  event.FlowTurnID,
+			TeamID:      event.TeamID,
+			TeamTurnID:  event.TeamTurnID,
+			CallerTeam:  payloadString(event.Payload, "caller_team"),
+			Attempt:     event.Attempt,
+			CallResults: make(map[string]types.CallResult),
+		}
+		if raw, ok := event.Payload["team_result"]; ok {
+			var result types.TeamTurnResult
+			if err := decodeValue(raw, &result); err == nil {
+				info.TeamID = result.Turn.TeamID
+				if info.TeamID == "" {
+					info.TeamID = event.TeamID
+				}
+				if info.TeamTurnID == "" {
+					info.TeamTurnID = result.Turn.ID
+				}
+				if info.FlowTurnID == "" {
+					info.FlowTurnID = result.Turn.FlowTurnID
+				}
+				if info.Attempt == 0 {
+					info.Attempt = result.Turn.Attempt
+				}
+				info.CallerTeam = result.Turn.CallerTeam
+				info.CallResults = result.CallResults
+				info.PendingToolTasks = append(info.PendingToolTasks, result.PendingToolTasks...)
+				info.PendingApprovals = append(info.PendingApprovals, result.PendingApprovals...)
+				for callID, callResult := range result.CallResults {
+					if callResult.Status != types.TurnWaitingTool {
+						continue
+					}
+					if hasPendingCall(info.PendingToolTasks, callID) {
+						continue
+					}
+					info.PendingToolTasks = append(info.PendingToolTasks, types.PendingToolTask{
+						CallID:       callID,
+						CallTurnID:   callResult.CallTurnID,
+						AgentID:      callResult.AgentID,
+						TaskID:       callResult.TaskID,
+						CheckpointID: callResult.CheckpointID,
+						Status:       callResult.Status,
+					})
+				}
+			}
+		}
+		hasApproval := false
+		for _, callResult := range info.CallResults {
+			if callResult.Status == types.TurnWaitingApproval &&
+				callResult.PendingApproval != nil {
+				hasApproval = true
+				break
+			}
+		}
+		if len(info.PendingToolTasks) == 0 && !hasApproval {
+			continue
+		}
+		return info, true
+	}
+	return pendingTeamResumeInfo{}, false
+}
+
+func hasPendingCall(items []types.PendingToolTask, callID string) bool {
+	for _, item := range items {
+		if item.CallID == callID {
+			return true
+		}
+	}
+	return false
+}
+
+func pendingAgentResume(events []types.SessionEvent) (pendingAgentResumeInfo, bool) {
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		if event.Type != types.EventAgentTurnWaitingInput &&
+			event.Type != types.EventAgentTurnWaitingTool {
+			continue
+		}
+		checkpointID := payloadString(event.Payload, "checkpoint_id")
+		if raw, ok := event.Payload["call_result"]; ok {
+			var result types.CallResult
+			if err := decodeValue(raw, &result); err == nil {
+				if checkpointID == "" {
+					checkpointID = result.CheckpointID
+				}
+			}
+		}
+		if checkpointID == "" {
+			continue
+		}
+		return pendingAgentResumeInfo{
+			FlowTurnID:   event.FlowTurnID,
+			TeamID:       event.TeamID,
+			TeamTurnID:   event.TeamTurnID,
+			CallID:       event.CallID,
+			CallTurnID:   event.CallTurnID,
+			CallerTeam:   payloadString(event.Payload, "caller_team"),
+			Attempt:      event.Attempt,
+			CheckpointID: checkpointID,
+			TaskID:       payloadString(event.Payload, "task_id"),
+			Status: func() types.TurnStatus {
+				if event.Type == types.EventAgentTurnWaitingTool {
+					return types.TurnWaitingTool
+				}
+				return types.TurnWaitingInput
+			}(),
+		}, true
+	}
+	return pendingAgentResumeInfo{}, false
+}
+
 func sortInterrupted(items []types.InterruptedExecution) {
 	sort.SliceStable(items, func(i, j int) bool {
-		return items[i].MemberTurnID+items[i].TeamTurnID+items[i].FlowTurnID <
-			items[j].MemberTurnID+items[j].TeamTurnID+items[j].FlowTurnID
+		return items[i].CallTurnID+items[i].TeamTurnID+items[i].FlowTurnID <
+			items[j].CallTurnID+items[j].TeamTurnID+items[j].FlowTurnID
 	})
 }
 
@@ -933,8 +1393,8 @@ func recoveryHistory(events []types.SessionEvent) []types.RecoveryEvent {
 }
 
 func recoveryTargetID(target types.InterruptedExecution) string {
-	if target.MemberTurnID != "" {
-		return target.MemberTurnID
+	if target.CallTurnID != "" {
+		return target.CallTurnID
 	}
 	if target.TeamTurnID != "" {
 		return target.TeamTurnID
@@ -945,7 +1405,7 @@ func recoveryTargetID(target types.InterruptedExecution) string {
 func selectInterrupted(items []types.InterruptedExecution, target string) (types.InterruptedExecution, error) {
 	if target != "" {
 		for _, item := range items {
-			if item.MemberTurnID == target || item.TeamTurnID == target || item.FlowTurnID == target {
+			if item.CallTurnID == target || item.TeamTurnID == target || item.FlowTurnID == target {
 				return item, nil
 			}
 		}
@@ -986,9 +1446,9 @@ func (r *Runtime) appendRecoveryCompleted(
 		FlowTurnID:    target.FlowTurnID,
 		TeamID:        target.TeamID,
 		TeamTurnID:    target.TeamTurnID,
-		MemberID:      target.MemberID,
-		MemberTurnID:  target.MemberTurnID,
-		MemberType:    target.MemberType,
+		CallID:        target.CallID,
+		CallTurnID:    target.CallTurnID,
+		CallType:      target.CallType,
 		Attempt:       target.Attempt + 1,
 		RecoveryOf:    recoveryTargetID(target),
 		Payload:       map[string]any{"request": request, "target": target},
@@ -1091,6 +1551,8 @@ func turnStatusForSession(status types.SessionStatus) types.TurnStatus {
 	switch status {
 	case types.SessionWaitingInput:
 		return types.TurnWaitingInput
+	case types.SessionWaitingTool:
+		return types.TurnWaitingTool
 	case types.SessionCompleted:
 		return types.TurnCompleted
 	case types.SessionCancelled:

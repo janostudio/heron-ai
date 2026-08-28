@@ -42,7 +42,7 @@ func TestEngine_EvaluateFailures(t *testing.T) {
 	engine := NewEngine()
 	result := engine.EvaluateFailures([]types.TeamTurnResult{
 		{},
-		{Error: "member failed"},
+		{Error: "call failed"},
 		{},
 		{Error: "timeout"},
 	})

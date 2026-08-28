@@ -52,7 +52,7 @@ const (
 // DisplayMessage is a message displayed in the TUI viewport
 type DisplayMessage struct {
 	Role      MessageRole
-	MemberID  string
+	CallID    string
 	Content   string
 	RoundNum  int
 	Timestamp time.Time
@@ -399,13 +399,18 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.totalUsage.PromptTokens += msg.result.Usage.PromptTokens
 			m.totalUsage.CompletionTokens += msg.result.Usage.CompletionTokens
+			m.totalUsage.ReasoningTokens += msg.result.Usage.ReasoningTokens
 			m.totalUsage.TotalTokens += msg.result.Usage.TotalTokens
+			m.totalUsage.PromptCacheHitTokens += msg.result.Usage.PromptCacheHitTokens
+			m.totalUsage.PromptCacheMissTokens += msg.result.Usage.PromptCacheMissTokens
+			m.totalUsage.CacheReadInputTokens += msg.result.Usage.CacheReadInputTokens
+			m.totalUsage.CacheCreationInputTokens += msg.result.Usage.CacheCreationInputTokens
 			m.roundNum++
 
 			for i, team := range msg.result.Teams {
 				m.addMessage(DisplayMessage{
 					Role:      RoleAgent,
-					MemberID:  team.TeamID,
+					CallID:    team.TeamID,
 					Content:   team.Reply,
 					RoundNum:  m.roundNum,
 					Timestamp: time.Now(),
@@ -582,7 +587,7 @@ func (m *TUIModel) renderMessages() {
 		case RoleAssistant:
 			lines = append(lines, assistantMsgStyle.Render(msg.Content))
 		case RoleAgent:
-			header := fmt.Sprintf("[%s]", msg.MemberID)
+			header := fmt.Sprintf("[%s]", msg.CallID)
 			lines = append(lines, agentHeaderStyles[0].Render(header))
 			lines = append(lines, assistantMsgStyle.Render(msg.Content))
 		case RoleSystem:

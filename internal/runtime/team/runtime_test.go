@@ -7,74 +7,75 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/heron-ai/heron-engine/internal/runtime/member"
+	"github.com/heron-ai/heron-engine/internal/runtime/call"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-type fakeMemberExecutor struct {
-	memberType types.MemberType
-	mu         sync.Mutex
-	started    map[string]time.Time
-	records    map[string][]types.SharedRecord
+type fakeCallExecutor struct {
+	callType types.CallType
+	mu       sync.Mutex
+	started  map[string]time.Time
+	records  map[string][]types.SharedRecord
 }
 
-func newFakeMemberExecutor(memberType types.MemberType) *fakeMemberExecutor {
-	return &fakeMemberExecutor{
-		memberType: memberType,
-		started:    make(map[string]time.Time),
-		records:    make(map[string][]types.SharedRecord),
+func newFakeCallExecutor(callType types.CallType) *fakeCallExecutor {
+	return &fakeCallExecutor{
+		callType: callType,
+		started:  make(map[string]time.Time),
+		records:  make(map[string][]types.SharedRecord),
 	}
 }
 
-func (e *fakeMemberExecutor) Type() types.MemberType {
-	return e.memberType
+func (e *fakeCallExecutor) Type() types.CallType {
+	return e.callType
 }
 
-func (e *fakeMemberExecutor) Execute(_ context.Context, req types.MemberRequest) (types.MemberResult, error) {
+func (e *fakeCallExecutor) Execute(_ context.Context, req types.CallRequest) (types.CallResult, error) {
 	e.mu.Lock()
-	e.started[req.Member.ID] = time.Now()
+	e.started[req.Call.ID] = time.Now()
 	e.mu.Unlock()
 
-	if req.Member.ID == "synthesize" {
+	if req.Call.ID == "synthesize" {
 		if len(req.Records) != 2 {
-			return types.MemberResult{
+			return types.CallResult{
 				Status: types.TurnFailed,
 				Error:  fmt.Sprintf("expected 2 input records, got %d", len(req.Records)),
 			}, nil
 		}
 	}
 
-	recordName := req.Member.Output.Record
+	recordName := req.Call.Output.Record
 	var records []types.SharedRecord
 	if recordName != "" {
 		record := types.SharedRecord{
-			RecordID: fmt.Sprintf("record-%s", req.Member.ID),
+			RecordID: fmt.Sprintf("record-%s", req.Call.ID),
 			Kind:     "test",
 			Name:     recordName,
 			Scope:    types.RecordScopeTeam,
-			Summary:  req.Member.ID + " completed",
+			Summary:  req.Call.ID + " completed",
 			Status:   types.RecordActive,
 			Revision: 1,
 		}
 		records = []types.SharedRecord{record}
 		e.mu.Lock()
-		e.records[req.Member.ID] = records
+		e.records[req.Call.ID] = records
 		e.mu.Unlock()
 	}
 
-	return types.MemberResult{
+	return types.CallResult{
 		Status:  types.TurnCompleted,
-		Reply:   req.Member.ID + " completed",
+		Reply:   req.Call.ID + " completed",
 		Records: records,
 		Next:    &types.Route{Action: types.NextProceed},
 	}, nil
 }
 
-func TestRuntimeRunsIndependentMembersInParallelAndUsesDependencies(t *testing.T) {
-	executor := newFakeMemberExecutor(types.MemberCommand)
-	registry := member.NewRegistry()
+func TestRuntimeRunsIndependentCallsInParallelAndUsesDependencies(t *testing.T) {
+	executor := newFakeCallExecutor(types.CallCommand)
+	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(executor))
 	runtime := NewRuntime(registry)
 
@@ -85,10 +86,10 @@ func TestRuntimeRunsIndependentMembersInParallelAndUsesDependencies(t *testing.T
 		TeamTurn:    types.TeamTurn{ID: "tt-1", TeamID: "review"},
 		Team: types.Team{
 			ID: "review",
-			Members: map[string]types.Member{
+			Calls: map[string]types.Call{
 				"security": {
 					ID:   "security",
-					Type: types.MemberCommand,
+					Type: types.CallCommand,
 					Command: &types.CommandSpec{
 						Command: "security-check",
 					},
@@ -98,7 +99,7 @@ func TestRuntimeRunsIndependentMembersInParallelAndUsesDependencies(t *testing.T
 				},
 				"performance": {
 					ID:   "performance",
-					Type: types.MemberCommand,
+					Type: types.CallCommand,
 					Command: &types.CommandSpec{
 						Command: "performance-check",
 					},
@@ -108,7 +109,7 @@ func TestRuntimeRunsIndependentMembersInParallelAndUsesDependencies(t *testing.T
 				},
 				"synthesize": {
 					ID:   "synthesize",
-					Type: types.MemberCommand,
+					Type: types.CallCommand,
 					Command: &types.CommandSpec{
 						Command: "synthesize-review",
 					},
@@ -136,7 +137,7 @@ func TestRuntimeRunsIndependentMembersInParallelAndUsesDependencies(t *testing.T
 	require.Equal(t, types.NextProceed, result.Next.Action)
 	require.Equal(t, []string{"record-synthesize"}, result.Turn.RecordIDs)
 	require.Contains(t, result.Reply, "synthesize completed")
-	require.Len(t, result.MemberResults, 3)
+	require.Len(t, result.CallResults, 3)
 	require.Contains(t, executor.records["security"][0].Name, "SecurityReview")
 	require.Contains(t, executor.records["performance"][0].Name, "PerformanceReview")
 
@@ -152,19 +153,54 @@ func TestRuntimeRunsIndependentMembersInParallelAndUsesDependencies(t *testing.T
 	require.True(t, synthesizeStarted.After(performanceStarted))
 }
 
-func TestRuntimeReturnsCoordinateWhenMemberFails(t *testing.T) {
-	executor := &failingMemberExecutor{}
-	registry := member.NewRegistry()
+func TestBuildCallInputKeepsRawUserInputAndDoesNotDuplicatePromptSections(t *testing.T) {
+	configured := types.Call{
+		ID: "answer",
+		Inputs: types.InputSpec{
+			UserMessage: true,
+			Records:     []types.InputBinding{{Record: "Report"}},
+		},
+	}
+	input := buildCallInput(
+		"Please inspect the project.",
+		[]types.SharedRecord{{
+			Name:    "Report",
+			Kind:    "test",
+			Summary: "fixture is ready",
+		}},
+		nil,
+		configured,
+	)
+	require.Equal(t, "Please inspect the project.", input)
+	require.NotContains(t, input, "## Input")
+	require.NotContains(t, input, "## Shared Records")
+}
+
+func TestBuildCallInputOmitsUserInputWhenCallDoesNotRequestIt(t *testing.T) {
+	input := buildCallInput(
+		"do not leak this",
+		nil,
+		nil,
+		types.Call{ID: "summarize", Inputs: types.InputSpec{
+			Records: []types.InputBinding{{Record: "Report"}},
+		}},
+	)
+	require.Empty(t, input)
+}
+
+func TestRuntimeReturnsCoordinateWhenCallFails(t *testing.T) {
+	executor := &failingCallExecutor{}
+	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(executor))
 	runtime := NewRuntime(registry)
 
 	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
 		Team: types.Team{
 			ID: "verify",
-			Members: map[string]types.Member{
+			Calls: map[string]types.Call{
 				"test": {
 					ID:   "test",
-					Type: types.MemberCommand,
+					Type: types.CallCommand,
 					Command: &types.CommandSpec{
 						Command: "test-command",
 					},
@@ -178,32 +214,32 @@ func TestRuntimeReturnsCoordinateWhenMemberFails(t *testing.T) {
 }
 
 func TestRuntimeLimitsCallsPerTeamTurnNotAcrossFlow(t *testing.T) {
-	executor := newFakeMemberExecutor(types.MemberCommand)
-	registry := member.NewRegistry()
+	executor := newFakeCallExecutor(types.CallCommand)
+	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(executor))
 	runtime := NewRuntime(registry)
 
 	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
 		Team: types.Team{
 			ID: "diagnose",
-			Members: map[string]types.Member{
+			Calls: map[string]types.Call{
 				"snapshot": {
 					ID:   "snapshot",
-					Type: types.MemberCommand,
+					Type: types.CallCommand,
 					Command: &types.CommandSpec{
 						Command: "snapshot",
 					},
 				},
 				"explore": {
 					ID:   "explore",
-					Type: types.MemberCommand,
+					Type: types.CallCommand,
 					Command: &types.CommandSpec{
 						Command: "explore",
 					},
 				},
 				"inspect": {
 					ID:        "inspect",
-					Type:      types.MemberCommand,
+					Type:      types.CallCommand,
 					DependsOn: []string{"snapshot", "explore"},
 					Command: &types.CommandSpec{
 						Command: "inspect",
@@ -220,15 +256,129 @@ func TestRuntimeLimitsCallsPerTeamTurnNotAcrossFlow(t *testing.T) {
 	require.Equal(t, types.NextCoordinate, result.Next.Action)
 }
 
-type failingMemberExecutor struct{}
-
-func (e *failingMemberExecutor) Type() types.MemberType {
-	return types.MemberCommand
+type waitingCallExecutor struct {
+	mu       sync.Mutex
+	executed []string
 }
 
-func (e *failingMemberExecutor) Execute(_ context.Context, req types.MemberRequest) (types.MemberResult, error) {
-	return types.MemberResult{
+func (e *waitingCallExecutor) Type() types.CallType {
+	return types.CallAgent
+}
+
+func (e *waitingCallExecutor) Execute(_ context.Context, req types.CallRequest) (types.CallResult, error) {
+	e.mu.Lock()
+	e.executed = append(e.executed, req.Call.ID)
+	e.mu.Unlock()
+	if req.ResumeTaskID != "" {
+		return types.CallResult{
+			Status:     types.TurnCompleted,
+			CallTurnID: req.CallTurnID,
+			AgentID:    req.Call.AgentID,
+			Reply:      req.Call.ID + " resumed",
+			Next:       &types.Route{Action: types.NextProceed},
+		}, nil
+	}
+	return types.CallResult{
+		Status:       types.TurnWaitingTool,
+		CallTurnID:   req.CallTurnID,
+		AgentID:      req.Call.AgentID,
+		TaskID:       "task-" + req.Call.ID,
+		CheckpointID: "checkpoint-" + req.Call.ID,
+		Checkpoint: &types.AgentCheckpoint{
+			ID:          "checkpoint-" + req.Call.ID,
+			AgentID:     req.Call.AgentID,
+			AgentTurnID: req.AgentTurnID,
+			CallID:      req.Call.ID,
+		},
+		Next: &types.Route{Action: types.NextWaitTool},
+	}, nil
+}
+
+func TestRuntimeAggregatesParallelWaitingToolCalls(t *testing.T) {
+	executor := &waitingCallExecutor{}
+	registry := call.NewRegistry()
+	require.NoError(t, registry.Register(executor))
+	runtime := NewRuntime(registry, map[string]types.AgentConfig{
+		"agent-a": {},
+		"agent-b": {},
+	})
+
+	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
+		TeamTurn: types.TeamTurn{ID: "tt-wait", TeamID: "parallel"},
+		Team: types.Team{
+			ID: "parallel",
+			Calls: map[string]types.Call{
+				"a": {ID: "a", Type: types.CallAgent, AgentID: "agent-a"},
+				"b": {ID: "b", Type: types.CallAgent, AgentID: "agent-b"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.TurnWaitingTool, result.Turn.Status)
+	require.Equal(t, types.NextWaitTool, result.Next.Action)
+	require.Len(t, result.PendingToolTasks, 2)
+	require.Len(t, result.CallResults, 2)
+	assert.Contains(t, result.PendingToolTasks, types.PendingToolTask{
+		CallID: "a", CallTurnID: "tt-wait:a", AgentID: "agent-a",
+		AgentTurnID: "tt-wait:a", TaskID: "task-a", CheckpointID: "checkpoint-a",
+		Status: types.TurnWaitingTool,
+	})
+}
+
+func TestRuntimeAggregateResumeSkipsCompletedSiblingCall(t *testing.T) {
+	executor := &waitingCallExecutor{}
+	registry := call.NewRegistry()
+	require.NoError(t, registry.Register(executor))
+	runtime := NewRuntime(registry, map[string]types.AgentConfig{
+		"agent-a": {},
+		"agent-b": {},
+	})
+
+	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
+		TeamTurn: types.TeamTurn{ID: "tt-resume", TeamID: "parallel"},
+		Team: types.Team{
+			ID: "parallel",
+			Calls: map[string]types.Call{
+				"a": {ID: "a", Type: types.CallAgent, AgentID: "agent-a"},
+				"b": {ID: "b", Type: types.CallAgent, AgentID: "agent-b"},
+			},
+		},
+		ResumeResults: map[string]types.CallResult{
+			"a": {
+				Status:     types.TurnCompleted,
+				CallTurnID: "tt-resume:a",
+				AgentID:    "agent-a",
+				Reply:      "a already completed",
+				Next:       &types.Route{Action: types.NextProceed},
+			},
+		},
+		ResumeCalls: map[string]types.TeamCallResume{
+			"b": {
+				CallTurnID:   "tt-resume:b",
+				CheckpointID: "checkpoint-b",
+				TaskID:       "task-b",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.TurnCompleted, result.Turn.Status)
+	require.Len(t, result.CallResults, 2)
+	assert.Equal(t, "a already completed", result.CallResults["a"].Reply)
+	assert.Equal(t, "b resumed", result.CallResults["b"].Reply)
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	assert.Equal(t, []string{"b"}, executor.executed)
+}
+
+type failingCallExecutor struct{}
+
+func (e *failingCallExecutor) Type() types.CallType {
+	return types.CallCommand
+}
+
+func (e *failingCallExecutor) Execute(_ context.Context, req types.CallRequest) (types.CallResult, error) {
+	return types.CallResult{
 		Status: types.TurnFailed,
-		Error:  req.Member.ID + " failed",
+		Error:  req.Call.ID + " failed",
 	}, nil
 }

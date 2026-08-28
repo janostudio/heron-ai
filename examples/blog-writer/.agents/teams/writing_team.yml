@@ -3,7 +3,7 @@ goal: 根据调研和大纲撰写完整博客文章。
 
 calls:
   write_blog:
-    type: subagent
+    type: agent
     agent: writer
     responsibility: 根据 ResearchReport 和 BlogOutline 撰写完整博客文章，并遵循长度、风格和事实要求。
     inputs:

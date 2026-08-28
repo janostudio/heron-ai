@@ -94,21 +94,21 @@ type FlowSessionStartedEvent struct {
 	FlowID        string
 }
 
-type MemberStartedEvent struct {
+type CallStartedEvent struct {
 	BaseEvent
 	FlowSessionID string
 	FlowTurnID    string
 	TeamID        string
 	TeamTurnID    string
-	MemberID      string
-	MemberType    string
+	CallID        string
+	CallType      string
 }
 
 type ModelCallCompletedEvent struct {
 	BaseEvent
 	FlowSessionID    string
 	TeamID           string
-	MemberID         string
+	CallID           string
 	Model            string
 	PromptTokens     int
 	CompletionTokens int
@@ -120,7 +120,7 @@ type ErrorOccurredEvent struct {
 	FlowSessionID string
 	FlowTurnID    string
 	TeamID        string
-	MemberID      string
+	CallID        string
 	Layer         string
 	Module        string
 	ToolName      string
@@ -133,7 +133,7 @@ type ErrorOccurredEvent struct {
 type ContextCompressedEvent struct {
 	BaseEvent
 	FlowSessionID string
-	MemberID      string
+	CallID        string
 	Layer         string
 	BeforeTokens  int
 	AfterTokens   int

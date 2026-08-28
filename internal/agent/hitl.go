@@ -16,8 +16,11 @@ type HITLGate struct {
 }
 
 func NewHITLGate(timeout time.Duration) *HITLGate {
-	if timeout <= 0 {
-		timeout = 5 * time.Minute
+	// A zero timeout means a durable approval that does not expire. A
+	// positive timeout is still supported for callers that explicitly want
+	// an in-memory synchronous gate to expire.
+	if timeout < 0 {
+		timeout = 0
 	}
 	return &HITLGate{
 		pending: make(map[string]chan types.HITLResponse),
@@ -35,7 +38,7 @@ func (g *HITLGate) RequestApproval(ctx context.Context, req types.HITLRequest) (
 	select {
 	case resp := <-ch:
 		return resp, nil
-	case <-time.After(g.timeout):
+	case <-approvalTimeout(g.timeout):
 		g.mu.Lock()
 		delete(g.pending, req.RequestID)
 		g.mu.Unlock()
@@ -50,6 +53,13 @@ func (g *HITLGate) RequestApproval(ctx context.Context, req types.HITLRequest) (
 		g.mu.Unlock()
 		return types.HITLResponse{}, ctx.Err()
 	}
+}
+
+func approvalTimeout(timeout time.Duration) <-chan time.Time {
+	if timeout <= 0 {
+		return nil
+	}
+	return time.After(timeout)
 }
 
 func (g *HITLGate) SubmitResponse(resp types.HITLResponse) error {
@@ -70,4 +80,19 @@ func (g *HITLGate) PendingCount() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return len(g.pending)
+}
+
+// Register records a pending approval without blocking the Agent loop. The
+// durable checkpoint remains the source of truth across process restarts.
+func (g *HITLGate) Register(req types.HITLRequest) error {
+	if g == nil {
+		return fmt.Errorf("HITL gate is nil")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, exists := g.pending[req.RequestID]; exists {
+		return nil
+	}
+	g.pending[req.RequestID] = make(chan types.HITLResponse, 1)
+	return nil
 }

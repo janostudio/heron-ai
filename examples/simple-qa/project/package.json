@@ -1,0 +1,9 @@
+{
+  "name": "simple-qa-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node src/greeting.test.js",
+    "start": "sh server.sh"
+  }
+}

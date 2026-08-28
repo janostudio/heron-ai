@@ -22,6 +22,7 @@ type OpenAIProvider struct {
 	baseURL   string
 	modelName string
 	profile   types.ModelProfile
+	media     types.MediaResolver
 }
 
 func NewOpenAIProvider(apiKey, baseURL, modelName string) *OpenAIProvider {
@@ -55,6 +56,10 @@ func NewOpenAIProviderWithProfile(apiKey, baseURL, modelName string, profile typ
 	}
 }
 
+func (p *OpenAIProvider) SetMediaResolver(resolver types.MediaResolver) {
+	p.media = resolver
+}
+
 type openAIRequest struct {
 	Model               string          `json:"model"`
 	Messages            []openAIMessage `json:"messages"`
@@ -71,9 +76,25 @@ type openAIRequest struct {
 
 type openAIMessage struct {
 	Role       string           `json:"role"`
-	Content    string           `json:"content,omitempty"`
+	Content    any              `json:"content,omitempty"`
 	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string           `json:"tool_call_id,omitempty"`
+}
+
+type openAIContentPart struct {
+	Type     string             `json:"type"`
+	Text     string             `json:"text,omitempty"`
+	ImageURL *openAIImageURL    `json:"image_url,omitempty"`
+	File     *openAIFileContent `json:"file,omitempty"`
+}
+
+type openAIImageURL struct {
+	URL string `json:"url"`
+}
+
+type openAIFileContent struct {
+	Filename string `json:"filename,omitempty"`
+	FileData string `json:"file_data,omitempty"`
 }
 
 type openAITool struct {
@@ -107,9 +128,16 @@ type openAIResponse struct {
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
-		PromptTokens            int `json:"prompt_tokens"`
-		CompletionTokens        int `json:"completion_tokens"`
-		TotalTokens             int `json:"total_tokens"`
+		PromptTokens             int `json:"prompt_tokens"`
+		CompletionTokens         int `json:"completion_tokens"`
+		TotalTokens              int `json:"total_tokens"`
+		PromptCacheHitTokens     int `json:"prompt_cache_hit_tokens"`
+		PromptCacheMissTokens    int `json:"prompt_cache_miss_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		PromptTokensDetails      *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 		CompletionTokensDetails *struct {
 			ReasoningTokens int `json:"reasoning_tokens"`
 		} `json:"completion_tokens_details"`
@@ -130,7 +158,10 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []types.Message, too
 		modelName = config.Model
 	}
 	effective := MergeProfileDefaults(p.profile, config)
-	req := p.buildRequest(modelName, messages, tools, config, effective, false)
+	req, err := p.buildRequest(ctx, modelName, messages, tools, config, effective, false)
+	if err != nil {
+		return nil, err
+	}
 
 	var wire openAIResponse
 	if err := p.post(ctx, effective, req, &wire); err != nil {
@@ -173,16 +204,21 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []types.Messag
 }
 
 func (p *OpenAIProvider) buildRequest(
+	ctx context.Context,
 	modelName string,
 	messages []types.Message,
 	tools []types.JSONSchema,
 	override types.ModelConfig,
 	effective types.ModelConfig,
 	stream bool,
-) openAIRequest {
+) (openAIRequest, error) {
+	converted, err := p.convertMessages(ctx, messages)
+	if err != nil {
+		return openAIRequest{}, err
+	}
 	req := openAIRequest{
 		Model:    modelName,
-		Messages: convertOpenAIMessages(messages),
+		Messages: converted,
 		Stream:   stream,
 	}
 
@@ -210,7 +246,7 @@ func (p *OpenAIProvider) buildRequest(
 	if effective.Reasoning != nil && profileAllowsReasoning(p.profile, override.Reasoning != nil) {
 		req.ReasoningEffort = effective.Reasoning.Effort
 	}
-	return req
+	return req, nil
 }
 
 func (p *OpenAIProvider) post(ctx context.Context, effective types.ModelConfig, req openAIRequest, output *openAIResponse) error {
@@ -258,19 +294,83 @@ func (p *OpenAIProvider) post(ctx context.Context, effective types.ModelConfig, 
 	return nil
 }
 
-func convertOpenAIMessages(messages []types.Message) []openAIMessage {
+func (p *OpenAIProvider) convertMessages(ctx context.Context, messages []types.Message) ([]openAIMessage, error) {
 	result := make([]openAIMessage, len(messages))
 	for i, msg := range messages {
+		content, err := p.convertContent(ctx, msg)
+		if err != nil {
+			return nil, err
+		}
 		result[i] = openAIMessage{
 			Role:       msg.Role,
-			Content:    msg.Content,
+			Content:    content,
 			ToolCallID: msg.ToolCallID,
 		}
 		if len(msg.ToolCalls) > 0 {
 			result[i].ToolCalls = convertOpenAIToolCalls(msg.ToolCalls)
 		}
 	}
-	return result
+	return result, nil
+}
+
+func (p *OpenAIProvider) convertContent(ctx context.Context, msg types.Message) (any, error) {
+	if len(msg.Parts) == 0 {
+		return msg.Content, nil
+	}
+	parts := make([]openAIContentPart, 0, len(msg.Parts)+1)
+	if msg.Content != "" {
+		parts = append(parts, openAIContentPart{Type: "text", Text: msg.Content})
+	}
+	for _, part := range msg.Parts {
+		if part.Media == nil {
+			if part.Text != "" {
+				parts = append(parts, openAIContentPart{Type: "text", Text: part.Text})
+			}
+			continue
+		}
+		kind := mediaKind(part)
+		switch kind {
+		case "image":
+			if !capabilityEnabled(p.profile.SupportsImages, true) {
+				return nil, unsupportedMedia(kind)
+			}
+			payload, err := resolveMediaPayload(ctx, p.media, *part.Media)
+			if err != nil {
+				return nil, err
+			}
+			imageURL := payload.URL
+			if imageURL == "" {
+				imageURL = dataURL(part.Media.MIMEType, payload.Data)
+			}
+			parts = append(parts, openAIContentPart{
+				Type: "image_url", ImageURL: &openAIImageURL{URL: imageURL},
+			})
+		case "document", "file":
+			if !capabilityEnabled(p.profile.SupportsDocuments, false) {
+				return nil, unsupportedMedia(kind)
+			}
+			payload, err := resolveMediaPayload(ctx, p.media, *part.Media)
+			if err != nil {
+				return nil, err
+			}
+			if payload.URL != "" {
+				return nil, fmt.Errorf("OpenAI file content requires inline bytes, not a URL")
+			}
+			parts = append(parts, openAIContentPart{
+				Type: "file",
+				File: &openAIFileContent{
+					Filename: part.Media.Name,
+					FileData: dataURL(part.Media.MIMEType, payload.Data),
+				},
+			})
+		default:
+			return nil, unsupportedMedia(kind)
+		}
+	}
+	if len(parts) == 1 && parts[0].Type == "text" {
+		return parts[0].Text, nil
+	}
+	return parts, nil
 }
 
 func convertOpenAIToolCalls(toolCalls []types.ToolCall) []openAIToolCall {
@@ -327,10 +427,19 @@ func convertOpenAITools(tools []types.JSONSchema) []openAITool {
 func convertOpenAIResponse(resp openAIResponse) *types.ChatResponse {
 	result := &types.ChatResponse{
 		Usage: types.TokenUsage{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
+			PromptTokens:             resp.Usage.PromptTokens,
+			CompletionTokens:         resp.Usage.CompletionTokens,
+			TotalTokens:              resp.Usage.TotalTokens,
+			PromptCacheHitTokens:     resp.Usage.PromptCacheHitTokens,
+			PromptCacheMissTokens:    resp.Usage.PromptCacheMissTokens,
+			CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
+			CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 		},
+	}
+	if resp.Usage.PromptTokensDetails != nil &&
+		resp.Usage.PromptTokensDetails.CachedTokens > 0 &&
+		result.Usage.CacheReadInputTokens == 0 {
+		result.Usage.CacheReadInputTokens = resp.Usage.PromptTokensDetails.CachedTokens
 	}
 	if resp.Usage.CompletionTokensDetails != nil {
 		result.Usage.ReasoningTokens = resp.Usage.CompletionTokensDetails.ReasoningTokens

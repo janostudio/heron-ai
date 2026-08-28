@@ -1,7 +1,12 @@
 # Team Configuration
 
-`Flow` 负责调度 Team，Team 负责组织自己的 Agent、Command 和 Webhook。
-不再引入 `Member`、`Worker` 或 `Aggregator` 作为用户需要理解的领域概念。
+`Flow` 负责调度 Team，Team 负责组织自己的 Call。
+Call 是 Team 内部的一次执行定义，目标可以是 Agent、Shell Command 或 Webhook。
+Call 不是额外的编排层，用户需要理解的主层级仍然是：
+
+```text
+Flow → Team → Call → Agent / Command / Webhook
+```
 
 ## Structure
 
@@ -13,20 +18,20 @@ calls:
   snapshot:
     type: command
     command:
-      command: bash .agents/scripts/git_snapshot.sh
+      command: bash .agents/skills/<skill-id>/scripts/git_snapshot.sh
       timeout: 30s
     output:
       record: GitSnapshot
 
   explorer:
-    type: subagent
+    type: agent
     agent: explorer
     responsibility: 只读检查 Workspace，补充诊断事实。
     output:
       record: ExplorationReport
 
   diagnose:
-    type: subagent
+    type: agent
     agent: root-cause-analyst
     depends_on: [snapshot, explorer]
     inputs:
@@ -44,10 +49,29 @@ output:
 调用的类型由 `type` 决定：
 
 ```text
-subagent → 调用本地 Agent，内部运行 Model / Tool Loop
+agent → 调用本地 Agent，内部运行 Model / Tool Loop
 command  → 调用固定 Shell
 webhook  → 调用固定 URL
 ```
+
+Command 脚本可以由 Skill 打包。推荐不要使用全局
+`.agents/scripts/`：
+
+```text
+.agents/skills/<skill-id>/
+├── SKILL.md
+└── scripts/
+    └── check.sh
+```
+
+Team 调用：
+
+```yaml
+command:
+  command: bash .agents/skills/<skill-id>/scripts/check.sh
+```
+
+这样 Skill 可以作为一个完整目录复制到另一个 Flow 中复用。
 
 ## Fields
 
@@ -63,8 +87,8 @@ webhook  → 调用固定 URL
 
 | Field | Type | Description |
 |---|---|---|
-| `type` | string | `subagent`、`command` 或 `webhook` |
-| `agent` | string | `subagent` 使用的 Agent 定义 |
+| `type` | string | `agent`、`command` 或 `webhook` |
+| `agent` | string | `agent` 使用的 Agent 定义 |
 | `command` | string/object | `command` 类型使用的 Shell |
 | `webhook` / `url` | object/string | `webhook` 类型使用的 URL |
 | `depends_on` | array | Team 内其他调用的名称 |
@@ -112,8 +136,17 @@ Test Team
 
 调用不会自动读取全部历史。需要什么信息，就在 `inputs` 中声明什么信息。
 
-## Compatibility
+## Terminology
 
-当前运行时内部仍保留旧的 `Member` 类型和 `members` 配置读取能力，用于兼容
-旧配置和事件恢复；新配置和文档统一使用 `calls`，用户只需要理解
-`Flow → Team → Agent / Command / Webhook`。
+`Call` 是 Team 的执行项，不是独立的协作实体：
+
+```text
+Team
+├── Call: Agent
+├── Call: Shell Command
+└── Call: Webhook
+```
+
+运行时不再使用 `Member` 作为核心概念。历史 session 中的
+`member_id`、`member_turn_id` 等字段只作为旧数据迁移输入，不作为当前
+配置或运行时 API。

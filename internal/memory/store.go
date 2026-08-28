@@ -16,15 +16,15 @@ import (
 )
 
 const (
-	defaultTeamMaxChars     = 4000
-	defaultSubagentMaxChars = 2000
+	defaultTeamMaxChars  = 4000
+	defaultAgentMaxChars = 2000
 )
 
 // Limits controls the hard size of memory.md snapshots.
 type Limits struct {
-	TeamMaxChars     int
-	SubagentMaxChars int
-	MaxItems         int
+	TeamMaxChars  int
+	AgentMaxChars int
+	MaxItems      int
 }
 
 // Store persists the two V1 short-term memory layers.
@@ -37,13 +37,35 @@ func NewStore(files storage.FileStore, limits Limits) *Store {
 	if limits.TeamMaxChars <= 0 {
 		limits.TeamMaxChars = defaultTeamMaxChars
 	}
-	if limits.SubagentMaxChars <= 0 {
-		limits.SubagentMaxChars = defaultSubagentMaxChars
+	if limits.AgentMaxChars <= 0 {
+		limits.AgentMaxChars = defaultAgentMaxChars
 	}
 	if limits.MaxItems <= 0 {
 		limits.MaxItems = 40
 	}
 	return &Store{files: files, limits: limits}
+}
+
+// ForConfig returns a view of the Store with the limits configured by one
+// Team. The underlying FileStore is shared, while the limits remain scoped to
+// the current TeamTurn. This keeps MemoryConfig effective even when a
+// runtime contains several Teams with different bounds.
+func (s *Store) ForConfig(config types.MemoryConfig) *Store {
+	if s == nil {
+		return nil
+	}
+	limits := s.limits
+	if config.MaxItems > 0 {
+		limits.MaxItems = config.MaxItems
+	}
+	if config.MaxChars > 0 {
+		// MemoryConfig intentionally exposes one compact size budget. Apply it
+		// to both bounded snapshots so Team and Agent memory obey the same
+		// project-level contract.
+		limits.TeamMaxChars = config.MaxChars
+		limits.AgentMaxChars = config.MaxChars
+	}
+	return &Store{files: s.files, limits: limits}
 }
 
 func (s *Store) LoadTeam(ctx context.Context, sessionID, teamID string) (types.MemorySnapshot, error) {
@@ -55,13 +77,13 @@ func (s *Store) SaveTeam(ctx context.Context, snapshot types.MemorySnapshot) err
 	return s.save(ctx, s.path(snapshot.SessionID, "teams", snapshot.TeamID, "memory.md"), snapshot, s.limits.TeamMaxChars)
 }
 
-func (s *Store) LoadSubagent(ctx context.Context, sessionID, teamID, memberID string) (types.MemorySnapshot, error) {
-	return s.load(ctx, s.path(sessionID, "agents", teamID, memberID, "memory.md"), types.MemoryScopeSubagent, sessionID, teamID, memberID)
+func (s *Store) LoadAgent(ctx context.Context, sessionID, teamID, callID string) (types.MemorySnapshot, error) {
+	return s.load(ctx, s.path(sessionID, "agents", teamID, callID, "memory.md"), types.MemoryScopeAgent, sessionID, teamID, callID)
 }
 
-func (s *Store) SaveSubagent(ctx context.Context, snapshot types.MemorySnapshot) error {
-	snapshot.Scope = types.MemoryScopeSubagent
-	return s.save(ctx, s.path(snapshot.SessionID, "agents", snapshot.TeamID, snapshot.MemberID, "memory.md"), snapshot, s.limits.SubagentMaxChars)
+func (s *Store) SaveAgent(ctx context.Context, snapshot types.MemorySnapshot) error {
+	snapshot.Scope = types.MemoryScopeAgent
+	return s.save(ctx, s.path(snapshot.SessionID, "agents", snapshot.TeamID, snapshot.CallID, "memory.md"), snapshot, s.limits.AgentMaxChars)
 }
 
 func (s *Store) path(sessionID string, parts ...string) string {
@@ -75,7 +97,7 @@ func (s *Store) load(
 	scope types.MemoryScope,
 	sessionID string,
 	teamID string,
-	memberID string,
+	callID string,
 ) (types.MemorySnapshot, error) {
 	if err := contextErr(ctx); err != nil {
 		return types.MemorySnapshot{}, err
@@ -86,7 +108,7 @@ func (s *Store) load(
 			Scope:     scope,
 			SessionID: sessionID,
 			TeamID:    teamID,
-			MemberID:  memberID,
+			CallID:    callID,
 			Revision:  0,
 		}, nil
 	}
@@ -107,8 +129,8 @@ func (s *Store) load(
 	if snapshot.TeamID == "" {
 		snapshot.TeamID = teamID
 	}
-	if snapshot.MemberID == "" {
-		snapshot.MemberID = memberID
+	if snapshot.CallID == "" {
+		snapshot.CallID = callID
 	}
 	return snapshot, nil
 }
@@ -120,8 +142,8 @@ func (s *Store) save(ctx context.Context, path string, snapshot types.MemorySnap
 	if snapshot.SessionID == "" || snapshot.TeamID == "" {
 		return errors.New("memory session_id and team_id are required")
 	}
-	if snapshot.Scope == types.MemoryScopeSubagent && snapshot.MemberID == "" {
-		return errors.New("subagent memory member_id is required")
+	if snapshot.Scope == types.MemoryScopeAgent && snapshot.CallID == "" {
+		return errors.New("agent memory call_id is required")
 	}
 	snapshot = Reduce(snapshot, s.limits.MaxItems)
 	snapshot.Revision++
@@ -151,7 +173,7 @@ func (s *Store) save(ctx context.Context, path string, snapshot types.MemorySnap
 	if len(data) > maxChars {
 		// The YAML/body headings have a fixed overhead. If the configured cap
 		// is smaller than that overhead, persist an empty bounded snapshot
-		// rather than failing the member execution.
+		// rather than failing the call execution.
 		snapshot.Goal = ""
 		snapshot.Confirmed = nil
 		snapshot.OpenQuestions = nil
@@ -202,7 +224,7 @@ func ReduceAggressively(snapshot types.MemorySnapshot) types.MemorySnapshot {
 // the current goal, because session.jsonl and SharedRecord remain authoritative.
 func ReduceForSize(snapshot types.MemorySnapshot, maxChars int) types.MemorySnapshot {
 	if maxChars <= 0 {
-		maxChars = defaultSubagentMaxChars
+		maxChars = defaultAgentMaxChars
 	}
 	snapshot.Confirmed = tail(snapshot.Confirmed, 2)
 	snapshot.OpenQuestions = tail(snapshot.OpenQuestions, 2)

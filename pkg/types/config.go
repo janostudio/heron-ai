@@ -1,7 +1,9 @@
 package types
 
+import "time"
+
 // EngineConfig is the optional global engine configuration. Flow, Team,
-// Member, Session, and Turn definitions live in their own domain types.
+// Call, Session, and Turn definitions live in their own domain types.
 type EngineConfig struct {
 	Settings SettingsConfig    `json:"settings"`
 	Models   []ProviderConfig  `json:"models"`
@@ -73,10 +75,10 @@ type MCPServerConfig struct {
 // SSEEvent is the view-layer event envelope. Runtime session events are
 // persisted as SessionEvent; this smaller projection is only for streaming.
 type SSEEvent struct {
-	Seq      int    `json:"seq"`
-	MemberID string `json:"member_id,omitempty"`
-	Content  string `json:"content,omitempty"`
-	Type     string `json:"type"`
+	Seq     int    `json:"seq"`
+	CallID  string `json:"call_id,omitempty"`
+	Content string `json:"content,omitempty"`
+	Type    string `json:"type"`
 }
 
 // GuardrailRule defines an input or output guardrail.
@@ -87,32 +89,43 @@ type GuardrailRule struct {
 	Message string `yaml:"message" json:"message"`
 }
 
-// HITLRequest represents a human approval request for a member tool call.
+// HITLRequest represents a human approval request for a call tool call.
 type HITLRequest struct {
-	RequestID  string         `json:"request_id"`
-	MemberID   string         `json:"member_id"`
-	MemberType MemberType     `json:"member_type,omitempty"`
-	ToolName   string         `json:"tool_name"`
-	ToolArgs   map[string]any `json:"tool_args"`
-	Reason     string         `json:"reason"`
+	RequestID   string         `json:"request_id"`
+	CallID      string         `json:"call_id"`
+	CallType    CallType       `json:"call_type,omitempty"`
+	ToolName    string         `json:"tool_name"`
+	ToolArgs    map[string]any `json:"tool_args"`
+	Reason      string         `json:"reason"`
+	RequestedAt time.Time      `json:"requested_at,omitempty"`
+	Channel     string         `json:"channel,omitempty"`
 }
 
 type HITLResponse struct {
-	RequestID string `json:"request_id"`
-	Approved  bool   `json:"approved"`
-	Reason    string `json:"reason,omitempty"`
+	RequestID  string            `json:"request_id"`
+	Approved   bool              `json:"approved"`
+	Reason     string            `json:"reason,omitempty"`
+	ApproverID string            `json:"approver_id,omitempty"`
+	Approver   string            `json:"approver,omitempty"`
+	Channel    string            `json:"channel,omitempty"`
+	DecidedAt  time.Time         `json:"decided_at,omitempty"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 
-// HookPayload identifies the current Flow/Team/Member execution boundary.
+// HookPayload identifies the current Flow/Team/Call execution boundary.
 type HookPayload struct {
 	FlowSessionID string         `json:"flow_session_id,omitempty"`
 	FlowTurnID    string         `json:"flow_turn_id,omitempty"`
 	TeamID        string         `json:"team_id,omitempty"`
 	TeamTurnID    string         `json:"team_turn_id,omitempty"`
-	MemberID      string         `json:"member_id,omitempty"`
-	MemberType    MemberType     `json:"member_type,omitempty"`
+	CallID        string         `json:"call_id,omitempty"`
+	CallType      CallType       `json:"call_type,omitempty"`
+	AgentID       string         `json:"agent_id,omitempty"`
+	AgentTurnID   string         `json:"agent_turn_id,omitempty"`
 	Event         string         `json:"event"`
+	Round         int            `json:"round,omitempty"`
 	ToolName      string         `json:"tool_name,omitempty"`
+	ToolCallID    string         `json:"tool_call_id,omitempty"`
 	ToolArgs      map[string]any `json:"tool_args,omitempty"`
 	ToolResult    *ToolResult    `json:"tool_result,omitempty"`
 	Error         string         `json:"error,omitempty"`

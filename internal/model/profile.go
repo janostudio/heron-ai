@@ -26,6 +26,9 @@ func MergeProfileDefaults(profile types.ModelProfile, override types.ModelConfig
 	if result.APIKey == "" {
 		result.APIKey = profile.APIKey
 	}
+	if result.MaxInputTokens <= 0 {
+		result.MaxInputTokens = profile.MaxInputTokens
+	}
 	if result.Temperature == nil {
 		result.Temperature = profile.Temperature
 	}

@@ -59,16 +59,16 @@ func TestFlowSessionStartedEvent(t *testing.T) {
 	assert.False(t, event.Timestamp().IsZero())
 }
 
-func TestMemberStartedEvent(t *testing.T) {
-	event := MemberStartedEvent{
-		BaseEvent:     NewBaseEvent("member.started"),
+func TestCallStartedEvent(t *testing.T) {
+	event := CallStartedEvent{
+		BaseEvent:     NewBaseEvent("call.started"),
 		FlowSessionID: "fs-001",
 		TeamID:        "diagnose",
-		MemberID:      "inspect",
-		MemberType:    "subagent",
+		CallID:        "inspect",
+		CallType:      "agent",
 	}
-	assert.Equal(t, "member.started", event.Type())
-	assert.Equal(t, "inspect", event.MemberID)
+	assert.Equal(t, "call.started", event.Type())
+	assert.Equal(t, "inspect", event.CallID)
 }
 
 func TestModelCallCompletedEvent(t *testing.T) {
@@ -76,7 +76,7 @@ func TestModelCallCompletedEvent(t *testing.T) {
 		BaseEvent:        NewBaseEvent("model.completed"),
 		FlowSessionID:    "fs-001",
 		TeamID:           "diagnose",
-		MemberID:         "inspect",
+		CallID:           "inspect",
 		Model:            "gpt-4o-mini",
 		PromptTokens:     100,
 		CompletionTokens: 50,
@@ -92,8 +92,8 @@ func TestErrorOccurredEvent(t *testing.T) {
 		BaseEvent:     NewBaseEvent("error.occurred"),
 		FlowSessionID: "fs-001",
 		TeamID:        "verify",
-		MemberID:      "test",
-		Layer:         "member",
+		CallID:        "test",
+		Layer:         "call",
 		Module:        "command",
 		ToolName:      "shell",
 		ErrorType:     "execution_error",

@@ -12,7 +12,7 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// DefinitionsLoadRequest describes loading the new Flow/Team/Member
+// DefinitionsLoadRequest describes loading the new Flow/Team/Call
 // configuration model. It intentionally has no per-session override: the
 // loader reads the current .agents/ configuration.
 type DefinitionsLoadRequest struct {
@@ -76,8 +76,8 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 	if err := flow.ValidateWithTeams(teams); err != nil {
 		return nil, fmt.Errorf("validate definitions: %w", err)
 	}
-	if err := validateSubagentDefinitions(flow, teams, agents); err != nil {
-		return nil, fmt.Errorf("validate subagents: %w", err)
+	if err := validateAgentCallDefinitions(flow, teams, agents); err != nil {
+		return nil, fmt.Errorf("validate agents: %w", err)
 	}
 	if err := validateAgentSupportDefinitions(flow, teams, agents, skills, rules); err != nil {
 		return nil, fmt.Errorf("validate agent support: %w", err)
@@ -264,8 +264,37 @@ func (l *ConfigLoader) loadSkill(path string) (*types.Skill, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := l.validateSkillScripts(path, skill.Scripts); err != nil {
+		return nil, err
+	}
 	skill.Body = strings.TrimSpace(string(body))
 	return &skill, nil
+}
+
+// validateSkillScripts keeps a Skill self-contained. A script may be invoked
+// by a Team command, but it must live inside the Skill package so copying the
+// package does not silently retain a dependency on another directory.
+func (l *ConfigLoader) validateSkillScripts(skillPath string, scripts []string) error {
+	skillDir := filepath.Dir(skillPath)
+	for _, script := range scripts {
+		script = strings.TrimSpace(script)
+		if script == "" {
+			return fmt.Errorf("skill script path must not be empty")
+		}
+		if filepath.IsAbs(script) {
+			return fmt.Errorf("skill script path %q must be relative to the Skill directory", script)
+		}
+
+		clean := filepath.Clean(script)
+		if clean == "." || clean == ".." ||
+			strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("skill script path %q escapes the Skill directory", script)
+		}
+		if !l.fileStore.Exists(filepath.Join(skillDir, clean)) {
+			return fmt.Errorf("skill script %q does not exist", script)
+		}
+	}
+	return nil
 }
 
 func (l *ConfigLoader) loadRuleDefinitions(dir string) (map[string]types.RuleItem, error) {
@@ -327,22 +356,22 @@ func (l *ConfigLoader) loadAgentRuleDefinitions(agentsDir string) (map[string]ty
 	return rules, nil
 }
 
-func validateSubagentDefinitions(flow types.Flow, teams map[string]types.Team, agents map[string]types.AgentConfig) error {
+func validateAgentCallDefinitions(flow types.Flow, teams map[string]types.Team, agents map[string]types.AgentConfig) error {
 	for flowTeamName, binding := range flow.Teams {
 		team, ok := teams[binding.TeamID]
 		if !ok {
 			return fmt.Errorf("flow team %q references missing definition %q", flowTeamName, binding.TeamID)
 		}
-		for memberName, member := range team.Members {
-			if member.Type != types.MemberSubagent {
+		for callName, call := range team.Calls {
+			if call.Type != types.CallAgent {
 				continue
 			}
-			if _, ok := agents[member.AgentID]; !ok {
+			if _, ok := agents[call.AgentID]; !ok {
 				return fmt.Errorf(
-					"team %q member %q references missing agent definition %q",
+					"team %q call %q references missing agent definition %q",
 					binding.TeamID,
-					memberName,
-					member.AgentID,
+					callName,
+					call.AgentID,
 				)
 			}
 		}
@@ -362,13 +391,13 @@ func validateAgentSupportDefinitions(
 		if !ok {
 			return fmt.Errorf("flow team %q references missing definition %q", flowTeamName, binding.TeamID)
 		}
-		for memberName, member := range team.Members {
-			if member.Type != types.MemberSubagent {
+		for callName, call := range team.Calls {
+			if call.Type != types.CallAgent {
 				continue
 			}
-			agent, ok := agents[member.AgentID]
+			agent, ok := agents[call.AgentID]
 			if !ok {
-				return fmt.Errorf("team %q member %q references missing agent %q", binding.TeamID, memberName, member.AgentID)
+				return fmt.Errorf("team %q call %q references missing agent %q", binding.TeamID, callName, call.AgentID)
 			}
 			for _, skillName := range agent.Skills {
 				if _, ok := skills[skillName]; !ok {

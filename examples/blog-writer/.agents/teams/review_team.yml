@@ -3,7 +3,7 @@ goal: 审校并润色博客文章。
 
 calls:
   review_blog:
-    type: subagent
+    type: agent
     agent: editor
     responsibility: 审校 BlogDraft，检查语法、结构、SEO、事实准确性和可读性，输出最终版本。
     inputs:

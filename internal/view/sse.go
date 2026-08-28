@@ -62,6 +62,21 @@ func (s *SSEWriter) WriteSessionEvent(event types.SessionEvent) error {
 	return nil
 }
 
+func (s *SSEWriter) WriteTask(task types.ToolTask) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := json.Marshal(task)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(s.w, "event: task\ndata: %s\n\n", data); err != nil {
+		return err
+	}
+	s.flusher.Flush()
+	return nil
+}
+
 func (s *SSEWriter) WriteChunk(content string) error {
 	return s.WriteEvent(types.SSEEvent{
 		Type:    "content",
@@ -69,10 +84,10 @@ func (s *SSEWriter) WriteChunk(content string) error {
 	})
 }
 
-func (s *SSEWriter) WriteMemberChunk(memberID, content string) error {
+func (s *SSEWriter) WriteCallChunk(callID, content string) error {
 	return s.WriteEvent(types.SSEEvent{
-		Type:     "member_output",
-		MemberID: memberID,
-		Content:  content,
+		Type:    "call_output",
+		CallID:  callID,
+		Content: content,
 	})
 }

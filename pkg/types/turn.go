@@ -13,6 +13,7 @@ const (
 	TurnCreated         TurnStatus = "created"
 	TurnRunning         TurnStatus = "running"
 	TurnWaitingInput    TurnStatus = "waiting_input"
+	TurnWaitingTool     TurnStatus = "waiting_tool"
 	TurnWaitingApproval TurnStatus = "waiting_approval"
 	TurnCompleted       TurnStatus = "completed"
 	TurnFailed          TurnStatus = "failed"
@@ -24,13 +25,15 @@ const (
 type NextAction string
 
 const (
-	NextProceed    NextAction = "proceed"
-	NextReturn     NextAction = "return"
-	NextCoordinate NextAction = "coordinate"
-	NextWaitInput  NextAction = "wait_input"
-	NextComplete   NextAction = "complete"
-	NextFail       NextAction = "fail"
-	NextActivate   NextAction = "activate"
+	NextProceed      NextAction = "proceed"
+	NextReturn       NextAction = "return"
+	NextCoordinate   NextAction = "coordinate"
+	NextWaitInput    NextAction = "wait_input"
+	NextWaitTool     NextAction = "wait_tool"
+	NextWaitApproval NextAction = "wait_approval"
+	NextComplete     NextAction = "complete"
+	NextFail         NextAction = "fail"
+	NextActivate     NextAction = "activate"
 )
 
 // Route is a Team or Flow routing decision. Teams is used by activate;
@@ -76,16 +79,17 @@ func (r *Route) UnmarshalYAML(node *yaml.Node) error {
 // FlowTurn represents one user input or external trigger handled by a
 // FlowSession.
 type FlowTurn struct {
-	ID            string     `yaml:"id" json:"id"`
-	FlowSessionID string     `yaml:"flow_session_id" json:"flow_session_id"`
-	Attempt       int        `yaml:"attempt" json:"attempt"`
-	RecoveryOf    string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
-	Input         string     `yaml:"input" json:"input"`
-	Status        TurnStatus `yaml:"status" json:"status"`
-	Next          *Route     `yaml:"next,omitempty" json:"next,omitempty"`
-	RecordIDs     []string   `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
-	StartedAt     time.Time  `yaml:"started_at" json:"started_at"`
-	FinishedAt    *time.Time `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
+	ID            string         `yaml:"id" json:"id"`
+	FlowSessionID string         `yaml:"flow_session_id" json:"flow_session_id"`
+	Attempt       int            `yaml:"attempt" json:"attempt"`
+	RecoveryOf    string         `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
+	Input         string         `yaml:"input" json:"input"`
+	ContextBlocks []ContextBlock `yaml:"context_blocks,omitempty" json:"context_blocks,omitempty"`
+	Status        TurnStatus     `yaml:"status" json:"status"`
+	Next          *Route         `yaml:"next,omitempty" json:"next,omitempty"`
+	RecordIDs     []string       `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
+	StartedAt     time.Time      `yaml:"started_at" json:"started_at"`
+	FinishedAt    *time.Time     `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
 }
 
 // TeamTurn represents one invocation of a TeamSession.
@@ -104,26 +108,26 @@ type TeamTurn struct {
 	FinishedAt    *time.Time `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
 }
 
-// SubagentTurn represents one request/response execution by a Subagent
-// member. Model and Tool calls remain implementation details inside it.
-type SubagentTurn struct {
-	ID                string     `yaml:"id" json:"id"`
-	TeamTurnID        string     `yaml:"team_turn_id" json:"team_turn_id"`
-	SubagentSessionID string     `yaml:"subagent_session_id" json:"subagent_session_id"`
-	MemberID          string     `yaml:"member_id" json:"member_id"`
-	Attempt           int        `yaml:"attempt" json:"attempt"`
-	RecoveryOf        string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
-	Status            TurnStatus `yaml:"status" json:"status"`
-	RecordIDs         []string   `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
-	StartedAt         time.Time  `yaml:"started_at" json:"started_at"`
-	FinishedAt        *time.Time `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
+// AgentTurn represents one request/response execution by an Agent Call.
+// Model and Tool calls remain implementation details inside it.
+type AgentTurn struct {
+	ID             string     `yaml:"id" json:"id"`
+	TeamTurnID     string     `yaml:"team_turn_id" json:"team_turn_id"`
+	AgentSessionID string     `yaml:"agent_session_id" json:"agent_session_id"`
+	CallID         string     `yaml:"call_id" json:"call_id"`
+	Attempt        int        `yaml:"attempt" json:"attempt"`
+	RecoveryOf     string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
+	Status         TurnStatus `yaml:"status" json:"status"`
+	RecordIDs      []string   `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
+	StartedAt      time.Time  `yaml:"started_at" json:"started_at"`
+	FinishedAt     *time.Time `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
 }
 
-// CommandTurn represents one direct command execution by a Team member.
+// CommandTurn represents one direct command execution by a Team call.
 type CommandTurn struct {
 	ID         string     `yaml:"id" json:"id"`
 	TeamTurnID string     `yaml:"team_turn_id" json:"team_turn_id"`
-	MemberID   string     `yaml:"member_id" json:"member_id"`
+	CallID     string     `yaml:"call_id" json:"call_id"`
 	Attempt    int        `yaml:"attempt" json:"attempt"`
 	RecoveryOf string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
 	Status     TurnStatus `yaml:"status" json:"status"`
@@ -132,11 +136,11 @@ type CommandTurn struct {
 	FinishedAt *time.Time `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
 }
 
-// WebhookTurn represents one direct HTTP execution by a Team member.
+// WebhookTurn represents one direct HTTP execution by a Team call.
 type WebhookTurn struct {
 	ID         string     `yaml:"id" json:"id"`
 	TeamTurnID string     `yaml:"team_turn_id" json:"team_turn_id"`
-	MemberID   string     `yaml:"member_id" json:"member_id"`
+	CallID     string     `yaml:"call_id" json:"call_id"`
 	Attempt    int        `yaml:"attempt" json:"attempt"`
 	RecoveryOf string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
 	Status     TurnStatus `yaml:"status" json:"status"`

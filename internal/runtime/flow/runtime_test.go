@@ -2,11 +2,14 @@ package flow
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/heron-ai/heron-engine/internal/agent"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -119,7 +122,251 @@ func TestRuntimeResumeRequiresWaitingInput(t *testing.T) {
 	require.ErrorContains(t, err, "not waiting for input")
 }
 
-func TestRuntimeRecoveryStatusFindsInterruptedMember(t *testing.T) {
+type aggregateResumeTeamRuntime struct {
+	mu      sync.Mutex
+	resumes int
+	lastReq types.TeamTurnRequest
+}
+
+func (r *aggregateResumeTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
+	r.mu.Lock()
+	r.lastReq = req
+	if len(req.ResumeCalls) > 0 {
+		r.resumes++
+	}
+	r.mu.Unlock()
+
+	if len(req.ResumeCalls) == 0 {
+		return types.TeamTurnResult{
+			Turn: req.TeamTurn,
+			Next: &types.Route{Action: types.NextWaitTool},
+			CallResults: map[string]types.CallResult{
+				"agent-a": {
+					Status:       types.TurnWaitingTool,
+					CallTurnID:   "tt:a",
+					AgentID:      "a",
+					TaskID:       "task-a",
+					CheckpointID: "checkpoint-a",
+					Next:         &types.Route{Action: types.NextWaitTool},
+				},
+				"agent-b": {
+					Status:       types.TurnWaitingTool,
+					CallTurnID:   "tt:b",
+					AgentID:      "b",
+					TaskID:       "task-b",
+					CheckpointID: "checkpoint-b",
+					Next:         &types.Route{Action: types.NextWaitTool},
+				},
+			},
+			PendingToolTasks: []types.PendingToolTask{
+				{CallID: "agent-a", CallTurnID: "tt:a", AgentID: "a", TaskID: "task-a", CheckpointID: "checkpoint-a", Status: types.TurnWaitingTool},
+				{CallID: "agent-b", CallTurnID: "tt:b", AgentID: "b", TaskID: "task-b", CheckpointID: "checkpoint-b", Status: types.TurnWaitingTool},
+			},
+		}, nil
+	}
+	return types.TeamTurnResult{
+		Turn: req.TeamTurn,
+		Next: &types.Route{Action: types.NextComplete},
+		CallResults: map[string]types.CallResult{
+			"agent-a": {Status: types.TurnCompleted, Reply: "a resumed"},
+			"agent-b": {Status: types.TurnCompleted, Reply: "b resumed"},
+		},
+		Reply: "all agents resumed",
+	}, nil
+}
+
+func aggregateResumeDefinitions() *types.Definitions {
+	return &types.Definitions{
+		Flow: types.Flow{
+			ID:          "aggregate",
+			EntryTeamID: "entry",
+			Teams: map[string]types.FlowTeamBinding{
+				"entry": {ID: "entry", TeamID: "entry-team", Coordinator: true},
+			},
+		},
+		Teams: map[string]types.Team{
+			"entry-team": {ID: "entry-team"},
+		},
+	}
+}
+
+func TestRuntimeResumeAggregatesMultipleToolTasks(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	sessions := storage.NewJSONLSessionWriter(files)
+	tasks := agent.NewFileToolTaskStore(files)
+	now := time.Now().UTC()
+	for _, id := range []string{"task-a", "task-b"} {
+		require.NoError(t, tasks.Save(context.Background(), types.ToolTask{
+			ID: id, Status: types.ToolTaskCompleted, Progress: 1,
+			UpdatedAt: now,
+		}))
+	}
+	teamRuntime := &aggregateResumeTeamRuntime{}
+	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil, t.TempDir())
+	runtime.SetTaskStore(tasks)
+
+	first, err := runtime.Start(context.Background(), types.StartFlowRequest{
+		FlowID: "aggregate", Input: "run both agents",
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.SessionWaitingTool, first.Session.Status)
+	require.Len(t, first.PendingToolTasks, 2)
+
+	resumed, err := runtime.Resume(context.Background(), first.Session.ID, "")
+	require.NoError(t, err)
+	require.Equal(t, types.SessionCompleted, resumed.Session.Status)
+	require.Equal(t, 1, teamRuntime.resumes)
+	require.Len(t, teamRuntime.lastReq.ResumeCalls, 2)
+	require.Contains(t, resumed.Reply, "all agents resumed")
+}
+
+func TestRuntimeResumeWaitsUntilAllToolTasksAreTerminal(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	sessions := storage.NewJSONLSessionWriter(files)
+	tasks := agent.NewFileToolTaskStore(files)
+	now := time.Now().UTC()
+	require.NoError(t, tasks.Save(context.Background(), types.ToolTask{
+		ID: "task-a", Status: types.ToolTaskCompleted, UpdatedAt: now,
+	}))
+	require.NoError(t, tasks.Save(context.Background(), types.ToolTask{
+		ID: "task-b", Status: types.ToolTaskRunning, UpdatedAt: now,
+	}))
+	teamRuntime := &aggregateResumeTeamRuntime{}
+	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil, t.TempDir())
+	runtime.SetTaskStore(tasks)
+
+	first, err := runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "aggregate"})
+	require.NoError(t, err)
+	waiting, err := runtime.Resume(context.Background(), first.Session.ID, "")
+	require.NoError(t, err)
+	require.Equal(t, types.SessionWaitingTool, waiting.Session.Status)
+	require.Len(t, waiting.PendingToolTasks, 2)
+	assert.Equal(t, 0, teamRuntime.resumes)
+}
+
+type approvalTeamRuntime struct {
+	resumed bool
+}
+
+func (r *approvalTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
+	if req.ResumeApproval != nil {
+		r.resumed = true
+		return types.TeamTurnResult{
+			Turn:  req.TeamTurn,
+			Reply: "approved tool completed",
+			Next:  &types.Route{Action: types.NextComplete},
+			CallResults: map[string]types.CallResult{
+				"danger": {
+					Status:   types.TurnCompleted,
+					Reply:    "approved",
+					Approval: req.ResumeApproval,
+				},
+			},
+		}, nil
+	}
+	return types.TeamTurnResult{
+		Turn: types.TeamTurn{
+			ID:     req.TeamTurn.ID,
+			TeamID: req.TeamTurn.TeamID,
+			Status: types.TurnWaitingApproval,
+		},
+		Next: &types.Route{Action: types.NextWaitApproval},
+		CallResults: map[string]types.CallResult{
+			"danger": {
+				Status:       types.TurnWaitingApproval,
+				CallTurnID:   "tt:danger",
+				CheckpointID: "cp-danger",
+				PendingApproval: &types.AgentPendingApproval{
+					RequestID:  "approval-1",
+					CallID:     "danger",
+					ToolCallID: "tool-1",
+					ToolName:   "Bash",
+					Reason:     "dangerous command",
+				},
+				Next: &types.Route{Action: types.NextWaitApproval},
+			},
+		},
+		PendingApprovals: []types.AgentPendingApproval{{
+			RequestID:  "approval-1",
+			CallID:     "danger",
+			ToolCallID: "tool-1",
+			ToolName:   "Bash",
+			Reason:     "dangerous command",
+		}},
+	}, nil
+}
+
+func TestRuntimeResumeApprovalResumesWaitingAgentCall(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	sessions := storage.NewJSONLSessionWriter(files)
+	teamRuntime := &approvalTeamRuntime{}
+	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil, t.TempDir())
+
+	first, err := runtime.Start(context.Background(), types.StartFlowRequest{
+		FlowID: "aggregate", Input: "run dangerous tool",
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.SessionWaitingApproval, first.Session.Status)
+	require.Len(t, first.PendingApprovals, 1)
+
+	resumed, err := runtime.ResumeApproval(
+		context.Background(), first.Session.ID, "approval-1", true, "approved by tester",
+	)
+	require.NoError(t, err)
+	require.Equal(t, types.SessionCompleted, resumed.Session.Status)
+	require.True(t, teamRuntime.resumed)
+	require.Contains(t, resumed.Reply, "approved tool completed")
+}
+
+func TestRuntimeResumeApprovalPreservesAuditingFields(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	sessions := storage.NewJSONLSessionWriter(files)
+	teamRuntime := &approvalTeamRuntime{}
+	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil, t.TempDir())
+
+	first, err := runtime.Start(context.Background(), types.StartFlowRequest{
+		FlowID: "aggregate", Input: "run dangerous tool",
+	})
+	require.NoError(t, err)
+	decision := types.HITLResponse{
+		RequestID:  "approval-1",
+		Approved:   true,
+		Reason:     "approved by operator",
+		ApproverID: "operator-7",
+		Approver:   "QA Operator",
+		Channel:    "stream-json",
+	}
+	resumed, err := runtime.ResumeApprovalWithResponse(context.Background(), first.Session.ID, decision)
+	require.NoError(t, err)
+	require.Equal(t, types.SessionCompleted, resumed.Session.Status)
+
+	require.NotEmpty(t, resumed.TeamResults)
+	var approval *types.HITLResponse
+	for _, teamResult := range resumed.TeamResults {
+		if callResult, ok := teamResult.CallResults["danger"]; ok && callResult.Approval != nil {
+			approval = callResult.Approval
+			break
+		}
+	}
+	require.NotNil(t, approval)
+	require.Equal(t, "operator-7", approval.ApproverID)
+	require.Equal(t, "stream-json", approval.Channel)
+}
+
+func TestRuntimeResumeApprovalRejectsUnknownApproval(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	sessions := storage.NewJSONLSessionWriter(files)
+	runtime := NewRuntime(aggregateResumeDefinitions(), &approvalTeamRuntime{}, sessions, nil, t.TempDir())
+
+	first, err := runtime.Start(context.Background(), types.StartFlowRequest{
+		FlowID: "aggregate", Input: "run dangerous tool",
+	})
+	require.NoError(t, err)
+	_, err = runtime.ResumeApproval(context.Background(), first.Session.ID, "unknown-approval", true, "")
+	require.ErrorContains(t, err, "not pending")
+}
+
+func TestRuntimeRecoveryStatusFindsInterruptedCall(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
 	runtime := NewRuntime(testDefinitions(), fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
@@ -151,9 +398,9 @@ func TestRuntimeRecoveryStatusFindsInterruptedMember(t *testing.T) {
 		FlowTurnID:    "ft-1",
 		TeamID:        "verify",
 		TeamTurnID:    "tt-1",
-		MemberID:      "test",
-		MemberTurnID:  "mt-1",
-		MemberType:    types.MemberCommand,
+		CallID:        "test",
+		CallTurnID:    "mt-1",
+		CallType:      types.CallCommand,
 		Payload:       map[string]any{"input": "fix it"},
 	}))
 
@@ -161,7 +408,7 @@ func TestRuntimeRecoveryStatusFindsInterruptedMember(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.SessionInterrupted, status.Session.Status)
 	require.Len(t, status.Interrupted, 1)
-	require.Equal(t, "mt-1", status.Interrupted[0].MemberTurnID)
+	require.Equal(t, "mt-1", status.Interrupted[0].CallTurnID)
 }
 
 func TestRuntimeBlocksNormalInputUntilInterruptedExecutionIsRecovered(t *testing.T) {

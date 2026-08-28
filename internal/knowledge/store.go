@@ -61,6 +61,19 @@ func (idx *KnowledgeIndex) Search(ctx context.Context, query string) ([]types.Kn
 
 // SearchWithScope filters by scope in addition to keyword matching
 func (idx *KnowledgeIndex) SearchWithScope(ctx context.Context, query string, agentName string, teamName string) ([]types.KnowledgeEntry, error) {
+	return idx.SearchWithScopeAndAllowlist(ctx, query, agentName, teamName, nil)
+}
+
+// SearchWithScopeAndAllowlist filters by visibility and, when provided, by
+// the Agent's explicit knowledge IDs. An empty allowlist preserves the
+// default behavior of returning every visible matching entry.
+func (idx *KnowledgeIndex) SearchWithScopeAndAllowlist(
+	ctx context.Context,
+	query string,
+	agentName string,
+	teamName string,
+	allowlist []string,
+) ([]types.KnowledgeEntry, error) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 
@@ -75,6 +88,9 @@ func (idx *KnowledgeIndex) SearchWithScope(ctx context.Context, query string, ag
 			continue
 		}
 		if !scopeAllows(entry.Scope, agentName, teamName) {
+			continue
+		}
+		if !knowledgeAllowed(entry, allowlist) {
 			continue
 		}
 		results = append(results, entry)
@@ -286,21 +302,66 @@ func (idx *KnowledgeIndex) Count() int {
 	return len(idx.entries)
 }
 
-// entryMatches checks if a knowledge entry matches the query
-func entryMatches(entry types.KnowledgeEntry, query string) bool {
-	// Check content
-	if strings.Contains(strings.ToLower(entry.Content), query) {
+func knowledgeAllowed(entry types.KnowledgeEntry, allowlist []string) bool {
+	if len(allowlist) == 0 {
 		return true
 	}
-
-	// Check keys
-	for _, key := range entry.Keys {
-		if strings.Contains(strings.ToLower(key), query) {
+	for _, allowed := range allowlist {
+		if strings.TrimSpace(allowed) == entry.ID {
 			return true
 		}
 	}
-
 	return false
+}
+
+// entryMatches checks if a knowledge entry matches the query
+func entryMatches(entry types.KnowledgeEntry, query string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return false
+	}
+
+	// The runtime query combines responsibility and user input. Preserve exact
+	// phrase matching, then fall back to meaningful terms so one extra sentence
+	// in the user request does not hide an otherwise relevant entry.
+	fields := []string{entry.ID, entry.Title, entry.Summary, entry.Content}
+	fields = append(fields, entry.Keys...)
+	searchText := strings.ToLower(strings.Join(fields, "\n"))
+	if strings.Contains(searchText, query) {
+		return true
+	}
+
+	for _, term := range knowledgeTerms(query) {
+		if strings.Contains(searchText, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func knowledgeTerms(query string) []string {
+	var terms []string
+	seen := make(map[string]struct{})
+	for _, field := range strings.FieldsFunc(query, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\r', '\n', ',', '.', ':', ';', '!', '?',
+			'(', ')', '[', ']', '{', '}', '"', '\'', '`', '/', '\\':
+			return true
+		default:
+			return false
+		}
+	}) {
+		field = strings.TrimSpace(field)
+		if len([]rune(field)) < 2 {
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		terms = append(terms, field)
+	}
+	return terms
 }
 
 // scopeAllows checks if the scope permits access for the given agent/team

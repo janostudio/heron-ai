@@ -32,7 +32,7 @@ type SessionWriter interface {
 
 // JSONLSessionWriter is a single-writer implementation backed by the current
 // FileStore. A mutex protects sequence allocation and append ordering even
-// when Team members finish in parallel.
+// when Team calls finish in parallel.
 type JSONLSessionWriter struct {
 	fileStore FileStore
 	mu        sync.Mutex

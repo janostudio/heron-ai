@@ -90,7 +90,7 @@ These limits have different scopes:
 |---|---|---|
 | `max_team_turns` | one `FlowTurn` | Maximum TeamTurns scheduled by this FlowTurn |
 | `max_calls_per_team_turn` | one `TeamTurn` | Maximum Agent/Command/Webhook calls executed by this TeamTurn |
-| `max_agent_rounds` | one `AgentTurn` | Maximum Model/Tool loop iterations inside one Subagent AgentTurn |
+| `max_agent_rounds` | one `AgentTurn` | Maximum Model/Tool loop iterations inside one AgentTurn |
 
 `max_parallel_teams`, `max_parallel_calls`, and `max_parallel_tools` only limit concurrency. They do
 not change the counted units. The default values are `20 / 20 / 200`.

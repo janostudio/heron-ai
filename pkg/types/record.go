@@ -25,12 +25,12 @@ type ProducerRef struct {
 	FlowTurnID    string `yaml:"flow_turn_id,omitempty" json:"flow_turn_id,omitempty"`
 	TeamID        string `yaml:"team_id,omitempty" json:"team_id,omitempty"`
 	TeamTurnID    string `yaml:"team_turn_id,omitempty" json:"team_turn_id,omitempty"`
-	MemberID      string `yaml:"member_id,omitempty" json:"member_id,omitempty"`
-	MemberTurnID  string `yaml:"member_turn_id,omitempty" json:"member_turn_id,omitempty"`
+	CallID        string `yaml:"call_id,omitempty" json:"call_id,omitempty"`
+	CallTurnID    string `yaml:"call_turn_id,omitempty" json:"call_turn_id,omitempty"`
 }
 
 // BasisRef points to evidence supporting a record. A workspace basis can be
-// reused by a downstream member while its revision is still current.
+// reused by a downstream call while its revision is still current.
 type BasisRef struct {
 	Kind             string `yaml:"kind" json:"kind"`
 	Path             string `yaml:"path,omitempty" json:"path,omitempty"`
@@ -47,7 +47,7 @@ type RecordLink struct {
 	TargetID string `yaml:"target_id" json:"target_id"`
 }
 
-// SharedRecord is the only generic cross-Team / cross-member collaboration
+// SharedRecord is the only generic cross-Team / cross-call collaboration
 // object. Data remains business-defined; the core only owns this envelope.
 type SharedRecord struct {
 	RecordID  string         `yaml:"record_id" json:"record_id"`

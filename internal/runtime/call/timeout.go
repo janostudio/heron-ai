@@ -1,4 +1,4 @@
-package member
+package call
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-func withTimeout(ctx context.Context, memberTimeout, specTimeout string) (context.Context, context.CancelFunc, error) {
-	timeout := strings.TrimSpace(memberTimeout)
+func withTimeout(ctx context.Context, callTimeout, specTimeout string) (context.Context, context.CancelFunc, error) {
+	timeout := strings.TrimSpace(callTimeout)
 	if timeout == "" {
 		timeout = strings.TrimSpace(specTimeout)
 	}

@@ -1,4 +1,4 @@
-package member
+package call
 
 import (
 	"context"
@@ -21,42 +21,42 @@ func NewCommandExecutor(workspaces ...*workspace.Service) *CommandExecutor {
 	return &CommandExecutor{workspace: service}
 }
 
-func (e *CommandExecutor) Type() types.MemberType {
-	return types.MemberCommand
+func (e *CommandExecutor) Type() types.CallType {
+	return types.CallCommand
 }
 
-func (e *CommandExecutor) Execute(ctx context.Context, req types.MemberRequest) (types.MemberResult, error) {
-	if req.Member.Command == nil || strings.TrimSpace(req.Member.Command.Command) == "" {
-		return types.MemberResult{Status: types.TurnFailed, Error: "command is required"}, fmt.Errorf("command is required for member %q", req.Member.ID)
+func (e *CommandExecutor) Execute(ctx context.Context, req types.CallRequest) (types.CallResult, error) {
+	if req.Call.Command == nil || strings.TrimSpace(req.Call.Command.Command) == "" {
+		return types.CallResult{Status: types.TurnFailed, Error: "command is required"}, fmt.Errorf("command is required for call %q", req.Call.ID)
 	}
 	if e.workspace == nil {
-		return types.MemberResult{Status: types.TurnFailed, Error: "workspace is not configured"}, fmt.Errorf("workspace is not configured")
+		return types.CallResult{Status: types.TurnFailed, Error: "workspace is not configured"}, fmt.Errorf("workspace is not configured")
 	}
-	if req.RecoveryOf != "" && req.Member.Command.ReplayPolicy != types.ReplayAllow && req.Member.Command.ReplayPolicy != types.ReplayIdempotent {
-		return types.MemberResult{
+	if req.RecoveryOf != "" && req.Call.Command.ReplayPolicy != types.ReplayAllow && req.Call.Command.ReplayPolicy != types.ReplayIdempotent {
+		return types.CallResult{
 			Status: types.TurnFailed,
 			Error:  "command replay is not allowed by replay_policy",
-		}, fmt.Errorf("command member %q replay policy is %q", req.Member.ID, req.Member.Command.ReplayPolicy)
+		}, fmt.Errorf("command call %q replay policy is %q", req.Call.ID, req.Call.Command.ReplayPolicy)
 	}
 	if req.RecoveryOf != "" &&
-		req.Member.Command.ReplayPolicy == types.ReplayIdempotent &&
-		strings.TrimSpace(req.Member.Command.IdempotencyKey) == "" {
-		return types.MemberResult{
+		req.Call.Command.ReplayPolicy == types.ReplayIdempotent &&
+		strings.TrimSpace(req.Call.Command.IdempotencyKey) == "" {
+		return types.CallResult{
 			Status: types.TurnFailed,
 			Error:  "command idempotent replay requires idempotency_key",
-		}, fmt.Errorf("command member %q idempotent replay requires idempotency_key", req.Member.ID)
+		}, fmt.Errorf("command call %q idempotent replay requires idempotency_key", req.Call.ID)
 	}
 
-	command := req.Member.Command.Command
-	args := req.Member.Command.Args
-	execCtx, cancel, err := withTimeout(ctx, req.Member.Timeout, req.Member.Command.Timeout)
+	command := req.Call.Command.Command
+	args := req.Call.Command.Args
+	execCtx, cancel, err := withTimeout(ctx, req.Call.Timeout, req.Call.Command.Timeout)
 	if err != nil {
-		return types.MemberResult{Status: types.TurnFailed, Error: err.Error()}, err
+		return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
 	}
 	defer cancel()
 
 	execution, err := e.workspace.Run(execCtx, workspace.CommandRequest{
-		TurnID:  memberTurnID(req),
+		TurnID:  callTurnID(req),
 		Command: command,
 		Args:    args,
 		Env:     commandEnv(req),
@@ -69,7 +69,7 @@ func (e *CommandExecutor) Execute(ctx context.Context, req types.MemberRequest) 
 		summary = strings.TrimSpace(errorOutput)
 	}
 
-	result := types.MemberResult{
+	result := types.CallResult{
 		Status:       types.TurnCompleted,
 		Reply:        summary,
 		WorkspaceOps: []types.WorkspaceOperation{execution.Operation},
@@ -78,9 +78,9 @@ func (e *CommandExecutor) Execute(ctx context.Context, req types.MemberRequest) 
 		result.Status = types.TurnFailed
 		result.Error = err.Error()
 	}
-	if recordName := req.Member.Output.Record; recordName != "" {
+	if recordName := req.Call.Output.Record; recordName != "" {
 		passed := commandPassed(err, execution.ExitCode, output, errorOutput)
-		result.Records = []types.SharedRecord{newMemberRecord(
+		result.Records = []types.SharedRecord{newCallRecord(
 			req,
 			recordName,
 			"command_result",

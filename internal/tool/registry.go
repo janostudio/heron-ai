@@ -36,6 +36,9 @@ func NewToolRegistry() *ToolRegistry {
 }
 
 func (r *ToolRegistry) Register(tool types.Tool) {
+	if tool == nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools[tool.Name()] = tool

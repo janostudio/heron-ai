@@ -7,7 +7,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestFlowValidateAcceptsMixedMembers(t *testing.T) {
+func TestFlowValidateAcceptsMixedCalls(t *testing.T) {
 	flow := Flow{
 		ID:          "code-fix",
 		EntryTeamID: "default",
@@ -29,27 +29,27 @@ func TestFlowValidateAcceptsMixedMembers(t *testing.T) {
 	teams := map[string]Team{
 		"default-team": {
 			ID: "default-team",
-			Members: map[string]Member{
+			Calls: map[string]Call{
 				"assistant": {
 					ID:      "assistant",
-					Type:    MemberSubagent,
+					Type:    CallAgent,
 					AgentID: "default-assistant",
 				},
 			},
 		},
 		"diagnose-team": {
 			ID: "diagnose-team",
-			Members: map[string]Member{
+			Calls: map[string]Call{
 				"inspect": {
 					ID:   "inspect",
-					Type: MemberCommand,
+					Type: CallCommand,
 					Command: &CommandSpec{
 						Command: "go test ./...",
 					},
 				},
 				"notify": {
 					ID:   "notify",
-					Type: MemberWebhook,
+					Type: CallWebhook,
 					Webhook: &WebhookSpec{
 						URL:    "https://example.com/hooks/diagnose",
 						Method: "POST",
@@ -153,13 +153,13 @@ func TestFlowValidateRejectsUnknownReferencesAndCycles(t *testing.T) {
 	}
 }
 
-func TestTeamValidateRejectsUnknownMemberDependency(t *testing.T) {
+func TestTeamValidateRejectsUnknownCallDependency(t *testing.T) {
 	team := Team{
 		ID: "review",
-		Members: map[string]Member{
+		Calls: map[string]Call{
 			"reviewer": {
 				ID:        "reviewer",
-				Type:      MemberSubagent,
+				Type:      CallAgent,
 				AgentID:   "reviewer-definition",
 				DependsOn: []string{"missing"},
 			},
@@ -168,23 +168,23 @@ func TestTeamValidateRejectsUnknownMemberDependency(t *testing.T) {
 
 	err := team.Validate()
 	if err == nil || !strings.Contains(err.Error(), "depends on unknown call") {
-		t.Fatalf("expected unknown member dependency error, got %v", err)
+		t.Fatalf("expected unknown call dependency error, got %v", err)
 	}
 }
 
-func TestTeamValidateRejectsMemberDependencyCycle(t *testing.T) {
+func TestTeamValidateRejectsCallDependencyCycle(t *testing.T) {
 	team := Team{
 		ID: "review",
-		Members: map[string]Member{
+		Calls: map[string]Call{
 			"first": {
 				ID:        "first",
-				Type:      MemberSubagent,
+				Type:      CallAgent,
 				AgentID:   "first-definition",
 				DependsOn: []string{"second"},
 			},
 			"second": {
 				ID:        "second",
-				Type:      MemberSubagent,
+				Type:      CallAgent,
 				AgentID:   "second-definition",
 				DependsOn: []string{"first"},
 			},
@@ -193,17 +193,17 @@ func TestTeamValidateRejectsMemberDependencyCycle(t *testing.T) {
 
 	err := team.Validate()
 	if err == nil || !strings.Contains(err.Error(), "call dependency cycle detected") {
-		t.Fatalf("expected member dependency cycle error, got %v", err)
+		t.Fatalf("expected call dependency cycle error, got %v", err)
 	}
 }
 
-func TestTeamValidateRejectsUnknownOutputMember(t *testing.T) {
+func TestTeamValidateRejectsUnknownOutputCall(t *testing.T) {
 	team := Team{
 		ID: "review",
-		Members: map[string]Member{
+		Calls: map[string]Call{
 			"reviewer": {
 				ID:      "reviewer",
-				Type:    MemberSubagent,
+				Type:    CallAgent,
 				AgentID: "reviewer-definition",
 			},
 		},
@@ -216,29 +216,29 @@ func TestTeamValidateRejectsUnknownOutputMember(t *testing.T) {
 
 	err := team.Validate()
 	if err == nil || !strings.Contains(err.Error(), "output references unknown call") {
-		t.Fatalf("expected unknown output member error, got %v", err)
+		t.Fatalf("expected unknown output call error, got %v", err)
 	}
 }
 
-func TestMemberValidateRejectsMixedOrInvalidDefinitions(t *testing.T) {
+func TestCallValidateRejectsMixedOrInvalidDefinitions(t *testing.T) {
 	tests := []struct {
-		name   string
-		member Member
-		want   string
+		name string
+		call Call
+		want string
 	}{
 		{
-			name: "missing subagent definition",
-			member: Member{
+			name: "missing agent definition",
+			call: Call{
 				ID:   "worker",
-				Type: MemberSubagent,
+				Type: CallAgent,
 			},
 			want: "agent is required",
 		},
 		{
 			name: "command with agent",
-			member: Member{
+			call: Call{
 				ID:      "test",
-				Type:    MemberCommand,
+				Type:    CallCommand,
 				AgentID: "wrong",
 				Command: &CommandSpec{Command: "go test ./..."},
 			},
@@ -246,18 +246,18 @@ func TestMemberValidateRejectsMixedOrInvalidDefinitions(t *testing.T) {
 		},
 		{
 			name: "invalid webhook url",
-			member: Member{
+			call: Call{
 				ID:      "notify",
-				Type:    MemberWebhook,
+				Type:    CallWebhook,
 				Webhook: &WebhookSpec{URL: "not a url"},
 			},
 			want: "invalid url",
 		},
 		{
 			name: "unknown type",
-			member: Member{
+			call: Call{
 				ID:   "worker",
-				Type: MemberType("agent"),
+				Type: CallType("unknown"),
 			},
 			want: "unsupported type",
 		},
@@ -265,7 +265,7 @@ func TestMemberValidateRejectsMixedOrInvalidDefinitions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.member.Validate()
+			err := tt.call.Validate()
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("expected error containing %q, got %v", tt.want, err)
 			}
@@ -273,32 +273,32 @@ func TestMemberValidateRejectsMixedOrInvalidDefinitions(t *testing.T) {
 	}
 }
 
-func TestMemberValidateRequiresIdempotencyKeyForIdempotentReplay(t *testing.T) {
-	member := Member{
+func TestCallValidateRequiresIdempotencyKeyForIdempotentReplay(t *testing.T) {
+	call := Call{
 		ID:   "verify",
-		Type: MemberCommand,
+		Type: CallCommand,
 		Command: &CommandSpec{
 			Command:      "git status --short",
 			ReplayPolicy: ReplayIdempotent,
 		},
 	}
-	err := member.Validate()
+	err := call.Validate()
 	if err == nil || !strings.Contains(err.Error(), "idempotency_key") {
 		t.Fatalf("expected idempotency key validation error, got %v", err)
 	}
 }
 
-func TestMemberValidateAcceptsIdempotentReplayWithKey(t *testing.T) {
-	member := Member{
+func TestCallValidateAcceptsIdempotentReplayWithKey(t *testing.T) {
+	call := Call{
 		ID:   "verify",
-		Type: MemberCommand,
+		Type: CallCommand,
 		Command: &CommandSpec{
 			Command:        "git status --short",
 			ReplayPolicy:   ReplayIdempotent,
 			IdempotencyKey: "verify-${flow_turn_id}",
 		},
 	}
-	if err := member.Validate(); err != nil {
+	if err := call.Validate(); err != nil {
 		t.Fatalf("expected valid idempotent command, got %v", err)
 	}
 }
@@ -343,7 +343,7 @@ teams_definitions:
 	var team Team
 	if err := yaml.Unmarshal([]byte(`
 id: verify-team
-members:
+calls:
   unit_test:
     type: command
     command: "go test ./..."
@@ -361,10 +361,10 @@ members:
 	if err := team.Validate(); err != nil {
 		t.Fatalf("expected decoded team to be valid: %v", err)
 	}
-	if team.Members["unit_test"].ID != "unit_test" {
-		t.Fatalf("expected member ID to be filled, got %q", team.Members["unit_test"].ID)
+	if team.Calls["unit_test"].ID != "unit_test" {
+		t.Fatalf("expected call ID to be filled, got %q", team.Calls["unit_test"].ID)
 	}
-	if team.Members["notify"].Webhook == nil {
+	if team.Calls["notify"].Webhook == nil {
 		t.Fatal("expected direct webhook URL to be decoded")
 	}
 }

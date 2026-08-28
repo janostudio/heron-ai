@@ -41,9 +41,9 @@ teams:
 
 	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
 id: default-team
-members:
+calls:
   assistant:
-    type: subagent
+    type: agent
     agent: default-assistant
     output:
       record: AssistantReply
@@ -51,7 +51,7 @@ members:
 
 	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "verify.yml"), []byte(`
 id: verify-team
-members:
+calls:
   unit_test:
     type: command
     command: "go test ./..."
@@ -84,11 +84,11 @@ You coordinate the request.
 	require.Equal(t, "default-team", definitions.Flow.Teams["default"].TeamID)
 	require.Len(t, definitions.Teams, 2)
 	require.Len(t, definitions.Agents, 1)
-	require.Equal(t, types.MemberCommand, definitions.Teams["verify-team"].Members["unit_test"].Type)
-	require.Equal(t, types.MemberWebhook, definitions.Teams["verify-team"].Members["notify"].Type)
+	require.Equal(t, types.CallCommand, definitions.Teams["verify-team"].Calls["unit_test"].Type)
+	require.Equal(t, types.CallWebhook, definitions.Teams["verify-team"].Calls["notify"].Type)
 }
 
-func TestLoadDefinitionsRejectsMissingSubagentDefinition(t *testing.T) {
+func TestLoadDefinitionsRejectsMissingAgentDefinition(t *testing.T) {
 	root := t.TempDir()
 	agentsDir := filepath.Join(root, ".agents", "agents")
 	teamsDir := filepath.Join(root, ".agents", "teams")
@@ -107,9 +107,9 @@ teams:
 `), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
 id: default-team
-members:
+calls:
   assistant:
-    type: subagent
+    type: agent
     agent: missing-agent
 `), 0644))
 
@@ -139,9 +139,9 @@ teams:
 `), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
 id: default-team
-members:
+calls:
   assistant:
-    type: subagent
+    type: agent
     agent: assistant
 `), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "assistant", "AGENT.md"), []byte(`---
@@ -183,6 +183,58 @@ Keep the answer concise.
 	require.Contains(t, definitions.Rules, "private")
 }
 
+func TestLoadDefinitionsValidatesSkillPackageScripts(t *testing.T) {
+	root := t.TempDir()
+	agentsDir := filepath.Join(root, ".agents", "agents")
+	teamsDir := filepath.Join(root, ".agents", "teams")
+	flowsDir := filepath.Join(root, ".agents", "flows")
+	skillDir := filepath.Join(root, ".agents", "skills", "checks")
+	require.NoError(t, os.MkdirAll(agentsDir, 0755))
+	require.NoError(t, os.MkdirAll(teamsDir, 0755))
+	require.NoError(t, os.MkdirAll(flowsDir, 0755))
+	require.NoError(t, os.MkdirAll(filepath.Join(skillDir, "scripts"), 0755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(flowsDir, "default.yml"), []byte(`
+id: flow
+entry: default
+teams:
+  default:
+    team: default-team
+    coordinator: true
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
+id: default-team
+calls: {}
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
+name: checks
+description: deterministic checks
+scripts:
+  - scripts/check.sh
+---
+Run the packaged check.
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "scripts", "check.sh"), []byte("#!/bin/sh\n"), 0755))
+
+	definitions, err := NewConfigLoader(root).LoadDefinitions(context.Background(), DefinitionsLoadRequest{
+		FlowPath: filepath.Join(flowsDir, "default.yml"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"scripts/check.sh"}, definitions.Skills["checks"].Scripts)
+
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
+name: checks
+description: deterministic checks
+scripts:
+  - scripts/missing.sh
+---
+`), 0644))
+	_, err = NewConfigLoader(root).LoadDefinitions(context.Background(), DefinitionsLoadRequest{
+		FlowPath: filepath.Join(flowsDir, "default.yml"),
+	})
+	require.ErrorContains(t, err, `skill script "scripts/missing.sh" does not exist`)
+}
+
 func TestLoadDefinitionsLoadsRuntimeLimits(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents", "agents"), 0755))
@@ -208,7 +260,7 @@ teams:
 `), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "teams", "default.yml"), []byte(`
 id: default-team
-members: {}
+calls: {}
 `), 0644))
 
 	definitions, err := NewConfigLoader(root).LoadDefinitions(context.Background(), DefinitionsLoadRequest{

@@ -3,7 +3,7 @@ goal: 安全和性能并行审查，最后生成综合报告。
 
 calls:
   security_review:
-    type: subagent
+    type: agent
     agent: security-reviewer
     responsibility: 审查输入代码的安全漏洞，包括注入、敏感信息、加密和权限问题。
     inputs:
@@ -12,7 +12,7 @@ calls:
       record: SecurityReview
 
   performance_review:
-    type: subagent
+    type: agent
     agent: performance-reviewer
     responsibility: 审查输入代码的性能、并发、资源释放和数据库访问问题。
     inputs:
@@ -21,7 +21,7 @@ calls:
       record: PerformanceReview
 
   aggregate:
-    type: subagent
+    type: agent
     agent: lead-reviewer
     depends_on: [security_review, performance_review]
     responsibility: 综合安全和性能审查结果，生成最终代码审查报告。

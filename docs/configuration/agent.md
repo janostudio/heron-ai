@@ -92,8 +92,26 @@ rules:
   - quality
 loop:
   max_rounds: 5
-  tool_mode: sequential
+  tool_execution: sequential
+  max_parallel_tools: 5
+  async_tools: []
   timeout: 120s
+context:
+  # 按当前模型能力比例控制 Active Context
+  target_ratio: 0.70
+  compaction_threshold: 0.80
+  hard_limit_ratio: 0.90
+  output_reserve_ratio: 0.15
+  tool_output_ratio: 0.10
+  max_tool_output_chars: 65536
+budget:
+  max_model_rounds: 30
+  max_tool_calls: 100
+  max_wall_time: 10m
+  max_input_tokens: 100000
+  max_output_tokens: 20000
+  max_file_changes: 100
+  max_tool_output: 1000000
 structured_output:
   type: json
   schema:
@@ -155,15 +173,63 @@ The content above belongs in:
 | `custom` | array | Custom tool names |
 | `mcp` | array | MCP server tool names |
 
-Built-in tools: `Read`, `Write`, `Grep`, `Glob`, `TodoWrite`, `TodoRead`
+Built-in tools: `Read`, `Write`, `Grep`, `Glob`, `Bash`, `WebSearch`,
+`WebFetch`, `CodeNav`, `AskUserQuestion`, `TodoWrite`, `TodoRead`
 
 ### loop
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `max_rounds` | integer | Max LLM turns per execution |
-| `tool_mode` | string | `sequential` or `parallel` |
+| `tool_execution` | string | `sequential` or `parallel_safe` |
+| `max_parallel_tools` | integer | Max concurrent read-only tools |
+| `async_tools` | array | Tool names allowed to create durable async tasks |
 | `timeout` | string | Execution timeout |
+
+### context
+
+`context` controls the bounded messages sent to the model. The complete
+transcript remains available to the current AgentTurn, while the Active Context
+may be compacted before the next model call.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `max_input_tokens` | integer | Optional explicit model input capacity |
+| `target_ratio` | number | Target Active Context ratio |
+| `compaction_threshold` | number | Ratio that triggers compaction |
+| `hard_limit_ratio` | number | Hard input limit ratio |
+| `output_reserve_ratio` | number | Ratio reserved for model output |
+| `tool_output_ratio` | number | Default Tool output budget ratio |
+| `max_tool_output_chars` | integer | Optional per-tool-result character limit |
+
+If `max_input_tokens` is omitted, the runtime uses the selected model profile's
+`maxInputTokens` when available. Recommended defaults are:
+
+```yaml
+target_ratio: 0.70
+compaction_threshold: 0.80
+hard_limit_ratio: 0.90
+output_reserve_ratio: 0.15
+tool_output_ratio: 0.10
+```
+
+### budget
+
+`budget` limits one AgentTurn independently from the context window:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `max_model_rounds` | integer | Maximum model calls |
+| `max_tool_calls` | integer | Maximum Tool calls |
+| `max_wall_time` | duration | Maximum wall-clock time, e.g. `10m` |
+| `max_input_tokens` | integer | Maximum cumulative model input tokens |
+| `max_output_tokens` | integer | Maximum cumulative model output tokens |
+| `max_file_changes` | integer | Maximum Workspace write operations |
+| `max_tool_output` | integer | Maximum cumulative Tool output characters |
+
+Zero means no explicit limit for that dimension. `loop.max_rounds` remains the
+backwards-compatible loop boundary; `budget.max_model_rounds` can make it
+stricter.
 
 ### structured_output
 
@@ -183,7 +249,7 @@ Built-in tools: `Read`, `Write`, `Grep`, `Glob`, `TodoWrite`, `TodoRead`
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `event` | string | Hook event: `on_start`, `on_end`, `on_tool_start`, `on_error` |
+| `event` | string | Hook event: `on_start`, `on_tool_start`, `on_tool_end`, `on_error`, `on_end` |
 | `command` | string | Shell command to execute |
 | `timeout` | string | Command timeout |
 

@@ -3,10 +3,13 @@ package view
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -120,6 +123,40 @@ func TestHandler_HandleTurn(t *testing.T) {
 	}
 }
 
+type richHandlerFlowRuntime struct {
+	handlerFlowRuntime
+	blocks []types.ContextBlock
+}
+
+func (r *richHandlerFlowRuntime) Start(context.Context, types.StartFlowRequest) (types.FlowTurnResult, error) {
+	return types.FlowTurnResult{}, nil
+}
+
+func (r *richHandlerFlowRuntime) HandleInputWithContext(_ context.Context, _ string, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
+	r.blocks = blocks
+	return types.FlowTurnResult{Session: types.FlowSession{ID: "fs-rich"}, Turn: types.FlowTurn{Input: input}}, nil
+}
+
+func (r *richHandlerFlowRuntime) ResumeWithContext(context.Context, string, string, []types.ContextBlock) (types.FlowTurnResult, error) {
+	return types.FlowTurnResult{}, nil
+}
+
+func TestHandler_HandleTurnPassesMultimediaContent(t *testing.T) {
+	runtime := &richHandlerFlowRuntime{}
+	handler := NewRuntimeHandler(runtime)
+	body := `{"content":[{"type":"text","text":"分析图片"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cG5n"}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/turn?session_id=fs-rich", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.HandleTurn(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Len(t, runtime.blocks, 1)
+	require.Equal(t, "分析图片", runtime.blocks[0].Text)
+	require.Len(t, runtime.blocks[0].Parts, 1)
+	require.Equal(t, "image", runtime.blocks[0].Parts[0].Type)
+}
+
 func TestHandler_HandleStreamReplaysFromLastEventID(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	writer := storage.NewJSONLSessionWriter(fileStore)
@@ -167,15 +204,145 @@ func TestHandler_HandleRecoveryStatus(t *testing.T) {
 	}
 }
 
+func TestHandler_HandleTaskStatusAndCancel(t *testing.T) {
+	tasks := &testTaskStore{
+		task: types.ToolTask{ID: "task-1", Status: types.ToolTaskRunning, Progress: 0.25},
+	}
+	handler := NewRuntimeHandlerWithSessionsAndTasks(
+		&handlerFlowRuntime{},
+		nil,
+		tasks,
+		tasks,
+	)
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/tasks?task_id=task-1", nil)
+	statusRec := httptest.NewRecorder()
+	handler.HandleTaskStatus(statusRec, statusReq)
+	require.Equal(t, http.StatusOK, statusRec.Code)
+	require.Contains(t, statusRec.Body.String(), `"task-1"`)
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/tasks/cancel", strings.NewReader(`{"task_id":"task-1"}`))
+	cancelRec := httptest.NewRecorder()
+	handler.HandleTaskCancel(cancelRec, cancelReq)
+	require.Equal(t, http.StatusOK, cancelRec.Code)
+	require.Equal(t, types.ToolTaskCancelled, tasks.task.Status)
+}
+
+type approvalHandlerRuntime struct {
+	approved bool
+}
+
+func (r *approvalHandlerRuntime) Start(context.Context, types.StartFlowRequest) (types.FlowTurnResult, error) {
+	return types.FlowTurnResult{}, nil
+}
+func (r *approvalHandlerRuntime) HandleInput(context.Context, string, string) (types.FlowTurnResult, error) {
+	return types.FlowTurnResult{}, nil
+}
+func (r *approvalHandlerRuntime) Resume(context.Context, string, string) (types.FlowTurnResult, error) {
+	return types.FlowTurnResult{}, nil
+}
+func (r *approvalHandlerRuntime) Cancel(context.Context, string) error { return nil }
+func (r *approvalHandlerRuntime) Status(context.Context, string) (types.FlowSession, error) {
+	return types.FlowSession{}, nil
+}
+func (r *approvalHandlerRuntime) ResumeApproval(
+	_ context.Context, sessionID, approvalID string, approved bool, reason string,
+) (types.FlowTurnResult, error) {
+	r.approved = approved
+	return types.FlowTurnResult{
+		Session: types.FlowSession{ID: sessionID, Status: types.SessionCompleted},
+		Reply:   approvalID + ":" + reason,
+	}, nil
+}
+
+func TestHandler_HandleApprovalResumesFlow(t *testing.T) {
+	runtime := &approvalHandlerRuntime{}
+	handler := NewRuntimeHandler(runtime)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/approvals?session_id=fs-approval",
+		strings.NewReader(`{"approval_id":"approval-1","approved":true,"reason":"approved"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	handler.HandleApproval(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.True(t, runtime.approved)
+	require.Contains(t, rec.Body.String(), `"fs-approval"`)
+}
+
+func TestHandler_HandleTaskStreamSendsInitialAndFinalState(t *testing.T) {
+	tasks := &testTaskSubscriber{
+		task: types.ToolTask{ID: "task-stream", Status: types.ToolTaskCompleted, Progress: 1},
+	}
+	handler := NewRuntimeHandlerWithSessionsAndTasks(nil, nil, tasks, tasks)
+	req := httptest.NewRequest(http.MethodGet, "/tasks/stream?task_id=task-stream", nil)
+	rec := httptest.NewRecorder()
+
+	handler.HandleTaskStream(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "event: task")
+	require.Contains(t, rec.Body.String(), `"task-stream"`)
+}
+
+type testTaskStore struct {
+	task types.ToolTask
+}
+
+func (s *testTaskStore) Save(_ context.Context, task types.ToolTask) error {
+	s.task = task
+	return nil
+}
+func (s *testTaskStore) Load(_ context.Context, id string) (*types.ToolTask, error) {
+	if id != s.task.ID {
+		return nil, errors.New("not found")
+	}
+	task := s.task
+	return &task, nil
+}
+func (s *testTaskStore) List(context.Context) ([]types.ToolTask, error) {
+	return []types.ToolTask{s.task}, nil
+}
+func (s *testTaskStore) Delete(context.Context, string) error { return nil }
+func (s *testTaskStore) Cancel(_ context.Context, id string) error {
+	if id == s.task.ID {
+		s.task.Status = types.ToolTaskCancelled
+	}
+	return nil
+}
+
+type testTaskSubscriber struct {
+	task types.ToolTask
+}
+
+func (s *testTaskSubscriber) Save(context.Context, types.ToolTask) error { return nil }
+func (s *testTaskSubscriber) Load(context.Context, string) (*types.ToolTask, error) {
+	task := s.task
+	return &task, nil
+}
+func (s *testTaskSubscriber) List(context.Context) ([]types.ToolTask, error) {
+	return []types.ToolTask{s.task}, nil
+}
+func (s *testTaskSubscriber) Delete(context.Context, string) error { return nil }
+func (s *testTaskSubscriber) Subscribe(ctx context.Context, _ string) (<-chan types.ToolTask, error) {
+	ch := make(chan types.ToolTask, 1)
+	ch <- s.task
+	close(ch)
+	return ch, nil
+}
+func (s *testTaskSubscriber) Cancel(context.Context, string) error { return nil }
+
 type recoveryHandlerRuntime struct{ handlerFlowRuntime }
 
 func (r *recoveryHandlerRuntime) RecoveryStatus(context.Context, string) (types.RecoveryStatus, error) {
 	return types.RecoveryStatus{
 		Session: types.FlowSession{ID: "fs-1", Status: types.SessionInterrupted},
 		Interrupted: []types.InterruptedExecution{{
-			Kind:         "member_turn",
-			MemberTurnID: "mt-1",
-			SafeToRetry:  false,
+			Kind:        "call_turn",
+			CallTurnID:  "mt-1",
+			SafeToRetry: false,
 		}},
 	}, nil
 }

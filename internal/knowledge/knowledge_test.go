@@ -157,6 +157,24 @@ func TestKnowledgeIndex_KeywordMatchingInKeys(t *testing.T) {
 	}
 }
 
+func TestKnowledgeIndex_SearchMatchesTermsInsideLongRuntimeQuery(t *testing.T) {
+	idx := NewKnowledgeIndex()
+	idx.Add(types.KnowledgeEntry{
+		ID:      "qa-guide",
+		Content: "The project service must be tested after a revision-aware write.",
+		Keys:    []string{"project", "service", "test"},
+		Scope:   types.Scope{Type: "all"},
+	})
+
+	results, err := idx.Search(context.Background(), "回答用户的问题。\n请检查 project service 并运行 test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 || results[0].ID != "qa-guide" {
+		t.Fatalf("expected qa-guide, got %#v", results)
+	}
+}
+
 func TestKnowledgeIndex_List(t *testing.T) {
 	idx := NewKnowledgeIndex()
 	idx.Add(types.KnowledgeEntry{ID: "1", Content: "first", Scope: types.Scope{Type: "all"}})

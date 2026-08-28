@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// RecoveryAction is explicit because a crashed member must never be
+// RecoveryAction is explicit because a crashed call must never be
 // re-executed implicitly during ordinary session replay.
 type RecoveryAction string
 
@@ -18,8 +18,8 @@ const (
 
 // RecoveryRequest is submitted after inspecting interrupted executions.
 //
-// TargetTurnID may be a TeamTurnID or MemberTurnID. V1 retries the containing
-// Team as a unit, never an individual side-effecting member.
+// TargetTurnID may be a TeamTurnID or CallTurnID. V1 retries the containing
+// Team as a unit, never an individual side-effecting call.
 type RecoveryRequest struct {
 	Action                RecoveryAction `json:"action"`
 	TargetTurnID          string         `json:"target_turn_id,omitempty"`
@@ -31,22 +31,22 @@ type RecoveryRequest struct {
 // InterruptedExecution describes a started execution that has no matching
 // completed event in session.jsonl. It is a recovery signal, not a checkpoint.
 type InterruptedExecution struct {
-	Kind         string     `json:"kind"` // flow_turn | team_turn | member_turn
-	FlowTurnID   string     `json:"flow_turn_id,omitempty"`
-	TeamID       string     `json:"team_id,omitempty"`
-	TeamTurnID   string     `json:"team_turn_id,omitempty"`
-	MemberID     string     `json:"member_id,omitempty"`
-	MemberTurnID string     `json:"member_turn_id,omitempty"`
-	MemberType   MemberType `json:"member_type,omitempty"`
-	Attempt      int        `json:"attempt"`
-	RecoveryOf   string     `json:"recovery_of,omitempty"`
-	StartedSeq   int64      `json:"started_seq,omitempty"`
-	StartedAt    time.Time  `json:"started_at,omitempty"`
-	Input        string     `json:"input,omitempty"`
-	CallerTeam   string     `json:"caller_team,omitempty"`
-	StartedEvent string     `json:"started_event"`
-	SafeToRetry  bool       `json:"safe_to_retry"`
-	RetryReason  string     `json:"retry_reason,omitempty"`
+	Kind         string    `json:"kind"` // flow_turn | team_turn | call_turn
+	FlowTurnID   string    `json:"flow_turn_id,omitempty"`
+	TeamID       string    `json:"team_id,omitempty"`
+	TeamTurnID   string    `json:"team_turn_id,omitempty"`
+	CallID       string    `json:"call_id,omitempty"`
+	CallTurnID   string    `json:"call_turn_id,omitempty"`
+	CallType     CallType  `json:"call_type,omitempty"`
+	Attempt      int       `json:"attempt"`
+	RecoveryOf   string    `json:"recovery_of,omitempty"`
+	StartedSeq   int64     `json:"started_seq,omitempty"`
+	StartedAt    time.Time `json:"started_at,omitempty"`
+	Input        string    `json:"input,omitempty"`
+	CallerTeam   string    `json:"caller_team,omitempty"`
+	StartedEvent string    `json:"started_event"`
+	SafeToRetry  bool      `json:"safe_to_retry"`
+	RetryReason  string    `json:"retry_reason,omitempty"`
 }
 
 type RecoveryStatus struct {

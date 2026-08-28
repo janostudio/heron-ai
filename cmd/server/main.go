@@ -27,6 +27,9 @@ func main() {
 	flow := flag.String("flow", "", "Flow config path (default: .agents/flows/default.yml)")
 	sessionID := flag.String("session", "", "Resume an existing FlowSession")
 	jsonRPC := flag.Bool("json-rpc", false, "Run a long-lived JSON-RPC 2.0 server over stdin/stdout")
+	inputFormat := flag.String("input-format", "", "Machine input format (stream-json)")
+	outputFormat := flag.String("output-format", "", "Machine output format (stream-json)")
+	serverURL := flag.String("server", "", "HTTP Heron server URL for stream-json client mode")
 	port := flag.String("port", "", "HTTP server port (default: 8080)")
 	serve := flag.Bool("serve", false, "Start HTTP server mode")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
@@ -40,6 +43,24 @@ func main() {
 	if *jsonRPC && (*prompt != "" || *serve) {
 		fmt.Fprintln(os.Stderr, "Error: --json-rpc cannot be combined with --prompt or --serve")
 		os.Exit(1)
+	}
+	if (*inputFormat != "" || *outputFormat != "") &&
+		(*prompt != "" || *serve || *jsonRPC) {
+		fmt.Fprintln(os.Stderr, "Error: --input-format/--output-format cannot be combined with --prompt, --serve, or --json-rpc")
+		os.Exit(1)
+	}
+	if *inputFormat == "stream-json" || *outputFormat == "stream-json" {
+		if *inputFormat != "stream-json" || *outputFormat != "stream-json" {
+			fmt.Fprintln(os.Stderr, "Error: stream-json requires both --input-format and --output-format")
+			os.Exit(1)
+		}
+		streamFlowPath := resolveFlowPath(*flow)
+		if streamFlowPath == "" || strings.TrimSpace(*serverURL) == "" {
+			fmt.Fprintln(os.Stderr, "Error: stream-json requires --flow and --server")
+			os.Exit(1)
+		}
+		runStreamJSONClient(streamFlowPath, *serverURL)
+		return
 	}
 
 	flowPath := resolveFlowPath(*flow)
@@ -97,7 +118,12 @@ func startServer(flowPath, port string) {
 		os.Exit(1)
 	}
 
-	handler := view.NewRuntimeHandlerWithSessions(bundle.Flow, bundle.Sessions)
+	handler := view.NewRuntimeHandlerWithSessionsAndTasks(
+		bundle.Flow,
+		bundle.Sessions,
+		bundle.Tasks,
+		bundle.TaskControl,
+	)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/run", handler.HandleRun)
 	mux.HandleFunc("/api/sessions", handler.HandleRun)
@@ -107,7 +133,12 @@ func startServer(flowPath, port string) {
 	mux.HandleFunc("/api/recovery/status", handler.HandleRecoveryStatus)
 	mux.HandleFunc("/api/recovery", handler.HandleRecover)
 	mux.HandleFunc("/api/resume", handler.HandleResume)
+	mux.HandleFunc("/api/approvals", handler.HandleApproval)
+	mux.HandleFunc("/api/result", handler.HandleResult)
 	mux.HandleFunc("/api/cancel", handler.HandleCancel)
+	mux.HandleFunc("/api/tasks", handler.HandleTaskStatus)
+	mux.HandleFunc("/api/tasks/cancel", handler.HandleTaskCancel)
+	mux.HandleFunc("/api/tasks/stream", handler.HandleTaskStream)
 
 	if port == "" {
 		port = os.Getenv("PORT")
@@ -211,7 +242,12 @@ func aggregateTeamUsage(results []types.TeamTurnResult) types.TokenUsage {
 	for _, result := range results {
 		usage.PromptTokens += result.Usage.PromptTokens
 		usage.CompletionTokens += result.Usage.CompletionTokens
+		usage.ReasoningTokens += result.Usage.ReasoningTokens
 		usage.TotalTokens += result.Usage.TotalTokens
+		usage.PromptCacheHitTokens += result.Usage.PromptCacheHitTokens
+		usage.PromptCacheMissTokens += result.Usage.PromptCacheMissTokens
+		usage.CacheReadInputTokens += result.Usage.CacheReadInputTokens
+		usage.CacheCreationInputTokens += result.Usage.CacheCreationInputTokens
 	}
 	return usage
 }

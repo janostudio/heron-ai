@@ -17,8 +17,8 @@ type MemoryObservation struct {
 type MemoryScope string
 
 const (
-	MemoryScopeTeam     MemoryScope = "team"
-	MemoryScopeSubagent MemoryScope = "subagent"
+	MemoryScopeTeam  MemoryScope = "team"
+	MemoryScopeAgent MemoryScope = "agent"
 )
 
 // MemoryWorkspaceRef keeps only a small pointer to workspace state. Complete
@@ -35,7 +35,7 @@ type MemorySnapshot struct {
 	Scope         MemoryScope          `yaml:"scope" json:"scope"`
 	SessionID     string               `yaml:"session_id" json:"session_id"`
 	TeamID        string               `yaml:"team_id" json:"team_id"`
-	MemberID      string               `yaml:"member_id,omitempty" json:"member_id,omitempty"`
+	CallID        string               `yaml:"call_id,omitempty" json:"call_id,omitempty"`
 	Revision      int                  `yaml:"revision" json:"revision"`
 	Goal          string               `yaml:"goal,omitempty" json:"goal,omitempty"`
 	Confirmed     []string             `yaml:"confirmed,omitempty" json:"confirmed,omitempty"`

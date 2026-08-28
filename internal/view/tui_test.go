@@ -967,7 +967,7 @@ func TestSelfTest_Messages_AddAllTypes(t *testing.T) {
 	// Add all message types
 	model.addMessage(DisplayMessage{Role: RoleUser, Content: "user msg"})
 	model.addMessage(DisplayMessage{Role: RoleAssistant, Content: "assistant msg"})
-	model.addMessage(DisplayMessage{Role: RoleAgent, MemberID: "agent1", Content: "agent msg"})
+	model.addMessage(DisplayMessage{Role: RoleAgent, CallID: "agent1", Content: "agent msg"})
 	model.addMessage(DisplayMessage{Role: RoleSystem, Content: "system msg"})
 	model.addMessage(DisplayMessage{Role: RoleUsage, Content: "100 tokens"})
 

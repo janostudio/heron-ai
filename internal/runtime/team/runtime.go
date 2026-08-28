@@ -2,6 +2,7 @@ package team
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,26 +11,27 @@ import (
 
 	"github.com/heron-ai/heron-engine/internal/knowledge"
 	"github.com/heron-ai/heron-engine/internal/memory"
-	"github.com/heron-ai/heron-engine/internal/runtime/member"
+	"github.com/heron-ai/heron-engine/internal/runtime/call"
 	"github.com/heron-ai/heron-engine/internal/skill"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// Runtime executes the members of one TeamTurn. It deliberately keeps the
-// first implementation small: dependencies are all-of, members without
+// Runtime executes the calls of one TeamTurn. It deliberately keeps the
+// first implementation small: dependencies are all-of, calls without
 // dependencies run in parallel, and Team output is promoted explicitly.
 type Runtime struct {
-	executors *member.Registry
+	executors *call.Registry
 	agents    map[string]types.AgentConfig
 	memories  *memory.Store
 	knowledge *knowledge.KnowledgeInjector
 	skills    *skill.SkillInjector
 	rules     map[string]types.RuleItem
 	sessions  storage.SessionWriter
+	dream     types.ConsolidationEnqueuer
 }
 
-func NewRuntime(executors *member.Registry, agentDefinitions ...map[string]types.AgentConfig) *Runtime {
+func NewRuntime(executors *call.Registry, agentDefinitions ...map[string]types.AgentConfig) *Runtime {
 	agents := make(map[string]types.AgentConfig)
 	if len(agentDefinitions) > 0 && agentDefinitions[0] != nil {
 		agents = agentDefinitions[0]
@@ -37,14 +39,14 @@ func NewRuntime(executors *member.Registry, agentDefinitions ...map[string]types
 	return &Runtime{executors: executors, agents: agents}
 }
 
-// SetMemoryStore wires the optional Team/Subagent memory extension without
+// SetMemoryStore wires the optional Team/Agent memory extension without
 // making memory a hard dependency of the core Team scheduler.
 func (r *Runtime) SetMemoryStore(store *memory.Store) {
 	r.memories = store
 }
 
 // SetKnowledgeInjector wires the optional long-term Knowledge extension.
-// Knowledge is queried at the member boundary; the Team scheduler does not
+// Knowledge is queried at the call boundary; the Team scheduler does not
 // otherwise depend on its storage format.
 func (r *Runtime) SetKnowledgeInjector(injector *knowledge.KnowledgeInjector) {
 	r.knowledge = injector
@@ -52,13 +54,13 @@ func (r *Runtime) SetKnowledgeInjector(injector *knowledge.KnowledgeInjector) {
 
 // SetSkillInjector wires the optional reusable prompt/tool bundle extension.
 // Skills remain an Agent concern; TeamRuntime only resolves them at the
-// member boundary.
+// call boundary.
 func (r *Runtime) SetSkillInjector(injector *skill.SkillInjector) {
 	r.skills = injector
 }
 
 // SetRuleDefinitions wires the global rule definitions. Rules are rendered
-// into the Subagent prompt without becoming a second orchestration protocol.
+// into the Agent prompt without becoming a second orchestration protocol.
 func (r *Runtime) SetRuleDefinitions(rules map[string]types.RuleItem) {
 	r.rules = rules
 }
@@ -67,13 +69,17 @@ func (r *Runtime) SetSessionWriter(writer storage.SessionWriter) {
 	r.sessions = writer
 }
 
+func (r *Runtime) SetConsolidationEnqueuer(enqueuer types.ConsolidationEnqueuer) {
+	r.dream = enqueuer
+}
+
 func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
 	result := types.TeamTurnResult{
-		Turn:          req.TeamTurn,
-		MemberResults: make(map[string]types.MemberResult),
+		Turn:        req.TeamTurn,
+		CallResults: make(map[string]types.CallResult),
 	}
 	if r.executors == nil {
-		result.Error = "member executor registry is nil"
+		result.Error = "call executor registry is nil"
 		result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
 		return result, fmt.Errorf("%s", result.Error)
 	}
@@ -84,8 +90,12 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 	}
 
 	var teamMemory types.MemorySnapshot
-	if r.memories != nil && req.Team.Memory.Enabled {
-		loaded, err := r.memories.LoadTeam(ctx, req.FlowSession.ID, req.Team.ID)
+	memories := r.memories
+	if memories != nil && req.Team.Memory.Enabled {
+		memories = memories.ForConfig(req.Team.Memory)
+	}
+	if memories != nil && req.Team.Memory.Enabled {
+		loaded, err := memories.LoadTeam(ctx, req.FlowSession.ID, req.Team.ID)
 		if err != nil {
 			result.Error = err.Error()
 			result.Next = &types.Route{Action: types.NextCoordinate, Reason: err.Error()}
@@ -94,16 +104,39 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		teamMemory = loaded
 	}
 
-	remaining := make(map[string]types.Member, len(req.Team.Members))
-	for name, configured := range req.Team.Members {
+	remaining := make(map[string]types.Call, len(req.Team.Calls))
+	for name, configured := range req.Team.Calls {
 		remaining[name] = configured
 	}
 
-	completed := make(map[string]bool, len(req.Team.Members))
+	completed := make(map[string]bool, len(req.Team.Calls))
 	var allRecords []types.SharedRecord
 	var allReply []string
 	teamCalls := 0
 	limits := req.Limits.WithDefaults()
+
+	// A resumed TeamTurn may already contain completed sibling Calls. They
+	// are inputs to the Team, not work to be executed again.
+	for name, callResult := range req.ResumeResults {
+		if _, ok := remaining[name]; !ok {
+			continue
+		}
+		result.CallResults[name] = callResult
+		delete(remaining, name)
+		completed[name] = callResult.Status == types.TurnCompleted
+		allRecords = append(allRecords, callResult.Records...)
+		if strings.TrimSpace(callResult.Reply) != "" {
+			allReply = append(allReply, callResult.Reply)
+		}
+		addUsage(&result.Usage, callResult.Usage)
+	}
+	for _, name := range req.ResumeCompletedCalls {
+		if _, ok := remaining[name]; !ok {
+			continue
+		}
+		delete(remaining, name)
+		completed[name] = true
+	}
 
 	for len(remaining) > 0 {
 		if err := contextErr(ctx); err != nil {
@@ -112,8 +145,15 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 			return result, err
 		}
 
-		ready := readyMembers(remaining, completed)
-		ready = limitMembers(ready, limits.MaxParallelCalls)
+		ready := readyCalls(remaining, completed)
+		if req.ResumeCallID != "" {
+			resumeCall, ok := remaining[req.ResumeCallID]
+			if !ok {
+				return result, fmt.Errorf("resume call %q not found in Team %q", req.ResumeCallID, req.Team.ID)
+			}
+			ready = map[string]types.Call{req.ResumeCallID: resumeCall}
+		}
+		ready = limitCalls(ready, limits.MaxParallelCalls)
 		if len(ready) == 0 {
 			result.Error = "team call dependency graph cannot make progress"
 			result.Next = &types.Route{Action: types.NextFail, Reason: result.Error}
@@ -126,170 +166,321 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		}
 		teamCalls += len(ready)
 
-		batchResults, err := r.runBatch(ctx, req, ready, result.MemberResults)
+		batchResults, err := r.runBatch(ctx, memories, req, ready, result.CallResults)
 		if err != nil {
+			for _, name := range sortedCallResultNames(batchResults) {
+				callResult := batchResults[name]
+				result.CallResults[name] = callResult
+				allRecords = append(allRecords, callResult.Records...)
+				if strings.TrimSpace(callResult.Reply) != "" {
+					allReply = append(allReply, callResult.Reply)
+				}
+				addUsage(&result.Usage, callResult.Usage)
+				if callResult.Status == types.TurnWaitingApproval && callResult.PendingApproval != nil {
+					result.PendingApprovals = append(result.PendingApprovals, *callResult.PendingApproval)
+				}
+			}
 			result.Error = err.Error()
 			result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
+			result.Turn.Status = types.TurnFailed
 			return result, err
 		}
 
-		for name, memberResult := range batchResults {
-			result.MemberResults[name] = memberResult
-			delete(remaining, name)
-			completed[name] = memberResult.Status == types.TurnCompleted
-			allRecords = append(allRecords, memberResult.Records...)
-			if strings.TrimSpace(memberResult.Reply) != "" {
-				allReply = append(allReply, memberResult.Reply)
+		hasWaitingInput := false
+		hasWaitingTool := false
+		hasWaitingApproval := false
+		var waitingInput *types.CallResult
+		for _, name := range sortedCallResultNames(batchResults) {
+			callResult := batchResults[name]
+			result.CallResults[name] = callResult
+			if callResult.Status == types.TurnCompleted {
+				delete(remaining, name)
+				completed[name] = true
 			}
-			result.Usage.PromptTokens += memberResult.Usage.PromptTokens
-			result.Usage.CompletionTokens += memberResult.Usage.CompletionTokens
-			result.Usage.TotalTokens += memberResult.Usage.TotalTokens
+			allRecords = append(allRecords, callResult.Records...)
+			if strings.TrimSpace(callResult.Reply) != "" {
+				allReply = append(allReply, callResult.Reply)
+			}
+			addUsage(&result.Usage, callResult.Usage)
 
-			if memberResult.Status != types.TurnCompleted {
-				result.Error = fmt.Sprintf("member %q failed: %s", name, memberResult.Error)
+			if callResult.Status == types.TurnWaitingInput {
+				hasWaitingInput = true
+				if waitingInput == nil {
+					copy := callResult
+					waitingInput = &copy
+				}
+				continue
+			}
+			if callResult.Status == types.TurnWaitingTool {
+				hasWaitingTool = true
+				result.PendingToolTasks = append(result.PendingToolTasks,
+					pendingToolTaskForCall(req, name, callResult))
+				continue
+			}
+			if callResult.Status == types.TurnWaitingApproval {
+				hasWaitingApproval = true
+				if callResult.PendingApproval != nil {
+					result.PendingApprovals = append(result.PendingApprovals, *callResult.PendingApproval)
+				}
+				continue
+			}
+			if callResult.Status != types.TurnCompleted {
+				result.Error = fmt.Sprintf("call %q failed: %s", name, callResult.Error)
 				result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
+				result.Turn.Status = types.TurnFailed
 				return result, fmt.Errorf("%s", result.Error)
 			}
 		}
+		if hasWaitingTool || hasWaitingInput || hasWaitingApproval {
+			// The whole ready batch is now represented by this TeamTurn.
+			// Keep all pending calls together so Flow.Resume can wait for and
+			// resume them as one aggregate rather than selecting one event.
+			switch {
+			case hasWaitingApproval:
+				result.Turn.Status = types.TurnWaitingApproval
+				result.Next = &types.Route{Action: types.NextWaitApproval, Reason: "one or more Agent Tool calls require approval"}
+			case hasWaitingTool:
+				result.Turn.Status = types.TurnWaitingTool
+				result.Next = &types.Route{Action: types.NextWaitTool, Reason: "one or more Agent Tool tasks are still running"}
+			case waitingInput != nil:
+				result.Turn.Status = types.TurnWaitingInput
+				result.Next = waitingInput.Next
+			}
+			result.Reply = strings.Join(allReply, "\n\n")
+			return result, nil
+		}
 	}
 
-	result.Records = selectTeamRecords(req.Team, result.MemberResults, allRecords)
+	result.Records = selectTeamRecords(req.Team, result.CallResults, allRecords)
 	result.Reply = strings.Join(allReply, "\n\n")
-	result.Next = resolveNext(req.Team, result.MemberResults)
+	result.Next = resolveNext(req.Team, result.CallResults)
 	result.Turn.Status = types.TurnCompleted
 	result.Turn.RecordIDs = recordIDs(result.Records)
-	if r.memories != nil && req.Team.Memory.Enabled {
+	if memories != nil && req.Team.Memory.Enabled {
 		teamMemory.RecordIDs = append(teamMemory.RecordIDs, result.Turn.RecordIDs...)
 		if reply := strings.TrimSpace(result.Reply); reply != "" {
 			teamMemory.NextSteps = append(teamMemory.NextSteps, reply)
 		}
-		if err := r.memories.SaveTeam(ctx, teamMemory); err != nil {
+		if err := memories.SaveTeam(ctx, teamMemory); err != nil {
 			return result, err
 		}
 	}
 	return result, nil
 }
 
+func sortedCallResultNames(results map[string]types.CallResult) []string {
+	names := make([]string, 0, len(results))
+	for name := range results {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (r *Runtime) runBatch(
 	ctx context.Context,
+	memories *memory.Store,
 	req types.TeamTurnRequest,
-	ready map[string]types.Member,
-	previous map[string]types.MemberResult,
-) (map[string]types.MemberResult, error) {
-	results := make(map[string]types.MemberResult, len(ready))
+	ready map[string]types.Call,
+	previous map[string]types.CallResult,
+) (map[string]types.CallResult, error) {
+	results := make(map[string]types.CallResult, len(ready))
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var firstErr error
 
 	for name, configured := range ready {
 		wg.Add(1)
-		go func(name string, configured types.Member) {
+		go func(name string, configured types.Call) {
 			defer wg.Done()
 
-			memberReq := types.MemberRequest{
-				FlowSession:   req.FlowSession,
-				FlowTurn:      req.FlowTurn,
-				TeamSession:   req.TeamSession,
-				TeamTurn:      req.TeamTurn,
-				Member:        configured,
-				Input:         buildMemberInput(req.Input, req.Records, previous, configured),
-				Records:       selectMemberRecords(req.Records, previous, configured),
-				MemberTurnID:  fmt.Sprintf("%s:%s", req.TeamTurn.ID, configured.ID),
-				Attempt:       req.TeamTurn.Attempt,
-				RecoveryOf:    req.TeamTurn.RecoveryOf,
-				WorkspaceRoot: req.WorkspaceRoot,
-				Limits:        req.Limits,
+			callReq := types.CallRequest{
+				FlowSession:        req.FlowSession,
+				FlowTurn:           req.FlowTurn,
+				TeamSession:        req.TeamSession,
+				TeamTurn:           req.TeamTurn,
+				Call:               configured,
+				Input:              buildCallInput(req.Input, req.Records, previous, configured),
+				ContextBlocks:      append([]types.ContextBlock(nil), req.ContextBlocks...),
+				Records:            selectCallRecords(req.Records, previous, configured),
+				CallTurnID:         fmt.Sprintf("%s:%s", req.TeamTurn.ID, configured.ID),
+				AgentTurnID:        fmt.Sprintf("%s:%s", req.TeamTurn.ID, configured.ID),
+				Attempt:            req.TeamTurn.Attempt,
+				RecoveryOf:         req.TeamTurn.RecoveryOf,
+				ResumeCheckpointID: req.ResumeCheckpointID,
+				ResumeTaskID:       req.ResumeTaskID,
+				WorkspaceRoot:      req.WorkspaceRoot,
+				Limits:             req.Limits,
 			}
-			if r.memories != nil && req.Team.Memory.Enabled {
-				teamSnapshot, memoryErr := r.memories.LoadTeam(ctx, req.FlowSession.ID, req.Team.ID)
+			if callReq.Input != "" && !hasContextBlock(callReq.ContextBlocks, "input") {
+				callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
+					Kind: "input", Text: callReq.Input, Source: "user",
+					Stability: "dynamic", Priority: 80, Compressible: true,
+				})
+			}
+			resume := req.ResumeCalls[name]
+			if resume.CallTurnID == "" && req.ResumeCallID == name {
+				resume.CallTurnID = req.ResumeCallTurnID
+				resume.CheckpointID = req.ResumeCheckpointID
+				resume.TaskID = req.ResumeTaskID
+				resume.ApprovalID = req.ResumeApprovalID
+				resume.Approval = req.ResumeApproval
+			}
+			if resume.CallTurnID != "" {
+				callReq.CallTurnID = resume.CallTurnID
+				callReq.AgentTurnID = resume.CallTurnID
+			}
+			if req.ResumeCallID == name && req.ResumeInput != "" {
+				callReq.Input = req.ResumeInput
+			}
+			callReq.ResumeCheckpointID = resume.CheckpointID
+			callReq.ResumeTaskID = resume.TaskID
+			callReq.ResumeApprovalID = resume.ApprovalID
+			callReq.ResumeApproval = resume.Approval
+			if memories != nil && req.Team.Memory.Enabled {
+				teamSnapshot, memoryErr := memories.LoadTeam(ctx, req.FlowSession.ID, req.Team.ID)
 				if memoryErr != nil {
 					mu.Lock()
 					if firstErr == nil {
 						firstErr = memoryErr
 					}
-					results[name] = types.MemberResult{Status: types.TurnFailed, Error: memoryErr.Error()}
+					results[name] = types.CallResult{Status: types.TurnFailed, Error: memoryErr.Error()}
 					mu.Unlock()
 					return
 				}
-				memberReq.TeamMemory = renderMemory(teamSnapshot)
+				callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
+					Kind: "team_memory", Text: renderMemory(teamSnapshot),
+					Source: "team_memory", Stability: "dynamic", Priority: 70,
+					Compressible: true,
+				})
 			}
-			if r.knowledge != nil && configured.Type == types.MemberSubagent {
-				query := strings.TrimSpace(configured.Responsibility + "\n" + req.Input)
-				if query != "" {
-					knowledgeText, knowledgeErr := r.knowledge.Inject(ctx, query, configured.AgentID, req.Team.ID)
-					if knowledgeErr != nil {
-						mu.Lock()
-						if firstErr == nil {
-							firstErr = knowledgeErr
-						}
-						results[name] = types.MemberResult{Status: types.TurnFailed, Error: knowledgeErr.Error()}
-						mu.Unlock()
-						return
-					}
-					memberReq.KnowledgeText = knowledgeText
-				}
-			}
-			if configured.Type == types.MemberSubagent {
+			if configured.Type == types.CallAgent {
 				agent, ok := r.agents[configured.AgentID]
 				if !ok {
-					memberResult := types.MemberResult{
+					callResult := types.CallResult{
 						Status: types.TurnFailed,
 						Error:  fmt.Sprintf("agent definition %q not found", configured.AgentID),
 					}
 					mu.Lock()
-					results[name] = memberResult
+					results[name] = callResult
 					if firstErr == nil {
-						firstErr = fmt.Errorf("member %q: %s", name, memberResult.Error)
+						firstErr = fmt.Errorf("call %q: %s", name, callResult.Error)
 					}
 					mu.Unlock()
 					return
 				}
+				if r.knowledge != nil {
+					query := strings.TrimSpace(configured.Responsibility + "\n" + req.Input)
+					if query != "" {
+						knowledgeText, knowledgeErr := r.knowledge.InjectWithAllowlist(
+							ctx,
+							query,
+							configured.AgentID,
+							req.Team.ID,
+							agent.Knowledge,
+						)
+						if knowledgeErr != nil {
+							mu.Lock()
+							if firstErr == nil {
+								firstErr = knowledgeErr
+							}
+							results[name] = types.CallResult{Status: types.TurnFailed, Error: knowledgeErr.Error()}
+							mu.Unlock()
+							return
+						}
+						callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
+							Kind: "knowledge", Text: knowledgeText,
+							Source: "knowledge", Stability: "semi_stable", Priority: 90,
+							Compressible: true,
+						})
+					}
+				}
 				if r.skills != nil {
 					prompts, tools := r.skills.Inject(agent.Skills)
-					memberReq.SkillText = strings.Join(prompts, "\n\n")
+					if text := strings.TrimSpace(strings.Join(prompts, "\n\n")); text != "" {
+						callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
+							Kind: "skills", Text: text, Source: "skill",
+							Placement: "system", Stability: "stable", Priority: 80,
+						})
+					}
 					agent.Tools.Builtin = appendUnique(agent.Tools.Builtin, tools...)
 				}
-				memberReq.RuleText = renderRules(r.rules, agent.Rules, configured.AgentID, req.Team.ID)
-				memberReq.AgentDefinition = &agent
-				if r.memories != nil && req.Team.Memory.Enabled {
-					snapshot, memoryErr := r.memories.LoadSubagent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
+				if text := renderRules(r.rules, agent.Rules, configured.AgentID, req.Team.ID); text != "" {
+					callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
+						Kind: "rules", Text: text, Source: "rule",
+						Placement: "system", Stability: "stable", Priority: 90,
+					})
+				}
+				callReq.AgentDefinition = &agent
+				if memories != nil && req.Team.Memory.Enabled {
+					snapshot, memoryErr := memories.LoadAgent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
 					if memoryErr != nil {
 						mu.Lock()
 						if firstErr == nil {
 							firstErr = memoryErr
 						}
-						results[name] = types.MemberResult{Status: types.TurnFailed, Error: memoryErr.Error()}
+						results[name] = types.CallResult{Status: types.TurnFailed, Error: memoryErr.Error()}
 						mu.Unlock()
 						return
 					}
-					memberReq.SubagentMemory = renderMemory(snapshot)
+					callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
+						Kind: "agent_memory", Text: renderMemory(snapshot),
+						Source: "agent_memory", Stability: "dynamic", Priority: 60,
+						Compressible: true,
+					})
 				}
 			}
+			callReq.ContextBlocks = buildContextBlocks(callReq)
 
-			if err := r.appendMemberStarted(ctx, memberReq); err != nil {
+			if err := r.appendCallStarted(ctx, callReq); err != nil {
 				mu.Lock()
 				if firstErr == nil {
 					firstErr = err
 				}
-				results[name] = types.MemberResult{Status: types.TurnFailed, Error: err.Error()}
+				results[name] = types.CallResult{Status: types.TurnFailed, Error: err.Error()}
 				mu.Unlock()
 				return
 			}
-			memberResult, err := r.executors.Execute(ctx, memberReq)
-			if err == nil && memberResult.Status == types.TurnCompleted && r.memories != nil && req.Team.Memory.Enabled {
-				if memoryErr := r.saveSubagentMemory(ctx, req, configured, memberReq.SubagentMemory, memberResult); memoryErr != nil {
+			callResult, err := r.executors.Execute(ctx, callReq)
+			if callReq.ResumeApproval != nil {
+				decision := *callReq.ResumeApproval
+				callResult.Approval = &decision
+			}
+			if err == nil && callResult.Status == types.TurnCompleted && memories != nil && req.Team.Memory.Enabled {
+				if memoryErr := r.saveAgentMemory(ctx, memories, req, configured, contextBlockText(callReq.ContextBlocks, "agent_memory"), callResult); memoryErr != nil {
 					err = memoryErr
-					memberResult.Status = types.TurnFailed
-					memberResult.Error = memoryErr.Error()
+					callResult.Status = types.TurnFailed
+					callResult.Error = memoryErr.Error()
 				}
+			}
+			if err == nil && callResult.Status == types.TurnCompleted &&
+				r.dream != nil && req.Team.Memory.Enabled && len(callResult.Records) > 0 {
+				// Dream maintenance is best effort and never changes the
+				// user-facing call result.
+				_ = r.dream.Enqueue(context.Background(), types.ContextConsolidation{
+					FlowSessionID: callReq.FlowSession.ID,
+					TeamID:        callReq.TeamTurn.TeamID,
+					AgentID:       callReq.Call.AgentID,
+					CallID:        callReq.Call.ID,
+					Records:       callResult.Records,
+					Status:        "queued",
+				})
 			}
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil && firstErr == nil {
-				firstErr = fmt.Errorf("member %q: %w", name, err)
+				firstErr = fmt.Errorf("call %q: %w", name, err)
 			}
-			results[name] = memberResult
-			if eventErr := r.appendMemberCompleted(ctx, memberReq, memberResult); eventErr != nil && firstErr == nil {
+			results[name] = callResult
+			if callResult.Status == types.TurnWaitingInput ||
+				callResult.Status == types.TurnWaitingTool ||
+				callResult.Status == types.TurnWaitingApproval {
+				if eventErr := r.appendCallWaiting(ctx, callReq, callResult); eventErr != nil && firstErr == nil {
+					firstErr = eventErr
+				}
+				return
+			}
+			if eventErr := r.appendCallCompleted(ctx, callReq, callResult); eventErr != nil && firstErr == nil {
 				firstErr = eventErr
 			}
 		}(name, configured)
@@ -301,39 +492,81 @@ func (r *Runtime) runBatch(
 	return results, nil
 }
 
-func (r *Runtime) appendMemberStarted(ctx context.Context, req types.MemberRequest) error {
+func addUsage(total *types.TokenUsage, usage types.TokenUsage) {
+	if total == nil {
+		return
+	}
+	total.PromptTokens += usage.PromptTokens
+	total.CompletionTokens += usage.CompletionTokens
+	total.ReasoningTokens += usage.ReasoningTokens
+	total.TotalTokens += usage.TotalTokens
+	total.PromptCacheHitTokens += usage.PromptCacheHitTokens
+	total.PromptCacheMissTokens += usage.PromptCacheMissTokens
+	total.CacheReadInputTokens += usage.CacheReadInputTokens
+	total.CacheCreationInputTokens += usage.CacheCreationInputTokens
+}
+
+func pendingToolTaskForCall(req types.TeamTurnRequest, callID string, result types.CallResult) types.PendingToolTask {
+	pending := types.PendingToolTask{
+		CallID:       callID,
+		CallTurnID:   result.CallTurnID,
+		AgentTurnID:  result.CallTurnID,
+		AgentID:      result.AgentID,
+		TaskID:       result.TaskID,
+		CheckpointID: result.CheckpointID,
+		Status:       result.Status,
+	}
+	if result.Checkpoint != nil {
+		if pending.CallTurnID == "" {
+			pending.CallTurnID = result.Checkpoint.AgentTurnID
+		}
+		if pending.AgentTurnID == "" {
+			pending.AgentTurnID = result.Checkpoint.AgentTurnID
+		}
+		pending.AgentID = result.Checkpoint.AgentID
+	}
+	if pending.CallTurnID == "" {
+		pending.CallTurnID = fmt.Sprintf("%s:%s", req.TeamTurn.ID, callID)
+	}
+	if pending.AgentTurnID == "" {
+		pending.AgentTurnID = pending.CallTurnID
+	}
+	return pending
+}
+
+func (r *Runtime) appendCallStarted(ctx context.Context, req types.CallRequest) error {
 	if r.sessions == nil {
 		return nil
 	}
 	eventType := types.EventCommandTurnStarted
-	if req.Member.Type == types.MemberSubagent {
-		eventType = types.EventSubagentTurnStarted
-	} else if req.Member.Type == types.MemberWebhook {
+	if req.Call.Type == types.CallAgent {
+		eventType = types.EventAgentTurnStarted
+	} else if req.Call.Type == types.CallWebhook {
 		eventType = types.EventWebhookTurnStarted
 	}
-	if req.Member.Type == types.MemberSubagent {
-		subagentSession := types.SubagentSession{
-			ID:            fmt.Sprintf("%s:%s", req.TeamSession.ID, req.Member.ID),
+	if req.Call.Type == types.CallAgent {
+		agentSession := types.AgentSession{
+			ID:            fmt.Sprintf("%s:%s", req.TeamSession.ID, req.Call.ID),
 			TeamSessionID: req.TeamSession.ID,
-			MemberID:      req.Member.ID,
-			AgentID:       req.Member.AgentID,
+			CallID:        req.Call.ID,
+			AgentID:       req.Call.AgentID,
 			Status:        types.SessionRunning,
 			CreatedAt:     req.TeamSession.CreatedAt,
 			UpdatedAt:     time.Now().UTC(),
 		}
 		if _, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
-			Type:          types.EventSubagentSessionCreated,
+			Type:          types.EventAgentSessionCreated,
 			FlowSessionID: req.FlowSession.ID,
 			FlowTurnID:    req.FlowTurn.ID,
 			TeamSessionID: req.TeamSession.ID,
 			TeamTurnID:    req.TeamTurn.ID,
 			TeamID:        req.TeamTurn.TeamID,
-			MemberID:      req.Member.ID,
-			MemberTurnID:  req.MemberTurnID,
-			MemberType:    req.Member.Type,
+			CallID:        req.Call.ID,
+			CallTurnID:    req.CallTurnID,
+			CallType:      req.Call.Type,
 			Attempt:       req.Attempt,
 			RecoveryOf:    req.RecoveryOf,
-			Payload:       map[string]any{"subagent_session": subagentSession},
+			Payload:       map[string]any{"agent_session": agentSession},
 		}); err != nil {
 			return err
 		}
@@ -345,55 +578,186 @@ func (r *Runtime) appendMemberStarted(ctx context.Context, req types.MemberReque
 		TeamSessionID: req.TeamSession.ID,
 		TeamTurnID:    req.TeamTurn.ID,
 		TeamID:        req.TeamTurn.TeamID,
-		MemberID:      req.Member.ID,
-		MemberTurnID:  req.MemberTurnID,
-		MemberType:    req.Member.Type,
+		CallID:        req.Call.ID,
+		CallTurnID:    req.CallTurnID,
+		CallType:      req.Call.Type,
 		Attempt:       req.Attempt,
 		RecoveryOf:    req.RecoveryOf,
 		Payload: map[string]any{
-			"member": req.Member,
-			"input":  req.Input,
+			"call":  req.Call,
+			"input": req.Input,
 		},
 	})
 	return err
 }
 
-func (r *Runtime) appendMemberCompleted(ctx context.Context, req types.MemberRequest, result types.MemberResult) error {
+func (r *Runtime) appendCallCompleted(ctx context.Context, req types.CallRequest, result types.CallResult) error {
 	if r.sessions == nil {
 		return nil
 	}
 	eventType := types.EventCommandTurnCompleted
-	if req.Member.Type == types.MemberSubagent {
-		eventType = types.EventSubagentTurnCompleted
-	} else if req.Member.Type == types.MemberWebhook {
+	if req.Call.Type == types.CallAgent {
+		eventType = types.EventAgentTurnCompleted
+	} else if req.Call.Type == types.CallWebhook {
 		eventType = types.EventWebhookTurnCompleted
 	}
-	_, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
+	if _, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
 		Type:          eventType,
 		FlowSessionID: req.FlowSession.ID,
 		FlowTurnID:    req.FlowTurn.ID,
 		TeamSessionID: req.TeamSession.ID,
 		TeamTurnID:    req.TeamTurn.ID,
 		TeamID:        req.TeamTurn.TeamID,
-		MemberID:      req.Member.ID,
-		MemberTurnID:  req.MemberTurnID,
-		MemberType:    req.Member.Type,
-		Payload:       map[string]any{"member_result": result},
+		CallID:        req.Call.ID,
+		CallTurnID:    req.CallTurnID,
+		CallType:      req.Call.Type,
+		Payload:       map[string]any{"call_result": result},
+	}); err != nil {
+		return err
+	}
+	if result.Approval != nil {
+		_, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
+			Type:          types.EventApprovalResolved,
+			FlowSessionID: req.FlowSession.ID,
+			FlowTurnID:    req.FlowTurn.ID,
+			TeamSessionID: req.TeamSession.ID,
+			TeamTurnID:    req.TeamTurn.ID,
+			TeamID:        req.TeamTurn.TeamID,
+			CallID:        req.Call.ID,
+			CallTurnID:    req.CallTurnID,
+			CallType:      req.Call.Type,
+			Attempt:       req.Attempt,
+			RecoveryOf:    req.RecoveryOf,
+			Payload:       map[string]any{"approval": result.Approval},
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return r.appendAgentSessionUpdated(ctx, req, result.Status)
+}
+
+func (r *Runtime) appendCallWaiting(ctx context.Context, req types.CallRequest, result types.CallResult) error {
+	if r.sessions == nil {
+		return nil
+	}
+	if req.Call.Type != types.CallAgent {
+		return r.appendCallCompleted(ctx, req, result)
+	}
+	eventType := types.EventAgentTurnWaitingInput
+	if result.Status == types.TurnWaitingTool {
+		eventType = types.EventAgentTurnWaitingTool
+	} else if result.Status == types.TurnWaitingApproval {
+		eventType = types.EventAgentTurnWaitingApproval
+	}
+	if _, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
+		Type:          eventType,
+		FlowSessionID: req.FlowSession.ID,
+		FlowTurnID:    req.FlowTurn.ID,
+		TeamSessionID: req.TeamSession.ID,
+		TeamTurnID:    req.TeamTurn.ID,
+		TeamID:        req.TeamTurn.TeamID,
+		CallID:        req.Call.ID,
+		CallTurnID:    req.CallTurnID,
+		CallType:      req.Call.Type,
+		Attempt:       req.Attempt,
+		RecoveryOf:    req.RecoveryOf,
+		Payload: map[string]any{
+			"call_result":   result,
+			"checkpoint_id": result.CheckpointID,
+			"task_id":       result.TaskID,
+		},
+	}); err != nil {
+		return err
+	}
+	if result.PendingApproval != nil {
+		_, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
+			Type:          types.EventApprovalRequested,
+			FlowSessionID: req.FlowSession.ID,
+			FlowTurnID:    req.FlowTurn.ID,
+			TeamSessionID: req.TeamSession.ID,
+			TeamTurnID:    req.TeamTurn.ID,
+			TeamID:        req.TeamTurn.TeamID,
+			CallID:        req.Call.ID,
+			CallTurnID:    req.CallTurnID,
+			CallType:      req.Call.Type,
+			Attempt:       req.Attempt,
+			RecoveryOf:    req.RecoveryOf,
+			Payload:       map[string]any{"approval": result.PendingApproval},
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return r.appendAgentSessionUpdated(ctx, req, result.Status)
+}
+
+func (r *Runtime) appendAgentSessionUpdated(
+	ctx context.Context,
+	req types.CallRequest,
+	status types.TurnStatus,
+) error {
+	if r.sessions == nil || req.Call.Type != types.CallAgent {
+		return nil
+	}
+	agentStatus := sessionStatusForCall(status)
+	agentSession := types.AgentSession{
+		ID:            fmt.Sprintf("%s:%s", req.TeamSession.ID, req.Call.ID),
+		TeamSessionID: req.TeamSession.ID,
+		CallID:        req.Call.ID,
+		AgentID:       req.Call.AgentID,
+		Status:        agentStatus,
+		CreatedAt:     req.TeamSession.CreatedAt,
+		UpdatedAt:     time.Now().UTC(),
+	}
+	_, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
+		Type:          types.EventAgentSessionUpdated,
+		FlowSessionID: req.FlowSession.ID,
+		FlowTurnID:    req.FlowTurn.ID,
+		TeamSessionID: req.TeamSession.ID,
+		TeamTurnID:    req.TeamTurn.ID,
+		TeamID:        req.TeamTurn.TeamID,
+		CallID:        req.Call.ID,
+		CallTurnID:    req.CallTurnID,
+		CallType:      req.Call.Type,
+		Attempt:       req.Attempt,
+		RecoveryOf:    req.RecoveryOf,
+		Payload:       map[string]any{"agent_session": agentSession},
 	})
 	return err
 }
 
-func (r *Runtime) saveSubagentMemory(
+func sessionStatusForCall(status types.TurnStatus) types.SessionStatus {
+	switch status {
+	case types.TurnWaitingInput:
+		return types.SessionWaitingInput
+	case types.TurnWaitingTool:
+		return types.SessionWaitingTool
+	case types.TurnWaitingApproval:
+		return types.SessionWaitingApproval
+	case types.TurnCompleted:
+		return types.SessionCompleted
+	case types.TurnCancelled:
+		return types.SessionCancelled
+	case types.TurnFailed:
+		return types.SessionFailed
+	default:
+		return types.SessionRunning
+	}
+}
+
+func (r *Runtime) saveAgentMemory(
 	ctx context.Context,
+	memories *memory.Store,
 	req types.TeamTurnRequest,
-	configured types.Member,
+	configured types.Call,
 	previousText string,
-	result types.MemberResult,
+	result types.CallResult,
 ) error {
-	if configured.Type != types.MemberSubagent || r.memories == nil {
+	if configured.Type != types.CallAgent || memories == nil {
 		return nil
 	}
-	snapshot, err := r.memories.LoadSubagent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
+	snapshot, err := memories.LoadAgent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
 	if err != nil {
 		return err
 	}
@@ -415,7 +779,7 @@ func (r *Runtime) saveSubagentMemory(
 			Revision: operation.Revision,
 		})
 	}
-	return r.memories.SaveSubagent(ctx, snapshot)
+	return memories.SaveAgent(ctx, snapshot)
 }
 
 func renderMemory(snapshot types.MemorySnapshot) string {
@@ -496,8 +860,8 @@ func appendUnique(values []string, extra ...string) []string {
 	return values
 }
 
-func readyMembers(remaining map[string]types.Member, completed map[string]bool) map[string]types.Member {
-	ready := make(map[string]types.Member)
+func readyCalls(remaining map[string]types.Call, completed map[string]bool) map[string]types.Call {
+	ready := make(map[string]types.Call)
 	for name, configured := range remaining {
 		ok := true
 		for _, dependency := range configured.DependsOn {
@@ -513,12 +877,12 @@ func readyMembers(remaining map[string]types.Member, completed map[string]bool) 
 	return ready
 }
 
-func limitMembers(members map[string]types.Member, max int) map[string]types.Member {
-	if max <= 0 || len(members) <= max {
-		return members
+func limitCalls(calls map[string]types.Call, max int) map[string]types.Call {
+	if max <= 0 || len(calls) <= max {
+		return calls
 	}
-	limited := make(map[string]types.Member, max)
-	for name, configured := range members {
+	limited := make(map[string]types.Call, max)
+	for name, configured := range calls {
 		if len(limited) >= max {
 			break
 		}
@@ -527,41 +891,80 @@ func limitMembers(members map[string]types.Member, max int) map[string]types.Mem
 	return limited
 }
 
-func buildMemberInput(
+func buildCallInput(
 	input string,
 	records []types.SharedRecord,
-	previous map[string]types.MemberResult,
-	configured types.Member,
+	previous map[string]types.CallResult,
+	configured types.Call,
 ) string {
-	var sections []string
+	// Records are passed separately through CallRequest. Keep this value as
+	// raw user input; PromptRenderer is the single owner of Agent section
+	// headings and formatting. This prevents "## Input" and
+	// "## Shared Records" from being wrapped twice.
 	if strings.TrimSpace(input) != "" && shouldReceiveInput(configured.Inputs) {
-		sections = append(sections, "## Input\n"+input)
+		return input
 	}
-	selected := selectMemberRecords(records, previous, configured)
-	if len(selected) > 0 {
-		sections = append(sections, "## Shared Records\n"+summarizeRecords(selected))
+	return ""
+}
+
+func buildContextBlocks(req types.CallRequest) []types.ContextBlock {
+	blocks := make([]types.ContextBlock, 0, len(req.ContextBlocks)+3)
+	hasInput := false
+	for _, block := range req.ContextBlocks {
+		if block.Kind == "input" {
+			hasInput = true
+			blocks = append(blocks, block)
+			continue
+		}
+		if block.Kind != "responsibility" && block.Kind != "records" {
+			blocks = append(blocks, block)
+		}
 	}
-	return strings.Join(sections, "\n\n")
+	add := func(kind, text, source, stability string, priority int, compressible bool) {
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		blocks = append(blocks, types.ContextBlock{
+			Kind: kind, Text: text, Source: source, Stability: stability,
+			Priority: priority, Compressible: compressible,
+		})
+	}
+	add("responsibility", req.Call.Responsibility, "call", "semi_stable", 100, true)
+	if !hasInput {
+		add("input", req.Input, "user", "dynamic", 80, true)
+	}
+	if len(req.Records) > 0 {
+		data, err := json.Marshal(req.Records)
+		if err == nil {
+			add("records", string(data), "shared_records", "dynamic", 50, true)
+		}
+	}
+	return blocks
+}
+
+func contextBlockText(blocks []types.ContextBlock, kind string) string {
+	for _, block := range blocks {
+		if block.Kind == kind {
+			return block.Text
+		}
+	}
+	return ""
+}
+
+func hasContextBlock(blocks []types.ContextBlock, kind string) bool {
+	for _, block := range blocks {
+		if block.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldReceiveInput(inputs types.InputSpec) bool {
-	return inputs.UserMessage ||
-		inputs.TeamUserMessage ||
-		inputs.FlowRecords != nil ||
-		inputs.TeamRecords != nil ||
-		inputs.Records != nil ||
-		inputs.TeamMemory != ""
+	return inputs.UserMessage || inputs.TeamUserMessage
 }
 
-func summarizeRecords(records []types.SharedRecord) string {
-	var lines []string
-	for _, record := range records {
-		lines = append(lines, fmt.Sprintf("- %s (%s): %s", record.Name, record.Kind, record.Summary))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func summarizeMemberResults(results map[string]types.MemberResult) string {
+func summarizeCallResults(results map[string]types.CallResult) string {
 	var lines []string
 	for name, result := range results {
 		lines = append(lines, fmt.Sprintf("- %s: %s", name, strings.TrimSpace(result.Reply)))
@@ -569,10 +972,10 @@ func summarizeMemberResults(results map[string]types.MemberResult) string {
 	return strings.Join(lines, "\n")
 }
 
-func selectMemberRecords(
+func selectCallRecords(
 	flowRecords []types.SharedRecord,
-	previous map[string]types.MemberResult,
-	configured types.Member,
+	previous map[string]types.CallResult,
+	configured types.Call,
 ) []types.SharedRecord {
 	inputs := configured.Inputs
 	if inputs.FlowRecords == nil &&
@@ -604,8 +1007,8 @@ func selectMemberRecords(
 			}
 			continue
 		}
-		if memberResult, ok := previous[binding.From]; ok {
-			for _, record := range memberResult.Records {
+		if callResult, ok := previous[binding.From]; ok {
+			for _, record := range callResult.Records {
 				if binding.Record == "" || record.Name == binding.Record {
 					selected = append(selected, record)
 				}
@@ -614,7 +1017,7 @@ func selectMemberRecords(
 		}
 		// A binding from a Flow Team (for example `from: research`) is
 		// already promoted into req.Records by FlowRuntime. It does not
-		// appear in the Team-local previous member map.
+		// appear in the Team-local previous call map.
 		for _, record := range flowRecords {
 			if binding.Record == "" || record.Name == binding.Record {
 				selected = append(selected, record)
@@ -624,15 +1027,15 @@ func selectMemberRecords(
 	return deduplicateRecords(selected)
 }
 
-func selectTeamRecords(team types.Team, results map[string]types.MemberResult, all []types.SharedRecord) []types.SharedRecord {
+func selectTeamRecords(team types.Team, results map[string]types.CallResult, all []types.SharedRecord) []types.SharedRecord {
 	output := team.Output
 	if output.IsZero() && !team.Outputs.IsZero() {
 		output = team.Outputs
 	}
 	if len(output.Records) == 0 {
 		if output.From != "" && output.Record != "" {
-			if memberResult, ok := results[output.From]; ok {
-				for _, record := range memberResult.Records {
+			if callResult, ok := results[output.From]; ok {
+				for _, record := range callResult.Records {
 					if record.Name == output.Record {
 						applyOutputScope(&record, output.Scope)
 						return []types.SharedRecord{record}
@@ -645,11 +1048,11 @@ func selectTeamRecords(team types.Team, results map[string]types.MemberResult, a
 
 	selected := make([]types.SharedRecord, 0, len(output.Records))
 	for _, binding := range output.Records {
-		memberResult, ok := results[binding.From]
+		callResult, ok := results[binding.From]
 		if !ok {
 			continue
 		}
-		for _, record := range memberResult.Records {
+		for _, record := range callResult.Records {
 			if record.Name == binding.Record {
 				applyOutputScope(&record, binding.Scope)
 				selected = append(selected, record)
@@ -665,7 +1068,7 @@ func applyOutputScope(record *types.SharedRecord, scope string) {
 	}
 }
 
-func resolveNext(team types.Team, results map[string]types.MemberResult) *types.Route {
+func resolveNext(team types.Team, results map[string]types.CallResult) *types.Route {
 	names := make([]string, 0, len(results))
 	for name := range results {
 		names = append(names, name)

@@ -12,6 +12,7 @@ type FileStore interface {
 	Read(path string) ([]byte, error)
 	Write(path string, data []byte) error
 	Append(path string, data []byte) error
+	Delete(path string) error
 	Exists(path string) bool
 	List(dir string) ([]string, error)
 }
@@ -82,6 +83,17 @@ func (fs *FileStoreImpl) Append(path string, data []byte) error {
 	defer f.Close()
 
 	_, err = f.Write(data)
+	return err
+}
+
+func (fs *FileStoreImpl) Delete(path string) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	err := os.Remove(fs.fullPath(path))
+	if os.IsNotExist(err) {
+		return nil
+	}
 	return err
 }
 

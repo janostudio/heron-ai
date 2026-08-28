@@ -59,7 +59,7 @@ func TestSkillRegistry_ListSummaries(t *testing.T) {
 
 	summaries := reg.ListSummaries()
 	assert.Len(t, summaries, 2)
-	
+
 	names := make([]string, len(summaries))
 	descs := make([]string, len(summaries))
 	for i, s := range summaries {
@@ -80,6 +80,9 @@ description: A loaded skill
 tools:
   - tool1
   - tool2
+scripts:
+  - scripts/tool1.sh
+  - scripts/tool2.sh
 ---
 This is the skill body content.`
 
@@ -92,6 +95,7 @@ This is the skill body content.`
 	assert.Equal(t, "my-skill", skill.Name)
 	assert.Equal(t, "A loaded skill", skill.Description)
 	assert.Equal(t, []string{"tool1", "tool2"}, skill.Tools)
+	assert.Equal(t, []string{"scripts/tool1.sh", "scripts/tool2.sh"}, skill.Scripts)
 	assert.Equal(t, "This is the skill body content.", skill.Body)
 }
 

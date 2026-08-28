@@ -51,7 +51,14 @@ func TestOpenAIProvider_UsesModelDefaults(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 		return jsonResponse(`{
 			"choices": [{"message": {"content": "ok"}}],
-			"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+			"usage": {
+				"prompt_tokens": 3,
+				"completion_tokens": 2,
+				"total_tokens": 5,
+				"prompt_cache_hit_tokens": 2,
+				"prompt_cache_miss_tokens": 1,
+				"prompt_tokens_details": {"cached_tokens": 2}
+			}
 		}`), nil
 	})
 
@@ -82,6 +89,9 @@ func TestOpenAIProvider_UsesModelDefaults(t *testing.T) {
 	assert.Equal(t, 0.7, request["temperature"])
 	assert.Equal(t, 0.8, request["top_p"])
 	assert.NotContains(t, request, "max_tokens")
+	assert.Equal(t, 2, response.Usage.PromptCacheHitTokens)
+	assert.Equal(t, 1, response.Usage.PromptCacheMissTokens)
+	assert.Equal(t, 2, response.Usage.CacheReadInputTokens)
 }
 
 func TestOpenAIProvider_AgentCanOverrideModelDefaults(t *testing.T) {
@@ -115,6 +125,69 @@ func TestOpenAIProvider_AgentCanOverrideModelDefaults(t *testing.T) {
 	assert.Equal(t, float64(2048), request["max_completion_tokens"])
 }
 
+func TestOpenAIProvider_MapsImageContentPart(t *testing.T) {
+	var request map[string]any
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		return jsonResponse(`{"choices":[{"message":{"content":"seen"}}]}`), nil
+	})
+	profile := types.ModelProfile{
+		ID: "vision", Name: "vision", BaseURL: "http://test.local/v1",
+		SupportsImages: boolPtr(true),
+	}
+	provider := NewOpenAIProviderWithProfile("key", profile.BaseURL, profile.Name, profile)
+	provider.client = &http.Client{Transport: transport}
+
+	_, err := provider.Chat(context.Background(), []types.Message{{
+		Role: "user", Content: "look",
+		Parts: []types.ContentPart{{
+			Type: "image",
+			Media: &types.MediaAttachment{
+				Kind: "image", MIMEType: "image/png", SourceType: "base64",
+				DataBase64: "cG5n",
+			},
+		}},
+	}}, nil, types.ModelConfig{Model: profile.Name})
+	require.NoError(t, err)
+	messages := request["messages"].([]any)
+	content := messages[0].(map[string]any)["content"].([]any)
+	require.Len(t, content, 2)
+	require.Equal(t, "image_url", content[1].(map[string]any)["type"])
+	require.Contains(t, content[1].(map[string]any)["image_url"].(map[string]any)["url"], "data:image/png;base64")
+}
+
+func TestAnthropicProvider_MapsImageContentPart(t *testing.T) {
+	var request map[string]any
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		return jsonResponse(`{"content":[{"type":"text","text":"seen"}]}`), nil
+	})
+	profile := types.ModelProfile{
+		ID: "claude-vision", Name: "claude-vision",
+		BaseURL: "http://test.local/v1", Protocol: "anthropic_messages",
+		SupportsImages: boolPtr(true),
+	}
+	provider := NewAnthropicProviderWithProfile("key", profile.BaseURL, profile.Name, profile)
+	provider.client = &http.Client{Transport: transport}
+
+	_, err := provider.Chat(context.Background(), []types.Message{{
+		Role: "user", Content: "look",
+		Parts: []types.ContentPart{{
+			Type: "image",
+			Media: &types.MediaAttachment{
+				Kind: "image", MIMEType: "image/png", SourceType: "base64",
+				DataBase64: "cG5n",
+			},
+		}},
+	}}, nil, types.ModelConfig{Model: profile.Name})
+	require.NoError(t, err)
+	messages := request["messages"].([]any)
+	blocks := messages[0].(map[string]any)["content"].([]any)
+	require.Len(t, blocks, 2)
+	require.Equal(t, "image", blocks[1].(map[string]any)["type"])
+	require.Equal(t, "base64", blocks[1].(map[string]any)["source"].(map[string]any)["type"])
+}
+
 func TestAnthropicProvider_TranslatesNativeMessages(t *testing.T) {
 	var request map[string]any
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -124,7 +197,12 @@ func TestAnthropicProvider_TranslatesNativeMessages(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 		return jsonResponse(`{
 			"content": [{"type": "text", "text": "hello from claude"}],
-			"usage": {"input_tokens": 4, "output_tokens": 6}
+			"usage": {
+				"input_tokens": 4,
+				"output_tokens": 6,
+				"cache_read_input_tokens": 3,
+				"cache_creation_input_tokens": 1
+			}
 		}`), nil
 	})
 
@@ -152,6 +230,8 @@ func TestAnthropicProvider_TranslatesNativeMessages(t *testing.T) {
 	assert.Equal(t, float64(4096), request["max_tokens"])
 	assert.Equal(t, "You are helpful.", request["system"])
 	assert.NotContains(t, request, "max_completion_tokens")
+	assert.Equal(t, 3, response.Usage.CacheReadInputTokens)
+	assert.Equal(t, 1, response.Usage.CacheCreationInputTokens)
 	messages, ok := request["messages"].([]any)
 	require.True(t, ok)
 	require.Len(t, messages, 1)

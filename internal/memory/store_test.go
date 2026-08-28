@@ -39,14 +39,14 @@ func TestStoreTeamMemoryUsesFixedMarkdownAndReloads(t *testing.T) {
 	require.Equal(t, 1, loaded.Revision)
 }
 
-func TestStoreSubagentMemoryHasLimit(t *testing.T) {
+func TestStoreAgentMemoryHasLimit(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
-	store := NewStore(files, Limits{SubagentMaxChars: 300, MaxItems: 50})
+	store := NewStore(files, Limits{AgentMaxChars: 300, MaxItems: 50})
 
-	err := store.SaveSubagent(context.Background(), types.MemorySnapshot{
+	err := store.SaveAgent(context.Background(), types.MemorySnapshot{
 		SessionID: "fs-1",
 		TeamID:    "diagnose",
-		MemberID:  "inspect",
+		CallID:    "inspect",
 		Goal:      strings.Repeat("goal ", 100),
 		Confirmed: []string{strings.Repeat("fact ", 100)},
 	})

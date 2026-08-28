@@ -2,9 +2,13 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,9 +86,10 @@ func TestRouteParser_Parse_NoAction(t *testing.T) {
 func TestRouteParser_ParseWithMode_LoopMode(t *testing.T) {
 	p := NewRouteParser()
 
-	// No action + loop mode = wait_input
+	// A plain response is a completed answer even when the Agent has a
+	// multi-round loop. Waiting for input requires an explicit route or Tool.
 	action, clean := p.ParseWithMode("hello", true)
-	assert.Equal(t, types.NextWaitInput, action)
+	assert.Equal(t, types.NextProceed, action)
 	assert.Equal(t, "hello", clean)
 
 	// Explicit action in loop mode
@@ -342,6 +347,24 @@ func TestHookExecutor_HookConstants(t *testing.T) {
 	assert.Equal(t, "on_error", HookOnError)
 }
 
+func TestHookExecutor_ExecuteSetsPayloadEventAndHonorsContext(t *testing.T) {
+	h := NewHookExecutor()
+	var payload types.HookPayload
+	h.Register(HookOnStart, func(ctx context.Context, got types.HookPayload) error {
+		payload = got
+		return nil
+	})
+
+	err := h.Execute(context.Background(), HookOnStart, types.HookPayload{})
+	require.NoError(t, err)
+	assert.Equal(t, HookOnStart, payload.Event)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = h.Execute(ctx, HookOnStart, types.HookPayload{})
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 // ============================================================
 // StructuredOutputManager Tests
 // ============================================================
@@ -484,9 +507,17 @@ func TestStructuredOutputManager_ValidateNonRequiredFieldMissing(t *testing.T) {
 type mockModelProvider struct {
 	responses []types.ChatResponse
 	callCount int
+	attempts  int
+	err       error
 }
 
 func (m *mockModelProvider) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
+	m.attempts++
+	if m.err != nil {
+		err := m.err
+		m.err = nil
+		return nil, err
+	}
 	if m.callCount < len(m.responses) {
 		resp := m.responses[m.callCount]
 		m.callCount++
@@ -520,7 +551,646 @@ type mockPromptRenderer struct {
 	messages []types.Message
 }
 
-func (m *mockPromptRenderer) Render(agent types.AgentConfig, req types.SubagentRequest, rctx RenderContext) ([]types.Message, error) {
+type contextLimitModelProvider struct {
+	mockModelProvider
+	maxInputTokens int
+}
+
+func (m *contextLimitModelProvider) MaxInputTokens(types.ModelConfig) int {
+	return m.maxInputTokens
+}
+
+func TestTurnLoop_Run_HookLifecycle(t *testing.T) {
+	model := &mockModelProvider{
+		responses: []types.ChatResponse{
+			{
+				Text: "reading",
+				ToolCalls: []types.ToolCall{{
+					ID:        "call-1",
+					Name:      "Read",
+					Arguments: map[string]any{"file": "test.txt"},
+				}},
+			},
+			{Text: "done"},
+		},
+	}
+	hooks := NewHookExecutor()
+	var events []string
+	var payloads []types.HookPayload
+	for _, event := range []string{HookOnStart, HookOnToolStart, HookOnToolEnd, HookOnEnd} {
+		event := event
+		hooks.Register(event, func(_ context.Context, payload types.HookPayload) error {
+			events = append(events, event)
+			payloads = append(payloads, payload)
+			return nil
+		})
+	}
+
+	loop := NewTurnLoop(
+		model,
+		&mockToolExecutor{},
+		nil,
+		NewRouteParser(),
+		nil,
+		hooks,
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
+	)
+	result, err := loop.Run(context.Background(), types.AgentConfig{
+		Name:  "test-agent",
+		Tools: types.ToolConfig{Builtin: []string{"Read"}},
+		Loop:  types.LoopConfig{MaxRounds: 2},
+	}, types.AgentRequest{
+		CallID:        "call-agent",
+		AgentID:       "assistant",
+		AgentTurnID:   "agent-turn-1",
+		ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "hello"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, []string{
+		HookOnStart,
+		HookOnToolStart,
+		HookOnToolEnd,
+		HookOnEnd,
+	}, events)
+	require.Len(t, payloads, 4)
+	assert.Equal(t, "assistant", payloads[0].AgentID)
+	assert.Equal(t, "agent-turn-1", payloads[0].AgentTurnID)
+	assert.Equal(t, "Read", payloads[1].ToolName)
+	assert.Equal(t, "call-1", payloads[1].ToolCallID)
+	assert.NotNil(t, payloads[2].ToolResult)
+	assert.Equal(t, HookOnEnd, payloads[3].Event)
+}
+
+func TestTurnLoop_Run_HookErrorStopsBeforeModel(t *testing.T) {
+	model := &mockModelProvider{}
+	hooks := NewHookExecutor()
+	hooks.Register(HookOnStart, func(context.Context, types.HookPayload) error {
+		return assert.AnError
+	})
+	var errorHookCalled bool
+	hooks.Register(HookOnError, func(context.Context, types.HookPayload) error {
+		errorHookCalled = true
+		return nil
+	})
+
+	loop := NewTurnLoop(
+		model,
+		&mockToolExecutor{},
+		nil,
+		NewRouteParser(),
+		nil,
+		hooks,
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
+	)
+	result, err := loop.Run(context.Background(), types.AgentConfig{Loop: types.LoopConfig{MaxRounds: 1}}, types.AgentRequest{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Contains(t, result.Error, assert.AnError.Error())
+	assert.True(t, errorHookCalled)
+	assert.Equal(t, 0, model.callCount)
+}
+
+func TestContextManager_PreservesCanonicalAndCompactsActiveMessages(t *testing.T) {
+	manager := NewContextManagerWithEstimator(
+		types.ContextConfig{
+			MaxInputTokens:      100,
+			TargetRatio:         0.40,
+			CompactionThreshold: 0.50,
+			HardLimitRatio:      0.80,
+			OutputReserveRatio:  0,
+			MaxToolOutputChars:  24,
+		},
+		charCountEstimator{},
+	)
+	require.NoError(t, manager.AddMessage(types.Message{Role: "system", Content: "sys"}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "first"}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "assistant", Content: "answer"}))
+	require.NoError(t, manager.AddMessage(types.Message{
+		Role:      "assistant",
+		Content:   "tool request",
+		ToolCalls: []types.ToolCall{{ID: "tool-1", Name: "Read"}},
+	}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "tool", ToolCallID: "tool-1", Content: strings.Repeat("x", 100)}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "latest request"}))
+
+	assert.Len(t, manager.CanonicalMessages(), 6)
+	assert.Less(t, len(manager.Messages()), len(manager.CanonicalMessages()))
+	assert.Contains(t, manager.Messages()[0].Content, "sys")
+	assert.Contains(t, manager.Messages()[len(manager.Messages())-1].Content, "latest request")
+	assert.LessOrEqual(t, manager.EstimateTokens(), 80)
+	for _, message := range manager.Messages() {
+		if strings.Contains(message.Content, "## Compacted Agent Context") {
+			assert.Equal(t, "user", message.Role)
+		}
+	}
+}
+
+func TestContextManagerCompactionKeepsStableSystemAndRecentToolGroup(t *testing.T) {
+	manager := NewContextManagerWithEstimator(
+		types.ContextConfig{
+			MaxInputTokens:      120,
+			TargetRatio:         0.35,
+			CompactionThreshold: 0.45,
+			HardLimitRatio:      0.75,
+			OutputReserveRatio:  0,
+			MaxToolOutputChars:  24,
+		},
+		charCountEstimator{},
+	)
+	require.NoError(t, manager.AddMessage(types.Message{Role: "system", Content: "stable instructions"}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "initial task"}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "assistant", Content: "old answer"}))
+	require.NoError(t, manager.AddMessage(types.Message{
+		Role: "assistant", Content: "old tool call",
+		ToolCalls: []types.ToolCall{{ID: "old", Name: "Read"}},
+	}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "tool", ToolCallID: "old", Content: strings.Repeat("old-result ", 8)}))
+	require.NoError(t, manager.AddMessage(types.Message{
+		Role: "assistant", Content: "latest tool call",
+		ToolCalls: []types.ToolCall{{ID: "latest", Name: "Read"}},
+	}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "tool", ToolCallID: "latest", Content: "latest-result"}))
+
+	active := manager.Messages()
+	require.Greater(t, manager.CompactionCount(), 0)
+	require.Equal(t, "system", active[0].Role)
+	require.Contains(t, active[0].Content, "stable instructions")
+	require.Contains(t, active[len(active)-1].Content, "late")
+	require.NotContains(t, strings.Join(messageContents(active), "\n"), "old-result old-result old-result")
+
+	for i, message := range active {
+		if message.Role == "assistant" && len(message.ToolCalls) > 0 {
+			require.Less(t, i+1, len(active))
+			require.Equal(t, "tool", active[i+1].Role)
+			require.Equal(t, message.ToolCalls[0].ID, active[i+1].ToolCallID)
+		}
+		if strings.Contains(message.Content, "## Compacted Agent Context") {
+			require.Equal(t, "user", message.Role)
+		}
+	}
+}
+
+func messageContents(messages []types.Message) []string {
+	result := make([]string, 0, len(messages))
+	for _, message := range messages {
+		result = append(result, message.Content)
+	}
+	return result
+}
+
+func TestContextManager_ToolOutputTruncatedOnlyInActiveContext(t *testing.T) {
+	manager := NewContextManagerWithEstimator(
+		types.ContextConfig{MaxInputTokens: 100, MaxToolOutputChars: 8},
+		charCountEstimator{},
+	)
+	content := strings.Repeat("z", 20)
+	require.NoError(t, manager.AddMessage(types.Message{Role: "tool", Content: content}))
+	assert.Equal(t, content, manager.CanonicalMessages()[0].Content)
+	assert.LessOrEqual(t, len(manager.Messages()[0].Content), 8)
+}
+
+func TestContextManager_ContextCancel(t *testing.T) {
+	manager := NewContextManagerWithEstimator(
+		types.ContextConfig{MaxInputTokens: 20, CompactionThreshold: 0.5, HardLimitRatio: 0.9},
+		charCountEstimator{},
+	)
+	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "1234567890"}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.ErrorIs(t, manager.Compact(ctx), context.Canceled)
+}
+
+func TestContextManager_StatsReportsActiveAndCanonicalContext(t *testing.T) {
+	manager := NewContextManager(types.ContextConfig{})
+	manager.SetToolSchemas([]types.JSONSchema{{Name: "Read", Type: "object"}})
+	require.NoError(t, manager.AddMessage(types.Message{Role: "system", Content: "stable"}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "input"}))
+
+	stats := manager.Stats()
+	assert.Equal(t, 2, stats.MessageCount)
+	assert.Equal(t, 2, stats.CanonicalCount)
+	assert.Equal(t, 1, stats.ToolSchemaCount)
+	assert.Greater(t, stats.EstimatedTokens, 0)
+}
+
+func TestContextManager_MicrocompactsOldToolOutput(t *testing.T) {
+	manager := NewContextManagerWithEstimator(
+		types.ContextConfig{
+			MaxInputTokens:             1000,
+			MicrocompactThresholdChars: 100,
+			MicrocompactMaxChars:       80,
+			RecentMessageGroups:        1,
+		},
+		charCountEstimator{},
+	)
+	require.NoError(t, manager.AddMessage(types.Message{Role: "system", Content: "stable"}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "task"}))
+	require.NoError(t, manager.AddMessage(types.Message{
+		Role: "assistant", ToolCalls: []types.ToolCall{{ID: "old", Name: "Bash"}},
+	}))
+	require.NoError(t, manager.AddMessage(types.Message{
+		Role: "tool", ToolCallID: "old", ToolName: "Bash",
+		Content: strings.Repeat("line-1\nline-2\nline-3\nline-4\nline-5\nline-6\n", 8),
+	}))
+	require.NoError(t, manager.AddMessage(types.Message{
+		Role: "assistant", ToolCalls: []types.ToolCall{{ID: "new", Name: "Read"}},
+	}))
+	require.NoError(t, manager.AddMessage(types.Message{
+		Role: "tool", ToolCallID: "new", ToolName: "Read", Content: "latest",
+	}))
+
+	active := manager.Messages()
+	require.Greater(t, manager.Stats().MicrocompactCount, 0)
+	require.Contains(t, strings.Join(messageContents(active), "\n"), "microcompacted")
+	require.Contains(t, strings.Join(messageContents(active), "\n"), "latest")
+}
+
+func TestIsContextLimitError(t *testing.T) {
+	require.True(t, isContextLimitError(fmt.Errorf("maximum context length exceeded")))
+	require.True(t, isContextLimitError(fmt.Errorf("too many tokens")))
+	require.False(t, isContextLimitError(fmt.Errorf("network unavailable")))
+}
+
+func TestTurnLoop_RetriesOnceAfterProviderContextLimit(t *testing.T) {
+	model := &mockModelProvider{
+		err: errors.New("maximum context length exceeded"),
+		responses: []types.ChatResponse{{
+			Text:  "recovered",
+			Usage: types.TokenUsage{TotalTokens: 10},
+		}},
+	}
+	loop := NewTurnLoop(
+		model,
+		&mockToolExecutor{},
+		nil,
+		NewRouteParser(),
+		nil,
+		NewHookExecutor(),
+		&mockPromptRenderer{messages: []types.Message{
+			{Role: "system", Content: "stable"},
+			{Role: "user", Content: "task"},
+		}},
+	)
+	result, err := loop.Run(context.Background(), types.AgentConfig{
+		Loop: types.LoopConfig{MaxRounds: 1},
+	}, types.AgentRequest{})
+	require.NoError(t, err)
+	require.Equal(t, "recovered", result.Reply)
+	require.Equal(t, 2, model.attempts)
+	require.Equal(t, 1, model.callCount)
+	require.Len(t, result.Requests, 2)
+	require.True(t, result.Requests[1].Compacted)
+}
+
+func TestBudgetTracker_EnforcesIndependentLimits(t *testing.T) {
+	now := time.Now().UTC()
+	budget, err := newBudgetTracker(types.AgentBudget{
+		MaxModelRounds: 2,
+		MaxToolCalls:   1,
+		MaxInputTokens: 10,
+	}, 0, now)
+	require.NoError(t, err)
+	require.NoError(t, budget.beforeModel(context.Background()))
+	budget.usage.ModelRounds++
+	budget.usage.InputTokens = 11
+	require.ErrorContains(t, budget.checkUsage(), "max_input_tokens")
+	require.ErrorContains(t, budget.beforeTool(context.Background(), 2), "max_tool_calls")
+	require.NoError(t, budget.beforeModel(context.Background()))
+	budget.usage.ModelRounds++
+	require.ErrorContains(t, budget.beforeModel(context.Background()), "max_model_rounds")
+}
+
+func TestBudgetTracker_ParsesWallTime(t *testing.T) {
+	_, err := newBudgetTracker(types.AgentBudget{MaxWallTime: "not-a-duration"}, 0, time.Now())
+	require.ErrorContains(t, err, "max_wall_time")
+}
+
+func TestFileCheckpointStore_SaveLoadDelete(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := NewFileCheckpointStore(files)
+	checkpoint := types.AgentCheckpoint{
+		Version: 1,
+		ID:      "agent-turn-1",
+		Status:  types.TurnWaitingInput,
+		Messages: []types.Message{{
+			Role: "user", Content: "hello",
+		}},
+		BudgetUsage: types.AgentBudgetUsage{ModelRounds: 1},
+	}
+	require.NoError(t, store.Save(context.Background(), checkpoint))
+	loaded, err := store.Load(context.Background(), checkpoint.ID)
+	require.NoError(t, err)
+	require.Equal(t, checkpoint.ID, loaded.ID)
+	require.Equal(t, checkpoint.Messages[0].Content, loaded.Messages[0].Content)
+	require.NoError(t, store.Delete(context.Background(), checkpoint.ID))
+	_, err = store.Load(context.Background(), checkpoint.ID)
+	assert.ErrorIs(t, err, ErrCheckpointNotFound)
+}
+
+func TestTurnLoop_Run_BudgetLimitReturnsCheckpoint(t *testing.T) {
+	model := &mockModelProvider{
+		responses: []types.ChatResponse{{
+			Text:  "first",
+			Usage: types.TokenUsage{PromptTokens: 5, CompletionTokens: 5, TotalTokens: 10},
+			ToolCalls: []types.ToolCall{{
+				ID: "tool-1", Name: "Read", Arguments: map[string]any{"file": "a.txt"},
+			}},
+		}},
+	}
+	store := &memoryCheckpointStore{}
+	loop := NewTurnLoop(
+		model,
+		&mockToolExecutor{},
+		nil,
+		NewRouteParser(),
+		nil,
+		NewHookExecutor(),
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
+	)
+	loop.SetCheckpointStore(store)
+	result, err := loop.Run(context.Background(), types.AgentConfig{
+		Tools:  types.ToolConfig{Builtin: []string{"Read"}},
+		Budget: types.AgentBudget{MaxToolCalls: 0, MaxOutputTokens: 1},
+		Loop:   types.LoopConfig{MaxRounds: 2},
+	}, types.AgentRequest{AgentID: "assistant", AgentTurnID: "turn-1"})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Contains(t, result.Error, "max_output_tokens")
+	require.NotNil(t, result.Checkpoint)
+	assert.Equal(t, "turn-1", result.Checkpoint.ID)
+}
+
+func TestTurnLoop_Run_AskUserQuestionSavesCheckpointAndResumes(t *testing.T) {
+	model := &mockModelProvider{
+		responses: []types.ChatResponse{{
+			Text: "ask",
+			ToolCalls: []types.ToolCall{{
+				ID:        "ask-1",
+				Name:      "AskUserQuestion",
+				Arguments: map[string]any{"question": "Continue?"},
+			}},
+		}, {
+			Text: "resumed answer",
+		}},
+	}
+	store := &memoryCheckpointStore{}
+	tools := &recordingToolExecutor{
+		result: &types.ToolResult{
+			Success: true,
+			Content: `{"question":"Continue?"}`,
+			Next:    &types.Route{Action: types.NextWaitInput},
+		},
+	}
+	loop := NewTurnLoop(
+		model, tools, nil, NewRouteParser(), nil, NewHookExecutor(),
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
+	)
+	loop.SetCheckpointStore(store)
+	agent := types.AgentConfig{
+		Tools: types.ToolConfig{Builtin: []string{"AskUserQuestion"}},
+		Loop:  types.LoopConfig{MaxRounds: 3},
+	}
+	first, err := loop.Run(context.Background(), agent, types.AgentRequest{
+		AgentID: "assistant", AgentTurnID: "turn-resume",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, first.Checkpoint)
+	assert.Equal(t, types.TurnWaitingInput, first.Status)
+
+	model.responses[1] = types.ChatResponse{Text: "resumed answer"}
+	second, err := loop.Run(context.Background(), agent, types.AgentRequest{
+		AgentID: "assistant", AgentTurnID: "turn-resume",
+		ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "yes"}}, ResumeCheckpointID: first.Checkpoint.ID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "resumed answer", second.Reply)
+	assert.Equal(t, 2, model.callCount)
+	_, err = store.Load(context.Background(), first.Checkpoint.ID)
+	assert.ErrorIs(t, err, ErrCheckpointNotFound)
+}
+
+func TestFileToolTaskStoreAndAsyncExecutor(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := NewFileToolTaskStore(files)
+	executor := &recordingToolExecutor{result: &types.ToolResult{Success: true, Content: "done"}}
+	async := NewAsyncToolExecutor(store, executor)
+
+	require.NoError(t, async.Start(context.Background(), types.ToolTask{
+		ID:         "task-1",
+		ToolCallID: "call-1",
+		ToolName:   "Read",
+		Arguments:  map[string]any{"file": "a.txt"},
+	}))
+
+	require.Eventually(t, func() bool {
+		task, err := store.Load(context.Background(), "task-1")
+		return err == nil && task.Status == types.ToolTaskCompleted && task.Result != nil
+	}, time.Second, 10*time.Millisecond)
+
+	task, err := store.Load(context.Background(), "task-1")
+	require.NoError(t, err)
+	assert.Equal(t, types.ToolTaskCompleted, task.Status)
+	assert.Equal(t, "done", task.Result.Content)
+}
+
+func TestFileToolTaskStoreProgressSubscription(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := NewFileToolTaskStore(files)
+	require.NoError(t, store.Save(context.Background(), types.ToolTask{
+		ID: "task-progress", Status: types.ToolTaskRunning,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates, err := store.Subscribe(ctx, "task-progress")
+	require.NoError(t, err)
+	initial := <-updates
+	assert.Equal(t, float64(0), initial.Progress)
+
+	require.NoError(t, store.UpdateProgress(context.Background(), "task-progress", 0.45, "running build"))
+	update := <-updates
+	assert.InDelta(t, 0.45, update.Progress, 0.001)
+	assert.Equal(t, "running build", update.Message)
+
+	require.NoError(t, store.Save(context.Background(), types.ToolTask{
+		ID: "task-progress", Status: types.ToolTaskCompleted,
+		Progress: 1, Message: "done", UpdatedAt: time.Now().UTC(),
+	}))
+	final := <-updates
+	assert.Equal(t, types.ToolTaskCompleted, final.Status)
+}
+
+func TestAsyncToolExecutorCompletionHandlerIsIdempotent(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := NewFileToolTaskStore(files)
+	async := NewAsyncToolExecutor(store, &recordingToolExecutor{
+		result: &types.ToolResult{Success: true, Content: "done"},
+	})
+	done := make(chan types.ToolTask, 2)
+	async.SetCompletionHandler(func(_ context.Context, task types.ToolTask) {
+		done <- task
+	})
+
+	require.NoError(t, async.Start(context.Background(), types.ToolTask{
+		ID: "task-completion", ToolName: "Bash",
+	}))
+	select {
+	case task := <-done:
+		assert.Equal(t, types.ToolTaskCompleted, task.Status)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for completion handler")
+	}
+	select {
+	case duplicate := <-done:
+		t.Fatalf("completion handler called twice: %#v", duplicate)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestAsyncToolExecutorRecoverDoesNotReplayUnsafeRunningTask(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := NewFileToolTaskStore(files)
+	now := time.Now().UTC()
+	require.NoError(t, store.Save(context.Background(), types.ToolTask{
+		ID:          "task-running",
+		ToolCallID:  "call-1",
+		ToolName:    "Bash",
+		Status:      types.ToolTaskRunning,
+		RestartSafe: false,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}))
+	executor := &recordingToolExecutor{}
+	async := NewAsyncToolExecutor(store, executor)
+	require.NoError(t, async.Recover(context.Background()))
+	task, err := store.Load(context.Background(), "task-running")
+	require.NoError(t, err)
+	assert.Equal(t, types.ToolTaskFailed, task.Status)
+	assert.Contains(t, task.Error, "process restart")
+	assert.Empty(t, executor.names)
+}
+
+func TestRecoverCheckpointsReportsReadyAndOrphanedTasks(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	checkpoints := NewFileCheckpointStore(files)
+	tasks := NewFileToolTaskStore(files)
+	now := time.Now().UTC()
+	require.NoError(t, tasks.Save(context.Background(), types.ToolTask{
+		ID: "task-ready", Status: types.ToolTaskCompleted, UpdatedAt: now,
+	}))
+	require.NoError(t, checkpoints.Save(context.Background(), types.AgentCheckpoint{
+		ID: "cp-ready", Status: types.TurnWaitingTool,
+		PendingTool: &types.AgentPendingTool{TaskID: "task-ready"},
+	}))
+	require.NoError(t, checkpoints.Save(context.Background(), types.AgentCheckpoint{
+		ID: "cp-orphan", Status: types.TurnWaitingTool,
+		PendingTool: &types.AgentPendingTool{TaskID: "missing-task"},
+	}))
+	report, err := RecoverCheckpoints(context.Background(), checkpoints, tasks)
+	require.NoError(t, err)
+	assert.Equal(t, 2, report.Total)
+	assert.Equal(t, 1, report.ReadyTasks)
+	assert.Contains(t, report.Orphaned, "cp-orphan")
+}
+
+func TestTurnLoop_Run_AsyncToolWaitsAndResumes(t *testing.T) {
+	model := &mockModelProvider{
+		responses: []types.ChatResponse{
+			{Text: "start", ToolCalls: []types.ToolCall{{
+				ID: "task-call", Name: "Bash", Arguments: map[string]any{"command": "echo ok"},
+			}}},
+			{Text: "finished"},
+		},
+	}
+	files := storage.NewFileStore(t.TempDir())
+	tasks := NewFileToolTaskStore(files)
+	async := NewAsyncToolExecutor(tasks, &recordingToolExecutor{
+		result: &types.ToolResult{Success: true, Content: "command output"},
+	})
+	checkpoints := NewFileCheckpointStore(files)
+	loop := NewTurnLoop(
+		model, &recordingToolExecutor{}, nil, NewRouteParser(), nil,
+		NewHookExecutor(), &mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "run"}}},
+	)
+	loop.SetCheckpointStore(checkpoints)
+	loop.SetTaskRunner(async)
+
+	agentConfig := types.AgentConfig{
+		Tools: types.ToolConfig{Builtin: []string{"Bash"}},
+		Loop:  types.LoopConfig{MaxRounds: 3, AsyncTools: []string{"Bash"}},
+	}
+	first, err := loop.Run(context.Background(), agentConfig, types.AgentRequest{
+		AgentID: "assistant", AgentTurnID: "turn-async",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, first.Checkpoint)
+	assert.Equal(t, types.TurnWaitingTool, first.Status)
+	require.NotEmpty(t, first.TaskID)
+
+	require.Eventually(t, func() bool {
+		task, loadErr := tasks.Load(context.Background(), first.TaskID)
+		return loadErr == nil && task.Status == types.ToolTaskCompleted
+	}, time.Second, 10*time.Millisecond)
+
+	second, err := loop.Run(context.Background(), agentConfig, types.AgentRequest{
+		AgentID: "assistant", AgentTurnID: "turn-async",
+		ResumeCheckpointID: first.Checkpoint.ID, ResumeTaskID: first.TaskID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "finished", second.Reply)
+}
+
+type memoryCheckpointStore struct {
+	items map[string]types.AgentCheckpoint
+}
+
+func (s *memoryCheckpointStore) List(_ context.Context) ([]types.AgentCheckpoint, error) {
+	result := make([]types.AgentCheckpoint, 0, len(s.items))
+	for _, checkpoint := range s.items {
+		result = append(result, checkpoint)
+	}
+	return result, nil
+}
+
+func (s *memoryCheckpointStore) Save(_ context.Context, checkpoint types.AgentCheckpoint) error {
+	if s.items == nil {
+		s.items = make(map[string]types.AgentCheckpoint)
+	}
+	s.items[checkpoint.ID] = checkpoint
+	return nil
+}
+
+func (s *memoryCheckpointStore) Load(_ context.Context, id string) (*types.AgentCheckpoint, error) {
+	checkpoint, ok := s.items[id]
+	if !ok {
+		return nil, ErrCheckpointNotFound
+	}
+	return &checkpoint, nil
+}
+
+func (s *memoryCheckpointStore) Delete(_ context.Context, id string) error {
+	delete(s.items, id)
+	return nil
+}
+
+type charCountEstimator struct{}
+
+func (charCountEstimator) EstimateMessages(messages []types.Message) int {
+	total := 0
+	for _, message := range messages {
+		total += len(message.Content) + len(message.Role) + len(message.ToolCallID)
+		for _, call := range message.ToolCalls {
+			total += len(call.ID) + len(call.Name)
+		}
+	}
+	return total
+}
+
+func (charCountEstimator) EstimateTools([]types.JSONSchema) int { return 0 }
+
+func (m *mockPromptRenderer) Render(agent types.AgentConfig, req types.AgentRequest, rctx RenderContext) ([]types.Message, error) {
 	return m.messages, nil
 }
 
@@ -549,10 +1219,10 @@ func TestTurnLoop_Run_SimpleResponse(t *testing.T) {
 		Loop: types.LoopConfig{MaxRounds: 5},
 	}
 
-	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "hello"})
+	result, err := loop.Run(context.Background(), agent, types.AgentRequest{ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "hello"}}})
 	require.NoError(t, err)
 	assert.Equal(t, "Hello! How can I help?", result.Reply)
-	assert.Equal(t, types.NextWaitInput, result.Next.Action) // maxRounds=5 > 1, loop mode defaults to wait_input
+	assert.Equal(t, types.NextProceed, result.Next.Action)
 	assert.Equal(t, 50, result.Usage.TotalTokens)
 }
 
@@ -578,12 +1248,12 @@ func TestTurnLoop_Run_MaxAgentRoundsLimit(t *testing.T) {
 
 	agent := types.AgentConfig{Name: "test-agent"}
 
-	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{
-		Input:          "hello",
+	result, err := loop.Run(context.Background(), agent, types.AgentRequest{
+		ContextBlocks:  []types.ContextBlock{{Kind: "input", Text: "hello"}},
 		MaxAgentRounds: 3,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, types.NextWaitInput, result.Next.Action) // loop mode
+	assert.Equal(t, types.NextProceed, result.Next.Action)
 	assert.Equal(t, 30, result.Usage.TotalTokens)
 }
 
@@ -607,7 +1277,7 @@ func TestTurnLoop_Run_ContextCanceled(t *testing.T) {
 		Loop: types.LoopConfig{MaxRounds: 1},
 	}
 
-	_, err := loop.Run(ctx, agent, types.SubagentRequest{Input: "hello"})
+	_, err := loop.Run(ctx, agent, types.AgentRequest{ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "hello"}}})
 	assert.Error(t, err)
 }
 
@@ -632,7 +1302,7 @@ func TestTurnLoop_Run_GuardrailBlocksInput(t *testing.T) {
 		Loop: types.LoopConfig{MaxRounds: 5},
 	}
 
-	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "this is blocked"})
+	result, err := loop.Run(context.Background(), agent, types.AgentRequest{ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "this is blocked"}}})
 	require.NoError(t, err)
 	assert.Contains(t, result.Error, "input blocked")
 }
@@ -669,10 +1339,63 @@ func TestTurnLoop_Run_ToolCallLoop(t *testing.T) {
 		Loop:  types.LoopConfig{MaxRounds: 5},
 	}
 
-	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "hello"})
+	result, err := loop.Run(context.Background(), agent, types.AgentRequest{ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "hello"}}})
 	require.NoError(t, err)
 	assert.Equal(t, "Done reading", result.Reply)
 	assert.Equal(t, 150, result.Usage.TotalTokens)
+}
+
+func TestTurnLoop_Run_RejectsToolOutsideAgentAllowlist(t *testing.T) {
+	model := &mockModelProvider{
+		responses: []types.ChatResponse{
+			{
+				Text: "try tool",
+				ToolCalls: []types.ToolCall{{
+					ID:        "call-1",
+					Name:      "Write",
+					Arguments: map[string]any{"file": "x", "content": "y"},
+				}},
+				Usage: types.TokenUsage{TotalTokens: 10},
+			},
+			{
+				Text:  "done",
+				Usage: types.TokenUsage{TotalTokens: 10},
+			},
+		},
+	}
+	toolExec := &recordingToolExecutor{}
+	loop := NewTurnLoop(
+		model,
+		toolExec,
+		NewGuardrailChecker(nil, nil),
+		NewRouteParser(),
+		NewHITLGate(time.Minute),
+		NewHookExecutor(),
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
+	)
+
+	result, err := loop.Run(context.Background(), types.AgentConfig{
+		Name:  "test-agent",
+		Tools: types.ToolConfig{Builtin: []string{"Read"}},
+		Loop:  types.LoopConfig{MaxRounds: 2},
+	}, types.AgentRequest{ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "hello"}}})
+	require.NoError(t, err)
+	require.Equal(t, 2, model.callCount)
+	require.Empty(t, toolExec.names)
+	require.Contains(t, result.Reply, "done")
+}
+
+type recordingToolExecutor struct {
+	names  []string
+	result *types.ToolResult
+}
+
+func (e *recordingToolExecutor) Execute(ctx context.Context, name string, args map[string]any) (*types.ToolResult, error) {
+	e.names = append(e.names, name)
+	if e.result != nil {
+		return e.result, nil
+	}
+	return &types.ToolResult{Success: true, Content: "ok"}, nil
 }
 
 func TestTurnLoop_Run_BuildToolSchemas(t *testing.T) {
@@ -698,8 +1421,32 @@ func TestTurnLoop_Run_BuildToolSchemas(t *testing.T) {
 		Loop:  types.LoopConfig{MaxRounds: 1},
 	}
 
-	_, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "hello"})
+	_, err := loop.Run(context.Background(), agent, types.AgentRequest{ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "hello"}}})
 	require.NoError(t, err)
+}
+
+func TestTurnLoop_BuildToolSchemasUsesDeterministicSortedUniqueOrder(t *testing.T) {
+	loop := NewTurnLoop(
+		&mockModelProvider{responses: []types.ChatResponse{{Text: "ok"}}},
+		&mockToolExecutor{},
+		NewGuardrailChecker(nil, nil),
+		NewRouteParser(),
+		NewHITLGate(5*time.Minute),
+		NewHookExecutor(),
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
+	)
+
+	schemas := loop.buildToolSchemas(types.AgentConfig{
+		Tools: types.ToolConfig{
+			Builtin: []string{"Write", "Read", "Write", "Bash"},
+		},
+	})
+
+	require.Equal(t, []string{"Bash", "Read", "Write"}, []string{
+		schemas[0].Name,
+		schemas[1].Name,
+		schemas[2].Name,
+	})
 }
 
 func TestTurnLoop_Run_SignalInResponse(t *testing.T) {
@@ -726,7 +1473,7 @@ func TestTurnLoop_Run_SignalInResponse(t *testing.T) {
 		Loop: types.LoopConfig{MaxRounds: 5},
 	}
 
-	result, err := loop.Run(context.Background(), agent, types.SubagentRequest{Input: "hello"})
+	result, err := loop.Run(context.Background(), agent, types.AgentRequest{ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "hello"}}})
 	require.NoError(t, err)
 	assert.Equal(t, types.NextComplete, result.Next.Action)
 	assert.Equal(t, "Task completed successfully", result.Reply)

@@ -15,6 +15,8 @@ const (
 type ToolExecutionSpec struct {
 	Class       ToolExecutionClass `yaml:"class" json:"class"`
 	MaxParallel int                `yaml:"max_parallel,omitempty" json:"max_parallel,omitempty"`
+	Async       bool               `yaml:"async,omitempty" json:"async,omitempty"`
+	RestartSafe bool               `yaml:"restart_safe,omitempty" json:"restart_safe,omitempty"`
 }
 
 // Tool interface defines the contract for all tools
@@ -28,11 +30,14 @@ type Tool interface {
 
 // ToolResult represents the result of a tool execution
 type ToolResult struct {
-	Success      bool                 `json:"success"`
-	Content      string               `json:"content"`
-	Error        string               `json:"error,omitempty"`
-	WorkspaceOps []WorkspaceOperation `json:"workspace_ops,omitempty"`
-	RecordRefs   []string             `json:"record_refs,omitempty"`
+	Success         bool                  `json:"success"`
+	Content         string                `json:"content"`
+	Error           string                `json:"error,omitempty"`
+	Metadata        map[string]any        `json:"metadata,omitempty"`
+	Next            *Route                `json:"next,omitempty"`
+	PendingApproval *AgentPendingApproval `json:"pending_approval,omitempty"`
+	WorkspaceOps    []WorkspaceOperation  `json:"workspace_ops,omitempty"`
+	RecordRefs      []string              `json:"record_refs,omitempty"`
 }
 
 // JSONSchema represents a JSON Schema for tool parameters

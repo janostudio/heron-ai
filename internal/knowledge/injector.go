@@ -19,7 +19,21 @@ func NewKnowledgeInjector(index *KnowledgeIndex) *KnowledgeInjector {
 
 // Inject searches knowledge and formats it for prompt injection
 func (i *KnowledgeInjector) Inject(ctx context.Context, query string, agentName string, teamName string) (string, error) {
-	entries, err := i.index.SearchWithScope(ctx, query, agentName, teamName)
+	return i.InjectWithAllowlist(ctx, query, agentName, teamName, nil)
+}
+
+// InjectWithAllowlist applies the Agent's declared knowledge IDs after scope
+// filtering. This keeps knowledge selection explicit without changing the
+// existing injector API used by callers that intentionally search all visible
+// entries.
+func (i *KnowledgeInjector) InjectWithAllowlist(
+	ctx context.Context,
+	query string,
+	agentName string,
+	teamName string,
+	allowlist []string,
+) (string, error) {
+	entries, err := i.index.SearchWithScopeAndAllowlist(ctx, query, agentName, teamName, allowlist)
 	if err != nil {
 		return "", fmt.Errorf("search knowledge: %w", err)
 	}

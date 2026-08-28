@@ -1,25 +1,25 @@
 # Architecture
 
-Heron is a multi-agent orchestration engine with a three-layer runtime model.
+Heron is a multi-agent orchestration engine with a three-layer orchestration
+model. `Call` is a Team execution item, not an additional orchestration layer.
 
 ## Runtime Model
 
 ```
-Run (session container)
-  └── Flow (stage pipeline with signal routing)
-        └── Stage (team execution)
-              └── Team (agent scheduling)
-                    ├── parallel: agents run concurrently
-                    └── sequential: agents run in order
-                          └── Agent (LLM turn loop)
-                                └── Turn (LLM call + tool execution)
+Flow (signal routing)
+  └── Team (Call scheduling)
+        ├── Call → Agent
+        │          └── AgentTurn (LLM + tool loop)
+        ├── Call → Shell Command
+        └── Call → Webhook
 ```
 
 | Layer | Description | Has LLM? |
 |-------|------------|----------|
-| **Run** | Complete session, holds conversation history | No |
-| **Round/Stage** | One stage of team execution | No |
-| **Turn** | Single agent LLM call + tool loop | **Yes** |
+| **Flow** | Complete orchestration graph and routing | No |
+| **Team** | Schedules dependent or parallel Calls | No |
+| **Call** | One Agent, Command, or Webhook execution | Depends on type |
+| **AgentTurn** | One Agent LLM/tool loop | **Yes** |
 
 ## Package Structure
 
@@ -28,8 +28,8 @@ heron-ai/
 ├── cmd/server/          # CLI entry point
 ├── pkg/types/           # Shared types and interfaces
 ├── internal/
-│   ├── orchestration/   # Flow engine, team runner, signal router
-│   ├── agent/           # Turn loop, guardrail, signal parser, HITL
+│   ├── runtime/         # Flow, Team, and Call runtimes
+│   ├── agent/           # AgentTurn loop, guardrail, signal parser, HITL
 │   ├── tool/            # Tool registry, executor, builtin tools
 │   ├── skill/           # Skill registry, loader, injector
 │   ├── context/         # Agent memory, history, compressor
@@ -47,7 +47,7 @@ heron-ai/
 
 ## Signal Routing
 
-Agents produce signals that control flow execution:
+Agent Calls produce signals that control Flow execution:
 
 | Signal | Effect |
 |--------|--------|

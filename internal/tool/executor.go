@@ -16,8 +16,17 @@ func NewToolExecutor(registry *ToolRegistry) *ToolExecutor {
 }
 
 func (e *ToolExecutor) Execute(ctx context.Context, name string, args map[string]any) (*types.ToolResult, error) {
+	if e == nil || e.registry == nil {
+		return &types.ToolResult{Success: false, Error: "tool registry is not configured"}, nil
+	}
 	t, err := e.registry.Lookup(name)
 	if err != nil {
+		return &types.ToolResult{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+	if err := ValidateParameters(t.Parameters(), args); err != nil {
 		return &types.ToolResult{
 			Success: false,
 			Error:   err.Error(),
@@ -40,6 +49,17 @@ func (e *ToolExecutor) Execute(ctx context.Context, name string, args map[string
 // the registry.
 func (e *ToolExecutor) ExecutionSpec(name string) types.ToolExecutionSpec {
 	return e.registry.ExecutionSpec(name)
+}
+
+func (e *ToolExecutor) NeedsApproval(name string, _ map[string]any) (bool, error) {
+	if e == nil || e.registry == nil {
+		return false, fmt.Errorf("tool registry is not configured")
+	}
+	t, err := e.registry.Lookup(name)
+	if err != nil {
+		return false, err
+	}
+	return t.NeedsApproval(), nil
 }
 
 func (e *ToolExecutor) ExecuteWithApproval(ctx context.Context, name string, args map[string]any) (*types.ToolResult, error) {

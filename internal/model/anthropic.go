@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ type AnthropicProvider struct {
 	modelName string
 	profile   types.ModelProfile
 	version   string
+	media     types.MediaResolver
 }
 
 func NewAnthropicProvider(apiKey, baseURL, modelName string) *AnthropicProvider {
@@ -62,6 +64,10 @@ func NewAnthropicProviderWithProfile(apiKey, baseURL, modelName string, profile 
 	}
 }
 
+func (p *AnthropicProvider) SetMediaResolver(resolver types.MediaResolver) {
+	p.media = resolver
+}
+
 type anthropicRequest struct {
 	Model        string                 `json:"model"`
 	MaxTokens    int                    `json:"max_tokens"`
@@ -82,15 +88,23 @@ type anthropicMessage struct {
 }
 
 type anthropicBlock struct {
-	Type      string         `json:"type"`
-	Text      string         `json:"text,omitempty"`
-	Thinking  string         `json:"thinking,omitempty"`
-	Signature string         `json:"signature,omitempty"`
-	ID        string         `json:"id,omitempty"`
-	Name      string         `json:"name,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
-	ToolUseID string         `json:"tool_use_id,omitempty"`
-	Content   string         `json:"content,omitempty"`
+	Type      string                `json:"type"`
+	Text      string                `json:"text,omitempty"`
+	Thinking  string                `json:"thinking,omitempty"`
+	Signature string                `json:"signature,omitempty"`
+	ID        string                `json:"id,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Input     map[string]any        `json:"input,omitempty"`
+	ToolUseID string                `json:"tool_use_id,omitempty"`
+	Content   string                `json:"content,omitempty"`
+	Source    *anthropicMediaSource `json:"source,omitempty"`
+}
+
+type anthropicMediaSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
 }
 
 type anthropicTool struct {
@@ -125,8 +139,10 @@ type anthropicResponse struct {
 		Input     json.RawMessage `json:"input"`
 	} `json:"content"`
 	Usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	} `json:"usage"`
 }
 
@@ -143,7 +159,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []types.Message, 
 		modelName = config.Model
 	}
 	effective := MergeProfileDefaults(p.profile, config)
-	req := p.buildRequest(modelName, messages, tools, config, effective, false)
+	req, err := p.buildRequest(ctx, modelName, messages, tools, config, effective, false)
+	if err != nil {
+		return nil, err
+	}
 
 	var wire anthropicResponse
 	if err := p.post(ctx, effective, req, &wire); err != nil {
@@ -172,18 +191,23 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []types.Mes
 }
 
 func (p *AnthropicProvider) buildRequest(
+	ctx context.Context,
 	modelName string,
 	messages []types.Message,
 	tools []types.JSONSchema,
 	override types.ModelConfig,
 	effective types.ModelConfig,
 	stream bool,
-) anthropicRequest {
+) (anthropicRequest, error) {
 	req := anthropicRequest{
 		Model:  modelName,
 		Stream: stream,
 	}
-	req.System, req.Messages = convertAnthropicMessages(messages)
+	var err error
+	req.System, req.Messages, err = p.convertMessages(ctx, messages)
+	if err != nil {
+		return anthropicRequest{}, err
+	}
 	if profileAllowsToolCalls(p.profile, len(tools) > 0) {
 		req.Tools = convertAnthropicTools(tools)
 	}
@@ -227,7 +251,7 @@ func (p *AnthropicProvider) buildRequest(
 		req.TopP = nil
 		req.TopK = nil
 	}
-	return req
+	return req, nil
 }
 
 func (p *AnthropicProvider) post(ctx context.Context, effective types.ModelConfig, req anthropicRequest, output *anthropicResponse) error {
@@ -279,7 +303,7 @@ func (p *AnthropicProvider) post(ctx context.Context, effective types.ModelConfi
 	return nil
 }
 
-func convertAnthropicMessages(messages []types.Message) (string, []anthropicMessage) {
+func (p *AnthropicProvider) convertMessages(ctx context.Context, messages []types.Message) (string, []anthropicMessage, error) {
 	result := make([]anthropicMessage, 0, len(messages))
 	var system []string
 	for _, msg := range messages {
@@ -310,14 +334,72 @@ func convertAnthropicMessages(messages []types.Message) (string, []anthropicMess
 					Input: call.Arguments,
 				})
 			}
+			mediaBlocks, err := p.convertParts(ctx, msg.Parts)
+			if err != nil {
+				return "", nil, err
+			}
+			blocks = append(blocks, mediaBlocks...)
 			if len(blocks) > 0 {
 				result = append(result, anthropicMessage{Role: "assistant", Content: blocks})
 			}
 		default:
-			result = append(result, anthropicMessage{Role: "user", Content: msg.Content})
+			blocks, err := p.convertParts(ctx, msg.Parts)
+			if err != nil {
+				return "", nil, err
+			}
+			if msg.Content != "" {
+				blocks = append([]anthropicBlock{{Type: "text", Text: msg.Content}}, blocks...)
+			}
+			if len(blocks) == 0 {
+				result = append(result, anthropicMessage{Role: "user", Content: msg.Content})
+			} else {
+				result = append(result, anthropicMessage{Role: "user", Content: blocks})
+			}
 		}
 	}
-	return strings.Join(system, "\n\n"), mergeAnthropicMessages(result)
+	return strings.Join(system, "\n\n"), mergeAnthropicMessages(result), nil
+}
+
+func (p *AnthropicProvider) convertParts(ctx context.Context, parts []types.ContentPart) ([]anthropicBlock, error) {
+	result := make([]anthropicBlock, 0, len(parts))
+	for _, part := range parts {
+		if part.Media == nil {
+			if part.Text != "" {
+				result = append(result, anthropicBlock{Type: "text", Text: part.Text})
+			}
+			continue
+		}
+		kind := mediaKind(part)
+		if kind != "image" && kind != "document" && kind != "file" {
+			return nil, unsupportedMedia(kind)
+		}
+		if kind == "image" && !capabilityEnabled(p.profile.SupportsImages, true) {
+			return nil, unsupportedMedia(kind)
+		}
+		if (kind == "document" || kind == "file") && !capabilityEnabled(p.profile.SupportsDocuments, true) {
+			return nil, unsupportedMedia(kind)
+		}
+		if kind != "image" && strings.ToLower(part.Media.MIMEType) != "application/pdf" {
+			return nil, fmt.Errorf("Anthropic document content currently supports application/pdf only")
+		}
+		payload, err := resolveMediaPayload(ctx, p.media, *part.Media)
+		if err != nil {
+			return nil, err
+		}
+		source := &anthropicMediaSource{Type: "base64", MediaType: part.Media.MIMEType}
+		if payload.URL != "" {
+			source.Type = "url"
+			source.URL = payload.URL
+		} else {
+			source.Data = base64.StdEncoding.EncodeToString(payload.Data)
+		}
+		blockType := "image"
+		if kind != "image" {
+			blockType = "document"
+		}
+		result = append(result, anthropicBlock{Type: blockType, Source: source})
+	}
+	return result, nil
 }
 
 func mergeAnthropicMessages(messages []anthropicMessage) []anthropicMessage {
@@ -459,9 +541,11 @@ func anthropicStructuredFormat(schema *types.StructuredOutput) *anthropicOutputF
 func convertAnthropicResponse(resp anthropicResponse) *types.ChatResponse {
 	result := &types.ChatResponse{
 		Usage: types.TokenUsage{
-			PromptTokens:     resp.Usage.InputTokens,
-			CompletionTokens: resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.InputTokens + resp.Usage.OutputTokens,
+			PromptTokens:             resp.Usage.InputTokens,
+			CompletionTokens:         resp.Usage.OutputTokens,
+			TotalTokens:              resp.Usage.InputTokens + resp.Usage.OutputTokens,
+			CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
+			CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 		},
 	}
 	for _, block := range resp.Content {

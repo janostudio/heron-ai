@@ -3,7 +3,7 @@ goal: 推进当前小说剧情。
 
 calls:
   hero_act:
-    type: subagent
+    type: agent
     agent: hero
     responsibility: 根据当前剧情描述主角的行动和对话。
     inputs:
@@ -12,7 +12,7 @@ calls:
       record: HeroAction
 
   villain_act:
-    type: subagent
+    type: agent
     agent: villain
     responsibility: 根据当前剧情描述反派的行动和对话。
     inputs:
@@ -21,7 +21,7 @@ calls:
       record: VillainAction
 
   narrate:
-    type: subagent
+    type: agent
     agent: narrator
     depends_on: [hero_act, villain_act]
     responsibility: 综合主角和反派的行动，推进剧情并输出旁白。

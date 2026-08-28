@@ -3,7 +3,7 @@ goal: 同时完成主题调研和文章大纲。
 
 calls:
   research_topic:
-    type: subagent
+    type: agent
     agent: researcher
     responsibility: 调研用户给出的主题，搜索知识库并记录事实依据。
     inputs:
@@ -12,7 +12,7 @@ calls:
       record: ResearchReport
 
   plan_outline:
-    type: subagent
+    type: agent
     agent: planner
     responsibility: 根据用户主题设计详细博客大纲。
     inputs:

@@ -1,9 +1,15 @@
 id: qa_team
 goal: 回答用户的问题。
 
+memory:
+  enabled: true
+  max_items: 20
+  max_chars: 4000
+  inject_summary: true
+
 calls:
   answer:
-    type: subagent
+    type: agent
     agent: assistant
     responsibility: 回答用户的问题。
     inputs:
