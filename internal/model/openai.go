@@ -171,7 +171,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []types.Message, too
 		if len(req.ResponseFormat) > 0 {
 			req.ResponseFormat = nil
 			if retryErr := p.post(ctx, effective, req, &wire); retryErr == nil {
-				return convertOpenAIResponse(wire), nil
+				return withModel(convertOpenAIResponse(wire), modelName), nil
 			} else {
 				err = retryErr
 			}
@@ -179,14 +179,14 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []types.Message, too
 		if isUnsupportedParameterError(err) && hasOptionalGenerationParameters(req) {
 			req = withoutOptionalGenerationParameters(req)
 			if retryErr := p.post(ctx, effective, req, &wire); retryErr == nil {
-				return convertOpenAIResponse(wire), nil
+				return withModel(convertOpenAIResponse(wire), modelName), nil
 			} else {
 				err = retryErr
 			}
 		}
 		return nil, fmt.Errorf("openai chat: %w", err)
 	}
-	return convertOpenAIResponse(wire), nil
+	return withModel(convertOpenAIResponse(wire), modelName), nil
 }
 
 // ChatStream keeps the ModelProvider contract for callers that want a stream.
@@ -284,19 +284,27 @@ func (p *OpenAIProvider) post(ctx context.Context, effective types.ModelConfig, 
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return err
+		if isTimeoutError(err) {
+			return types.NewProviderTimeoutError(err)
+		}
+		return types.NewProviderNetworkError(err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		if isTimeoutError(err) {
+			return types.NewProviderTimeoutError(err)
+		}
+		return types.NewProviderNetworkError(err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var apiErr openAIErrorResponse
 		if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
-			return fmt.Errorf("%s: %s", apiErr.Error.Type, apiErr.Error.Message)
+			pe := types.ClassifyProviderError(resp.StatusCode, apiErr.Error.Type, body)
+			pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
+			return pe
 		}
-		return fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return types.ClassifyProviderError(resp.StatusCode, "", body)
 	}
 	if err := json.Unmarshal(body, output); err != nil {
 		return fmt.Errorf("decode response: %w", err)

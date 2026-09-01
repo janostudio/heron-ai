@@ -431,6 +431,9 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			resp, chatErr = t.model.Chat(ctx, requestMessages, toolSchemas, modelConfig)
 			if resp != nil {
 				requestStats[requestStatIndex].Usage = resp.Usage
+				if resp.Model != "" {
+					requestStats[requestStatIndex].Model = resp.Model
+				}
 			}
 			if chatErr == nil {
 				break

@@ -266,6 +266,13 @@ type ModelProfile struct {
 	SupportsTopK              *bool `json:"supportsTopK,omitempty"`
 	SupportsRepetitionPenalty *bool `json:"supportsRepetitionPenalty,omitempty"`
 	SupportsStructuredOutput  *bool `json:"supportsStructuredOutput,omitempty"`
+
+	// Fallback is an ordered list of alternative model names to try when this
+	// model fails with a retryable error (rate limit, 5xx, timeout, network).
+	Fallback []string `json:"fallback,omitempty" yaml:"fallback,omitempty"`
+	// CooldownSeconds is how long a failed model is skipped as a passive
+	// fallback before it is retried. 0 means the default (600s).
+	CooldownSeconds int `json:"cooldown_seconds,omitempty" yaml:"cooldown_seconds,omitempty"`
 }
 
 // Message represents a chat message
@@ -297,6 +304,9 @@ type ChatResponse struct {
 	FinishReason string     `json:"finish_reason,omitempty"`
 	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
 	Usage        TokenUsage `json:"usage"`
+	// Model is the actual model name that produced this response. It may
+	// differ from the configured primary model when fallback was triggered.
+	Model string `json:"model,omitempty"`
 }
 
 // ChatChunk represents a streaming chat response chunk

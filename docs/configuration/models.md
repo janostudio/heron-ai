@@ -65,9 +65,39 @@ Agent 文件只需要指定模型名称；没有在 Agent 上显式配置的参�
 | `supportsTopK` | boolean | 是否允许发送 top-k |
 | `supportsRepetitionPenalty` | boolean | 是否允许发送重复惩罚 |
 | `supportsStructuredOutput` | boolean | 是否声明支持结构化输出 |
+| `fallback` | string[] | 有序备选模型名列表；本模型失败时按顺序切换 |
+| `cooldown_seconds` | integer | 失败后作为被动备选被跳过的秒数；缺省 600 |
 
 能力字段没有配置时表示“未知”，不是“支持”或“不支持”。Provider 会根据
 协议选择安全的发送策略；服务端明确返回不支持参数时，会尝试移除可选参数重试。
+
+## 模型故障转移（fallback）
+
+当模型因可重试错误（限流 429 / 服务端 5xx / 超时 / 网络故障）失败时，
+引擎会按 `fallback` 声明的顺序切换备选模型。认证错误（401/403）和参数
+错误（400）不会触发切换。
+
+```json
+{
+  "id": "gpt-4o",
+  "name": "gpt-4o",
+  "protocol": "openai_chat",
+  "base_url": "https://api.openai.com/v1",
+  "api_key": "${OPENAI_API_KEY}",
+  "fallback": ["claude-sonnet", "deepseek-v3"],
+  "cooldown_seconds": 60
+}
+```
+
+语义：
+
+- `fallback` 是扁平链，只遍历主模型直接声明的列表，不递归展开备选自身的
+  `fallback`。
+- 失败后该模型进入 cooldown 冷却（时长由 `cooldown_seconds` 决定，缺省
+  600 秒），到期自动恢复。
+- 冷却只影响被动备选的跳过；用户显式指定的主模型始终会尝试。
+- cooldown 状态保存在进程内存中，不持久化，重启后重置。
+- 实际使用的模型名会记录在 session.jsonl 的 `requests[]` 中（`model` 字段）。
 
 ## Agent 覆盖规则
 

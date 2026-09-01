@@ -127,6 +127,9 @@ type ModelRequestStats struct {
 	ToolSchemaHash        string     `json:"tool_schema_hash,omitempty"`
 	Compacted             bool       `json:"compacted,omitempty"`
 	Usage                 TokenUsage `json:"usage"`
+	// Model is the actual model name that produced this request, which may
+	// differ from the configured primary when fallback was triggered.
+	Model string `json:"model,omitempty"`
 }
 
 // CallExecutorProvider executes exactly one V1 call type.

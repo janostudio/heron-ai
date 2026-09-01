@@ -170,14 +170,14 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []types.Message, 
 		if isUnsupportedParameterError(err) && hasAnthropicOptionalParameters(req) {
 			req = withoutAnthropicOptionalParameters(req)
 			if retryErr := p.post(ctx, effective, req, &wire); retryErr == nil {
-				return convertAnthropicResponse(wire), nil
+				return withModel(convertAnthropicResponse(wire), modelName), nil
 			} else {
 				err = retryErr
 			}
 		}
 		return nil, fmt.Errorf("anthropic messages: %w", err)
 	}
-	return convertAnthropicResponse(wire), nil
+	return withModel(convertAnthropicResponse(wire), modelName), nil
 }
 
 func (p *AnthropicProvider) ChatStream(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (<-chan types.ChatChunk, error) {
@@ -284,19 +284,27 @@ func (p *AnthropicProvider) post(ctx context.Context, effective types.ModelConfi
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return err
+		if isTimeoutError(err) {
+			return types.NewProviderTimeoutError(err)
+		}
+		return types.NewProviderNetworkError(err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		if isTimeoutError(err) {
+			return types.NewProviderTimeoutError(err)
+		}
+		return types.NewProviderNetworkError(err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var apiErr anthropicErrorResponse
 		if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
-			return fmt.Errorf("%s: %s", apiErr.Error.Type, apiErr.Error.Message)
+			pe := types.ClassifyProviderError(resp.StatusCode, apiErr.Error.Type, body)
+			pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
+			return pe
 		}
-		return fmt.Errorf("http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return types.ClassifyProviderError(resp.StatusCode, "", body)
 	}
 	if err := json.Unmarshal(body, output); err != nil {
 		return fmt.Errorf("decode response: %w", err)
