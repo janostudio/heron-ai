@@ -1,0 +1,75 @@
+id: perform_team
+goal: 六条车道并行演绎：每条车道只演 ScenePlan 分配给自己的角色，各车道独立输出 RolePerformances。
+memory:
+  enabled: true
+  max_items: 20
+  max_chars: 12000
+calls:
+  role_lane_1:
+    type: agent
+    agent: role-actor
+    responsibility: 你是 1 号车道。只演绎 ScenePlan.cast 中 lane==1 的角色。
+    inputs:
+      flow_records: [ScenePlan]
+    output:
+      record: RolePerformances
+  role_lane_2:
+    type: agent
+    agent: role-actor
+    responsibility: 你是 2 号车道。只演绎 ScenePlan.cast 中 lane==2 的角色。
+    inputs:
+      flow_records: [ScenePlan]
+    output:
+      record: RolePerformances
+  role_lane_3:
+    type: agent
+    agent: role-actor
+    responsibility: 你是 3 号车道。只演绎 ScenePlan.cast 中 lane==3 的角色。
+    inputs:
+      flow_records: [ScenePlan]
+    output:
+      record: RolePerformances
+  role_lane_4:
+    type: agent
+    agent: role-actor
+    responsibility: 你是 4 号车道。只演绎 ScenePlan.cast 中 lane==4 的角色。
+    inputs:
+      flow_records: [ScenePlan]
+    output:
+      record: RolePerformances
+  role_lane_5:
+    type: agent
+    agent: role-actor
+    responsibility: 你是 5 号车道。只演绎 ScenePlan.cast 中 lane==5 的角色。
+    inputs:
+      flow_records: [ScenePlan]
+    output:
+      record: RolePerformances
+  role_lane_6:
+    type: agent
+    agent: role-actor
+    responsibility: 你是 6 号车道。只演绎 ScenePlan.cast 中 lane==6 的角色。
+    inputs:
+      flow_records: [ScenePlan]
+    output:
+      record: RolePerformances
+output:
+  records:
+    - from: role_lane_1
+      record: RolePerformances
+      scope: flow
+    - from: role_lane_2
+      record: RolePerformances
+      scope: flow
+    - from: role_lane_3
+      record: RolePerformances
+      scope: flow
+    - from: role_lane_4
+      record: RolePerformances
+      scope: flow
+    - from: role_lane_5
+      record: RolePerformances
+      scope: flow
+    - from: role_lane_6
+      record: RolePerformances
+      scope: flow

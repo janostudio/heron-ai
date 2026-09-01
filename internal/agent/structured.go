@@ -10,6 +10,42 @@ import (
 
 type StructuredOutputManager struct{}
 
+const defaultStructuredOutputTokens = 4096
+
+// structuredModelConfig prevents a model registry's large general-purpose
+// output/reasoning defaults from consuming the entire budget before a small
+// machine-readable JSON decision is emitted.
+func structuredModelConfig(agent types.AgentConfig) types.ModelConfig {
+	config := agent.Model
+	config.ResponseFormat = agent.Structured
+	if agent.Structured == nil {
+		return config
+	}
+
+	limit := defaultStructuredOutputTokens
+	if agent.Structured.MaxOutputTokens > 0 {
+		limit = agent.Structured.MaxOutputTokens
+	} else if explicit := config.OutputTokenLimit(); explicit != nil && *explicit > 0 {
+		limit = *explicit
+	}
+	config.MaxOutputTokens = &limit
+	if config.Temperature == nil {
+		value := 0.0
+		config.Temperature = &value
+	}
+	if config.TopP == nil {
+		value := 1.0
+		config.TopP = &value
+	}
+
+	// Structured routing Agents should not inherit high reasoning defaults
+	// unless they explicitly configure reasoning on the Agent.
+	if config.Reasoning == nil {
+		config.Reasoning = &types.ReasoningConfig{Type: "none"}
+	}
+	return config
+}
+
 func NewStructuredOutputManager() *StructuredOutputManager {
 	return &StructuredOutputManager{}
 }

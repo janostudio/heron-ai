@@ -1,0 +1,20 @@
+id: lobby_team
+goal: 主A协调：理解用户意图，规划本轮场景，挑选并组装上场角色卡分配到车道，或直接回复。
+memory:
+  enabled: true
+  max_items: 20
+  max_chars: 12000
+calls:
+  direct:
+    type: agent
+    agent: director
+    responsibility: 规划本轮 ScenePlan 并把上场角色分配到 1-6 号车道，或 next.action=proceed 直接回复用户。
+    inputs:
+      user_message: true
+      flow_records: [ScenePlan, RolePerformances, StoryTurn, TeamFailureReport]
+    output:
+      record: ScenePlan
+output:
+  from: direct
+  record: ScenePlan
+  scope: flow

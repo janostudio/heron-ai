@@ -71,6 +71,47 @@ leaves the FlowSession in `waiting_input` so the client can continue the
 same `session_id`. Configuring `complete` or `wait_input` in `on_proceed`
 is a load-time validation error.
 
+### Team failure and coordination
+
+The Flow is collaborative, so a failed intermediate Team is not an automatic
+replay request:
+
+```text
+Agent/model retry
+  → AgentTurn failed
+  → CallResult failed
+  → TeamTurn failed
+  → Flow coordinator
+  → user-visible summary
+```
+
+`Agent` may retry a transient model request inside the current AgentTurn.
+After those retries are exhausted, the containing Team reports the failure to
+the single Flow coordinator with `next.action=coordinate`. The Flow runtime
+publishes a Flow-scope `TeamFailureReport` containing the failed Team, failed
+Calls, and reason. It also preserves successful sibling Team results.
+
+The coordinator is activated once for the batch and can aggregate:
+
+- successful sibling SharedRecords;
+- `TeamFailureReport` records;
+- records already persisted for the Flow.
+
+The failed Team is not automatically executed again. A dependent Team whose
+inputs require the failed Team is skipped because its prerequisites are not
+valid. Independent sibling Teams may complete normally. A later retry requires
+an explicit new coordinator decision, normally from a new user turn.
+
+For coordinator prompts, treat `TeamFailureReport` as an execution result:
+
+```text
+- summarize the failed Team and reason;
+- include successful sibling results;
+- do not activate the failed Team again automatically;
+- only activate it when the user explicitly asks to retry or there is a
+  concrete, non-replay recovery plan.
+```
+
 ## File Location
 
 Flows are YAML files in `.agents/flows/`:

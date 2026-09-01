@@ -1,30 +1,24 @@
 id: novel_story
-entry: opening
+entry: lobby
 
 teams:
-  opening:
-    team: story_team
+  lobby:
+    team: lobby_team
     coordinator: true
+    can_activate: [perform]
     inputs:
       user_message: true
-    on_proceed: [development]
+      flow_records: [ScenePlan, RolePerformances, StoryTurn, TeamFailureReport]
 
-  development:
-    team: story_team
-    depends_on: [opening]
+  perform:
+    team: perform_team
+    depends_on: [lobby]
     inputs:
-      user_message: true
-    on_proceed: [climax]
+      flow_records: [ScenePlan]
+    on_proceed: [weave]
 
-  climax:
-    team: story_team
-    depends_on: [development]
+  weave:
+    team: weave_team
+    depends_on: [perform]
     inputs:
-      user_message: true
-    on_proceed: [ending]
-
-  ending:
-    team: story_team
-    depends_on: [climax]
-    inputs:
-      user_message: true
+      flow_records: [ScenePlan, RolePerformances]

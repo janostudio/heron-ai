@@ -565,6 +565,9 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		enqueue(activation)
 	}
 	completedTeams := make(map[string]bool)
+	failedTeams := make(map[string]bool)
+	coordinateRetries := make(map[string]int)
+	activationRetries := make(map[string]int)
 	allRecords, err := r.loadHistoricalFlowRecords(ctx, session.ID)
 	if err != nil {
 		return r.finishTurn(ctx, result, types.SessionFailed, err)
@@ -576,10 +579,18 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 			return r.finishTurn(ctx, result, types.SessionFailed, err)
 		}
 
-		ready, blocked := takeReadyActivations(queue, completedTeams, r.definitions.Flow)
+		ready, blocked := takeReadyActivations(queue, completedTeams, failedTeams, r.definitions.Flow)
 		ready, deferred := limitActivations(ready, r.limits.WithDefaults().MaxParallelTeams)
 		queue = append(deferred, blocked...)
 		if len(ready) == 0 {
+			// Activations whose dependencies failed are intentionally
+			// discarded. Their work cannot be executed with valid inputs;
+			// the coordinator receives the original TeamFailureReport
+			// instead. Do not turn this normal failure propagation into a
+			// generic "activation graph cannot make progress" error.
+			if len(queue) == 0 {
+				break
+			}
 			return r.finishTurn(ctx, result, types.SessionFailed, errors.New("flow activation graph cannot make progress"))
 		}
 		if teamTurns+len(ready) > r.limits.MaxTeamTurns {
@@ -627,7 +638,22 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 			result.Reply = joinReply(result.Reply, teamResult.Reply)
 			allRecords = append(allRecords, teamResult.Records...)
 			result.Records = append(result.Records, teamResult.Records...)
-			completedTeams[execution.activation.teamID] = teamResult.Error == ""
+			if teamResult.Error == "" && teamResult.Turn.Status != types.TurnFailed {
+				completedTeams[execution.activation.teamID] = true
+			} else {
+				failedTeams[execution.activation.teamID] = true
+			}
+			if teamFailure := teamFailureRecord(turn, execution); teamFailure != nil {
+				// A failed intermediate Team is a collaboration result, not
+				// an automatic replay request. Publish the failure as a
+				// Flow-scope record so the coordinator can summarize it
+				// together with successful sibling Teams.
+				allRecords = append(allRecords, *teamFailure)
+				result.Records = append(result.Records, *teamFailure)
+				if err := r.publishFlowRecord(ctx, session, turn, *teamFailure); err != nil {
+					return r.finishTurn(ctx, result, types.SessionFailed, err)
+				}
+			}
 		}
 
 		// Resolve all routes after the batch has finished. A parallel batch
@@ -638,6 +664,25 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		hasWaitApproval := false
 		var routeFailure error
 		var resolvedRoute *types.Route
+		// Several sibling Teams can report to the same coordinator in one
+		// batch. Route that coordinator once and let it aggregate all
+		// successful results and TeamFailureReport records.
+		batchRoutes := make(map[string]struct{})
+		enqueueBatchRoute := func(next activation) {
+			key := next.teamID + "\x00" + next.callerTeam
+			if next.teamID == coordinatorID(r.definitions.Flow) {
+				// The coordinator is the single aggregation point for this
+				// batch. A failed Team and a successful sibling may both
+				// route there; they must produce one coordinator activation,
+				// not duplicate coordinator turns.
+				key = next.teamID
+			}
+			if _, exists := batchRoutes[key]; exists {
+				return
+			}
+			batchRoutes[key] = struct{}{}
+			enqueue(next)
+		}
 		for _, execution := range executions {
 			next := execution.next
 			if next == nil {
@@ -661,7 +706,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 					targets = []string{coordinatorID(r.definitions.Flow)}
 				}
 				for _, target := range targets {
-					enqueue(activation{teamID: target, callerTeam: execution.activation.teamID})
+					enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
 				}
 			case types.NextActivate:
 				if !execution.binding.Coordinator {
@@ -672,8 +717,18 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 					routeFailure = err
 					continue
 				}
+				activationKey := execution.activation.teamID + "->" + strings.Join(sortedStrings(next.Teams), ",")
+				if activationRetries[activationKey] >= r.limits.MaxActivationRetries {
+					routeFailure = fmt.Errorf(
+						"repeated Flow activation %q exceeded retry limit (%d)",
+						activationKey,
+						r.limits.MaxActivationRetries,
+					)
+					continue
+				}
+				activationRetries[activationKey]++
 				for _, target := range next.Teams {
-					enqueue(activation{teamID: target, callerTeam: execution.activation.teamID})
+					enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
 				}
 			case types.NextReturn:
 				target := next.CallerTeam
@@ -683,13 +738,29 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				if target == "" {
 					target = coordinatorID(r.definitions.Flow)
 				}
-				enqueue(activation{teamID: target, callerTeam: execution.activation.teamID})
+				enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
 			case types.NextCoordinate:
-				enqueue(activation{teamID: coordinatorID(r.definitions.Flow), callerTeam: execution.activation.teamID})
+				sourceTeam := execution.activation.teamID
+				if coordinateRetries[sourceTeam] >= r.limits.MaxCoordinateRetries {
+					routeFailure = fmt.Errorf(
+						"team %q exceeded coordinate retry limit (%d): %s",
+						sourceTeam,
+						r.limits.MaxCoordinateRetries,
+						next.Reason,
+					)
+					continue
+				}
+				coordinateRetries[sourceTeam]++
+				enqueueBatchRoute(activation{teamID: coordinatorID(r.definitions.Flow), callerTeam: execution.activation.teamID})
 			case types.NextWaitTool:
 				hasWaitTool = true
 			case types.NextWaitApproval:
 				hasWaitApproval = true
+			case types.NextAction("complete"), types.NextAction("wait_input"):
+				// Backward compatibility for older Agent responses. These
+				// values describe lifecycle completion, not Flow/Team
+				// orchestration. The current lifecycle leaves a normal Flow
+				// turn resumable, so do not enqueue another Team here.
 			case types.NextFail:
 				if routeFailure == nil {
 					routeFailure = errors.New(next.Reason)
@@ -750,19 +821,57 @@ type teamExecution struct {
 func takeReadyActivations(
 	queue []activation,
 	completed map[string]bool,
+	failed map[string]bool,
 	flow types.Flow,
 ) ([]activation, []activation) {
 	ready := make([]activation, 0, len(queue))
 	blocked := make([]activation, 0, len(queue))
 	for _, current := range queue {
 		binding, ok := flow.Teams[current.teamID]
-		if current.force || !ok || dependenciesCompleted(binding.DependsOn, completed) {
+		if current.force || !ok {
+			// A forced activation is an explicit resume/recovery request and
+			// is allowed to bypass dependency state. Ordinary queued work is
+			// never allowed to run after a failed dependency.
+			ready = append(ready, current)
+			continue
+		}
+		if dependenciesFailed(current.teamID, failed, flow) {
+			continue
+		}
+		if dependenciesCompleted(binding.DependsOn, completed) {
 			ready = append(ready, current)
 			continue
 		}
 		blocked = append(blocked, current)
 	}
 	return ready, blocked
+}
+
+func dependenciesFailed(teamID string, failed map[string]bool, flow types.Flow) bool {
+	visiting := make(map[string]bool)
+	var visit func(string) bool
+	visit = func(current string) bool {
+		if failed[current] {
+			return true
+		}
+		if visiting[current] {
+			return false
+		}
+		visiting[current] = true
+		defer delete(visiting, current)
+
+		binding, ok := flow.Teams[current]
+		if !ok {
+			return false
+		}
+		for _, dependency := range binding.DependsOn {
+			if visit(dependency) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(teamID)
 }
 
 func limitActivations(items []activation, max int) ([]activation, []activation) {
@@ -849,7 +958,7 @@ func (r *Runtime) executeTeamTurn(
 		Team:               team,
 		Input:              teamInput(input, binding.Inputs),
 		ContextBlocks:      blocks,
-		Records:            selectFlowRecords(records, binding.Inputs),
+		Records:            selectFlowRecordsForBinding(records, binding),
 		WorkspaceRoot:      r.workspace,
 		Limits:             r.limits,
 		ResumeCallID:       current.resumeCallID,
@@ -864,14 +973,32 @@ func (r *Runtime) executeTeamTurn(
 	})
 	if runErr != nil {
 		teamResult.Error = runErr.Error()
-		if teamResult.Next == nil {
-			teamResult.Next = &types.Route{Action: types.NextCoordinate, Reason: runErr.Error()}
+		teamResult.Turn.Status = types.TurnFailed
+	}
+
+	// A failed Agent/Call makes its containing Team fail. Escalate that
+	// failure to the Flow coordinator exactly once; this is not an automatic
+	// replay request. The coordinator can aggregate this failure with sibling
+	// Team results and decide what to tell the user.
+	teamFailed := runErr != nil ||
+		teamResult.Error != "" ||
+		teamResult.Turn.Status == types.TurnFailed ||
+		(teamResult.Next != nil && teamResult.Next.Action == types.NextFail)
+	if teamFailed {
+		reason := strings.TrimSpace(teamResult.Error)
+		if reason == "" && teamResult.Next != nil {
+			reason = strings.TrimSpace(teamResult.Next.Reason)
 		}
-		// A coordinator cannot coordinate itself after it has failed. Without
-		// this guard a failed single-Team Flow loops until MaxTeamTurns.
-		if teamResult.Next.Action == types.NextCoordinate &&
-			current.teamID == coordinatorID(r.definitions.Flow) {
-			teamResult.Next = &types.Route{Action: types.NextFail, Reason: runErr.Error()}
+		if reason == "" {
+			reason = "team execution failed"
+		}
+		if teamResult.Error == "" {
+			teamResult.Error = reason
+		}
+		if current.teamID == coordinatorID(r.definitions.Flow) {
+			teamResult.Next = &types.Route{Action: types.NextFail, Reason: reason}
+		} else {
+			teamResult.Next = &types.Route{Action: types.NextCoordinate, Reason: reason}
 		}
 		teamResult.Turn.Status = types.TurnFailed
 	}
@@ -901,7 +1028,9 @@ func (r *Runtime) executeTeamTurn(
 	waitingApproval := teamTurnStatus == types.TurnWaitingApproval ||
 		next.Action == types.NextWaitApproval
 	teamResult.Turn.Status = types.TurnCompleted
-	if waitingApproval {
+	if teamFailed {
+		teamResult.Turn.Status = types.TurnFailed
+	} else if waitingApproval {
 		teamResult.Turn.Status = types.TurnWaitingApproval
 	} else if waitingTool {
 		teamResult.Turn.Status = types.TurnWaitingTool
@@ -971,9 +1100,98 @@ func (r *Runtime) executeTeamTurn(
 	execution.result = teamResult
 	execution.next = next
 	// A Team-level execution error is represented in TeamTurnResult so the
-	// coordinator can still receive a coordinate route. Only persistence or
-	// runtime infrastructure errors abort the whole FlowTurn here.
+	// Flow can report it to the coordinator. It is not an automatic replay
+	// request; only an explicit coordinator route may activate work again.
 	return execution, nil
+}
+
+func (r *Runtime) publishFlowRecord(
+	ctx context.Context,
+	session types.FlowSession,
+	flowTurn types.FlowTurn,
+	record types.SharedRecord,
+) error {
+	if r.evidence != nil {
+		if err := r.evidence.Publish(ctx, session.ID, record); err != nil {
+			return err
+		}
+	}
+	return r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
+		Type:          types.EventSharedRecordPublished,
+		FlowSessionID: session.ID,
+		FlowTurnID:    flowTurn.ID,
+		TeamID:        record.Producer.TeamID,
+		TeamTurnID:    record.Producer.TeamTurnID,
+		CallID:        record.Producer.CallID,
+		CallTurnID:    record.Producer.CallTurnID,
+		Payload:       map[string]any{"record": record},
+	})
+}
+
+func teamFailureRecord(flowTurn types.FlowTurn, execution teamExecution) *types.SharedRecord {
+	teamResult := execution.result
+	if teamResult.Error == "" && teamResult.Turn.Status != types.TurnFailed {
+		return nil
+	}
+	// The default/Flow coordinator has no higher Team to report to. Its
+	// failure is terminal for this FlowTurn and is returned to the caller
+	// directly rather than wrapped as another coordination record.
+	if execution.binding.Coordinator {
+		return nil
+	}
+
+	failedCalls := make([]string, 0)
+	callErrors := make(map[string]string)
+	for callID, callResult := range teamResult.CallResults {
+		if callResult.Status != types.TurnFailed && callResult.Error == "" {
+			continue
+		}
+		failedCalls = append(failedCalls, callID)
+		if callResult.Error != "" {
+			callErrors[callID] = callResult.Error
+		}
+	}
+	sort.Strings(failedCalls)
+
+	reason := strings.TrimSpace(teamResult.Error)
+	if reason == "" && teamResult.Next != nil {
+		reason = strings.TrimSpace(teamResult.Next.Reason)
+	}
+	if reason == "" {
+		reason = "team execution failed"
+	}
+
+	data := map[string]any{
+		"team_id":         execution.activation.teamID,
+		"team_turn_id":    teamResult.Turn.ID,
+		"status":          string(types.TurnFailed),
+		"reason":          reason,
+		"failed_calls":    failedCalls,
+		"call_errors":     callErrors,
+		"automatic_retry": false,
+	}
+	recordID := fmt.Sprintf(
+		"team-failure-%s-%s",
+		flowTurn.ID,
+		execution.activation.teamID,
+	)
+	return &types.SharedRecord{
+		RecordID: recordID,
+		Kind:     "team_failure",
+		Name:     "TeamFailureReport",
+		Scope:    types.RecordScopeFlow,
+		Producer: types.ProducerRef{
+			FlowSessionID: flowTurn.FlowSessionID,
+			FlowTurnID:    flowTurn.ID,
+			TeamID:        execution.activation.teamID,
+			TeamTurnID:    teamResult.Turn.ID,
+		},
+		Summary:   fmt.Sprintf("Team %q failed: %s", execution.activation.teamID, reason),
+		Data:      data,
+		Status:    types.RecordActive,
+		Revision:  1,
+		CreatedAt: time.Now().UTC(),
+	}
 }
 
 func (r *Runtime) finishTurn(
@@ -1524,6 +1742,33 @@ func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec) []typ
 	return selected
 }
 
+func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding) []types.SharedRecord {
+	selected := selectFlowRecords(records, binding.Inputs)
+	if !binding.Coordinator {
+		return selected
+	}
+
+	// Coordinator input is also an execution envelope: it must see failures
+	// produced by sibling Teams even when a Flow omitted the synthetic
+	// TeamFailureReport from its explicit allowlist. Successful records remain
+	// governed by the normal Flow input policy.
+	seen := make(map[string]struct{}, len(selected))
+	for _, record := range selected {
+		seen[record.RecordID] = struct{}{}
+	}
+	for _, record := range records {
+		if record.Name != "TeamFailureReport" {
+			continue
+		}
+		if _, exists := seen[record.RecordID]; exists {
+			continue
+		}
+		selected = append(selected, record)
+		seen[record.RecordID] = struct{}{}
+	}
+	return selected
+}
+
 func coordinatorID(flow types.Flow) string {
 	for name, binding := range flow.Teams {
 		if binding.Coordinator {
@@ -1531,6 +1776,12 @@ func coordinatorID(flow types.Flow) string {
 		}
 	}
 	return ""
+}
+
+func sortedStrings(values []string) []string {
+	result := append([]string(nil), values...)
+	sort.Strings(result)
+	return result
 }
 
 func recordIDs(records []types.SharedRecord) []string {

@@ -199,6 +199,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 	noProgressRounds := 0
 	lastModelText := ""
 	sameModelTexts := 0
+	structuredRetries := 0
 	if req.ResumeCheckpointID != "" {
 		checkpoint, loadErr := t.checkpoints.Load(ctx, req.ResumeCheckpointID)
 		if loadErr != nil {
@@ -409,8 +410,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			}
 		}
 
-		modelConfig := agent.Model
-		modelConfig.ResponseFormat = agent.Structured
+		modelConfig := structuredModelConfig(agent)
 		var resp *types.ChatResponse
 		var chatErr error
 		contextRecovered := false
@@ -479,6 +479,38 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		totalUsage.PromptCacheMissTokens += resp.Usage.PromptCacheMissTokens
 		totalUsage.CacheReadInputTokens += resp.Usage.CacheReadInputTokens
 		totalUsage.CacheCreationInputTokens += resp.Usage.CacheCreationInputTokens
+		if agent.Structured != nil && isStructuredOutputTruncated(resp.FinishReason) {
+			truncatedErr := errors.New("structured output truncated: model stopped at the output token limit")
+			if structuredRetries < 1 && round+1 < maxRounds {
+				structuredRetries++
+				if addErr := contextManager.AddMessage(types.Message{
+					Role: "assistant", Content: resp.Text,
+				}); addErr != nil {
+					return nil, addErr
+				}
+				if addErr := contextManager.AddMessage(types.Message{
+					Role:    "user",
+					Content: "The previous JSON response was truncated. Return one complete JSON object only, with every required field, and no explanation or Markdown.",
+				}); addErr != nil {
+					return nil, addErr
+				}
+				lastText = resp.Text
+				continue
+			}
+			t.emitErrorHook(ctx, agent, req, round, truncatedErr)
+			return &types.AgentResult{
+				Status:       types.TurnFailed,
+				Reply:        resp.Text,
+				Error:        truncatedErr.Error(),
+				Usage:        totalUsage,
+				WorkspaceOps: workspaceOps,
+				ToolCalls:    toolCalls,
+				Next: &types.Route{
+					Action: types.NextCoordinate,
+					Reason: truncatedErr.Error(),
+				},
+			}, nil
+		}
 		lastText = resp.Text
 		if strings.TrimSpace(resp.Text) != "" && strings.TrimSpace(resp.Text) == strings.TrimSpace(lastModelText) {
 			sameModelTexts++
@@ -499,6 +531,22 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			if agent.Structured != nil {
 				parsed, err = NewStructuredOutputManager().ParseAndValidate(cleanText, agent.Structured)
 				if err != nil {
+					if structuredRetries < 1 && round+1 < maxRounds {
+						structuredRetries++
+						if addErr := contextManager.AddMessage(types.Message{
+							Role: "assistant", Content: resp.Text,
+						}); addErr != nil {
+							return nil, addErr
+						}
+						if addErr := contextManager.AddMessage(types.Message{
+							Role:    "user",
+							Content: "The previous response was not valid JSON for the required schema. Return one complete JSON object only; do not explain, use Markdown, or omit required fields.",
+						}); addErr != nil {
+							return nil, addErr
+						}
+						lastText = resp.Text
+						continue
+					}
 					t.emitErrorHook(ctx, agent, req, round, err)
 					return &types.AgentResult{Status: types.TurnFailed, Reply: cleanText, Error: fmt.Sprintf("structured output: %v", err), Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls, Next: &types.Route{Action: types.NextCoordinate, Reason: err.Error()}}, nil
 				}
@@ -507,6 +555,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			if parsedRoute := routeFromParsed(parsed); parsedRoute != nil {
 				route = parsedRoute
 			}
+			route = normalizeStructuredRoute(agent.Structured, route)
 			reply := cleanText
 			if parsedReply := stringFromParsed(parsed, "reply"); parsedReply != "" {
 				reply = parsedReply
@@ -755,6 +804,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		if parsedRoute := routeFromParsed(parsed); parsedRoute != nil {
 			route = parsedRoute
 		}
+		route = normalizeStructuredRoute(agent.Structured, route)
 		reply := cleanText
 		if parsedReply := stringFromParsed(parsed, "reply"); parsedReply != "" {
 			reply = parsedReply
@@ -762,6 +812,15 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		return &types.AgentResult{Status: types.TurnCompleted, Reply: reply, Parsed: parsed, Next: route, Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls}, nil
 	}
 	return &types.AgentResult{Status: types.TurnCompleted, Reply: cleanText, Next: &types.Route{Action: action, Reason: "agent loop limit reached"}, Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls}, nil
+}
+
+func isStructuredOutputTruncated(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "length", "max_tokens":
+		return true
+	default:
+		return false
+	}
 }
 
 func contextBlockText(blocks []types.ContextBlock, kind string) string {
@@ -1492,7 +1551,7 @@ func routeFromParsed(parsed any) *types.Route {
 		return nil
 	}
 	route := &types.Route{
-		Action:     types.NextAction(action),
+		Action:     normalizeRouteAction(action),
 		Reason:     stringFromMap(next, "reason"),
 		CallerTeam: stringFromMap(next, "caller_team"),
 	}
@@ -1504,6 +1563,28 @@ func routeFromParsed(parsed any) *types.Route {
 		}
 	}
 	return route
+}
+
+func normalizeStructuredRoute(structured *types.StructuredOutput, route *types.Route) *types.Route {
+	if structured == nil || route == nil {
+		return route
+	}
+	if route.Action == types.NextAction("complete") ||
+		route.Action == types.NextAction("wait_input") {
+		return &types.Route{Action: types.NextProceed, Reason: "structured Agent completed"}
+	}
+	return route
+}
+
+// normalizeRouteAction preserves compatibility with older Agent prompts while
+// keeping lifecycle terms out of Flow/Team orchestration.
+func normalizeRouteAction(action string) types.NextAction {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "", "complete", "wait_input":
+		return types.NextProceed
+	default:
+		return types.NextAction(action)
+	}
 }
 
 func stringFromParsed(parsed any, key string) string {

@@ -508,14 +508,16 @@ func TestStructuredOutputManager_ValidateNonRequiredFieldMissing(t *testing.T) {
 // ============================================================
 
 type mockModelProvider struct {
-	responses []types.ChatResponse
-	callCount int
-	attempts  int
-	err       error
+	responses  []types.ChatResponse
+	callCount  int
+	attempts   int
+	err        error
+	lastConfig types.ModelConfig
 }
 
 func (m *mockModelProvider) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
 	m.attempts++
+	m.lastConfig = config
 	if m.err != nil {
 		err := m.err
 		m.err = nil

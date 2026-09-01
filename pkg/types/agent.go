@@ -152,8 +152,9 @@ func (c ContextConfig) WithDefaults() ContextConfig {
 }
 
 type StructuredOutput struct {
-	Type   string         `yaml:"type" json:"type"`
-	Schema map[string]any `yaml:"schema" json:"schema"`
+	Type            string         `yaml:"type" json:"type"`
+	Schema          map[string]any `yaml:"schema" json:"schema"`
+	MaxOutputTokens int            `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
 }
 
 type HITLConfig struct {

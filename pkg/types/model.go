@@ -292,10 +292,11 @@ type ToolCall struct {
 
 // ChatResponse represents an LLM chat response
 type ChatResponse struct {
-	Text      string     `json:"text"`
-	Reasoning string     `json:"reasoning,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	Usage     TokenUsage `json:"usage"`
+	Text         string     `json:"text"`
+	Reasoning    string     `json:"reasoning,omitempty"`
+	FinishReason string     `json:"finish_reason,omitempty"`
+	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
+	Usage        TokenUsage `json:"usage"`
 }
 
 // ChatChunk represents a streaming chat response chunk

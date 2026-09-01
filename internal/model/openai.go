@@ -126,6 +126,7 @@ type openAIResponse struct {
 			ReasoningContent string           `json:"reasoning_content"`
 			ToolCalls        []openAIToolCall `json:"tool_calls"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens             int `json:"prompt_tokens"`
@@ -245,6 +246,15 @@ func (p *OpenAIProvider) buildRequest(
 	}
 	if effective.Reasoning != nil && profileAllowsReasoning(p.profile, override.Reasoning != nil) {
 		req.ReasoningEffort = effective.Reasoning.Effort
+		if req.ReasoningEffort == "" {
+			switch strings.ToLower(strings.TrimSpace(effective.Reasoning.Type)) {
+			case "none", "disabled", "off":
+				// OpenAI-compatible gateways commonly inherit the model
+				// registry's reasoning default when this field is omitted.
+				// Send an explicit "none" for small structured routing calls.
+				req.ReasoningEffort = "none"
+			}
+		}
 	}
 	return req, nil
 }
@@ -450,6 +460,7 @@ func convertOpenAIResponse(resp openAIResponse) *types.ChatResponse {
 	choice := resp.Choices[0]
 	result.Text = choice.Message.Content
 	result.Reasoning = choice.Message.ReasoningContent
+	result.FinishReason = choice.FinishReason
 	for _, call := range choice.Message.ToolCalls {
 		var args map[string]any
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {

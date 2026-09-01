@@ -213,11 +213,13 @@ type FlowTurnResult struct {
 // a new orchestration concept: the flow may still choose any valid static or
 // dynamic route within these bounds.
 type RuntimeLimits struct {
-	MaxTeamTurns        int `json:"max_team_turns"`
-	MaxCallsPerTeamTurn int `json:"max_calls_per_team_turn"`
-	MaxAgentRounds      int `json:"max_agent_rounds"`
-	MaxParallelTeams    int `json:"max_parallel_teams"`
-	MaxParallelCalls    int `json:"max_parallel_calls"`
+	MaxTeamTurns         int `json:"max_team_turns"`
+	MaxCallsPerTeamTurn  int `json:"max_calls_per_team_turn"`
+	MaxAgentRounds       int `json:"max_agent_rounds"`
+	MaxParallelTeams     int `json:"max_parallel_teams"`
+	MaxParallelCalls     int `json:"max_parallel_calls"`
+	MaxCoordinateRetries int `json:"max_coordinate_retries"`
+	MaxActivationRetries int `json:"max_activation_retries"`
 	// Tool parallelism is inside one AgentTurn and is not a Flow/Team
 	// orchestration level.
 	MaxParallelTools int `json:"max_parallel_tools"`
@@ -238,6 +240,12 @@ func (l RuntimeLimits) WithDefaults() RuntimeLimits {
 	}
 	if l.MaxParallelCalls <= 0 {
 		l.MaxParallelCalls = 20
+	}
+	if l.MaxCoordinateRetries <= 0 {
+		l.MaxCoordinateRetries = 1
+	}
+	if l.MaxActivationRetries <= 0 {
+		l.MaxActivationRetries = 1
 	}
 	if l.MaxParallelTools <= 0 {
 		l.MaxParallelTools = 20

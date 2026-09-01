@@ -94,6 +94,46 @@ func TestOpenAIProvider_UsesModelDefaults(t *testing.T) {
 	assert.Equal(t, 2, response.Usage.CacheReadInputTokens)
 }
 
+func TestOpenAIProvider_PreservesFinishReason(t *testing.T) {
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return jsonResponse(`{
+			"choices": [{"message": {"content": "{\"partial\":"}, "finish_reason": "length"}]
+		}`), nil
+	})
+	provider := NewOpenAIProviderWithProfile("key", "http://test.local/v1", "model", types.ModelProfile{
+		ID: "model", Name: "model", BaseURL: "http://test.local/v1",
+	})
+	provider.client = &http.Client{Transport: transport}
+
+	response, err := provider.Chat(context.Background(), []types.Message{
+		{Role: "user", Content: "json"},
+	}, nil, types.ModelConfig{Model: "model"})
+	require.NoError(t, err)
+	require.Equal(t, "length", response.FinishReason)
+}
+
+func TestOpenAIProviderDisablesReasoningForExplicitNone(t *testing.T) {
+	var request map[string]any
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		return jsonResponse(`{"choices":[{"message":{"content":"{}"}}]}`), nil
+	})
+	provider := NewOpenAIProviderWithProfile("key", "http://test.local/v1", "model", types.ModelProfile{
+		ID: "model", Name: "model", BaseURL: "http://test.local/v1",
+		SupportsReasoning: boolPtr(true),
+	})
+	provider.client = &http.Client{Transport: transport}
+
+	_, err := provider.Chat(context.Background(), []types.Message{
+		{Role: "user", Content: "return json"},
+	}, nil, types.ModelConfig{
+		Model:     "model",
+		Reasoning: &types.ReasoningConfig{Type: "none"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "none", request["reasoning_effort"])
+}
+
 func TestOpenAIProvider_AgentCanOverrideModelDefaults(t *testing.T) {
 	var request map[string]any
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {

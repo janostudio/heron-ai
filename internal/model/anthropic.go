@@ -138,7 +138,8 @@ type anthropicResponse struct {
 		Name      string          `json:"name"`
 		Input     json.RawMessage `json:"input"`
 	} `json:"content"`
-	Usage struct {
+	StopReason string `json:"stop_reason"`
+	Usage      struct {
 		InputTokens              int `json:"input_tokens"`
 		OutputTokens             int `json:"output_tokens"`
 		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
@@ -548,6 +549,7 @@ func convertAnthropicResponse(resp anthropicResponse) *types.ChatResponse {
 			CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
 		},
 	}
+	result.FinishReason = resp.StopReason
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "text":
