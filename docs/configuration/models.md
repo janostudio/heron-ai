@@ -89,6 +89,46 @@ Agent 文件只需要指定模型名称；没有在 Agent 上显式配置的参�
 }
 ```
 
+完整的多级链示例（主 → 备 → 兜底）：
+
+```json
+{
+  "model": "gpt-4o",
+  "models": [
+    {
+      "id": "gpt-4o",
+      "name": "gpt-4o",
+      "protocol": "openai_chat",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "${OPENAI_API_KEY}",
+      "fallback": ["claude-sonnet", "deepseek-v3"],
+      "cooldown_seconds": 60
+    },
+    {
+      "id": "claude-sonnet",
+      "name": "claude-sonnet",
+      "protocol": "anthropic_messages",
+      "base_url": "https://api.anthropic.com",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "fallback": ["deepseek-v3"],
+      "cooldown_seconds": 120
+    },
+    {
+      "id": "deepseek-v3",
+      "name": "deepseek-v3",
+      "protocol": "openai_chat",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key": "${DEEPSEEK_API_KEY}"
+    }
+  ]
+}
+```
+
+注意：即使 `claude-sonnet` 自己也声明了 `fallback`，调度时**只会遍历
+`gpt-4o` 直接声明的链**（`claude-sonnet` → `deepseek-v3`），不会递归展开
+`claude-sonnet` 的 `fallback`。最终兜底模型（`deepseek-v3`）通常不再声明
+`fallback`，链在此自然终止。
+
 语义：
 
 - `fallback` 是扁平链，只遍历主模型直接声明的列表，不递归展开备选自身的
