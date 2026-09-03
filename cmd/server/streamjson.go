@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -224,6 +225,5 @@ func (c *streamJSONClient) write(value any) error {
 }
 
 func urlQueryEscape(value string) string {
-	replacer := strings.NewReplacer("%", "%25", " ", "%20", "?", "%3F", "&", "%26", "=", "%3D")
-	return replacer.Replace(value)
+	return url.QueryEscape(value)
 }

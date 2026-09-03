@@ -269,7 +269,7 @@ func buildCurrentRuntime(ctx context.Context, flowPath string) (*app.RuntimeBund
 		return nil, "", fmt.Errorf("models.json has no models")
 	}
 	for i := range models.Models {
-		models.Models[i].APIKey = resolveAPIKey(models.Models[i].APIKey, os.Getenv("OPENAI_API_KEY"))
+		models.Models[i].APIKey = resolveAPIKey(models.Models[i].APIKey, apiKeyFallbackFor(models.Models[i]))
 	}
 	defaultProfile, err := resolveModelProfile(models)
 	if err != nil {
@@ -318,8 +318,46 @@ func resolveModelProfile(config *ModelsConfig) (types.ModelProfile, error) {
 				return item, nil
 			}
 		}
+		return types.ModelProfile{}, fmt.Errorf("model %q not found in models.json", selected)
 	}
 	return config.Models[0], nil
+}
+
+// apiKeyFallbackFor maps a model profile to the environment variable that
+// should be used as its API key fallback when the profile does not declare one.
+// The mapping is provider-aware so a key for one provider is never injected
+// into a model of another provider (for example OPENAI_API_KEY must not leak
+// into an Anthropic model). Unknown or ambiguous providers get no fallback.
+func apiKeyFallbackFor(profile types.ModelProfile) string {
+	switch profileProtocol(profile) {
+	case "anthropic":
+		return os.Getenv("ANTHROPIC_API_KEY")
+	case "openai":
+		return os.Getenv("OPENAI_API_KEY")
+	default:
+		return ""
+	}
+}
+
+// profileProtocol classifies a model profile into a canonical protocol name
+// using the same rules as the provider router (Protocol first, then Provider,
+// defaulting to openai for backwards compatibility).
+func profileProtocol(profile types.ModelProfile) string {
+	value := strings.ToLower(strings.TrimSpace(profile.Protocol))
+	if value == "" {
+		value = strings.ToLower(strings.TrimSpace(profile.Provider))
+	}
+
+	switch value {
+	case "anthropic", "anthropic_messages", "messages":
+		return "anthropic"
+	case "openai", "openai_chat", "openai-compatible", "openai_compatible", "chat":
+		return "openai"
+	default:
+		// Existing models.json files only have an OpenAI-compatible endpoint.
+		// Keep that format as the safe backwards-compatible default.
+		return "openai"
+	}
 }
 
 func resolveAPIKey(configured, fallback string) string {

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -244,6 +246,103 @@ func TestJSONRPCServerReturnsProtocolErrorsAndContinues(t *testing.T) {
 	}
 	if stub.startCalls != 1 {
 		t.Fatalf("start calls = %d, want 1", stub.startCalls)
+	}
+}
+
+func TestJSONRPCTurnResultFrom(t *testing.T) {
+	t.Run("empty result", func(t *testing.T) {
+		got := jsonRPCTurnResultFrom(types.FlowTurnResult{})
+		require.Empty(t, got.SessionID)
+		require.Empty(t, got.FlowTurnID)
+		require.Empty(t, got.Status)
+		require.Empty(t, got.Reply)
+		require.Empty(t, got.Records)
+		require.Empty(t, got.Error)
+		require.Zero(t, got.Usage.TotalTokens)
+	})
+
+	t.Run("full result", func(t *testing.T) {
+		in := testFlowTurnResult(types.SessionWaitingInput, "hello")
+		got := jsonRPCTurnResultFrom(in)
+		require.Equal(t, "fs-1", got.SessionID)
+		require.Equal(t, "ft-1", got.FlowTurnID)
+		require.Equal(t, types.SessionWaitingInput, got.Status)
+		require.Equal(t, "hello", got.Reply)
+		require.Len(t, got.Records, 1)
+		require.Equal(t, "record-1", got.Records[0].RecordID)
+		require.Equal(t, "diagnosis", got.Records[0].Kind)
+		require.Equal(t, "DiagnosisReport", got.Records[0].Name)
+		require.Equal(t, "found one issue", got.Records[0].Summary)
+		require.Equal(t, types.RecordActive, got.Records[0].Status)
+		require.Equal(t, 1, got.Records[0].Revision)
+		require.Equal(t, 30, got.Usage.TotalTokens)
+	})
+
+	t.Run("error result preserves error", func(t *testing.T) {
+		in := testFlowTurnResult(types.SessionFailed, "")
+		in.Error = "something broke"
+		got := jsonRPCTurnResultFrom(in)
+		require.Equal(t, "something broke", got.Error)
+		require.Equal(t, types.SessionFailed, got.Status)
+	})
+}
+
+func TestAggregateTeamUsage(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		got := aggregateTeamUsage(nil)
+		require.Zero(t, got.TotalTokens)
+	})
+
+	t.Run("accumulates across agents", func(t *testing.T) {
+		results := []types.TeamTurnResult{
+			{Usage: types.TokenUsage{PromptTokens: 10, CompletionTokens: 20, ReasoningTokens: 1, TotalTokens: 31, PromptCacheHitTokens: 2, PromptCacheMissTokens: 3, CacheReadInputTokens: 4, CacheCreationInputTokens: 5}},
+			{Usage: types.TokenUsage{PromptTokens: 5, CompletionTokens: 15, ReasoningTokens: 2, TotalTokens: 22, PromptCacheHitTokens: 6, PromptCacheMissTokens: 7, CacheReadInputTokens: 8, CacheCreationInputTokens: 9}},
+		}
+		got := aggregateTeamUsage(results)
+		require.Equal(t, 15, got.PromptTokens)
+		require.Equal(t, 35, got.CompletionTokens)
+		require.Equal(t, 3, got.ReasoningTokens)
+		require.Equal(t, 53, got.TotalTokens)
+		require.Equal(t, 8, got.PromptCacheHitTokens)
+		require.Equal(t, 10, got.PromptCacheMissTokens)
+		require.Equal(t, 12, got.CacheReadInputTokens)
+		require.Equal(t, 14, got.CacheCreationInputTokens)
+	})
+
+	t.Run("dedup is caller responsibility", func(t *testing.T) {
+		// aggregateTeamUsage simply sums; identical team results are summed twice.
+		results := []types.TeamTurnResult{
+			{Usage: types.TokenUsage{TotalTokens: 10}},
+			{Usage: types.TokenUsage{TotalTokens: 10}},
+		}
+		got := aggregateTeamUsage(results)
+		require.Equal(t, 20, got.TotalTokens)
+	})
+}
+
+func TestResolveAPIKey(t *testing.T) {
+	t.Setenv("HERON_TEST_KEY", "env-secret")
+	t.Setenv("HERON_EMPTY_KEY", "")
+
+	for _, test := range []struct {
+		name      string
+		configured string
+		fallback  string
+		want      string
+	}{
+		{name: "env reference exists", configured: "${HERON_TEST_KEY}", fallback: "fallback", want: "env-secret"},
+		{name: "env reference missing", configured: "${HERON_MISSING_KEY}", fallback: "fallback", want: ""},
+		{name: "env reference empty value", configured: "${HERON_EMPTY_KEY}", fallback: "fallback", want: ""},
+		{name: "literal", configured: "sk-literal", fallback: "fallback", want: "sk-literal"},
+		{name: "empty configured uses fallback", configured: "", fallback: "fallback", want: "fallback"},
+		{name: "empty configured no fallback", configured: "", fallback: "", want: ""},
+		{name: "unbalanced prefix only", configured: "${HERON_TEST_KEY", fallback: "fallback", want: "${HERON_TEST_KEY"},
+		{name: "unbalanced suffix only", configured: "HERON_TEST_KEY}", fallback: "fallback", want: "HERON_TEST_KEY}"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := resolveAPIKey(test.configured, test.fallback)
+			require.Equal(t, test.want, got)
+		})
 	}
 }
 
