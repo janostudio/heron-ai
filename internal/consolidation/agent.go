@@ -57,6 +57,7 @@ type JobStore interface {
 	Save(ctx context.Context, job types.ContextConsolidation) error
 	Load(ctx context.Context, id string) (*types.ContextConsolidation, error)
 	List(ctx context.Context) ([]types.ContextConsolidation, error)
+	Delete(ctx context.Context, id string) error
 }
 
 // FileJobStore is the durable queue for Dream / Memory maintenance. Jobs are
@@ -157,6 +158,24 @@ func (s *FileJobStore) List(ctx context.Context) ([]types.ContextConsolidation, 
 	return jobs, nil
 }
 
+// Delete removes a terminal job record from the durable queue. It is used by
+// Recover to garbage-collect failed/completed jobs whose summary has already
+// been written to memory, preventing unbounded disk growth.
+func (s *FileJobStore) Delete(ctx context.Context, id string) error {
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	if s == nil || s.files == nil {
+		return errors.New("consolidation job store is not configured")
+	}
+	if strings.TrimSpace(id) == "" {
+		return errors.New("consolidation job id is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.files.Delete(consolidationPath(id))
+}
+
 func consolidationPath(id string) string {
 	return filepath.Join(".agents", "data", "consolidations", id+".json")
 }
@@ -220,12 +239,20 @@ func (w *Worker) Recover(ctx context.Context) error {
 		return err
 	}
 	for _, job := range jobs {
-		if job.Status != "queued" && job.Status != "running" {
-			continue
-		}
-		job.Status = "queued"
-		if err := w.jobs.Save(ctx, job); err != nil {
-			return err
+		switch job.Status {
+		case "failed", "completed":
+			// Terminal jobs: their summary has already been written to memory
+			// (or the failure is recorded in the job itself). They will never
+			// be re-consumed by ProcessOnce, so remove them to avoid unbounded
+			// disk growth in .agents/data/consolidations/.
+			if err := w.jobs.Delete(ctx, job.ID); err != nil {
+				return err
+			}
+		case "running":
+			job.Status = "queued"
+			if err := w.jobs.Save(ctx, job); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
