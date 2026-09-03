@@ -25,6 +25,8 @@ Thumbs.db
 # Runtime data
 .agents/data/
 **/.agents/data/
+.agents/knowledge/
+**/.agents/knowledge/
 
 # Local model registry / credentials
 .agents/models.json
