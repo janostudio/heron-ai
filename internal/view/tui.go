@@ -51,11 +51,12 @@ const (
 
 // DisplayMessage is a message displayed in the TUI viewport
 type DisplayMessage struct {
-	Role      MessageRole
-	CallID    string
-	Content   string
-	RoundNum  int
-	Timestamp time.Time
+	Role       MessageRole
+	CallID     string
+	Content    string
+	RoundNum   int
+	Timestamp  time.Time
+	AgentIndex int
 }
 
 // ===== Slash Commands =====
@@ -140,10 +141,10 @@ var (
 )
 
 func agentStyle(index int) lipgloss.Style {
-	if index < len(agentHeaderStyles) {
-		return agentHeaderStyles[index]
+	if index < 0 || index >= len(agentHeaderStyles) {
+		return agentHeaderStyles[0]
 	}
-	return agentHeaderStyles[0]
+	return agentHeaderStyles[index]
 }
 
 // ===== Welcome Banner =====
@@ -396,13 +397,13 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			for i, team := range msg.result.Teams {
 				m.addMessage(DisplayMessage{
-					Role:      RoleAgent,
-					CallID:    team.TeamID,
-					Content:   team.Reply,
-					RoundNum:  m.roundNum,
-					Timestamp: time.Now(),
+					Role:       RoleAgent,
+					CallID:     team.TeamID,
+					Content:    team.Reply,
+					RoundNum:   m.roundNum,
+					Timestamp:  time.Now(),
+					AgentIndex: i,
 				})
-				_ = agentStyle(i)
 			}
 
 			if msg.result.Usage.TotalTokens > 0 {
@@ -575,7 +576,7 @@ func (m *TUIModel) renderMessages() {
 			lines = append(lines, assistantMsgStyle.Render(msg.Content))
 		case RoleAgent:
 			header := fmt.Sprintf("[%s]", msg.CallID)
-			lines = append(lines, agentHeaderStyles[0].Render(header))
+			lines = append(lines, agentStyle(msg.AgentIndex).Render(header))
 			lines = append(lines, assistantMsgStyle.Render(msg.Content))
 		case RoleSystem:
 			lines = append(lines, systemMsgStyle.Render(msg.Content))
