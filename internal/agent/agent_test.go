@@ -220,7 +220,7 @@ func TestHITLGate_RequestAndSubmit(t *testing.T) {
 	// Submit in a goroutine
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		g.SubmitResponse(types.HITLResponse{
+		_ = g.SubmitResponse(types.HITLResponse{
 			RequestID: "req-1",
 			Approved:  true,
 			Reason:    "looks good",
@@ -265,13 +265,13 @@ func TestHITLGate_PendingCount(t *testing.T) {
 	assert.Equal(t, 0, g.PendingCount())
 
 	go func() {
-		g.RequestApproval(context.Background(), types.HITLRequest{RequestID: "req-4"})
+		_, _ = g.RequestApproval(context.Background(), types.HITLRequest{RequestID: "req-4"})
 	}()
 	time.Sleep(50 * time.Millisecond)
 
 	assert.Equal(t, 1, g.PendingCount())
 
-	g.SubmitResponse(types.HITLResponse{RequestID: "req-4"})
+	_ = g.SubmitResponse(types.HITLResponse{RequestID: "req-4"})
 	time.Sleep(50 * time.Millisecond)
 
 	assert.Equal(t, 0, g.PendingCount())

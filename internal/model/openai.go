@@ -328,7 +328,7 @@ func (p *OpenAIProvider) post(ctx context.Context, effective types.ModelConfig, 
 		}
 		return types.NewProviderNetworkError(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		if isTimeoutError(err) {
@@ -386,7 +386,7 @@ func (p *OpenAIProvider) postStream(ctx context.Context, effective types.ModelCo
 		}
 		return nil, types.NewProviderNetworkError(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		body, readErr := io.ReadAll(resp.Body)

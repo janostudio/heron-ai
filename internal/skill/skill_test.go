@@ -43,8 +43,8 @@ func TestSkillRegistry_RegisterAndLookup(t *testing.T) {
 
 func TestSkillRegistry_ListNames(t *testing.T) {
 	reg := NewSkillRegistry()
-	reg.Register(types.Skill{Name: "s1", Description: "d1"})
-	reg.Register(types.Skill{Name: "s2", Description: "d2"})
+	_ = reg.Register(types.Skill{Name: "s1", Description: "d1"})
+	_ = reg.Register(types.Skill{Name: "s2", Description: "d2"})
 
 	names := reg.ListNames()
 	assert.Len(t, names, 2)
@@ -54,8 +54,8 @@ func TestSkillRegistry_ListNames(t *testing.T) {
 
 func TestSkillRegistry_ListSummaries(t *testing.T) {
 	reg := NewSkillRegistry()
-	reg.Register(types.Skill{Name: "s1", Description: "d1"})
-	reg.Register(types.Skill{Name: "s2", Description: "d2"})
+	_ = reg.Register(types.Skill{Name: "s1", Description: "d1"})
+	_ = reg.Register(types.Skill{Name: "s2", Description: "d2"})
 
 	summaries := reg.ListSummaries()
 	assert.Len(t, summaries, 2)
@@ -152,12 +152,12 @@ Body of skill2.`), 0644)
 
 func TestSkillInjector_Inject(t *testing.T) {
 	reg := NewSkillRegistry()
-	reg.Register(types.Skill{
+	_ = reg.Register(types.Skill{
 		Name:  "s1",
 		Body:  "prompt for s1",
 		Tools: []string{"t1", "t2"},
 	})
-	reg.Register(types.Skill{
+	_ = reg.Register(types.Skill{
 		Name:  "s2",
 		Body:  "prompt for s2",
 		Tools: []string{"t3"},
@@ -171,7 +171,7 @@ func TestSkillInjector_Inject(t *testing.T) {
 
 func TestSkillInjector_Inject_UnknownSkill(t *testing.T) {
 	reg := NewSkillRegistry()
-	reg.Register(types.Skill{
+	_ = reg.Register(types.Skill{
 		Name:  "s1",
 		Body:  "prompt",
 		Tools: []string{"t1"},
@@ -185,7 +185,7 @@ func TestSkillInjector_Inject_UnknownSkill(t *testing.T) {
 
 func TestSkillInjector_Inject_EmptyBody(t *testing.T) {
 	reg := NewSkillRegistry()
-	reg.Register(types.Skill{
+	_ = reg.Register(types.Skill{
 		Name:  "no-body",
 		Body:  "",
 		Tools: []string{"t1"},

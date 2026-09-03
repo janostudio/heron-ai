@@ -26,8 +26,8 @@ func TestMCPAdapter_ConnectAndList(t *testing.T) {
 func TestMCPAdapter_Disconnect(t *testing.T) {
 	adapter := NewMCPAdapter()
 
-	adapter.Connect(context.Background(), MCPServer{Name: "s1"})
-	adapter.Connect(context.Background(), MCPServer{Name: "s2"})
+	_ = adapter.Connect(context.Background(), MCPServer{Name: "s1"})
+	_ = adapter.Connect(context.Background(), MCPServer{Name: "s2"})
 
 	err := adapter.Disconnect("s1")
 	require.NoError(t, err)

@@ -292,7 +292,7 @@ func (p *AnthropicProvider) post(ctx context.Context, effective types.ModelConfi
 		}
 		return types.NewProviderNetworkError(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		if isTimeoutError(err) {
@@ -392,7 +392,7 @@ func (p *AnthropicProvider) convertParts(ctx context.Context, parts []types.Cont
 			return nil, unsupportedMedia(kind)
 		}
 		if kind != "image" && strings.ToLower(part.Media.MIMEType) != "application/pdf" {
-			return nil, fmt.Errorf("Anthropic document content currently supports application/pdf only")
+			return nil, fmt.Errorf("anthropic document content currently supports application/pdf only")
 		}
 		payload, err := resolveMediaPayload(ctx, p.media, *part.Media)
 		if err != nil {

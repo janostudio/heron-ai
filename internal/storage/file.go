@@ -80,7 +80,7 @@ func (fs *FileStoreImpl) Append(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	_, err = f.Write(data)
 	return err

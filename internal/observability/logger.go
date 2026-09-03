@@ -80,7 +80,7 @@ func (l *Logger) log(level LogLevel, msg string, fields map[string]any) {
 	}
 
 	data, _ := json.Marshal(entry)
-	fmt.Fprintln(l.output, string(data))
+	_, _ = fmt.Fprintln(l.output, string(data))
 
 	if level == LogFatal {
 		os.Exit(1)

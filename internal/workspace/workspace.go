@@ -642,17 +642,17 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	tempName := temp.Name()
-	defer os.Remove(tempName)
+	defer func() { _ = os.Remove(tempName) }()
 	if err := temp.Chmod(mode); err != nil {
-		temp.Close()
+		_ = temp.Close()
 		return err
 	}
 	if _, err := temp.Write(data); err != nil {
-		temp.Close()
+		_ = temp.Close()
 		return err
 	}
 	if err := temp.Sync(); err != nil {
-		temp.Close()
+		_ = temp.Close()
 		return err
 	}
 	if err := temp.Close(); err != nil {
