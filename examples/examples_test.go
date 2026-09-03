@@ -3,6 +3,7 @@ package examples_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -169,6 +170,14 @@ func TestNovelRPExampleUsesCoordinatorActivationAndParallelLanes(t *testing.T) {
 }
 
 func TestAutoBugfixGitignoreExampleUsesNativeAgentsSkillsScriptsAndDeterministicCommands(t *testing.T) {
+	// The auto-bugfix-gitignore fixture is a local-only example ignored by
+	// .gitignore. On a clean checkout (CI) it is absent, so skip rather than
+	// fail; the fixture exists and is exercised in local development.
+	fixture := filepath.Join("..", "examples", "auto-bugfix-gitignore", ".agents", "flows", "auto_bugfix.yml")
+	if _, err := os.Stat(fixture); err != nil {
+		t.Skipf("auto-bugfix-gitignore fixture not present (clean checkout): %v", err)
+	}
+
 	definitions := loadDefinitions(t, "auto-bugfix-gitignore", ".agents/flows/auto_bugfix.yml")
 
 	require.Equal(t, "auto_bugfix_gitignore", definitions.Flow.ID)
