@@ -314,7 +314,7 @@ func resolveModelProfile(config *ModelsConfig) (types.ModelProfile, error) {
 	selected := strings.TrimSpace(config.Model)
 	if selected != "" {
 		for _, item := range config.Models {
-			if item.Name == selected || item.ID == selected {
+			if item.Name == selected {
 				return item, nil
 			}
 		}

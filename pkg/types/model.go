@@ -235,9 +235,13 @@ type MediaAttachment struct {
 // model by the global .agents/models.json registry. Optional generation
 // values are pointers so "not declared" is different from an explicit zero.
 type ModelProfile struct {
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Provider  string `json:"provider,omitempty"`
+	// ID is the model identifier sent to the API (the wire `model` field).
+	// When empty, providers fall back to Name for backwards compatibility.
+	ID string `json:"id,omitempty"`
+	// Name is the display and unique match key: agents reference it via
+	// `model: xxx` and the router indexes profiles/providers by it.
+	Name     string `json:"name,omitempty"`
+	Provider string `json:"provider,omitempty"`
 	Protocol  string `json:"protocol,omitempty"`
 	BaseURL   string `json:"base_url,omitempty"`
 	ModelsURL string `json:"models_url,omitempty"`
@@ -247,6 +251,11 @@ type ModelProfile struct {
 	MaxInputTokens  int `json:"maxInputTokens,omitempty"`
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
 	MaxTokens       int `json:"max_tokens,omitempty"` // Deprecated registry alias.
+
+	// Stream indicates the provider requires/supports streaming calls. When
+	// true, OpenAIProvider.Chat issues a streaming request and aggregates the
+	// SSE chunks into a single ChatResponse.
+	Stream bool `json:"stream,omitempty"`
 
 	Temperature       *float64         `json:"temperature,omitempty"`
 	TopP              *float64         `json:"top_p,omitempty"`

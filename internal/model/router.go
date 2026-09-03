@@ -56,14 +56,12 @@ func NewProviderRouterWithClock(defaultModel string, profiles []types.ModelProfi
 			router.defaultModel = name
 		}
 		router.profiles[name] = profile
-		router.profiles[profile.ID] = profile
 
 		provider, err := providerForProfile(profile)
 		if err != nil {
 			return nil, err
 		}
 		router.providers[name] = provider
-		router.providers[profile.ID] = provider
 	}
 
 	if router.defaultModel == "" {

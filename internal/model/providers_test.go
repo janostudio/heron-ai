@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -289,6 +290,170 @@ func TestProviderRouter_SelectsAnthropicByProtocol(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "claude-test", router.DefaultModel())
 	assert.IsType(t, &AnthropicProvider{}, router.providers["claude-test"])
+}
+
+func TestOpenAIProvider_UsesIDAsRequestModel(t *testing.T) {
+	var request map[string]any
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		return jsonResponse(`{"choices":[{"message":{"content":"ok"}}]}`), nil
+	})
+	profile := types.ModelProfile{
+		ID:      "hy3-ioa",
+		Name:    "hy3-ioa-cp",
+		BaseURL: "http://test.local/v1",
+	}
+	provider := NewOpenAIProviderWithProfile("key", profile.BaseURL, profile.Name, profile)
+	provider.client = &http.Client{Transport: transport}
+
+	resp, err := provider.Chat(context.Background(), []types.Message{
+		{Role: "user", Content: "hello"},
+	}, nil, types.ModelConfig{Model: profile.Name})
+	require.NoError(t, err)
+	assert.Equal(t, "hy3-ioa", request["model"])
+	assert.Equal(t, "hy3-ioa", resp.Model)
+}
+
+func TestAnthropicProvider_UsesIDAsRequestModel(t *testing.T) {
+	var request map[string]any
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		return jsonResponse(`{"content":[{"type":"text","text":"ok"}]}`), nil
+	})
+	profile := types.ModelProfile{
+		ID:       "claude-real",
+		Name:     "claude-display",
+		BaseURL:  "http://test.local/v1",
+		Protocol: "anthropic_messages",
+	}
+	provider := NewAnthropicProviderWithProfile("key", profile.BaseURL, profile.Name, profile)
+	provider.client = &http.Client{Transport: transport}
+
+	resp, err := provider.Chat(context.Background(), []types.Message{
+		{Role: "user", Content: "hello"},
+	}, nil, types.ModelConfig{Model: profile.Name})
+	require.NoError(t, err)
+	assert.Equal(t, "claude-real", request["model"])
+	assert.Equal(t, "claude-real", resp.Model)
+}
+
+func TestOpenAIProvider_EmptyIDFallsBackToName(t *testing.T) {
+	var request map[string]any
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		return jsonResponse(`{"choices":[{"message":{"content":"ok"}}]}`), nil
+	})
+	profile := types.ModelProfile{
+		Name:    "name-only",
+		BaseURL: "http://test.local/v1",
+	}
+	provider := NewOpenAIProviderWithProfile("key", profile.BaseURL, profile.Name, profile)
+	provider.client = &http.Client{Transport: transport}
+
+	_, err := provider.Chat(context.Background(), []types.Message{
+		{Role: "user", Content: "hello"},
+	}, nil, types.ModelConfig{Model: profile.Name})
+	require.NoError(t, err)
+	assert.Equal(t, "name-only", request["model"])
+}
+
+func TestProviderRouter_IndexesByNameOnly(t *testing.T) {
+	router, err := NewProviderRouter("a-cp", []types.ModelProfile{
+		{ID: "hy3-ioa", Name: "a-cp", BaseURL: "http://127.0.0.1", APIKey: "key"},
+		{ID: "hy3-ioa", Name: "b-cp", BaseURL: "http://127.0.0.1", APIKey: "key"},
+	})
+	require.NoError(t, err)
+
+	// Both names resolve to distinct profiles despite sharing the same ID.
+	_, ok := router.providers["a-cp"]
+	require.True(t, ok)
+	_, ok = router.providers["b-cp"]
+	require.True(t, ok)
+
+	// The shared ID must not be registered as its own key.
+	_, ok = router.providers["hy3-ioa"]
+	require.False(t, ok)
+
+	// Default model resolves to the first profile's name.
+	assert.Equal(t, "a-cp", router.DefaultModel())
+}
+
+func TestOpenAIProvider_StreamAggregatesSSE(t *testing.T) {
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		require.Equal(t, "/chat/completions", r.URL.Path)
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		for _, line := range []string{
+			`data: {"choices":[{"index":0,"delta":{"content":"你","reasoning_content":"思","tool_calls":[]},"finish_reason":""}],"usage":null}` + "\n\n",
+			`data: {"choices":[{"index":0,"delta":{"content":"好","reasoning_content":"考","tool_calls":[]},"finish_reason":""}],"usage":null}` + "\n\n",
+			`data: {"choices":[{"index":0,"delta":{"content":"","reasoning_content":"","tool_calls":[]},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}` + "\n\n",
+			"data: [DONE]\n\n",
+		} {
+			_, _ = io.WriteString(w, line)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	profile := types.ModelProfile{
+		ID:      "cp-model",
+		Name:    "cp-model",
+		BaseURL: server.URL,
+		Stream:  true,
+	}
+	provider := NewOpenAIProviderWithProfile("key", server.URL, profile.Name, profile)
+
+	resp, err := provider.Chat(context.Background(), []types.Message{
+		{Role: "user", Content: "hello"},
+	}, nil, types.ModelConfig{Model: profile.Name})
+	require.NoError(t, err)
+	assert.Equal(t, "你好", resp.Text)
+	assert.Equal(t, "思考", resp.Reasoning)
+	assert.Equal(t, "stop", resp.FinishReason)
+	assert.Equal(t, 10, resp.Usage.PromptTokens)
+	assert.Equal(t, 2, resp.Usage.CompletionTokens)
+	assert.Equal(t, 12, resp.Usage.TotalTokens)
+	assert.Equal(t, true, request["stream"])
+}
+
+func TestOpenAIProvider_StreamAggregatesToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		for _, line := range []string{
+			`data: {"choices":[{"index":0,"delta":{"content":"","tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":"}}]},"finish_reason":""}],"usage":null}` + "\n\n",
+			`data: {"choices":[{"index":0,"delta":{"content":"","tool_calls":[{"index":0,"function":{"name":"","arguments":"\"北京\"}"}}]},"finish_reason":"tool_calls"}],"usage":null}` + "\n\n",
+			"data: [DONE]\n\n",
+		} {
+			_, _ = io.WriteString(w, line)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	profile := types.ModelProfile{
+		ID:      "cp-model",
+		Name:    "cp-model",
+		BaseURL: server.URL,
+		Stream:  true,
+	}
+	provider := NewOpenAIProviderWithProfile("key", server.URL, profile.Name, profile)
+
+	resp, err := provider.Chat(context.Background(), []types.Message{
+		{Role: "user", Content: "weather?"},
+	}, nil, types.ModelConfig{Model: profile.Name})
+	require.NoError(t, err)
+	require.Len(t, resp.ToolCalls, 1)
+	assert.Equal(t, "t1", resp.ToolCalls[0].ID)
+	assert.Equal(t, "get_weather", resp.ToolCalls[0].Name)
+	assert.Equal(t, map[string]any{"city": "北京"}, resp.ToolCalls[0].Arguments)
+	assert.Equal(t, "tool_calls", resp.FinishReason)
 }
 
 func boolPtr(value bool) *bool {

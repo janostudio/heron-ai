@@ -64,6 +64,16 @@ func modelName(profile types.ModelProfile) string {
 	return profile.ID
 }
 
+// requestModelName returns the model identifier to send on the wire. The
+// profile ID is authoritative when present; otherwise it falls back to the
+// display/match name so legacy profiles without an explicit ID keep working.
+func requestModelName(profile types.ModelProfile) string {
+	if strings.TrimSpace(profile.ID) != "" {
+		return profile.ID
+	}
+	return modelName(profile)
+}
+
 func profileProtocol(profile types.ModelProfile, override types.ModelConfig) string {
 	value := strings.ToLower(strings.TrimSpace(profile.Protocol))
 	if value == "" {

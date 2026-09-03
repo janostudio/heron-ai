@@ -159,6 +159,9 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []types.Message, 
 	if config.Model != "" {
 		modelName = config.Model
 	}
+	if id := requestModelName(p.profile); id != "" {
+		modelName = id
+	}
 	effective := MergeProfileDefaults(p.profile, config)
 	req, err := p.buildRequest(ctx, modelName, messages, tools, config, effective, false)
 	if err != nil {

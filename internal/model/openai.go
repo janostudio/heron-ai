@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -153,15 +154,53 @@ type openAIErrorResponse struct {
 	} `json:"error"`
 }
 
+// openAIStreamToolCall mirrors the wire delta.tool_calls entries during
+// streaming. Unlike the non-streaming openAIToolCall, streaming fragments are
+// identified by an `index` (stable across chunks) rather than an id, which only
+// appears on the first fragment.
+type openAIStreamToolCall struct {
+	Index    int               `json:"index"`
+	ID       string            `json:"id"`
+	Type     string            `json:"type"`
+	Function openAIFunctionCall `json:"function"`
+}
+
+type openAIStreamChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content          string                 `json:"content"`
+			ReasoningContent string                 `json:"reasoning_content"`
+			ToolCalls        []openAIStreamToolCall `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
 	modelName := p.modelName
 	if config.Model != "" {
 		modelName = config.Model
 	}
+	if id := requestModelName(p.profile); id != "" {
+		modelName = id
+	}
 	effective := MergeProfileDefaults(p.profile, config)
-	req, err := p.buildRequest(ctx, modelName, messages, tools, config, effective, false)
+	req, err := p.buildRequest(ctx, modelName, messages, tools, config, effective, p.profile.Stream)
 	if err != nil {
 		return nil, err
+	}
+
+	if p.profile.Stream {
+		wire, err := p.postStream(ctx, effective, req)
+		if err != nil {
+			return nil, fmt.Errorf("openai chat: %w", err)
+		}
+		return withModel(convertOpenAIResponse(*wire), modelName), nil
 	}
 
 	var wire openAIResponse
@@ -310,6 +349,156 @@ func (p *OpenAIProvider) post(ctx context.Context, effective types.ModelConfig, 
 		return fmt.Errorf("decode response: %w", err)
 	}
 	return nil
+}
+
+// postStream issues a streaming chat completions request and aggregates the
+// SSE chunks into a single openAIResponse. It mirrors post's URL/header/auth
+// construction but reads the body as an event stream and reconstructs the
+// message from per-chunk deltas (content, reasoning, and tool-call fragments).
+func (p *OpenAIProvider) postStream(ctx context.Context, effective types.ModelConfig, req openAIRequest) (*openAIResponse, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	baseURL := p.baseURL
+	if effective.BaseURL != "" {
+		baseURL = strings.TrimRight(effective.BaseURL, "/")
+	}
+	url := baseURL + "/chat/completions"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	apiKey := p.apiKey
+	if effective.APIKey != "" {
+		apiKey = effective.APIKey
+	}
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		if isTimeoutError(err) {
+			return nil, types.NewProviderTimeoutError(err)
+		}
+		return nil, types.NewProviderNetworkError(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return nil, types.NewProviderNetworkError(readErr)
+		}
+		var apiErr openAIErrorResponse
+		if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
+			pe := types.ClassifyProviderError(resp.StatusCode, apiErr.Error.Type, body)
+			pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
+			return nil, pe
+		}
+		return nil, types.ClassifyProviderError(resp.StatusCode, "", body)
+	}
+
+	result := &openAIResponse{}
+	var content, reasoning strings.Builder
+	toolCalls := make(map[int]*openAIToolCall)
+	var finishReason string
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk openAIStreamChunk
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		delta := chunk.Choices[0].Delta
+		if delta.Content != "" {
+			content.WriteString(delta.Content)
+		}
+		if delta.ReasoningContent != "" {
+			reasoning.WriteString(delta.ReasoningContent)
+		}
+		for _, tc := range delta.ToolCalls {
+			// Streaming tool-call fragments are keyed by their stable index;
+			// the id only appears on the first fragment, and later fragments
+			// carry just the incremental arguments (and often an empty name).
+			call := toolCalls[tc.Index]
+			if call == nil {
+				call = &openAIToolCall{}
+				toolCalls[tc.Index] = call
+			}
+			if call.ID == "" && tc.ID != "" {
+				call.ID = tc.ID
+			}
+			if call.Type == "" && tc.Type != "" {
+				call.Type = tc.Type
+			}
+			if call.Function.Name == "" && tc.Function.Name != "" {
+				call.Function.Name = tc.Function.Name
+			}
+			if tc.Function.Arguments != "" {
+				call.Function.Arguments += tc.Function.Arguments
+			}
+		}
+		if chunk.Choices[0].FinishReason != "" {
+			finishReason = chunk.Choices[0].FinishReason
+		}
+		if chunk.Usage != nil {
+			result.Usage.PromptTokens = chunk.Usage.PromptTokens
+			result.Usage.CompletionTokens = chunk.Usage.CompletionTokens
+			result.Usage.TotalTokens = chunk.Usage.TotalTokens
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, types.NewProviderNetworkError(err)
+	}
+
+	// Reconstruct tool calls in index order.
+	var orderedToolCalls []openAIToolCall
+	for i := 0; i < len(toolCalls); i++ {
+		if call, ok := toolCalls[i]; ok {
+			orderedToolCalls = append(orderedToolCalls, *call)
+		}
+	}
+
+	result.Choices = []struct {
+		Message struct {
+			Content          string           `json:"content"`
+			ReasoningContent string           `json:"reasoning_content"`
+			ToolCalls        []openAIToolCall `json:"tool_calls"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	}{
+		{
+			Message: struct {
+				Content          string           `json:"content"`
+				ReasoningContent string           `json:"reasoning_content"`
+				ToolCalls        []openAIToolCall `json:"tool_calls"`
+			}{
+				Content:          content.String(),
+				ReasoningContent: reasoning.String(),
+				ToolCalls:        orderedToolCalls,
+			},
+			FinishReason: finishReason,
+		},
+	}
+	return result, nil
 }
 
 func (p *OpenAIProvider) convertMessages(ctx context.Context, messages []types.Message) ([]openAIMessage, error) {
