@@ -213,7 +213,6 @@ func TestCollectTool_UnknownHandleFails(t *testing.T) {
 func TestCollectTool_ContextCancelledWhileWaiting(t *testing.T) {
 	fixture, collect := newCollectFixture(t)
 	release := make(chan struct{})
-	defer close(release)
 	fixture.runner.result = func(call spawnRunnerCall) (*types.AgentResult, error) {
 		<-release
 		return &types.AgentResult{Status: types.TurnCompleted, Reply: "never"}, nil
@@ -233,6 +232,12 @@ func TestCollectTool_ContextCancelledWhileWaiting(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(result.Content), &entries))
 	require.Len(t, entries, 1)
 	assert.Contains(t, entries[0]["error"], "context")
+
+	// Release the blocked child goroutine and wait for it to finish before the
+	// test's TempDir is torn down, otherwise the still-running task writes into
+	// a directory that testing is already removing ("directory not empty").
+	close(release)
+	fixture.waitForTask(t, taskID)
 }
 
 func TestCollectTool_DurableAcrossExecutorLifetimes(t *testing.T) {
