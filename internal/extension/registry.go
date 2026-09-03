@@ -76,18 +76,32 @@ func (r *ExtensionRegistry) ListByType(extType string) []ExtensionInfo {
 }
 
 // CheckCapabilities validates required and optional capabilities separately.
-// Core capabilities such as workspace and records can be supplied by the
-// caller without registering them as third-party extensions.
-func (r *ExtensionRegistry) CheckCapabilities(required []string, optional []string) error {
+//
+// Required capabilities must be present (or be one of the core capabilities
+// "workspace"/"records", which the caller supplies without registering them as
+// third-party extensions); a missing required capability yields an error.
+//
+// Optional capabilities are not required for startup: a missing optional
+// capability does not produce an error. Instead it is reported in the returned
+// missing slice so the caller can degrade gracefully and record a
+// "capability unavailable" notice.
+func (r *ExtensionRegistry) CheckCapabilities(required []string, optional []string) (missing []string, err error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	for _, capability := range required {
 		if !r.hasCapabilityLocked(capability) && capability != "workspace" && capability != "records" {
-			return fmt.Errorf("required capability %q is unavailable", capability)
+			return nil, fmt.Errorf("required capability %q is unavailable", capability)
 		}
 	}
-	return nil
+
+	for _, capability := range optional {
+		if !r.hasCapabilityLocked(capability) {
+			missing = append(missing, capability)
+		}
+	}
+
+	return missing, nil
 }
 
 func (r *ExtensionRegistry) HasCapability(name string) bool {
@@ -96,14 +110,11 @@ func (r *ExtensionRegistry) HasCapability(name string) bool {
 	return r.hasCapabilityLocked(name)
 }
 
+// hasCapabilityLocked reports whether a capability with the given name is
+// registered and enabled. Capabilities are keyed by ExtensionInfo.Name;
+// ExtensionInfo.Type ("lua" | "wasm") describes the extension's runtime format
+// and is unrelated to capability lookup.
 func (r *ExtensionRegistry) hasCapabilityLocked(name string) bool {
-	if info, ok := r.extensions[name]; ok {
-		return info.Enabled
-	}
-	for _, info := range r.extensions {
-		if info.Type == name && info.Enabled {
-			return true
-		}
-	}
-	return false
+	info, ok := r.extensions[name]
+	return ok && info.Enabled
 }
