@@ -174,6 +174,48 @@ func TestGenerateSchema(t *testing.T) {
 	assert.Equal(t, "Path to file", schema.Properties["file"].Description)
 }
 
+func TestGenerateSchemaEdgeCases(t *testing.T) {
+	tool := &mockTool{
+		name: "test",
+		params: map[string]any{
+			"mode": map[string]any{
+				"type":     "string",
+				"required": true,
+				"enum":     []string{"create", "replace", "edit"},
+			},
+			"max": map[string]any{
+				"type": "integer",
+			},
+			"not_a_map": "ignored",
+			"no_type":   map[string]any{"description": "desc only"},
+		},
+	}
+
+	schema := GenerateSchema(tool)
+	require.Equal(t, "object", schema.Type)
+
+	require.Contains(t, schema.Properties, "mode")
+	require.Equal(t, []string{"create", "replace", "edit"}, schema.Properties["mode"].Enum)
+	require.Equal(t, []string{"mode"}, schema.Required)
+
+	require.Contains(t, schema.Properties, "max")
+	require.Equal(t, "integer", schema.Properties["max"].Type)
+
+	require.Contains(t, schema.Properties, "no_type")
+	require.Equal(t, "desc only", schema.Properties["no_type"].Description)
+	require.Equal(t, "", schema.Properties["no_type"].Type)
+
+	require.NotContains(t, schema.Properties, "not_a_map")
+}
+
+func TestGenerateSchemaEmptyParams(t *testing.T) {
+	tool := &mockTool{name: "empty", params: map[string]any{}}
+	schema := GenerateSchema(tool)
+	require.Equal(t, "object", schema.Type)
+	require.Empty(t, schema.Properties)
+	require.Empty(t, schema.Required)
+}
+
 func TestGenerateSchemas(t *testing.T) {
 	tools := []types.Tool{
 		&mockTool{name: "t1", params: map[string]any{}},
