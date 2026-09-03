@@ -140,7 +140,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, params map[string]any) (*ty
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("web search returned status %d", resp.StatusCode)}, nil
 	}
@@ -249,7 +249,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, params map[string]any) (*typ
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("web fetch returned status %d", resp.StatusCode)}, nil
 	}
@@ -398,15 +398,7 @@ func parseSearchResponse(body []byte) ([]WebSearchResult, string, error) {
 	if response.AbstractURL != "" {
 		results = append(results, WebSearchResult{Title: response.Heading, URL: response.AbstractURL, Snippet: response.AbstractText})
 	}
-	var flatten func([]struct {
-		Text     string `json:"Text"`
-		FirstURL string `json:"FirstURL"`
-		Topics   []struct {
-			Text     string `json:"Text"`
-			FirstURL string `json:"FirstURL"`
-		} `json:"Topics"`
-	})
-	flatten = func(items []struct {
+	flatten := func(items []struct {
 		Text     string `json:"Text"`
 		FirstURL string `json:"FirstURL"`
 		Topics   []struct {

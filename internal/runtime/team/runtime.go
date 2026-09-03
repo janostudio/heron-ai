@@ -654,9 +654,10 @@ func (r *Runtime) appendCallStarted(ctx context.Context, req types.CallRequest, 
 		return nil
 	}
 	eventType := types.EventCommandTurnStarted
-	if req.Call.Type == types.CallAgent {
+	switch req.Call.Type {
+	case types.CallAgent:
 		eventType = types.EventAgentTurnStarted
-	} else if req.Call.Type == types.CallWebhook {
+	case types.CallWebhook:
 		eventType = types.EventWebhookTurnStarted
 	}
 	if req.Call.Type == types.CallAgent {
@@ -711,9 +712,10 @@ func (r *Runtime) appendCallCompleted(ctx context.Context, req types.CallRequest
 		return nil
 	}
 	eventType := types.EventCommandTurnCompleted
-	if req.Call.Type == types.CallAgent {
+	switch req.Call.Type {
+	case types.CallAgent:
 		eventType = types.EventAgentTurnCompleted
-	} else if req.Call.Type == types.CallWebhook {
+	case types.CallWebhook:
 		eventType = types.EventWebhookTurnCompleted
 	}
 	if _, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
@@ -760,9 +762,10 @@ func (r *Runtime) appendCallWaiting(ctx context.Context, req types.CallRequest, 
 		return r.appendCallCompleted(ctx, req, result, spawn)
 	}
 	eventType := types.EventAgentTurnWaitingInput
-	if result.Status == types.TurnWaitingTool {
+	switch result.Status {
+	case types.TurnWaitingTool:
 		eventType = types.EventAgentTurnWaitingTool
-	} else if result.Status == types.TurnWaitingApproval {
+	case types.TurnWaitingApproval:
 		eventType = types.EventAgentTurnWaitingApproval
 	}
 	if _, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
@@ -1060,14 +1063,6 @@ func hasContextBlock(blocks []types.ContextBlock, kind string) bool {
 
 func shouldReceiveInput(inputs types.InputSpec) bool {
 	return inputs.UserMessage || inputs.TeamUserMessage
-}
-
-func summarizeCallResults(results map[string]types.CallResult) string {
-	var lines []string
-	for name, result := range results {
-		lines = append(lines, fmt.Sprintf("- %s: %s", name, strings.TrimSpace(result.Reply)))
-	}
-	return strings.Join(lines, "\n")
 }
 
 // selectCallRecords resolves one call's record bindings. A binding from B

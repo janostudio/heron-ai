@@ -15,28 +15,19 @@ type Event interface {
 type EventBus struct {
 	mu           sync.RWMutex
 	subscribers  map[string][]chan Event
-	bufferSize   int
 	droppedCount map[string]int64
 }
 
-func NewEventBus(bufferSize int) *EventBus {
-	if bufferSize <= 0 {
-		bufferSize = 256
-	}
+func NewEventBus(_ int) *EventBus {
 	return &EventBus{
 		subscribers:  make(map[string][]chan Event),
-		bufferSize:   bufferSize,
 		droppedCount: make(map[string]int64),
 	}
 }
 
-func (b *EventBus) Subscribe(eventType string, ch chan Event, bufferSize int) {
+func (b *EventBus) Subscribe(eventType string, ch chan Event, _ int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	if bufferSize <= 0 {
-		bufferSize = b.bufferSize
-	}
 
 	// Use the provided channel directly
 	b.subscribers[eventType] = append(b.subscribers[eventType], ch)

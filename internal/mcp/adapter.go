@@ -21,7 +21,6 @@ type MCPServer struct {
 type MCPAdapter struct {
 	mu      sync.RWMutex
 	servers map[string]MCPServer
-	tools   []types.Tool
 }
 
 func NewMCPAdapter() *MCPAdapter {

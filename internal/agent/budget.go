@@ -72,12 +72,6 @@ func (b *budgetTracker) beforeTool(ctx context.Context, count int) error {
 	return nil
 }
 
-func (b *budgetTracker) addModel(usage types.TokenUsage) {
-	b.usage.ModelRounds++
-	b.usage.InputTokens += usage.PromptTokens
-	b.usage.OutputTokens += usage.CompletionTokens + usage.ReasoningTokens
-}
-
 func (b *budgetTracker) addTool(count, output, fileChanges int) {
 	b.usage.ToolCalls += count
 	b.usage.ToolOutput += output

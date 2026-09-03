@@ -86,7 +86,7 @@ func (e *WebhookExecutor) Execute(ctx context.Context, req types.CallRequest) (t
 	if err != nil {
 		return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	responseBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
 		return types.CallResult{Status: types.TurnFailed, Error: readErr.Error()}, readErr

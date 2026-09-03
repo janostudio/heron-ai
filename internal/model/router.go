@@ -84,19 +84,6 @@ func providerForProfile(profile types.ModelProfile) (types.ModelProvider, error)
 	}
 }
 
-func (r *ProviderRouter) providerFor(config types.ModelConfig) (types.ModelProvider, types.ModelConfig, error) {
-	modelName := strings.TrimSpace(config.Model)
-	if modelName == "" {
-		modelName = r.defaultModel
-		config.Model = modelName
-	}
-	provider, ok := r.providers[modelName]
-	if !ok {
-		return nil, config, fmt.Errorf("model %q not found in models.json", modelName)
-	}
-	return provider, config, nil
-}
-
 func (r *ProviderRouter) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
 	return r.chatWithFallback(ctx, messages, tools, config)
 }

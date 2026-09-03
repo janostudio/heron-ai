@@ -14,7 +14,7 @@ func TestChildInserterContextRoundTrip(t *testing.T) {
 	ctx := WithChildInserter(context.Background(), inserter)
 	assert.Equal(t, inserter, ChildInserterFromContext(ctx))
 	assert.Nil(t, ChildInserterFromContext(context.Background()))
-	assert.Nil(t, ChildInserterFromContext(nil))
+	assert.Nil(t, ChildInserterFromContext(context.TODO()))
 }
 
 type stubInserter struct{}
@@ -23,7 +23,7 @@ func (*stubInserter) InsertSpawnedCall(context.Context, string, SpawnedCallSpec)
 
 func TestSpawnDepthContextRoundTrip(t *testing.T) {
 	assert.Equal(t, 0, SpawnDepthFromContext(context.Background()))
-	assert.Equal(t, 0, SpawnDepthFromContext(nil))
+	assert.Equal(t, 0, SpawnDepthFromContext(context.TODO()))
 	assert.Equal(t, 2, SpawnDepthFromContext(WithSpawnDepth(context.Background(), 2)))
 }
 

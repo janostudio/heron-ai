@@ -159,9 +159,9 @@ type openAIErrorResponse struct {
 // identified by an `index` (stable across chunks) rather than an id, which only
 // appears on the first fragment.
 type openAIStreamToolCall struct {
-	Index    int               `json:"index"`
-	ID       string            `json:"id"`
-	Type     string            `json:"type"`
+	Index    int                `json:"index"`
+	ID       string             `json:"id"`
+	Type     string             `json:"type"`
 	Function openAIFunctionCall `json:"function"`
 }
 

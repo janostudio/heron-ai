@@ -47,8 +47,8 @@ func TestExtensionRegistry_Get_NotFound(t *testing.T) {
 
 func TestExtensionRegistry_List(t *testing.T) {
 	reg := NewExtensionRegistry()
-	reg.Register(ExtensionInfo{Name: "e1", Type: "lua"})
-	reg.Register(ExtensionInfo{Name: "e2", Type: "wasm"})
+	_ = reg.Register(ExtensionInfo{Name: "e1", Type: "lua"})
+	_ = reg.Register(ExtensionInfo{Name: "e2", Type: "wasm"})
 
 	list := reg.List()
 	assert.Len(t, list, 2)
@@ -63,9 +63,9 @@ func TestExtensionRegistry_List(t *testing.T) {
 
 func TestExtensionRegistry_ListByType(t *testing.T) {
 	reg := NewExtensionRegistry()
-	reg.Register(ExtensionInfo{Name: "e1", Type: "lua"})
-	reg.Register(ExtensionInfo{Name: "e2", Type: "lua"})
-	reg.Register(ExtensionInfo{Name: "e3", Type: "wasm"})
+	_ = reg.Register(ExtensionInfo{Name: "e1", Type: "lua"})
+	_ = reg.Register(ExtensionInfo{Name: "e2", Type: "lua"})
+	_ = reg.Register(ExtensionInfo{Name: "e3", Type: "wasm"})
 
 	luaExts := reg.ListByType("lua")
 	assert.Len(t, luaExts, 2)

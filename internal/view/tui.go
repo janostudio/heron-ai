@@ -116,10 +116,6 @@ var (
 			Foreground(lipgloss.Color("243")).
 			Padding(0, 1)
 
-	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196")).
-			Bold(true)
-
 	spinnerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("39"))
 
@@ -134,14 +130,6 @@ var (
 				Padding(0, 1)
 
 	// Agent colors for multi-agent display
-	agentColors = []lipgloss.Color{
-		lipgloss.Color("39"),  // blue
-		lipgloss.Color("42"),  // green
-		lipgloss.Color("220"), // yellow
-		lipgloss.Color("201"), // magenta
-		lipgloss.Color("51"),  // cyan
-	}
-
 	agentHeaderStyles = []lipgloss.Style{
 		lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true),
 		lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true),
@@ -212,7 +200,6 @@ type TUIModel struct {
 
 	width  int
 	height int
-	err    error
 }
 
 // NewTUIModel creates a new TUI model

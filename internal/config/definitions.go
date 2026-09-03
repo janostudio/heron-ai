@@ -79,15 +79,15 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 	if err := validateAgentCallDefinitions(flow, teams, agents); err != nil {
 		return nil, fmt.Errorf("validate agents: %w", err)
 	}
-	if err := validateAgentSupportDefinitions(flow, teams, agents, skills, rules); err != nil {
+	if err := validateAgentSupportDefinitions(flow, teams, agents, skills); err != nil {
 		return nil, fmt.Errorf("validate agent support: %w", err)
 	}
 
 	return &types.Definitions{
-		Flow:   flow,
-		Teams:  teams,
-		Agents: agents,
-		Skills: skills,
+		Flow:      flow,
+		Teams:     teams,
+		Agents:    agents,
+		Skills:    skills,
 		Rules:     rules,
 		Limits:    l.LoadRuntimeLimits(),
 		Knowledge: l.LoadKnowledgeSettings(),
@@ -385,7 +385,6 @@ func validateAgentSupportDefinitions(
 	teams map[string]types.Team,
 	agents map[string]types.AgentConfig,
 	skills map[string]types.Skill,
-	rules map[string]types.RuleItem,
 ) error {
 	for flowTeamName, binding := range flow.Teams {
 		team, ok := teams[binding.TeamID]
@@ -403,11 +402,6 @@ func validateAgentSupportDefinitions(
 			for _, skillName := range agent.Skills {
 				if _, ok := skills[skillName]; !ok {
 					return fmt.Errorf("agent %q references missing skill %q", agent.Name, skillName)
-				}
-			}
-			for _, ruleName := range agent.Rules {
-				if _, ok := rules[ruleName]; !ok {
-					continue
 				}
 			}
 		}

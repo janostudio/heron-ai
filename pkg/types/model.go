@@ -240,8 +240,8 @@ type ModelProfile struct {
 	ID string `json:"id,omitempty"`
 	// Name is the display and unique match key: agents reference it via
 	// `model: xxx` and the router indexes profiles/providers by it.
-	Name     string `json:"name,omitempty"`
-	Provider string `json:"provider,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Provider  string `json:"provider,omitempty"`
 	Protocol  string `json:"protocol,omitempty"`
 	BaseURL   string `json:"base_url,omitempty"`
 	ModelsURL string `json:"models_url,omitempty"`

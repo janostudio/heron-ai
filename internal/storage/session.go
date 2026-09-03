@@ -116,6 +116,10 @@ func (w *JSONLSessionWriter) Subscribe(ctx context.Context, sessionID string, af
 		w.mu.Unlock()
 		return nil, err
 	}
+	if replay == nil {
+		w.mu.Unlock()
+		return nil, ErrNotFound
+	}
 	ch := make(chan types.SessionEvent, len(replay.Events)+64)
 	w.nextSubID++
 	subID := w.nextSubID
@@ -123,11 +127,9 @@ func (w *JSONLSessionWriter) Subscribe(ctx context.Context, sessionID string, af
 		w.subs[sessionID] = make(map[int]chan types.SessionEvent)
 	}
 	w.subs[sessionID][subID] = ch
-	if replay != nil {
-		for _, event := range replay.Events {
-			if event.Seq > afterSeq {
-				ch <- event
-			}
+	for _, event := range replay.Events {
+		if event.Seq > afterSeq {
+			ch <- event
 		}
 	}
 	w.mu.Unlock()

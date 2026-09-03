@@ -556,15 +556,6 @@ type mockPromptRenderer struct {
 	messages []types.Message
 }
 
-type contextLimitModelProvider struct {
-	mockModelProvider
-	maxInputTokens int
-}
-
-func (m *contextLimitModelProvider) MaxInputTokens(types.ModelConfig) int {
-	return m.maxInputTokens
-}
-
 func TestTurnLoop_Run_HookLifecycle(t *testing.T) {
 	model := &mockModelProvider{
 		responses: []types.ChatResponse{

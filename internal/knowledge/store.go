@@ -200,7 +200,7 @@ func (s *MarkdownStore) RebuildIndex(ctx context.Context) error {
 		if relErr != nil {
 			relative = entry.Path
 		}
-		builder.WriteString(fmt.Sprintf("- [%s](%s) — %s\n", title, filepath.ToSlash(relative), summary))
+		fmt.Fprintf(&builder, "- [%s](%s) — %s\n", title, filepath.ToSlash(relative), summary)
 	}
 	return s.files.Write(filepath.Join(s.root, "index.md"), []byte(builder.String()))
 }

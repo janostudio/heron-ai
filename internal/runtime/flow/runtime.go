@@ -469,10 +469,6 @@ func (r *Runtime) Status(ctx context.Context, sessionID string) (types.FlowSessi
 	return status.Session, nil
 }
 
-func (r *Runtime) runTurn(ctx context.Context, session types.FlowSession, input string) (types.FlowTurnResult, error) {
-	return r.runTurnWithContext(ctx, session, input, nil)
-}
-
 func (r *Runtime) runTurnWithContext(ctx context.Context, session types.FlowSession, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
 	return r.runTurnWithActivationsAndContext(ctx, session, input, blocks, []activation{
 		{teamID: r.definitions.Flow.EntryTeamID},

@@ -761,8 +761,6 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			if toolResult.Next == nil || toolResult.Next.Action == types.NextProceed {
 				continue
 			}
-			waitingForContinuation = toolResult.Next.Action == types.NextWaitApproval ||
-				toolResult.Next.Action == types.NextWaitTool
 			agentResult := &types.AgentResult{
 				Status:          statusForRoute(toolResult.Next),
 				Reply:           toolResultContent(toolResult),

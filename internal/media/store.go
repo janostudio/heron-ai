@@ -201,7 +201,7 @@ func (s *FileStore) readInput(ctx context.Context, attachment types.MediaAttachm
 		if err != nil {
 			return nil, "", err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return nil, "", fmt.Errorf("download media: http %s", resp.Status)
 		}

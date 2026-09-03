@@ -65,7 +65,7 @@ func TestModelRegistry_Register_Duplicate(t *testing.T) {
 func TestModelRegistry_Get(t *testing.T) {
 	reg := NewModelRegistry()
 	p := &mockProvider{name: "test"}
-	reg.Register("test", p)
+	_ = reg.Register("test", p)
 
 	got, err := reg.Get("test")
 	require.NoError(t, err)
@@ -82,7 +82,7 @@ func TestModelRegistry_Get_NotFound(t *testing.T) {
 func TestModelRegistry_GetDefault(t *testing.T) {
 	reg := NewModelRegistry()
 	p := &mockProvider{name: "test"}
-	reg.Register("test", p)
+	_ = reg.Register("test", p)
 
 	got, err := reg.GetDefault()
 	require.NoError(t, err)
@@ -100,8 +100,8 @@ func TestModelRegistry_SetDefault(t *testing.T) {
 	reg := NewModelRegistry()
 	p1 := &mockProvider{name: "p1"}
 	p2 := &mockProvider{name: "p2"}
-	reg.Register("p1", p1)
-	reg.Register("p2", p2)
+	_ = reg.Register("p1", p1)
+	_ = reg.Register("p2", p2)
 
 	// First registered should be default
 	got, err := reg.GetDefault()
@@ -126,8 +126,8 @@ func TestModelRegistry_SetDefault_NotFound(t *testing.T) {
 
 func TestModelRegistry_List(t *testing.T) {
 	reg := NewModelRegistry()
-	reg.Register("a", &mockProvider{name: "a"})
-	reg.Register("b", &mockProvider{name: "b"})
+	_ = reg.Register("a", &mockProvider{name: "a"})
+	_ = reg.Register("b", &mockProvider{name: "b"})
 
 	names := reg.List()
 	assert.Len(t, names, 2)

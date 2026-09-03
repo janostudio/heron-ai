@@ -313,7 +313,7 @@ func encode(snapshot types.MemorySnapshot) ([]byte, error) {
 	writeList(&body, snapshot.NextSteps)
 	body.WriteString("\n# Workspace\n\n")
 	for _, item := range snapshot.Workspace {
-		body.WriteString(fmt.Sprintf("- %s (%s)\n", item.Path, item.Revision))
+		fmt.Fprintf(&body, "- %s (%s)\n", item.Path, item.Revision)
 	}
 	body.WriteString("\n# SharedRecord Refs\n\n")
 	writeList(&body, snapshot.RecordIDs)

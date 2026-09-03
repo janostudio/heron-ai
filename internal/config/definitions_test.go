@@ -181,7 +181,8 @@ calls: {}
 	}
 }
 
-func TestLoadDefinitionsRejectsMissingAgentDefinition(t *testing.T) {	root := t.TempDir()
+func TestLoadDefinitionsRejectsMissingAgentDefinition(t *testing.T) {
+	root := t.TempDir()
 	agentsDir := filepath.Join(root, ".agents", "agents")
 	teamsDir := filepath.Join(root, ".agents", "teams")
 	flowsDir := filepath.Join(root, ".agents", "flows")
