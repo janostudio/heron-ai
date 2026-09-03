@@ -205,7 +205,7 @@ func (c *streamJSONClient) do(req *http.Request) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
 		return nil, readErr
