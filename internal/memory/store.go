@@ -16,15 +16,17 @@ import (
 )
 
 const (
-	defaultTeamMaxChars  = 4000
-	defaultAgentMaxChars = 2000
+	defaultTeamMaxChars   = 4000
+	defaultAgentMaxChars  = 2000
+	defaultEntityMaxChars = 4000
 )
 
 // Limits controls the hard size of memory.md snapshots.
 type Limits struct {
-	TeamMaxChars  int
-	AgentMaxChars int
-	MaxItems      int
+	TeamMaxChars   int
+	AgentMaxChars  int
+	EntityMaxChars int
+	MaxItems       int
 }
 
 // Store persists the two V1 short-term memory layers.
@@ -39,6 +41,9 @@ func NewStore(files storage.FileStore, limits Limits) *Store {
 	}
 	if limits.AgentMaxChars <= 0 {
 		limits.AgentMaxChars = defaultAgentMaxChars
+	}
+	if limits.EntityMaxChars <= 0 {
+		limits.EntityMaxChars = defaultEntityMaxChars
 	}
 	if limits.MaxItems <= 0 {
 		limits.MaxItems = 40
@@ -84,6 +89,29 @@ func (s *Store) LoadAgent(ctx context.Context, sessionID, teamID, callID string)
 func (s *Store) SaveAgent(ctx context.Context, snapshot types.MemorySnapshot) error {
 	snapshot.Scope = types.MemoryScopeAgent
 	return s.save(ctx, s.path(snapshot.SessionID, "agents", snapshot.TeamID, snapshot.CallID, "memory.md"), snapshot, s.limits.AgentMaxChars)
+}
+
+// LoadEntity reads the persistent memory of one dynamic Agent entity (design
+// doc 20). A missing snapshot is not an error.
+func (s *Store) LoadEntity(ctx context.Context, agentID, key string) (types.MemorySnapshot, error) {
+	return s.load(ctx, s.entityPath(agentID, key), types.MemoryScopeEntity, "", "", "")
+}
+
+// SaveEntity persists one dynamic Agent entity's memory. The snapshot is
+// scoped by agent template + entity key and outlives any session.
+func (s *Store) SaveEntity(ctx context.Context, agentID, key string, snapshot types.MemorySnapshot) error {
+	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(key) == "" {
+		return errors.New("entity memory agent and key are required")
+	}
+	snapshot.Scope = types.MemoryScopeEntity
+	snapshot.SessionID = ""
+	snapshot.TeamID = ""
+	snapshot.CallID = ""
+	return s.save(ctx, s.entityPath(agentID, key), snapshot, s.limits.EntityMaxChars)
+}
+
+func (s *Store) entityPath(agentID, key string) string {
+	return filepath.Join(".agents", "data", "agents", agentID, key, "memory", "memory.md")
 }
 
 func (s *Store) path(sessionID string, parts ...string) string {
@@ -139,11 +167,13 @@ func (s *Store) save(ctx context.Context, path string, snapshot types.MemorySnap
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
-	if snapshot.SessionID == "" || snapshot.TeamID == "" {
-		return errors.New("memory session_id and team_id are required")
-	}
-	if snapshot.Scope == types.MemoryScopeAgent && snapshot.CallID == "" {
-		return errors.New("agent memory call_id is required")
+	if snapshot.Scope != types.MemoryScopeEntity {
+		if snapshot.SessionID == "" || snapshot.TeamID == "" {
+			return errors.New("memory session_id and team_id are required")
+		}
+		if snapshot.Scope == types.MemoryScopeAgent && snapshot.CallID == "" {
+			return errors.New("agent memory call_id is required")
+		}
 	}
 	snapshot = Reduce(snapshot, s.limits.MaxItems)
 	snapshot.Revision++

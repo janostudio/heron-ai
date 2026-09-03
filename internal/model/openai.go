@@ -412,8 +412,12 @@ func convertOpenAITools(tools []types.JSONSchema) []openAITool {
 	for i, tool := range tools {
 		properties := make(map[string]any, len(tool.Properties))
 		for name, property := range tool.Properties {
-			item := map[string]any{
-				"type": property.Type,
+			item := map[string]any{}
+			// An empty or "any" type means the parameter accepts any JSON
+			// value; providers have no such native type, so the constraint is
+			// simply omitted.
+			if property.Type != "" && property.Type != "any" {
+				item["type"] = property.Type
 			}
 			if property.Description != "" {
 				item["description"] = property.Description

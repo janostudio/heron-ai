@@ -73,6 +73,19 @@ func TestBuildUserPromptRendersRecordContextBlock(t *testing.T) {
 	}
 }
 
+func TestBuildUserPromptRendersSpawnContextBlocks(t *testing.T) {
+	r := NewPromptRenderer(nil)
+	prompt := r.BuildUserPrompt(types.AgentConfig{}, types.AgentRequest{}, RenderContext{ContextBlocks: []types.ContextBlock{
+		{Kind: "fanout_item", Text: `{"file":"a.go"}`, Source: "spawn", Priority: 85},
+		{Kind: "entity_memory", Text: "Goal: fix the assigned file", Source: "entity_memory", Priority: 60},
+	}})
+	for _, expected := range []string{"## Your Item", `{"file":"a.go"}`, "## Entity Memory", "Goal: fix the assigned file"} {
+		if !strings.Contains(prompt, expected) {
+			t.Errorf("missing %q:\n%s", expected, prompt)
+		}
+	}
+}
+
 func TestRenderKeepsSystemAndUserContextSeparated(t *testing.T) {
 	r := NewPromptRenderer(nil)
 	messages, err := r.Render(types.AgentConfig{Persona: types.PersonaConfig{Role: "Assistant"}}, types.AgentRequest{}, RenderContext{ContextBlocks: []types.ContextBlock{

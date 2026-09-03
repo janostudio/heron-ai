@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/heron-ai/heron-engine/internal/agentstore"
 	"github.com/heron-ai/heron-engine/internal/runtime/call"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -381,4 +382,102 @@ func (e *failingCallExecutor) Execute(_ context.Context, req types.CallRequest) 
 		Status: types.TurnFailed,
 		Error:  req.Call.ID + " failed",
 	}, nil
+}
+
+// spawnPublishingRunner simulates an Agent whose Spawn tool publishes two
+// downstream records through the collector injected by the Agent executor.
+type spawnPublishingRunner struct {
+	mu              sync.Mutex
+	verifierRecords string
+	verifierRan     bool
+}
+
+func (r *spawnPublishingRunner) Run(ctx context.Context, _ types.AgentConfig, req types.AgentRequest) (*types.AgentResult, error) {
+	switch req.CallID {
+	case "fixer":
+		collector := agentstore.RecordCollectorFromContext(ctx)
+		if collector == nil || !collector.Enabled() {
+			return &types.AgentResult{Status: types.TurnFailed, Error: "spawn collector missing"}, nil
+		}
+		collector.Add("spawn_result", "fixed a.go", map[string]any{"key": "e-1"})
+		collector.Add("spawn_result", "fixed b.go", map[string]any{"key": "e-2"})
+		return &types.AgentResult{Status: types.TurnCompleted, Reply: "spawned fixes done"}, nil
+	case "verifier":
+		r.mu.Lock()
+		r.verifierRan = true
+		for _, block := range req.ContextBlocks {
+			if block.Kind == "records" {
+				r.verifierRecords = block.Text
+			}
+		}
+		r.mu.Unlock()
+		return &types.AgentResult{Status: types.TurnCompleted, Reply: "verified"}, nil
+	}
+	return &types.AgentResult{Status: types.TurnFailed, Error: "unexpected call " + req.CallID}, nil
+}
+
+func (r *spawnPublishingRunner) recordsSeen() (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.verifierRecords, r.verifierRan
+}
+
+func TestRuntimeDeliversSpawnRecordsToDownstreamCall(t *testing.T) {
+	runner := &spawnPublishingRunner{}
+	registry := call.NewRegistry()
+	require.NoError(t, registry.Register(call.NewAgentExecutor(runner)))
+	runtime := NewRuntime(registry, map[string]types.AgentConfig{
+		"fix-agent":    {Name: "fix-agent"},
+		"verify-agent": {Name: "verify-agent"},
+	})
+
+	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
+		FlowSession: types.FlowSession{ID: "fs-1"},
+		FlowTurn:    types.FlowTurn{ID: "ft-1"},
+		TeamSession: types.TeamSession{ID: "ts-1"},
+		TeamTurn:    types.TeamTurn{ID: "tt-1", TeamID: "fix-team"},
+		Team: types.Team{
+			ID: "fix-team",
+			Calls: map[string]types.Call{
+				"fixer": {
+					ID:        "fixer",
+					Type:      types.CallAgent,
+					AgentID:   "fix-agent",
+					DependsOn: nil,
+					Output:    types.OutputSpec{Record: "FixReport"},
+				},
+				"verifier": {
+					ID:        "verifier",
+					Type:      types.CallAgent,
+					AgentID:   "verify-agent",
+					DependsOn: []string{"fixer"},
+					Inputs: types.InputSpec{
+						Records: []types.InputBinding{
+							{From: "fixer", Record: "FixReport"},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.NextProceed, result.Next.Action)
+
+	// The fixer call publishes its own record plus both spawned children's
+	// records under the same name.
+	fixerRecords := result.CallResults["fixer"].Records
+	require.Len(t, fixerRecords, 3)
+	assert.Equal(t, "agent_result", fixerRecords[0].Kind)
+	assert.Equal(t, "spawn_result", fixerRecords[1].Kind)
+	assert.Equal(t, "spawn_result", fixerRecords[2].Kind)
+	assert.Equal(t, "FixReport", fixerRecords[1].Name)
+	assert.Equal(t, "fixer", fixerRecords[1].Producer.CallID)
+
+	// The downstream call receives all same-name records through its input
+	// binding and sees the spawned children's data.
+	recordsJSON, ran := runner.recordsSeen()
+	require.True(t, ran)
+	assert.Contains(t, recordsJSON, "e-1")
+	assert.Contains(t, recordsJSON, "e-2")
+	assert.Contains(t, recordsJSON, "spawned fixes done")
 }

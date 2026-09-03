@@ -209,6 +209,10 @@ func renderContextBlock(block types.ContextBlock) string {
 		return "## Team Memory\n" + block.Text
 	case "agent_memory":
 		return "## Agent Memory\n" + block.Text
+	case "entity_memory":
+		return "## Entity Memory\n" + block.Text
+	case "fanout_item":
+		return "## Your Item\n" + block.Text
 	case "records":
 		var records []types.SharedRecord
 		if err := json.Unmarshal([]byte(block.Text), &records); err == nil {
@@ -241,37 +245,49 @@ func formatRecordData(data map[string]any) string {
 // Built-in template content
 
 const executionManagementTemplate = `## Execution Management
-When working on your responsibility:
-1. Break down complex work into steps
-2. Track your progress
-3. Use tools when needed
-4. Report your findings clearly`
+You operate as a disciplined executor, not a passive responder.
+
+1. Before acting, restate your plan: the goal, the concrete steps, and the definition of done.
+2. Break complex work into small, verifiable steps. Execute them one at a time.
+3. Track progress explicitly. After each step, note what is done and what remains.
+4. Use tools to gather facts before making decisions; do not guess.
+5. If a step fails or is blocked, stop and report the blocker and what you already tried, rather than retrying blindly.
+6. Report findings clearly and concretely: what changed, why, and what is next.`
 
 const toolUsageTemplate = `## Tool Usage
-You have access to tools that help you complete your task.
-- Use tools when you need to read, write, or search information
-- Each tool call counts toward your turn limit
-- Be efficient and only use tools when necessary`
+Tools are your only way to observe and change the outside world. Treat them as a source of ground truth.
+
+- Before answering from memory, use tools to read the actual current state.
+- Prefer the narrowest tool call that answers your question.
+- Always check a tool's result before acting on it; a non-empty result is not the same as a correct result.
+- If a tool errors, read the error and adapt. Do not repeat the identical call.
+- Every tool call consumes part of your turn budget. Batch independent reads; avoid redundant or speculative calls.`
 
 const memoryManagementTemplate = `## Memory Management
-You maintain your own memory. Use memory to:
-- Track important information across turns
-- Note decisions and their rationale
-- Record findings and insights
-- Update your understanding as you learn more`
+You maintain durable memory across turns. Use it to stay consistent and avoid re-deriving what you already learned.
 
-const knowledgeQueryTemplate = `## Knowledge Query
-When you need background information:
-- Search the knowledge base for relevant context
-- Cross-reference multiple sources when possible
-- Note when information is uncertain or conflicting`
+- Record decisions together with their rationale, not just the conclusion.
+- Record concrete findings (identifiers, values, facts), not vague impressions.
+- Update memory when new information changes or supersedes a prior entry.
+- Before redoing work, check whether memory already contains the answer.`
+
+const knowledgeQueryTemplate = `## Knowledge Usage
+When background knowledge is injected into your context:
+- Treat injected knowledge as guidance, not fact. Current Workspace files and
+  Session records always take precedence over knowledge.
+- Weigh each entry by its confidence and basis. Lower-confidence or stale
+  knowledge must not override what you can verify directly.
+- Cross-reference multiple entries when they overlap; note when information is
+  uncertain or conflicting.
+- Use knowledge to avoid re-deriving known constraints, not to skip verification.`
 
 const perspectiveIsolationTemplate = `## Perspective Isolation
-You are one of multiple agents working together. Important rules:
-- You only know what you've personally observed or been told
-- Do not assume knowledge that other agents have
-- When receiving information from others, consider the source
-- Return clear findings and decisions so the Team can coordinate the next step`
+You are one agent in a multi-agent team. Keep your knowledge boundary explicit.
+
+- You know only what you have personally observed or been explicitly told.
+- Never assume another agent's state, progress, or decisions.
+- When you receive information from another agent, note its source and treat it as unverified until confirmed.
+- Return clear findings, decisions, and open questions so the Team can coordinate the next step without guessing.`
 
 const outputFormatTemplate = `## Output Format
 Your output must follow the specified structured format.

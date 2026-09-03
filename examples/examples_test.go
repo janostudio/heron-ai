@@ -2,6 +2,7 @@ package examples_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -113,43 +114,58 @@ func TestBlogWriterExampleUsesTeamRoutingAndSharedRecords(t *testing.T) {
 	}
 }
 
-func TestNovelRPExampleUsesRepeatedTeamActivation(t *testing.T) {
+func TestNovelRPExampleUsesCoordinatorActivationAndParallelLanes(t *testing.T) {
 	definitions := loadDefinitions(t, "novel-rp", ".agents/flows/flow.yml")
 
 	require.Equal(t, "novel_story", definitions.Flow.ID)
-	require.Equal(t, "opening", definitions.Flow.EntryTeamID)
-	require.Len(t, definitions.Flow.Teams, 4)
+	require.Equal(t, "lobby", definitions.Flow.EntryTeamID)
+	require.Len(t, definitions.Flow.Teams, 3)
 
-	expected := []struct {
-		name    string
-		next    string
-		depends []string
-	}{
-		{name: "opening", next: "development"},
-		{name: "development", next: "climax", depends: []string{"opening"}},
-		{name: "climax", next: "ending", depends: []string{"development"}},
-		{name: "ending", depends: []string{"climax"}},
-	}
-	for _, item := range expected {
-		binding := definitions.Flow.Teams[item.name]
-		require.Equal(t, item.depends, binding.DependsOn, item.name)
-		if item.next == "" {
-			// The terminal team no longer declares an on_proceed action.
-			require.Nil(t, binding.OnProceed, item.name)
-		} else {
-			require.Equal(t, []string{item.next}, binding.OnProceed.Teams, item.name)
-		}
-	}
+	// lobby is the single coordinator and may activate perform.
+	lobby := definitions.Flow.Teams["lobby"]
+	require.True(t, lobby.Coordinator)
+	require.Equal(t, []string{"perform"}, lobby.CanActivate)
+	require.Nil(t, lobby.OnProceed)
 
-	team := definitions.Teams["story_team"]
-	require.Len(t, team.Calls, 3)
-	require.ElementsMatch(t,
-		[]string{"hero_act", "villain_act"},
-		team.Calls["narrate"].DependsOn,
-	)
-	require.Equal(t, "StoryTurn", team.Output.Record)
-	require.Equal(t, "narrate", team.Output.From)
+	// perform runs after lobby and proceeds to weave.
+	perform := definitions.Flow.Teams["perform"]
+	require.Equal(t, []string{"lobby"}, perform.DependsOn)
+	require.Equal(t, []string{"weave"}, perform.OnProceed.Teams)
+
+	// weave terminates the turn; the next turn restarts from the entry.
+	weave := definitions.Flow.Teams["weave"]
+	require.Equal(t, []string{"perform"}, weave.DependsOn)
+	require.Nil(t, weave.OnProceed)
+
+	// lobby_team: the director plans the scene and publishes ScenePlan.
+	lobbyTeam := definitions.Teams["lobby_team"]
+	require.Equal(t, "director", lobbyTeam.Calls["direct"].AgentID)
+	require.Equal(t, "ScenePlan", lobbyTeam.Output.Record)
+	require.Equal(t, "direct", lobbyTeam.Output.From)
+
+	// perform_team: six parallel lanes of the same generic role-actor.
+	performTeam := definitions.Teams["perform_team"]
+	require.Len(t, performTeam.Calls, 6)
+	for i := 1; i <= 6; i++ {
+		call, ok := performTeam.Calls[fmt.Sprintf("role_lane_%d", i)]
+		require.True(t, ok, "role_lane_%d should exist", i)
+		require.Equal(t, "role-actor", call.AgentID)
+		require.Empty(t, call.DependsOn)
+		require.Equal(t, "RolePerformances", call.Output.Record)
+	}
+	require.Len(t, performTeam.Output.Records, 6)
+
+	// weave_team: the narrator weaves the final StoryTurn.
+	weaveTeam := definitions.Teams["weave_team"]
+	require.Equal(t, "narrator", weaveTeam.Calls["narrate"].AgentID)
+	require.Equal(t, "StoryTurn", weaveTeam.Output.Record)
+
 	require.Len(t, definitions.Agents, 3)
+	for _, name := range []string{"director", "role-actor", "narrator"} {
+		agent, ok := definitions.Agents[name]
+		require.True(t, ok, "agent %s should exist", name)
+		require.NotEmpty(t, agent.Body)
+	}
 }
 
 func TestAutoBugfixGitignoreExampleUsesNativeAgentsSkillsScriptsAndDeterministicCommands(t *testing.T) {

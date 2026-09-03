@@ -43,6 +43,9 @@ dist/
 # Local integration fixture (never commit)
 /examples/auto-bugfix-gitignore/
 
+# Local single-agent dev example (never commit)
+/examples/dev-agent/
+
 # Dependencies
 vendor/
 

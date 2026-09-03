@@ -110,6 +110,9 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// Expose this turn's Agent/request to Tool implementations (Spawn) without
+	// widening the Tool interface. The value is inert for every other tool.
+	ctx = withSpawnIdentity(ctx, agent, req)
 	var requestStats []types.ModelRequestStats
 	var approvalDecision *types.HITLResponse
 	defer func() {
@@ -162,7 +165,13 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		maxRounds = agent.Budget.MaxModelRounds
 	}
 	toolSchemas := t.buildToolSchemas(agent)
-	contextManager := NewContextManager(t.contextConfig(agent))
+	var summarizer Summarizer
+	if strings.EqualFold(agent.Context.Summarizer, "mechanical") {
+		summarizer = mechanicalSummarizer{}
+	} else {
+		summarizer = NewLLMSummarizer(t.model, agent.Model)
+	}
+	contextManager := NewContextManagerWithSummarizer(t.contextConfig(agent), nil, summarizer)
 	contextManager.SetToolSchemas(toolSchemas)
 	if req.ResumeCheckpointID != "" && t.checkpoints == nil {
 		return nil, fmt.Errorf("agent checkpoint store is not configured")
@@ -1702,6 +1711,26 @@ func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema 
 		},
 		"TodoWrite": {Name: "TodoWrite", Type: "object", Properties: map[string]types.JSONProperty{"items": {Type: "array", Description: "List of todo items"}}},
 		"TodoRead":  {Name: "TodoRead", Type: "object", Properties: map[string]types.JSONProperty{}},
+		"Spawn": {
+			Name: "Spawn", Type: "object",
+			Description: "Spawn dynamic agent entities and execute them. wait=true blocks until children finish; wait=false returns handles immediately. Entities are reused by key and keep persistent memory.",
+			Properties: map[string]types.JSONProperty{
+				"agent":   {Type: "string", Description: "Target agent id; defaults to the spawning agent itself"},
+				"item":    {Type: "any", Description: "Single task item (any JSON value) delivered to the child entity"},
+				"items":   {Type: "array", Description: "Multiple task items; one child entity per item, executed in parallel"},
+				"wait":    {Type: "boolean", Description: "true: block until children finish; false: return handles immediately (deliver=parent collects later with Collect; deliver=downstream children run in the Team DAG)"},
+				"deliver": {Type: "string", Enum: []string{"parent", "downstream"}, Description: "parent: results return to you; downstream: results are published as records of your call (downstream calls wait for you and all your spawned children)"},
+				"key":     {Type: "string", Description: "Entity key to reuse an existing entity (with its memory); only valid with a single item"},
+			},
+		},
+		"Collect": {
+			Name: "Collect", Type: "object",
+			Description: "Block until spawned children from asynchronous Spawn calls (wait=false) finish and return their results, aligned with the given handles. Failed children are reported per handle.",
+			Properties: map[string]types.JSONProperty{
+				"handles": {Type: "array", Description: "Handles (task ids) returned by asynchronous Spawn calls"},
+			},
+			Required: []string{"handles"},
+		},
 	}
 
 	toolNames := append([]string(nil), agent.Tools.Builtin...)

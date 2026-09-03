@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/knowledge"
 	"github.com/heron-ai/heron-engine/internal/memory"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -164,12 +165,14 @@ func consolidationPath(id string) string {
 // intentionally does not call an LLM: long summaries remain a separate,
 // explicit future capability and cannot block or alter the Agent answer.
 type Worker struct {
-	jobs         JobStore
-	memories     *memory.Store
-	consolidator *RecordConsolidator
-	mu           sync.Mutex
-	cancel       context.CancelFunc
-	done         chan struct{}
+	jobs           JobStore
+	memories       *memory.Store
+	consolidator   *RecordConsolidator
+	curator        *knowledge.Curator
+	knowledgeStore storage.FileStore
+	mu             sync.Mutex
+	cancel         context.CancelFunc
+	done           chan struct{}
 }
 
 func NewWorker(jobs JobStore, memories *memory.Store) *Worker {
@@ -178,6 +181,18 @@ func NewWorker(jobs JobStore, memories *memory.Store) *Worker {
 		memories:     memories,
 		consolidator: NewRecordConsolidator(),
 	}
+}
+
+// SetCurator 注入可选的知识提炼路径。curator 为 nil 时关闭该路径。
+// knowledgeFiles 用于把 Curator 产出写到 .agents/knowledge/proposed/。
+func (w *Worker) SetCurator(curator *knowledge.Curator, knowledgeFiles storage.FileStore) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.curator = curator
+	w.knowledgeStore = knowledgeFiles
 }
 
 func (w *Worker) Enqueue(ctx context.Context, job types.ContextConsolidation) error {
@@ -299,6 +314,9 @@ func (w *Worker) process(ctx context.Context, job types.ContextConsolidation) er
 	}
 	summary := w.consolidator.Consolidate(ctx, job.Records)
 	job.ResultSummary = summary
+	if w.curator != nil && len(job.Records) > 0 {
+		_ = w.curateProposed(ctx, job) // 失败静默降级，不回写 job.Error
+	}
 	if strings.TrimSpace(summary) != "" && w.memories != nil && job.TeamID != "" {
 		if err := w.updateMemory(ctx, job, summary); err != nil {
 			job.Status = "failed"
@@ -328,6 +346,38 @@ func (w *Worker) updateMemory(ctx context.Context, job types.ContextConsolidatio
 	}
 	snapshot.Confirmed = append(snapshot.Confirmed, summary)
 	return w.memories.SaveTeam(ctx, snapshot)
+}
+
+func (w *Worker) curateProposed(ctx context.Context, job types.ContextConsolidation) error {
+	sources := buildCuratorSources(job.Records)
+	md, err := w.curator.Curate(ctx, sources)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(md) == "" {
+		return errors.New("curator returned empty markdown")
+	}
+	path := filepath.Join(".agents", "knowledge", "proposed", job.ID+".md")
+	return w.knowledgeStore.Write(path, []byte(md+"\n"))
+}
+
+func buildCuratorSources(records []types.SharedRecord) []string {
+	sources := make([]string, 0, len(records))
+	for _, r := range records {
+		name := strings.TrimSpace(r.Name)
+		summary := strings.TrimSpace(r.Summary)
+		switch {
+		case name == "" && summary == "":
+			continue
+		case name == "":
+			sources = append(sources, summary)
+		case summary == "":
+			sources = append(sources, name)
+		default:
+			sources = append(sources, fmt.Sprintf("[%s] %s", name, summary))
+		}
+	}
+	return sources
 }
 
 func contextErr(ctx context.Context) error {

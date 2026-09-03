@@ -30,6 +30,24 @@ func (l *ConfigLoader) LoadRuntimeLimits() types.RuntimeLimits {
 	return limits
 }
 
+// LoadKnowledgeSettings 读取 .agents/settings.json 的 knowledge 段。
+// 文件缺失/字段缺失时返回零值 KnowledgeConfig（CuratorModel=""）。
+func (l *ConfigLoader) LoadKnowledgeSettings() types.KnowledgeConfig {
+	var cfg types.KnowledgeConfig
+	path := filepath.Join(".agents", "settings.json")
+	data, err := l.fileStore.Read(path)
+	if err != nil {
+		return cfg
+	}
+	var raw struct {
+		Knowledge types.KnowledgeConfig `json:"knowledge"`
+	}
+	if err := json.Unmarshal(data, &raw); err == nil {
+		cfg = raw.Knowledge
+	}
+	return cfg
+}
+
 func NewConfigLoader(baseDir string) *ConfigLoader {
 	return &ConfigLoader{
 		baseDir:   baseDir,

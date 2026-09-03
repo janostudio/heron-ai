@@ -19,6 +19,10 @@ type MemoryScope string
 const (
 	MemoryScopeTeam  MemoryScope = "team"
 	MemoryScopeAgent MemoryScope = "agent"
+	// MemoryScopeEntity is the persistent memory of one dynamic Agent entity
+	// (design doc 20). Unlike the session-scoped layers, it survives across
+	// sessions and is keyed by entity, not by call.
+	MemoryScopeEntity MemoryScope = "entity"
 )
 
 // MemoryWorkspaceRef keeps only a small pointer to workspace state. Complete

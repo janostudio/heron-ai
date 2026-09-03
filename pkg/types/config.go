@@ -16,6 +16,13 @@ type SettingsConfig struct {
 	Observability ObservabilityConfig `json:"observability"`
 	Paths         PathsConfig         `json:"paths"`
 	Agent         AgentSettingsConfig `json:"agent"`
+	Knowledge     KnowledgeConfig     `json:"knowledge,omitempty"`
+}
+
+// KnowledgeConfig 配置知识自动学习相关能力。
+type KnowledgeConfig struct {
+	// CuratorModel 为 Knowledge Curator 提炼指定的模型名；空 = 用默认模型。
+	CuratorModel string `json:"curator_model,omitempty"`
 }
 
 type LoggingConfig struct {

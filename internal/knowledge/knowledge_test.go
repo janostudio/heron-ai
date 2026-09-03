@@ -321,6 +321,53 @@ func TestKnowledgeInjector_InjectNoMatchesReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestKnowledgeInjector_FormatEntriesIncludesUsageInstruction(t *testing.T) {
+	idx := NewKnowledgeIndex()
+	injector := NewKnowledgeInjector(idx)
+
+	entries := []types.KnowledgeEntry{
+		{ID: "1", Content: "First entry"},
+		{ID: "2", Content: "Second entry"},
+	}
+
+	result := injector.formatEntries(entries)
+
+	if !strings.Contains(result, "## Knowledge Context") {
+		t.Fatal("expected result to contain '## Knowledge Context'")
+	}
+	if !strings.Contains(result, "## Knowledge Usage") {
+		t.Fatal("expected result to contain '## Knowledge Usage'")
+	}
+	if !strings.Contains(result, "- First entry") {
+		t.Fatal("expected result to contain '- First entry'")
+	}
+	if !strings.Contains(result, "- Second entry") {
+		t.Fatal("expected result to contain '- Second entry'")
+	}
+}
+
+func TestKnowledgeInjector_InjectWithAllowlistNoMatchOmitsUsageInstruction(t *testing.T) {
+	idx := NewKnowledgeIndex()
+	idx.Add(types.KnowledgeEntry{
+		ID:      "1",
+		Content: "Important knowledge",
+		Keys:    []string{"important"},
+		Scope:   types.Scope{Type: "all"},
+	})
+
+	injector := NewKnowledgeInjector(idx)
+	result, err := injector.InjectWithAllowlist(context.Background(), "nonexistent", "agent1", "team1", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "" {
+		t.Fatalf("expected empty result, got '%s'", result)
+	}
+	if strings.Contains(result, "## Knowledge Usage") {
+		t.Fatal("expected no '## Knowledge Usage' when no entries match")
+	}
+}
+
 func TestKnowledgeInjector_InjectAllWithScopeFiltering(t *testing.T) {
 	idx := NewKnowledgeIndex()
 	idx.Add(types.KnowledgeEntry{

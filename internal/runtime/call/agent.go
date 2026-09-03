@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/agentstore"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -38,6 +39,19 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
 	}
 	defer cancel()
+
+	// Spawned children publishing with deliver=downstream write into this
+	// collector; the records are attached to this call's result below so
+	// downstream consumers aggregate them like any same-name record.
+	spawnCollector := agentstore.NewRecordCollector(req.Call.Output.Record, types.ProducerRef{
+		FlowSessionID: req.FlowSession.ID,
+		FlowTurnID:    req.FlowTurn.ID,
+		TeamID:        req.TeamTurn.TeamID,
+		TeamTurnID:    req.TeamTurn.ID,
+		CallID:        req.Call.ID,
+		CallTurnID:    callTurnID(req),
+	})
+	execCtx = agentstore.WithRecordCollector(execCtx, spawnCollector)
 
 	result, err := e.runner.Run(execCtx, *req.AgentDefinition, types.AgentRequest{
 		FlowSessionID:      req.FlowSession.ID,
@@ -104,6 +118,10 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		)}
 		callResult.Records[0].Basis = basisFromWorkspaceOps(result.WorkspaceOps)
 	}
+	// Records published by spawned children (deliver=downstream) share the
+	// call's output.record name; one call publishing several records is
+	// already supported by the team record selection.
+	callResult.Records = append(callResult.Records, spawnCollector.Records()...)
 	return callResult, nil
 }
 

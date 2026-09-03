@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/agent"
+	"github.com/heron-ai/heron-engine/internal/agentstore"
 	"github.com/heron-ai/heron-engine/internal/consolidation"
 	"github.com/heron-ai/heron-engine/internal/knowledge"
 	"github.com/heron-ai/heron-engine/internal/media"
@@ -87,6 +88,26 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 
 	teamRuntime := team.NewRuntime(executors, definitions.Agents)
 	files := storage.NewFileStore(workspaceRoot)
+	// One entity is one agent: the Spawn tool's inline children, durable
+	// SpawnChild tasks, and the Team scheduler's synthetic calls (batch C)
+	// share one entity lock set so the same dynamic entity never runs two
+	// concurrent turns across paths.
+	entityLocks := agentstore.NewEntityLocks()
+	teamRuntime.SetEntityLocks(entityLocks)
+	// Spawn (design 20/21, batch A): the tool executes child turns through the
+	// same TurnLoop and persists dynamic entities under the workspace data dir.
+	// Agents must declare Spawn in tools.builtin to see it; everyone else is
+	// unaffected. Batch B wires the async task runner and session writer below
+	// so wait=false spawns run as durable SpawnChild tasks; batch C wires the
+	// shared entity locks for Team DAG insertions.
+	spawnTool := agent.NewSpawnTool(
+		turnLoop,
+		definitions.Agents,
+		agentstore.NewRegistry(files),
+		memory.NewStore(files, memory.Limits{}),
+	)
+	spawnTool.SetEntityLocks(entityLocks)
+	toolRegistry.Register(spawnTool)
 	mediaStore := media.NewFileStore(files, media.Limits{})
 	if setter, ok := provider.(types.MediaResolverSetter); ok {
 		setter.SetMediaResolver(mediaStore)
@@ -96,6 +117,8 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 		consolidation.NewFileJobStore(files),
 		memory.NewStore(files, memory.Limits{}),
 	)
+	curator := knowledge.NewCurator(provider, definitions.Knowledge.CuratorModel)
+	dreamWorker.SetCurator(curator, files)
 	if err := dreamWorker.Start(ctx); err != nil {
 		return nil, err
 	}
@@ -130,7 +153,14 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 	sessionWriter := storage.NewJSONLSessionWriter(files)
 	checkpointStore := agent.NewFileCheckpointStore(files)
 	taskStore := agent.NewFileToolTaskStore(files)
-	taskRunner := agent.NewAsyncToolExecutor(taskStore, toolExecutor)
+	// Durable SpawnChild tasks (asynchronous Spawn, batch B) route through the
+	// dispatcher into the Spawn tool; every other async tool keeps its normal
+	// execution path. The shared executor gives spawned children the same
+	// persistence, progress and recovery as ordinary async tool tasks.
+	taskRunner := agent.NewAsyncToolExecutor(taskStore, agent.NewSpawnTaskDispatcher(spawnTool, toolExecutor))
+	spawnTool.SetTaskRunner(taskRunner)
+	spawnTool.SetSessionWriter(sessionWriter)
+	toolRegistry.Register(agent.NewCollectTool(taskRunner))
 	turnLoop.SetCheckpointStore(checkpointStore)
 	turnLoop.SetTaskRunner(taskRunner)
 	if err := taskRunner.Recover(ctx); err != nil {
@@ -152,6 +182,12 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 	flowRuntime.SetTaskStore(taskStore)
 	flowRuntime.SetMediaStore(mediaStore)
 	onTaskDone := func(doneCtx context.Context, task types.ToolTask) {
+		if task.ToolName == agent.SpawnChildToolName {
+			// Spawned children deliver their results through Collect handles
+			// (durable task store), not through the Flow waiting-tool wake-up:
+			// the parent keeps running or has already finished its turn.
+			return
+		}
 		if task.FlowSessionID == "" {
 			return
 		}

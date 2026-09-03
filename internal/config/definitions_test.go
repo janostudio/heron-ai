@@ -327,6 +327,26 @@ scripts:
 	require.ErrorContains(t, err, `skill script "scripts/missing.sh" does not exist`)
 }
 
+func TestLoadKnowledgeSettings_ReadsCuratorModel(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "settings.json"), []byte(`{
+  "knowledge": {
+    "curator_model": "gpt-x"
+  }
+}`), 0644))
+
+	cfg := NewConfigLoader(root).LoadKnowledgeSettings()
+	require.Equal(t, "gpt-x", cfg.CuratorModel)
+}
+
+func TestLoadKnowledgeSettings_MissingFileReturnsZero(t *testing.T) {
+	root := t.TempDir()
+
+	cfg := NewConfigLoader(root).LoadKnowledgeSettings()
+	require.Equal(t, "", cfg.CuratorModel)
+}
+
 func TestLoadDefinitionsLoadsRuntimeLimits(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents", "agents"), 0755))

@@ -42,6 +42,7 @@ type MessageContextManager struct {
 	mu            sync.RWMutex
 	config        types.ContextConfig
 	estimator     ContextTokenEstimator
+	summarizer    Summarizer
 	canonical     []types.Message
 	active        []types.Message
 	tools         []types.JSONSchema
@@ -54,12 +55,20 @@ func NewContextManager(config types.ContextConfig) *MessageContextManager {
 }
 
 func NewContextManagerWithEstimator(config types.ContextConfig, estimator ContextTokenEstimator) *MessageContextManager {
+	return NewContextManagerWithSummarizer(config, estimator, nil)
+}
+
+func NewContextManagerWithSummarizer(config types.ContextConfig, estimator ContextTokenEstimator, summarizer Summarizer) *MessageContextManager {
 	if estimator == nil {
 		estimator = defaultContextTokenEstimator{}
 	}
+	if summarizer == nil {
+		summarizer = mechanicalSummarizer{}
+	}
 	return &MessageContextManager{
-		config:    config.WithDefaults(),
-		estimator: estimator,
+		config:     config.WithDefaults(),
+		estimator:  estimator,
+		summarizer: summarizer,
 	}
 }
 
@@ -317,7 +326,11 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	}
 
 	candidate := cloneMessages(prefix)
-	summary := mergeCompactionSummary(existingSummary, buildContextSummary(dropped, 0))
+	nextSummary, err := m.summarizer.Summarize(ctx, dropped)
+	if err != nil || strings.TrimSpace(nextSummary) == "" {
+		nextSummary = buildContextSummary(dropped, 0)
+	}
+	summary := mergeCompactionSummary(existingSummary, nextSummary)
 	if summary != "" {
 		if compacted := fitCompactionSummary(
 			summary,

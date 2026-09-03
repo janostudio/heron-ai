@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/agentstore"
 	"github.com/heron-ai/heron-engine/internal/knowledge"
 	"github.com/heron-ai/heron-engine/internal/memory"
 	"github.com/heron-ai/heron-engine/internal/runtime/call"
@@ -21,14 +22,15 @@ import (
 // first implementation small: dependencies are all-of, calls without
 // dependencies run in parallel, and Team output is promoted explicitly.
 type Runtime struct {
-	executors *call.Registry
-	agents    map[string]types.AgentConfig
-	memories  *memory.Store
-	knowledge *knowledge.KnowledgeInjector
-	skills    *skill.SkillInjector
-	rules     map[string]types.RuleItem
-	sessions  storage.SessionWriter
-	dream     types.ConsolidationEnqueuer
+	executors  *call.Registry
+	agents     map[string]types.AgentConfig
+	memories   *memory.Store
+	knowledge  *knowledge.KnowledgeInjector
+	skills     *skill.SkillInjector
+	rules      map[string]types.RuleItem
+	sessions   storage.SessionWriter
+	dream      types.ConsolidationEnqueuer
+	entityLock *agentstore.EntityLocks
 }
 
 func NewRuntime(executors *call.Registry, agentDefinitions ...map[string]types.AgentConfig) *Runtime {
@@ -71,6 +73,16 @@ func (r *Runtime) SetSessionWriter(writer storage.SessionWriter) {
 
 func (r *Runtime) SetConsolidationEnqueuer(enqueuer types.ConsolidationEnqueuer) {
 	r.dream = enqueuer
+}
+
+// SetEntityLocks shares one entity lock set with the Spawn tool so inline
+// spawned children and synthetic Team calls of the same dynamic entity never
+// run concurrently (design 20: one entity is one agent). Each Run falls back
+// to a private lock set when none is wired.
+func (r *Runtime) SetEntityLocks(locks *agentstore.EntityLocks) {
+	if locks != nil {
+		r.entityLock = locks
+	}
 }
 
 func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
@@ -138,16 +150,24 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		completed[name] = true
 	}
 
-	for len(remaining) > 0 {
+	// Spawned child insertion (design 21 §4.4): from here the run state owns
+	// the scheduling sets, so Spawn(wait=false, deliver=downstream) inside a
+	// parent call can append synthetic calls under the run mutex while the
+	// main loop is blocked in runBatch.
+	state := newRunState(remaining, completed, r.entityLock)
+	defer state.close()
+	ctx = agentstore.WithChildInserter(ctx, state)
+
+	for state.hasRemaining() {
 		if err := contextErr(ctx); err != nil {
 			result.Error = err.Error()
 			result.Next = &types.Route{Action: types.NextFail, Reason: result.Error}
 			return result, err
 		}
 
-		ready := readyCalls(remaining, completed)
+		ready := state.readyCalls()
 		if req.ResumeCallID != "" {
-			resumeCall, ok := remaining[req.ResumeCallID]
+			resumeCall, ok := state.call(req.ResumeCallID)
 			if !ok {
 				return result, fmt.Errorf("resume call %q not found in Team %q", req.ResumeCallID, req.Team.ID)
 			}
@@ -166,7 +186,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		}
 		teamCalls += len(ready)
 
-		batchResults, err := r.runBatch(ctx, memories, req, ready, result.CallResults)
+		batchResults, err := r.runBatch(ctx, memories, req, state, ready, result.CallResults)
 		if err != nil {
 			for _, name := range sortedCallResultNames(batchResults) {
 				callResult := batchResults[name]
@@ -194,8 +214,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 			callResult := batchResults[name]
 			result.CallResults[name] = callResult
 			if callResult.Status == types.TurnCompleted {
-				delete(remaining, name)
-				completed[name] = true
+				state.complete(name)
 			}
 			allRecords = append(allRecords, callResult.Records...)
 			if strings.TrimSpace(callResult.Reply) != "" {
@@ -251,7 +270,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		}
 	}
 
-	result.Records = selectTeamRecords(req.Team, result.CallResults, allRecords)
+	result.Records = selectTeamRecords(req.Team, result.CallResults, allRecords, state)
 	result.Reply = strings.Join(allReply, "\n\n")
 	result.Next = resolveNext(req.Team, result.CallResults)
 	result.Turn.Status = types.TurnCompleted
@@ -281,6 +300,7 @@ func (r *Runtime) runBatch(
 	ctx context.Context,
 	memories *memory.Store,
 	req types.TeamTurnRequest,
+	state *runState,
 	ready map[string]types.Call,
 	previous map[string]types.CallResult,
 ) (map[string]types.CallResult, error) {
@@ -294,6 +314,7 @@ func (r *Runtime) runBatch(
 		go func(name string, configured types.Call) {
 			defer wg.Done()
 
+			spec, isSpawned := state.specOf(configured.ID)
 			callReq := types.CallRequest{
 				FlowSession:        req.FlowSession,
 				FlowTurn:           req.FlowTurn,
@@ -302,7 +323,7 @@ func (r *Runtime) runBatch(
 				Call:               configured,
 				Input:              buildCallInput(req.Input, req.Records, previous, configured),
 				ContextBlocks:      append([]types.ContextBlock(nil), req.ContextBlocks...),
-				Records:            selectCallRecords(req.Records, previous, configured),
+				Records:            selectCallRecords(req.Records, previous, configured, state),
 				CallTurnID:         fmt.Sprintf("%s:%s", req.TeamTurn.ID, configured.ID),
 				AgentTurnID:        fmt.Sprintf("%s:%s", req.TeamTurn.ID, configured.ID),
 				Attempt:            req.TeamTurn.Attempt,
@@ -311,6 +332,25 @@ func (r *Runtime) runBatch(
 				ResumeTaskID:       req.ResumeTaskID,
 				WorkspaceRoot:      req.WorkspaceRoot,
 				Limits:             req.Limits,
+			}
+			if isSpawned {
+				// "## Your Item" (design 21 §4.4): a synthetic call receives
+				// its spawn item as the fanout_item block, exactly like an
+				// inline spawned child.
+				itemJSON, marshalErr := json.Marshal(spec.Item)
+				if marshalErr != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = fmt.Errorf("call %q: encode spawn item: %w", name, marshalErr)
+					}
+					results[name] = types.CallResult{Status: types.TurnFailed, Error: marshalErr.Error()}
+					mu.Unlock()
+					return
+				}
+				callReq.ContextBlocks = append([]types.ContextBlock{{
+					Kind: "fanout_item", Text: string(itemJSON), Source: "spawn",
+					Stability: "dynamic", Priority: 85,
+				}}, callReq.ContextBlocks...)
 			}
 			if callReq.Input != "" && !hasContextBlock(callReq.ContextBlocks, "input") {
 				callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
@@ -412,7 +452,30 @@ func (r *Runtime) runBatch(
 					})
 				}
 				callReq.AgentDefinition = &agent
-				if memories != nil && req.Team.Memory.Enabled {
+				if isSpawned {
+					// Entity memory routing (design 20 §5): a synthetic call reads
+					// its entity's persistent memory, not the session-scoped
+					// per-call memory — the same scope inline spawned children
+					// use.
+					if memories != nil {
+						snapshot, memoryErr := memories.LoadEntity(ctx, spec.AgentID, spec.Key)
+						if memoryErr != nil {
+							mu.Lock()
+							if firstErr == nil {
+								firstErr = memoryErr
+							}
+							results[name] = types.CallResult{Status: types.TurnFailed, Error: memoryErr.Error()}
+							mu.Unlock()
+							return
+						}
+						if text := renderMemory(snapshot); text != "" {
+							callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
+								Kind: "entity_memory", Text: text, Source: "entity_memory",
+								Stability: "dynamic", Priority: 60, Compressible: true,
+							})
+						}
+					}
+				} else if memories != nil && req.Team.Memory.Enabled {
 					snapshot, memoryErr := memories.LoadAgent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
 					if memoryErr != nil {
 						mu.Lock()
@@ -432,7 +495,30 @@ func (r *Runtime) runBatch(
 			}
 			callReq.ContextBlocks = buildContextBlocks(callReq)
 
-			if err := r.appendCallStarted(ctx, callReq); err != nil {
+			// Depth and entity serialization (runChild parity): the synthetic
+			// call's own Spawn calls must see the spawn depth, and one entity
+			// never runs two concurrent turns. The TryLock happens before the
+			// started event so a busy entity fails without emitting events,
+			// matching the other pre-execution failure paths.
+			execCtx := ctx
+			unlockEntity := func() {}
+			if isSpawned {
+				execCtx = agentstore.WithSpawnDepth(ctx, spec.Depth)
+				var acquired bool
+				unlockEntity, acquired = state.tryLockEntity(spec.AgentID, spec.Key)
+				if !acquired {
+					busyErr := fmt.Errorf("entity %q is already executing", spec.Key)
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = fmt.Errorf("call %q: %w", name, busyErr)
+					}
+					results[name] = types.CallResult{Status: types.TurnFailed, Error: busyErr.Error()}
+					mu.Unlock()
+					return
+				}
+			}
+			if err := r.appendCallStarted(ctx, callReq, spec); err != nil {
+				unlockEntity()
 				mu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -441,22 +527,36 @@ func (r *Runtime) runBatch(
 				mu.Unlock()
 				return
 			}
-			callResult, err := r.executors.Execute(ctx, callReq)
+			callResult, err := r.executors.Execute(execCtx, callReq)
+			unlockEntity()
 			if callReq.ResumeApproval != nil {
 				decision := *callReq.ResumeApproval
 				callResult.Approval = &decision
 			}
-			if err == nil && callResult.Status == types.TurnCompleted && memories != nil && req.Team.Memory.Enabled {
-				if memoryErr := r.saveAgentMemory(ctx, memories, req, configured, contextBlockText(callReq.ContextBlocks, "agent_memory"), callResult); memoryErr != nil {
-					err = memoryErr
-					callResult.Status = types.TurnFailed
-					callResult.Error = memoryErr.Error()
+			if err == nil && callResult.Status == types.TurnCompleted && memories != nil {
+				if isSpawned {
+					// Entity memory routing: persist to the entity scope with
+					// the same deterministic update inline children apply.
+					if memoryErr := saveEntityMemory(ctx, memories, *spec, contextBlockText(callReq.ContextBlocks, "entity_memory"), callResult); memoryErr != nil {
+						err = memoryErr
+						callResult.Status = types.TurnFailed
+						callResult.Error = memoryErr.Error()
+					}
+				} else if req.Team.Memory.Enabled {
+					if memoryErr := r.saveAgentMemory(ctx, memories, req, configured, contextBlockText(callReq.ContextBlocks, "agent_memory"), callResult); memoryErr != nil {
+						err = memoryErr
+						callResult.Status = types.TurnFailed
+						callResult.Error = memoryErr.Error()
+					}
 				}
 			}
 			if err == nil && callResult.Status == types.TurnCompleted &&
+				!isSpawned &&
 				r.dream != nil && req.Team.Memory.Enabled && len(callResult.Records) > 0 {
 				// Dream maintenance is best effort and never changes the
-				// user-facing call result.
+				// user-facing call result. Synthetic calls are skipped: their
+				// memory lives in the entity scope, not the session-scoped
+				// per-call memory the consolidation worker writes.
 				_ = r.dream.Enqueue(context.Background(), types.ContextConsolidation{
 					FlowSessionID: callReq.FlowSession.ID,
 					TeamID:        callReq.TeamTurn.TeamID,
@@ -475,12 +575,12 @@ func (r *Runtime) runBatch(
 			if callResult.Status == types.TurnWaitingInput ||
 				callResult.Status == types.TurnWaitingTool ||
 				callResult.Status == types.TurnWaitingApproval {
-				if eventErr := r.appendCallWaiting(ctx, callReq, callResult); eventErr != nil && firstErr == nil {
+				if eventErr := r.appendCallWaiting(ctx, callReq, callResult, spec); eventErr != nil && firstErr == nil {
 					firstErr = eventErr
 				}
 				return
 			}
-			if eventErr := r.appendCallCompleted(ctx, callReq, callResult); eventErr != nil && firstErr == nil {
+			if eventErr := r.appendCallCompleted(ctx, callReq, callResult, spec); eventErr != nil && firstErr == nil {
 				firstErr = eventErr
 			}
 		}(name, configured)
@@ -534,7 +634,22 @@ func pendingToolTaskForCall(req types.TeamTurnRequest, callID string, result typ
 	return pending
 }
 
-func (r *Runtime) appendCallStarted(ctx context.Context, req types.CallRequest) error {
+// spawnEventPayload decorates one session event payload with the spawn
+// identity of a synthetic call, mirroring the payload.spawn block the Spawn
+// tool emits for inline children so event consumers see one shape.
+func spawnEventPayload(payload map[string]any, spawn *agentstore.SpawnedCallSpec) map[string]any {
+	if spawn == nil {
+		return payload
+	}
+	payload["spawn"] = map[string]any{
+		"agent":          spawn.AgentID,
+		"key":            spawn.Key,
+		"parent_call_id": spawn.ParentCallID,
+	}
+	return payload
+}
+
+func (r *Runtime) appendCallStarted(ctx context.Context, req types.CallRequest, spawn *agentstore.SpawnedCallSpec) error {
 	if r.sessions == nil {
 		return nil
 	}
@@ -583,15 +698,15 @@ func (r *Runtime) appendCallStarted(ctx context.Context, req types.CallRequest) 
 		CallType:      req.Call.Type,
 		Attempt:       req.Attempt,
 		RecoveryOf:    req.RecoveryOf,
-		Payload: map[string]any{
+		Payload: spawnEventPayload(map[string]any{
 			"call":  req.Call,
 			"input": req.Input,
-		},
+		}, spawn),
 	})
 	return err
 }
 
-func (r *Runtime) appendCallCompleted(ctx context.Context, req types.CallRequest, result types.CallResult) error {
+func (r *Runtime) appendCallCompleted(ctx context.Context, req types.CallRequest, result types.CallResult, spawn *agentstore.SpawnedCallSpec) error {
 	if r.sessions == nil {
 		return nil
 	}
@@ -611,7 +726,7 @@ func (r *Runtime) appendCallCompleted(ctx context.Context, req types.CallRequest
 		CallID:        req.Call.ID,
 		CallTurnID:    req.CallTurnID,
 		CallType:      req.Call.Type,
-		Payload:       map[string]any{"call_result": result},
+		Payload:       spawnEventPayload(map[string]any{"call_result": result}, spawn),
 	}); err != nil {
 		return err
 	}
@@ -637,12 +752,12 @@ func (r *Runtime) appendCallCompleted(ctx context.Context, req types.CallRequest
 	return r.appendAgentSessionUpdated(ctx, req, result.Status)
 }
 
-func (r *Runtime) appendCallWaiting(ctx context.Context, req types.CallRequest, result types.CallResult) error {
+func (r *Runtime) appendCallWaiting(ctx context.Context, req types.CallRequest, result types.CallResult, spawn *agentstore.SpawnedCallSpec) error {
 	if r.sessions == nil {
 		return nil
 	}
 	if req.Call.Type != types.CallAgent {
-		return r.appendCallCompleted(ctx, req, result)
+		return r.appendCallCompleted(ctx, req, result, spawn)
 	}
 	eventType := types.EventAgentTurnWaitingInput
 	if result.Status == types.TurnWaitingTool {
@@ -662,11 +777,11 @@ func (r *Runtime) appendCallWaiting(ctx context.Context, req types.CallRequest, 
 		CallType:      req.Call.Type,
 		Attempt:       req.Attempt,
 		RecoveryOf:    req.RecoveryOf,
-		Payload: map[string]any{
+		Payload: spawnEventPayload(map[string]any{
 			"call_result":   result,
 			"checkpoint_id": result.CheckpointID,
 			"task_id":       result.TaskID,
-		},
+		}, spawn),
 	}); err != nil {
 		return err
 	}
@@ -860,23 +975,6 @@ func appendUnique(values []string, extra ...string) []string {
 	return values
 }
 
-func readyCalls(remaining map[string]types.Call, completed map[string]bool) map[string]types.Call {
-	ready := make(map[string]types.Call)
-	for name, configured := range remaining {
-		ok := true
-		for _, dependency := range configured.DependsOn {
-			if !completed[dependency] {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			ready[name] = configured
-		}
-	}
-	return ready
-}
-
 func limitCalls(calls map[string]types.Call, max int) map[string]types.Call {
 	if max <= 0 || len(calls) <= max {
 		return calls
@@ -972,10 +1070,17 @@ func summarizeCallResults(results map[string]types.CallResult) string {
 	return strings.Join(lines, "\n")
 }
 
+// selectCallRecords resolves one call's record bindings. A binding from B
+// collects the records of B itself plus every member of B's spawn group
+// (design 21 §4.4): synthetic children publish under the parent call's
+// output.record name, and RecordID keeps the child call id so multiple
+// children stay distinct. With an empty group registry the expansion is
+// exactly the legacy single-producer lookup.
 func selectCallRecords(
 	flowRecords []types.SharedRecord,
 	previous map[string]types.CallResult,
 	configured types.Call,
+	groups *runState,
 ) []types.SharedRecord {
 	inputs := configured.Inputs
 	if inputs.FlowRecords == nil &&
@@ -1007,55 +1112,90 @@ func selectCallRecords(
 			}
 			continue
 		}
-		if callResult, ok := previous[binding.From]; ok {
-			for _, record := range callResult.Records {
+		if _, ok := previous[binding.From]; !ok {
+			// A binding from a Flow Team (for example `from: research`) is
+			// already promoted into req.Records by FlowRuntime. It does not
+			// appear in the Team-local previous call map.
+			for _, record := range flowRecords {
 				if binding.Record == "" || record.Name == binding.Record {
 					selected = append(selected, record)
 				}
 			}
 			continue
 		}
-		// A binding from a Flow Team (for example `from: research`) is
-		// already promoted into req.Records by FlowRuntime. It does not
-		// appear in the Team-local previous call map.
-		for _, record := range flowRecords {
-			if binding.Record == "" || record.Name == binding.Record {
-				selected = append(selected, record)
+		for _, producerID := range groups.producersFrom(binding.From) {
+			callResult, ok := previous[producerID]
+			if !ok {
+				continue
+			}
+			for _, record := range callResult.Records {
+				if binding.Record == "" || record.Name == binding.Record {
+					selected = append(selected, record)
+				}
 			}
 		}
 	}
 	return deduplicateRecords(selected)
 }
 
-func selectTeamRecords(team types.Team, results map[string]types.CallResult, all []types.SharedRecord) []types.SharedRecord {
+// selectTeamRecords promotes call results into the Team output. Output
+// bindings from B aggregate B itself plus every member of B's spawn group
+// (design 21 §4.4). With no group members registered, both output forms keep
+// their exact legacy single-producer semantics.
+func selectTeamRecords(team types.Team, results map[string]types.CallResult, all []types.SharedRecord, groups *runState) []types.SharedRecord {
 	output := team.Output
 	if output.IsZero() && !team.Outputs.IsZero() {
 		output = team.Outputs
 	}
 	if len(output.Records) == 0 {
 		if output.From != "" && output.Record != "" {
-			if callResult, ok := results[output.From]; ok {
+			producers := groups.producersFrom(output.From)
+			if len(producers) == 1 {
+				// No group members: keep the exact current single-record
+				// semantics (first matching record of the one producer).
+				if callResult, ok := results[output.From]; ok {
+					for _, record := range callResult.Records {
+						if record.Name == output.Record {
+							applyOutputScope(&record, output.Scope)
+							return []types.SharedRecord{record}
+						}
+					}
+				}
+				return all
+			}
+			var selected []types.SharedRecord
+			for _, producerID := range producers {
+				callResult, ok := results[producerID]
+				if !ok {
+					continue
+				}
 				for _, record := range callResult.Records {
 					if record.Name == output.Record {
 						applyOutputScope(&record, output.Scope)
-						return []types.SharedRecord{record}
+						selected = append(selected, record)
 					}
 				}
 			}
+			if len(selected) > 0 {
+				return selected
+			}
+			return all
 		}
 		return all
 	}
 
 	selected := make([]types.SharedRecord, 0, len(output.Records))
 	for _, binding := range output.Records {
-		callResult, ok := results[binding.From]
-		if !ok {
-			continue
-		}
-		for _, record := range callResult.Records {
-			if record.Name == binding.Record {
-				applyOutputScope(&record, binding.Scope)
-				selected = append(selected, record)
+		for _, producerID := range groups.producersFrom(binding.From) {
+			callResult, ok := results[producerID]
+			if !ok {
+				continue
+			}
+			for _, record := range callResult.Records {
+				if record.Name == binding.Record {
+					applyOutputScope(&record, binding.Scope)
+					selected = append(selected, record)
+				}
 			}
 		}
 	}

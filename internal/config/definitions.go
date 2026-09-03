@@ -88,8 +88,9 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 		Teams:  teams,
 		Agents: agents,
 		Skills: skills,
-		Rules:  rules,
-		Limits: l.LoadRuntimeLimits(),
+		Rules:     rules,
+		Limits:    l.LoadRuntimeLimits(),
+		Knowledge: l.LoadKnowledgeSettings(),
 	}, nil
 }
 

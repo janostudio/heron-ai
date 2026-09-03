@@ -8,6 +8,17 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
+// KnowledgeUsageInstruction 教模型如何对待注入的知识内容。
+const KnowledgeUsageInstruction = `## Knowledge Usage
+When background knowledge is injected into your context:
+- Treat injected knowledge as guidance, not fact. Current Workspace files and
+  Session records always take precedence over knowledge.
+- Weigh each entry by its confidence and basis. Lower-confidence or stale
+  knowledge must not override what you can verify directly.
+- Cross-reference multiple entries when they overlap; note when information is
+  uncertain or conflicting.
+- Use knowledge to avoid re-deriving known constraints, not to skip verification.`
+
 // KnowledgeInjector injects knowledge into agent context
 type KnowledgeInjector struct {
 	index *KnowledgeIndex
@@ -66,6 +77,7 @@ func (i *KnowledgeInjector) InjectAll(ctx context.Context, agentName string, tea
 func (i *KnowledgeInjector) formatEntries(entries []types.KnowledgeEntry) string {
 	var parts []string
 	parts = append(parts, "## Knowledge Context\n")
+	parts = append(parts, KnowledgeUsageInstruction)
 
 	for _, entry := range entries {
 		parts = append(parts, fmt.Sprintf("- %s", entry.Content))
