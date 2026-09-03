@@ -690,13 +690,13 @@ func responseFormat(schema *types.StructuredOutput) map[string]any {
 			}
 			for key, item := range property {
 				if key != "required" {
-					clean[key] = item
+					clean[key] = normalizeJSONValue(item)
 				}
 			}
 			properties[name] = clean
 			continue
 		}
-		properties[name] = value
+		properties[name] = normalizeJSONValue(value)
 	}
 	raw := map[string]any{
 		"type": "json_schema",
@@ -712,6 +712,41 @@ func responseFormat(schema *types.StructuredOutput) map[string]any {
 		},
 	}
 	return raw
+}
+
+// normalizeJSONValue deep-converts values decoded from YAML frontmatter into
+// types encoding/json can serialize. adrg/frontmatter parses YAML with
+// gopkg.in/yaml.v2, which decodes nested mappings as map[interface{}]interface{}
+// (non-string keys) rather than map[string]any. Those maps make json.Marshal
+// fail with "unsupported type: map[interface {}]interface {}", so they must be
+// recursively rewritten before entering the request body.
+func normalizeJSONValue(v any) any {
+	switch x := v.(type) {
+	case map[interface{}]interface{}:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			key, ok := k.(string)
+			if !ok {
+				key = fmt.Sprint(k)
+			}
+			out[key] = normalizeJSONValue(val)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			out[k] = normalizeJSONValue(val)
+		}
+		return out
+	case []interface{}:
+		out := make([]any, len(x))
+		for i, val := range x {
+			out[i] = normalizeJSONValue(val)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func generationAllowed(explicit bool, value any, capability *bool) bool {

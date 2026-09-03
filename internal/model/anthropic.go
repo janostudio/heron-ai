@@ -363,10 +363,12 @@ func (p *AnthropicProvider) convertMessages(ctx context.Context, messages []type
 				blocks = append([]anthropicBlock{{Type: "text", Text: msg.Content}}, blocks...)
 			}
 			if len(blocks) == 0 {
-				result = append(result, anthropicMessage{Role: "user", Content: msg.Content})
-			} else {
-				result = append(result, anthropicMessage{Role: "user", Content: blocks})
+				// An empty user message (no content and no parts) would produce
+				// an empty content string, which the Anthropic Messages API
+				// rejects with a 400. Skip it rather than emit an invalid entry.
+				continue
 			}
+			result = append(result, anthropicMessage{Role: "user", Content: blocks})
 		}
 	}
 	return strings.Join(system, "\n\n"), mergeAnthropicMessages(result), nil
@@ -537,13 +539,13 @@ func anthropicStructuredFormat(schema *types.StructuredOutput) *anthropicOutputF
 			}
 			for key, item := range property {
 				if key != "required" {
-					clean[key] = item
+					clean[key] = normalizeJSONValue(item)
 				}
 			}
 			properties[name] = clean
 			continue
 		}
-		properties[name] = value
+		properties[name] = normalizeJSONValue(value)
 	}
 	return &anthropicOutputFormat{
 		Type: "json_schema",
