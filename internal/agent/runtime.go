@@ -593,12 +593,17 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				}); addErr != nil {
 					return nil, addErr
 				}
+				truncatedMsg := "The previous JSON response was truncated. Return one complete JSON object only, with every required field, and no explanation or Markdown."
 				if addErr := contextManager.AddMessage(types.Message{
 					Role:    "user",
-					Content: "The previous JSON response was truncated. Return one complete JSON object only, with every required field, and no explanation or Markdown.",
+					Content: truncatedMsg,
 				}); addErr != nil {
 					return nil, addErr
 				}
+				t.emitAgentEvent(ctx, req, round, types.EventAgentFeedback, map[string]any{
+					"round":   round,
+					"content": truncatedMsg,
+				})
 				lastText = resp.Text
 				continue
 			}
@@ -650,12 +655,17 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 						}); addErr != nil {
 							return nil, addErr
 						}
+						invalidMsg := "The previous response was not valid JSON for the required schema. Return one complete JSON object only; do not explain, use Markdown, or omit required fields."
 						if addErr := contextManager.AddMessage(types.Message{
 							Role:    "user",
-							Content: "The previous response was not valid JSON for the required schema. Return one complete JSON object only; do not explain, use Markdown, or omit required fields.",
+							Content: invalidMsg,
 						}); addErr != nil {
 							return nil, addErr
 						}
+						t.emitAgentEvent(ctx, req, round, types.EventAgentFeedback, map[string]any{
+							"round":   round,
+							"content": invalidMsg,
+						})
 						lastText = resp.Text
 						continue
 					}
