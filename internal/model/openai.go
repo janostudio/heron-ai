@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -324,6 +325,10 @@ func (p *OpenAIProvider) post(ctx context.Context, effective types.ModelConfig, 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
 		if isTimeoutError(err) {
+			logging.Warn("model request timeout", map[string]any{
+				"model": req.Model,
+				"error": err.Error(),
+			})
 			return types.NewProviderTimeoutError(err)
 		}
 		return types.NewProviderNetworkError(err)
@@ -332,6 +337,10 @@ func (p *OpenAIProvider) post(ctx context.Context, effective types.ModelConfig, 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		if isTimeoutError(err) {
+			logging.Warn("model response read timeout", map[string]any{
+				"model": req.Model,
+				"error": err.Error(),
+			})
 			return types.NewProviderTimeoutError(err)
 		}
 		return types.NewProviderNetworkError(err)

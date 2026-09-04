@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -566,6 +567,11 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	activationRetries := make(map[string]int)
 	allRecords, err := r.loadHistoricalFlowRecords(ctx, session.ID)
 	if err != nil {
+		logging.Error("load historical flow records", map[string]any{
+			"flow_session_id": session.ID,
+			"flow_turn_id":    turn.ID,
+			"error":           err.Error(),
+		})
 		return r.finishTurn(ctx, result, types.SessionFailed, err)
 	}
 	teamTurns := 0
@@ -587,10 +593,22 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 			if len(queue) == 0 {
 				break
 			}
-			return r.finishTurn(ctx, result, types.SessionFailed, errors.New("flow activation graph cannot make progress"))
+			progressErr := errors.New("flow activation graph cannot make progress")
+			logging.Error("flow activation graph cannot make progress", map[string]any{
+				"flow_session_id": session.ID,
+				"flow_turn_id":    turn.ID,
+				"error":           progressErr.Error(),
+			})
+			return r.finishTurn(ctx, result, types.SessionFailed, progressErr)
 		}
 		if teamTurns+len(ready) > r.limits.MaxTeamTurns {
-			return r.finishTurn(ctx, result, types.SessionFailed, fmt.Errorf("flow turn exceeded max team turns: %d", r.limits.MaxTeamTurns))
+			limitErr := fmt.Errorf("flow turn exceeded max team turns: %d", r.limits.MaxTeamTurns)
+			logging.Error("flow turn exceeded max team turns", map[string]any{
+				"flow_session_id": session.ID,
+				"flow_turn_id":    turn.ID,
+				"error":           limitErr.Error(),
+			})
+			return r.finishTurn(ctx, result, types.SessionFailed, limitErr)
 		}
 		teamTurns += len(ready)
 
@@ -623,6 +641,11 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		}
 		wg.Wait()
 		if firstErr != nil {
+			logging.Error("team turn execution failed", map[string]any{
+				"flow_session_id": session.ID,
+				"flow_turn_id":    turn.ID,
+				"error":           firstErr.Error(),
+			})
 			return r.finishTurn(ctx, result, types.SessionFailed, firstErr)
 		}
 
@@ -768,6 +791,11 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 			}
 		}
 		if routeFailure != nil {
+			logging.Error("flow route failure", map[string]any{
+				"flow_session_id": session.ID,
+				"flow_turn_id":    turn.ID,
+				"error":           routeFailure.Error(),
+			})
 			return r.finishTurn(ctx, result, types.SessionFailed, routeFailure)
 		}
 		result.Turn.Next = resolvedRoute
@@ -968,6 +996,13 @@ func (r *Runtime) executeTeamTurn(
 		ResumeCalls:        current.resumeCalls,
 	})
 	if runErr != nil {
+		logging.Error("team run failed", map[string]any{
+			"flow_session_id": session.ID,
+			"flow_turn_id":    flowTurn.ID,
+			"team_id":         current.teamID,
+			"team_turn_id":    teamTurn.ID,
+			"error":           runErr.Error(),
+		})
 		teamResult.Error = runErr.Error()
 		teamResult.Turn.Status = types.TurnFailed
 	}
@@ -1203,6 +1238,13 @@ func (r *Runtime) finishTurn(
 	result.Turn.FinishedAt = &now
 	if runErr != nil {
 		result.Error = runErr.Error()
+	}
+	if status == types.SessionFailed {
+		logging.Error("flow turn failed", map[string]any{
+			"flow_session_id": result.Session.ID,
+			"flow_turn_id":    result.Turn.ID,
+			"error":           result.Error,
+		})
 	}
 	eventType := types.EventFlowTurnCompleted
 	switch status {

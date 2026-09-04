@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -117,6 +118,10 @@ func (r *ProviderRouter) ChatStream(ctx context.Context, messages []types.Messag
 	if lastErr == nil {
 		return nil, fmt.Errorf("no model available")
 	}
+	logging.Error("all fallback models exhausted", map[string]any{
+		"model": strings.TrimSpace(config.Model),
+		"error": lastErr.Error(),
+	})
 	return nil, fmt.Errorf("all fallback models exhausted: %w", lastErr)
 }
 
@@ -154,6 +159,10 @@ func (r *ProviderRouter) chatWithFallback(ctx context.Context, messages []types.
 	if lastErr == nil {
 		return nil, fmt.Errorf("no model available")
 	}
+	logging.Error("all fallback models exhausted", map[string]any{
+		"model": strings.TrimSpace(config.Model),
+		"error": lastErr.Error(),
+	})
 	return nil, fmt.Errorf("all fallback models exhausted: %w", lastErr)
 }
 

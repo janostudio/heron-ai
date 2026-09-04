@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -84,11 +85,25 @@ func (e *WebhookExecutor) Execute(ctx context.Context, req types.CallRequest) (t
 
 	resp, err := e.client.Do(httpReq)
 	if err != nil {
+		logging.Error("webhook request failed", map[string]any{
+			"flow_session_id": req.FlowSession.ID,
+			"team_id":         req.TeamTurn.TeamID,
+			"call_id":         req.Call.ID,
+			"url":             req.Call.Webhook.URL,
+			"error":           err.Error(),
+		})
 		return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	responseBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
+		logging.Error("webhook response read failed", map[string]any{
+			"flow_session_id": req.FlowSession.ID,
+			"team_id":         req.TeamTurn.TeamID,
+			"call_id":         req.Call.ID,
+			"url":             req.Call.Webhook.URL,
+			"error":           readErr.Error(),
+		})
 		return types.CallResult{Status: types.TurnFailed, Error: readErr.Error()}, readErr
 	}
 

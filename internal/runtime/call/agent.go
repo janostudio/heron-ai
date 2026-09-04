@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/agentstore"
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -73,9 +74,23 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		MaxParallelTools:   req.Limits.WithDefaults().MaxParallelTools,
 	})
 	if err != nil {
+		logging.Error("agent executor failed", map[string]any{
+			"flow_session_id": req.FlowSession.ID,
+			"team_id":         req.TeamTurn.TeamID,
+			"call_id":         req.Call.ID,
+			"agent_id":        req.Call.AgentID,
+			"error":           err.Error(),
+		})
 		return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
 	}
 	if result == nil {
+		logging.Error("agent runner returned nil result", map[string]any{
+			"flow_session_id": req.FlowSession.ID,
+			"team_id":         req.TeamTurn.TeamID,
+			"call_id":         req.Call.ID,
+			"agent_id":        req.Call.AgentID,
+			"error":           fmt.Sprintf("agent %q returned nil result", req.Call.ID),
+		})
 		return types.CallResult{Status: types.TurnFailed, Error: "agent runner returned nil result"}, fmt.Errorf("agent %q returned nil result", req.Call.ID)
 	}
 

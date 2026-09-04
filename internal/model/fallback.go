@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -45,6 +46,13 @@ func logFallback(ctx context.Context, from string, pe *types.ProviderError, to s
 		"kind", string(pe.Kind),
 		"status_code", pe.StatusCode,
 	)
+	logging.Warn("model fallback triggered", map[string]any{
+		"from_model":  from,
+		"to_model":    to,
+		"kind":        string(pe.Kind),
+		"status_code": pe.StatusCode,
+		"error":       pe.Error(),
+	})
 }
 
 // nextModel returns the model that follows from in chain, or "" when from is

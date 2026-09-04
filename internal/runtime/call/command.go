@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/workspace"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -75,6 +76,12 @@ func (e *CommandExecutor) Execute(ctx context.Context, req types.CallRequest) (t
 		WorkspaceOps: []types.WorkspaceOperation{execution.Operation},
 	}
 	if err != nil {
+		logging.Error("command execution failed", map[string]any{
+			"flow_session_id": req.FlowSession.ID,
+			"team_id":         req.TeamTurn.TeamID,
+			"call_id":         req.Call.ID,
+			"error":           err.Error(),
+		})
 		result.Status = types.TurnFailed
 		result.Error = err.Error()
 	}
