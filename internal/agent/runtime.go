@@ -1327,11 +1327,10 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 			results[parallelIndexes[i]] = result
 			t.emitToolEndHook(ctx, agent, req, round, parallelCalls[i], result)
 			if result != nil && result.Success {
-				t.emitAgentEvent(ctx, req, round, types.EventToolCallCompleted, map[string]any{
-					"round":     round,
-					"tool_name": parallelCalls[i].Name,
-					"content":   toolResultContent(result),
-				})
+				fields := toolResultEventFields(result)
+				fields["round"] = round
+				fields["tool_name"] = parallelCalls[i].Name
+				t.emitAgentEvent(ctx, req, round, types.EventToolCallCompleted, fields)
 			} else {
 				errMsg := "tool returned nil result"
 				if result != nil {
@@ -1383,11 +1382,10 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 			result = &types.ToolResult{Success: false, Error: "tool returned nil result"}
 		}
 		if result.Success {
-			t.emitAgentEvent(ctx, req, round, types.EventToolCallCompleted, map[string]any{
-				"round":     round,
-				"tool_name": call.Name,
-				"content":   toolResultContent(result),
-			})
+			fields := toolResultEventFields(result)
+			fields["round"] = round
+			fields["tool_name"] = call.Name
+			t.emitAgentEvent(ctx, req, round, types.EventToolCallCompleted, fields)
 		} else {
 			t.emitAgentEvent(ctx, req, round, types.EventToolCallFailed, map[string]any{
 				"round":     round,
@@ -1537,6 +1535,20 @@ func toolResultContent(result *types.ToolResult) string {
 		return result.Error
 	}
 	return ""
+}
+
+// toolResultEventFields builds the payload for a tool_call.completed event.
+// Unlike toolResultContent (which flattens Metadata into the content string for
+// the model), it exposes Metadata keys as top-level fields so analysis tools
+// can query them structurally (e.g. jq '.exit_code', '.stdout', '.file').
+func toolResultEventFields(result *types.ToolResult) map[string]any {
+	fields := map[string]any{
+		"content": result.Content,
+	}
+	for key, value := range result.Metadata {
+		fields[key] = value
+	}
+	return fields
 }
 
 func parallelToolsEnabled(agent types.AgentConfig) bool {

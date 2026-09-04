@@ -145,3 +145,34 @@ func TestReplayAgentContextFeedback(t *testing.T) {
 	assert.Equal(t, "user", got[1].Role)
 	assert.Equal(t, "## Completion Feedback\nredo", got[1].Content)
 }
+
+func TestToolResultEventFieldsExposesMetadata(t *testing.T) {
+	result := &types.ToolResult{
+		Content: "command output",
+		Metadata: map[string]any{
+			"exit_code": 0,
+			"stdout":    "out",
+			"stderr":    "err",
+			"truncated": false,
+		},
+	}
+
+	fields := toolResultEventFields(result)
+
+	// content stays plain text (no flattened Metadata string).
+	assert.Equal(t, "command output", fields["content"])
+	// Metadata keys are promoted to top-level fields.
+	assert.Equal(t, 0, fields["exit_code"])
+	assert.Equal(t, "out", fields["stdout"])
+	assert.Equal(t, "err", fields["stderr"])
+	assert.Equal(t, false, fields["truncated"])
+}
+
+func TestToolResultEventFieldsEmptyMetadata(t *testing.T) {
+	result := &types.ToolResult{Content: "plain"}
+
+	fields := toolResultEventFields(result)
+
+	assert.Equal(t, "plain", fields["content"])
+	assert.Len(t, fields, 1) // only content, no metadata keys
+}
