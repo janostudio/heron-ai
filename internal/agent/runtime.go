@@ -133,9 +133,7 @@ func (t *TurnLoop) emitAgentEvent(ctx context.Context, req types.AgentRequest, r
 			Attempt:       req.Attempt,
 			RecoveryOf:    req.RecoveryOf,
 		},
-		AgentTurnID: req.AgentTurnID,
-		Round:       round,
-		Payload:     payload,
+		Payload: payload,
 	}
 	_, _ = t.sessionWriter.Append(ctx, req.FlowSessionID, storage.LayerAgent, event)
 }

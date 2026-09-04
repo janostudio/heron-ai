@@ -36,16 +36,13 @@ func layerFile(layer EventLayer) string {
 	}
 }
 
-// SessionEvent is the on-disk session event envelope. It is the union of the
-// three layer event types (types.FlowEvent / types.TeamEvent / types.AgentEvent):
-// the common types.EventHeader plus the agent-specific AgentTurnID/Round and the
-// business Payload. A single type keeps Replay/Subscribe able to merge the three
-// per-layer files into one globally-ordered timeline.
+// SessionEvent is the on-disk session event envelope: the common
+// types.EventHeader plus the business Payload. A single type keeps
+// Replay/Subscribe able to merge the three per-layer files into one
+// globally-ordered timeline.
 type SessionEvent struct {
 	types.EventHeader
-	AgentTurnID string         `json:"agent_turn_id,omitempty"`
-	Round       int            `json:"round,omitempty"`
-	Payload     map[string]any `json:"payload,omitempty"`
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 // SessionReplay is the ordered event view reconstructed from the three layer

@@ -176,3 +176,142 @@ func TestToolResultEventFieldsEmptyMetadata(t *testing.T) {
 	assert.Equal(t, "plain", fields["content"])
 	assert.Len(t, fields, 1) // only content, no metadata keys
 }
+
+// capturingModelProvider records the messages each Chat call receives so tests
+// can assert that replay restored prior context.
+type capturingModelProvider struct {
+	captured [][]types.Message
+}
+
+func (m *capturingModelProvider) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
+	m.captured = append(m.captured, cloneMessages(messages))
+	return &types.ChatResponse{Text: "answer", Usage: types.TokenUsage{TotalTokens: 1}}, nil
+}
+
+func (m *capturingModelProvider) ChatStream(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (<-chan types.ChatChunk, error) {
+	return nil, nil
+}
+
+// TestRunReplaysPriorContext verifies the end-to-end path: when a session has
+// prior agent.jsonl events for the same call, Run replays them into the model
+// context instead of starting from a blank transcript.
+func TestRunReplaysPriorContext(t *testing.T) {
+	w := &fakeSessionWriter{}
+
+	// Simulate a prior turn: one assistant model response recorded in agent.jsonl.
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1"},
+		Payload:     map[string]any{"text": "prior answer"},
+	})
+
+	model := &capturingModelProvider{}
+	loop := NewTurnLoop(
+		model,
+		&mockToolExecutor{},
+		nil,
+		NewRouteParser(),
+		nil,
+		nil,
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
+	)
+	loop.SetSessionWriter(w)
+
+	_, err := loop.Run(context.Background(), types.AgentConfig{
+		Name: "test-agent",
+		Loop: types.LoopConfig{MaxRounds: 1},
+	}, types.AgentRequest{
+		FlowSessionID: "fs-1",
+		CallID:        "call-1",
+		AgentID:       "assistant",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, model.captured, "expected at least one Chat call")
+
+	messages := model.captured[0]
+	// The replay should have appended the prior assistant message after the
+	// freshly rendered prompt.
+	found := false
+	for _, msg := range messages {
+		if msg.Role == "assistant" && msg.Content == "prior answer" {
+			found = true
+		}
+	}
+	assert.True(t, found, "prior assistant message should be replayed into context, got: %+v", messages)
+}
+
+// toolCallModel returns one assistant message with a tool call, then a final
+// answer, so the Run loop exercises tool execution.
+type toolCallModel struct {
+	calls int
+}
+
+func (m *toolCallModel) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
+	m.calls++
+	if m.calls == 1 {
+		return &types.ChatResponse{
+			Text:      "calling tool",
+			ToolCalls: []types.ToolCall{{ID: "t1", Name: "Bash", Arguments: map[string]any{"command": "ls"}}},
+			Usage:     types.TokenUsage{TotalTokens: 1},
+		}, nil
+	}
+	return &types.ChatResponse{Text: "done", Usage: types.TokenUsage{TotalTokens: 1}}, nil
+}
+
+func (m *toolCallModel) ChatStream(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (<-chan types.ChatChunk, error) {
+	return nil, nil
+}
+
+// metadataToolExecutor returns a tool result with Metadata so tests can assert
+// tool_call.completed events expose metadata as top-level fields.
+type metadataToolExecutor struct{}
+
+func (m *metadataToolExecutor) Execute(ctx context.Context, name string, args map[string]any) (*types.ToolResult, error) {
+	return &types.ToolResult{
+		Success: true,
+		Content: "ls output",
+		Metadata: map[string]any{
+			"exit_code": 0,
+			"stdout":    "ls output",
+			"stderr":    "",
+		},
+	}, nil
+}
+
+// TestToolCallEventExposesMetadataEndToEnd verifies the emitted
+// tool_call.completed event carries metadata (exit_code etc.) as top-level
+// fields rather than flattened into the content string.
+func TestToolCallEventExposesMetadataEndToEnd(t *testing.T) {
+	w := &fakeSessionWriter{}
+	loop := NewTurnLoop(
+		&toolCallModel{},
+		&metadataToolExecutor{},
+		nil,
+		NewRouteParser(),
+		nil,
+		nil,
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "run ls"}}},
+	)
+	loop.SetSessionWriter(w)
+
+	_, err := loop.Run(context.Background(), types.AgentConfig{
+		Name:  "test-agent",
+		Tools: types.ToolConfig{Builtin: []string{"Bash"}},
+		Loop:  types.LoopConfig{MaxRounds: 2},
+	}, types.AgentRequest{
+		FlowSessionID: "fs-1",
+		CallID:        "call-1",
+		AgentID:       "assistant",
+	})
+	require.NoError(t, err)
+
+	var completed *storage.SessionEvent
+	for _, event := range w.recorded() {
+		if event.Type == types.EventToolCallCompleted {
+			completed = &event
+		}
+	}
+	require.NotNil(t, completed, "expected a tool_call.completed event")
+	assert.Equal(t, 0, completed.Payload["exit_code"])
+	assert.Equal(t, "ls output", completed.Payload["stdout"])
+	assert.Equal(t, "ls output", completed.Payload["content"])
+}

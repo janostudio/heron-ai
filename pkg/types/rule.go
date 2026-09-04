@@ -8,6 +8,6 @@ type RuleItem struct {
 	Scope    Scope  `yaml:"scope" json:"scope"`
 	Priority int    `yaml:"priority,omitempty" json:"priority,omitempty"`
 
-	Path  string   `yaml:"-" json:"-"`                                // 源文件相对路径，供延迟读取
+	Path  string   `yaml:"-" json:"-"`                             // 源文件相对路径，供延迟读取
 	Paths []string `yaml:"paths,omitempty" json:"paths,omitempty"` // 条件触发 glob；空=常驻
 }
