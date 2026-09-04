@@ -110,10 +110,10 @@ func TestKindForMIME(t *testing.T) {
 
 func TestValidateDeclaredKind(t *testing.T) {
 	tests := []struct {
-		name     string
-		kind     string
-		mime     string
-		wantErr  bool
+		name    string
+		kind    string
+		mime    string
+		wantErr bool
 	}{
 		{"empty kind ok", "", "image/png", false},
 		{"file kind always ok", "file", "image/png", false},

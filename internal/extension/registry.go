@@ -15,7 +15,7 @@ type ExtensionInfo struct {
 type Capability string
 
 const (
-	CapabilityMemory        Capability = "memory"
+	CapabilityState         Capability = "state"
 	CapabilityKnowledge     Capability = "knowledge"
 	CapabilityObservability Capability = "observability"
 	CapabilityLearning      Capability = "learning"

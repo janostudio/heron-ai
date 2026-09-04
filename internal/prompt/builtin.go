@@ -13,7 +13,7 @@ import (
 var BuiltinTemplates = map[string]string{
 	"execution-management":  executionManagementTemplate,
 	"tool-usage":            toolUsageTemplate,
-	"memory-management":     memoryManagementTemplate,
+	"state-management":      stateManagementTemplate,
 	"knowledge-query":       knowledgeQueryTemplate,
 	"perspective-isolation": perspectiveIsolationTemplate,
 	"output-format":         outputFormatTemplate,
@@ -48,7 +48,7 @@ func NewPromptRenderer(templates map[string]string) *PromptRenderer {
 }
 
 // RenderContext holds optional runtime context for prompt rendering. The
-// renderer does not fetch memory, knowledge, or records itself; those are
+// renderer does not fetch state, knowledge, or records itself; those are
 // injected by the runtime so the prompt layer stays deterministic.
 type RenderContext struct {
 	Variables     map[string]string
@@ -104,10 +104,10 @@ func (p *PromptRenderer) BuildSystemPrompt(agent types.AgentConfig, rctx RenderC
 		parts = append(parts, GetTemplate("tool-usage"))
 	}
 
-	// Memory management instructions are stable Agent policy. The actual
-	// Team/Agent Memory snapshots are dynamic and belong in the user context
+	// State management instructions are stable Agent policy. The actual
+	// Team/Agent State snapshots are dynamic and belong in the user context
 	// below, not in the cacheable system prefix.
-	parts = append(parts, GetTemplate("memory-management"))
+	parts = append(parts, GetTemplate("state-management"))
 
 	// Execution management is also stable Agent policy. Keep it in the
 	// system prefix rather than appending it after dynamic user context so
@@ -205,12 +205,12 @@ func renderContextBlock(block types.ContextBlock) string {
 		return block.Text
 	case "input":
 		return "## Input\n" + block.Text
-	case "team_memory":
-		return "## Team Memory\n" + block.Text
-	case "agent_memory":
-		return "## Agent Memory\n" + block.Text
-	case "entity_memory":
-		return "## Entity Memory\n" + block.Text
+	case "team_state":
+		return "## Team State\n" + block.Text
+	case "agent_state":
+		return "## Agent State\n" + block.Text
+	case "entity_state":
+		return "## Entity State\n" + block.Text
 	case "fanout_item":
 		return "## Your Item\n" + block.Text
 	case "records":
@@ -263,13 +263,13 @@ Tools are your only way to observe and change the outside world. Treat them as a
 - If a tool errors, read the error and adapt. Do not repeat the identical call.
 - Every tool call consumes part of your turn budget. Batch independent reads; avoid redundant or speculative calls.`
 
-const memoryManagementTemplate = `## Memory Management
-You maintain durable memory across turns. Use it to stay consistent and avoid re-deriving what you already learned.
+const stateManagementTemplate = `## State Management
+You maintain durable state across turns. Use it to stay consistent and avoid re-deriving what you already learned.
 
 - Record decisions together with their rationale, not just the conclusion.
 - Record concrete findings (identifiers, values, facts), not vague impressions.
-- Update memory when new information changes or supersedes a prior entry.
-- Before redoing work, check whether memory already contains the answer.`
+- Update state when new information changes or supersedes a prior entry.
+- Before redoing work, check whether state already contains the answer.`
 
 const knowledgeQueryTemplate = `## Knowledge Usage
 When background knowledge is injected into your context:

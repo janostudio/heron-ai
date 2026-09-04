@@ -62,7 +62,7 @@ const (
 type InputSpec struct {
 	UserMessage     bool           `yaml:"user_message,omitempty" json:"user_message,omitempty"`
 	TeamUserMessage bool           `yaml:"team_user_message,omitempty" json:"team_user_message,omitempty"`
-	TeamMemory      string         `yaml:"team_memory,omitempty" json:"team_memory,omitempty"`
+	TeamState       string         `yaml:"team_state,omitempty" json:"team_state,omitempty"`
 	FlowRecords     []string       `yaml:"flow_records,omitempty" json:"flow_records,omitempty"`
 	TeamRecords     []string       `yaml:"team_records,omitempty" json:"team_records,omitempty"`
 	Records         []InputBinding `yaml:"records,omitempty" json:"records,omitempty"`
@@ -98,7 +98,7 @@ type InputBinding struct {
 	As              string     `yaml:"as,omitempty" json:"as,omitempty"`
 	UserMessage     bool       `yaml:"user_message,omitempty" json:"user_message,omitempty"`
 	TeamUserMessage bool       `yaml:"team_user_message,omitempty" json:"team_user_message,omitempty"`
-	TeamMemory      string     `yaml:"team_memory,omitempty" json:"team_memory,omitempty"`
+	TeamState       string     `yaml:"team_state,omitempty" json:"team_state,omitempty"`
 	View            RecordView `yaml:"view,omitempty" json:"view,omitempty"`
 }
 

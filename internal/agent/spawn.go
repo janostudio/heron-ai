@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/heron-ai/heron-engine/internal/agentstore"
-	"github.com/heron-ai/heron-engine/internal/memory"
+	"github.com/heron-ai/heron-engine/internal/state"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -77,7 +77,7 @@ type SpawnTool struct {
 	runner      AgentRunner
 	agents      map[string]types.AgentConfig
 	registry    *agentstore.Registry
-	memories    *memory.Store
+	states      *state.Store
 	tasks       *AsyncToolExecutor
 	sessions    storage.SessionWriter
 	entityLocks *agentstore.EntityLocks
@@ -109,20 +109,20 @@ func WithSpawnMaxDepth(max int) SpawnOption {
 
 // NewSpawnTool creates the Spawn tool. runner is the Agent execution path used
 // for child turns (typically the same TurnLoop that executes the parent);
-// agents resolves agent definitions by id; registry and memories persist
-// dynamic entities and their memory.
+// agents resolves agent definitions by id; registry and states persist
+// dynamic entities and their state.
 func NewSpawnTool(
 	runner AgentRunner,
 	agents map[string]types.AgentConfig,
 	registry *agentstore.Registry,
-	memories *memory.Store,
+	states *state.Store,
 	options ...SpawnOption,
 ) *SpawnTool {
 	spawn := &SpawnTool{
 		runner:      runner,
 		agents:      agents,
 		registry:    registry,
-		memories:    memories,
+		states:      states,
 		entityLocks: agentstore.NewEntityLocks(),
 		maxChildren: defaultSpawnMaxChildren,
 		maxDepth:    defaultSpawnMaxDepth,
@@ -162,7 +162,7 @@ func (t *SpawnTool) Description() string {
 	return "Spawn dynamic agent entities and execute them. wait=true blocks until children finish; " +
 		"wait=false returns handles immediately — deliver=parent children are collected later with Collect, " +
 		"deliver=downstream children join your call's Team group and publish records for downstream calls. " +
-		"Each item is delivered to its child as ## Your Item; entities keep persistent memory keyed by `key`."
+		"Each item is delivered to its child as ## Your Item; entities keep persistent state keyed by `key`."
 }
 
 func (t *SpawnTool) NeedsApproval() bool { return false }
@@ -196,7 +196,7 @@ func (t *SpawnTool) Parameters() map[string]any {
 		},
 		"key": map[string]any{
 			"type":        "string",
-			"description": "Entity key to reuse an existing entity (with its memory); only valid with a single item",
+			"description": "Entity key to reuse an existing entity (with its state); only valid with a single item",
 		},
 	}
 }
@@ -412,7 +412,7 @@ func spawnOutcomeEntry(outcome *spawnOutcome, includeReply bool) map[string]any 
 }
 
 // runChild ensures the entity exists, executes one child AgentTurn inline,
-// and persists the entity memory afterwards. The child context carries the
+// and persists the entity state afterwards. The child context carries the
 // spawn depth (and inherits the record collector) for nested spawning. Child
 // turns emit agent-level session events so their consumption lands in the
 // same session.jsonl fact source as ordinary agent turns.
@@ -457,16 +457,16 @@ func (t *SpawnTool) runChild(
 		Priority:  85,
 	}}
 
-	snapshot, err := t.memories.LoadEntity(childCtx, agentID, entity.Key)
+	snapshot, err := t.states.LoadEntity(childCtx, agentID, entity.Key)
 	if err != nil {
 		return &spawnOutcome{Key: entity.Key, Error: err.Error()}
 	}
-	memoryText := renderEntityMemory(snapshot)
-	if memoryText != "" {
+	stateText := renderEntityState(snapshot)
+	if stateText != "" {
 		blocks = append(blocks, types.ContextBlock{
-			Kind:         "entity_memory",
-			Text:         memoryText,
-			Source:       "entity_memory",
+			Kind:         "entity_state",
+			Text:         stateText,
+			Source:       "entity_state",
 			Stability:    "dynamic",
 			Priority:     60,
 			Compressible: true,
@@ -514,8 +514,8 @@ func (t *SpawnTool) runChild(
 		outcome.Error = fmt.Sprintf("child ended with status %s", result.Status)
 		return outcome
 	}
-	if err := t.saveEntityMemory(childCtx, agentID, entity.Key, string(itemJSON), memoryText, result); err != nil {
-		outcome.Error = fmt.Sprintf("save entity memory: %v", err)
+	if err := t.saveEntityState(childCtx, agentID, entity.Key, string(itemJSON), stateText, result); err != nil {
+		outcome.Error = fmt.Sprintf("save entity state: %v", err)
 	}
 	return outcome
 }
@@ -585,15 +585,15 @@ func (t *SpawnTool) emitChildEvent(
 	_, _ = t.sessions.Append(ctx, parent.FlowSessionID, event)
 }
 
-// saveEntityMemory applies the same deterministic update the Team runtime
-// uses for per-call agent memory: first outcome is confirmed, later replies
+// saveEntityState applies the same deterministic update the Team runtime
+// uses for per-call agent state: first outcome is confirmed, later replies
 // become next steps, workspace refs are tracked.
-func (t *SpawnTool) saveEntityMemory(
+func (t *SpawnTool) saveEntityState(
 	ctx context.Context,
-	agentID, key, itemJSON, previousMemoryText string,
+	agentID, key, itemJSON, previousStateText string,
 	result *types.AgentResult,
 ) error {
-	snapshot, err := t.memories.LoadEntity(ctx, agentID, key)
+	snapshot, err := t.states.LoadEntity(ctx, agentID, key)
 	if err != nil {
 		return err
 	}
@@ -602,7 +602,7 @@ func (t *SpawnTool) saveEntityMemory(
 	}
 	reply := strings.TrimSpace(result.Reply)
 	if reply != "" {
-		if strings.TrimSpace(previousMemoryText) == "" {
+		if strings.TrimSpace(previousStateText) == "" {
 			snapshot.Confirmed = append(snapshot.Confirmed, reply)
 		} else {
 			snapshot.NextSteps = append(snapshot.NextSteps, reply)
@@ -612,12 +612,12 @@ func (t *SpawnTool) saveEntityMemory(
 		if operation.Path == "" {
 			continue
 		}
-		snapshot.Workspace = append(snapshot.Workspace, types.MemoryWorkspaceRef{
+		snapshot.Workspace = append(snapshot.Workspace, types.StateWorkspaceRef{
 			Path:     operation.Path,
 			Revision: operation.Revision,
 		})
 	}
-	return t.memories.SaveEntity(ctx, agentID, key, snapshot)
+	return t.states.SaveEntity(ctx, agentID, key, snapshot)
 }
 
 func childCallID(parentCallID, key string) string {
@@ -765,7 +765,7 @@ func (t *SpawnTool) executeAsyncDownstream(
 // executeChildTask runs one durable SpawnChild task (the dispatcher entry
 // point). Arguments are the persisted spawnChildArguments payload; the child
 // executes through the same runChild path as synchronous spawns, including
-// entity memory persistence and agent-level session events.
+// entity state persistence and agent-level session events.
 func (t *SpawnTool) executeChildTask(ctx context.Context, args map[string]any) (*types.ToolResult, error) {
 	if t == nil || t.runner == nil || t.registry == nil {
 		return spawnError("Spawn tool is not configured"), nil
@@ -874,7 +874,7 @@ func spawnTaskID(parent types.AgentRequest, key string) string {
 	return fmt.Sprintf("%s:spawn:%s:%d", base, key, spawnTurnSeq.Add(1))
 }
 
-func renderEntityMemory(snapshot types.MemorySnapshot) string {
+func renderEntityState(snapshot types.StateSnapshot) string {
 	var sections []string
 	if snapshot.Goal != "" {
 		sections = append(sections, "Goal: "+snapshot.Goal)

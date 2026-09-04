@@ -1,6 +1,6 @@
 id: perform_team
 goal: 六条车道并行演绎：每条车道只演 ScenePlan 分配给自己的角色，各车道独立输出 RolePerformances。
-memory:
+state:
   enabled: true
   max_items: 20
   max_chars: 12000

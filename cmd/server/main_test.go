@@ -136,11 +136,11 @@ func TestAPIKeyFallbackFor(t *testing.T) {
 
 // sessionFlowRunner stub FlowRuntime for exercising the Run method branches.
 type runnerFlowRuntimeStub struct {
-	startCalls  int
-	handleCalls int
-	startResult types.FlowTurnResult
+	startCalls   int
+	handleCalls  int
+	startResult  types.FlowTurnResult
 	handleResult types.FlowTurnResult
-	err         error
+	err          error
 }
 
 func (s *runnerFlowRuntimeStub) Start(context.Context, types.StartFlowRequest) (types.FlowTurnResult, error) {

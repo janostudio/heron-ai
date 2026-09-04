@@ -8,9 +8,9 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// capturingCuratorModel captures Chat arguments so tests can assert on the
-// request the Curator produced.
-type capturingCuratorModel struct {
+// capturingSummarizerModel captures Chat arguments so tests can assert on the
+// request the KnowledgeSummarizer produced.
+type capturingSummarizerModel struct {
 	calls        int
 	lastMessages []types.Message
 	lastTools    []types.JSONSchema
@@ -19,7 +19,7 @@ type capturingCuratorModel struct {
 	err          error
 }
 
-func (m *capturingCuratorModel) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
+func (m *capturingSummarizerModel) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
 	m.calls++
 	m.lastMessages = messages
 	m.lastTools = tools
@@ -33,17 +33,17 @@ func (m *capturingCuratorModel) Chat(ctx context.Context, messages []types.Messa
 	return &types.ChatResponse{Text: m.text}, nil
 }
 
-func (m *capturingCuratorModel) ChatStream(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (<-chan types.ChatChunk, error) {
+func (m *capturingSummarizerModel) ChatStream(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (<-chan types.ChatChunk, error) {
 	return nil, nil
 }
 
-func TestCuratorCurateReturnsTrimmedText(t *testing.T) {
-	model := &capturingCuratorModel{text: "  ---\nkind: fact\n---\n\nbody  "}
-	c := NewCurator(model, "")
+func TestSummarizerSummarizeReturnsTrimmedText(t *testing.T) {
+	model := &capturingSummarizerModel{text: "  ---\nkind: fact\n---\n\nbody  "}
+	s := NewKnowledgeSummarizer(model, "")
 
-	got, err := c.Curate(context.Background(), []string{"a candidate source"})
+	got, err := s.Summarize(context.Background(), []string{"a candidate source"})
 	if err != nil {
-		t.Fatalf("Curate returned error: %v", err)
+		t.Fatalf("Summarize returned error: %v", err)
 	}
 	if !strings.HasPrefix(got, "---") || !strings.HasSuffix(got, "body") {
 		t.Fatalf("expected trimmed text, got %q", got)
@@ -53,14 +53,14 @@ func TestCuratorCurateReturnsTrimmedText(t *testing.T) {
 	}
 }
 
-func TestCuratorBuildsRequestShape(t *testing.T) {
-	// curatorModel = "gpt-x" -> config.Model == "gpt-x".
-	model := &capturingCuratorModel{text: "entry"}
-	c := NewCurator(model, "gpt-x")
+func TestSummarizerBuildsRequestShape(t *testing.T) {
+	// summaryModel = "gpt-x" -> config.Model == "gpt-x".
+	model := &capturingSummarizerModel{text: "entry"}
+	s := NewKnowledgeSummarizer(model, "gpt-x")
 
-	_, err := c.Curate(context.Background(), []string{"source one", "source two"})
+	_, err := s.Summarize(context.Background(), []string{"source one", "source two"})
 	if err != nil {
-		t.Fatalf("Curate returned error: %v", err)
+		t.Fatalf("Summarize returned error: %v", err)
 	}
 
 	if model.lastTools != nil {
@@ -85,7 +85,7 @@ func TestCuratorBuildsRequestShape(t *testing.T) {
 	if model.lastMessages[0].Role != "system" {
 		t.Fatalf("expected system role, got %q", model.lastMessages[0].Role)
 	}
-	if !strings.Contains(model.lastMessages[0].Content, "knowledge curator") {
+	if !strings.Contains(model.lastMessages[0].Content, "knowledge summarizer") {
 		t.Fatalf("expected system prompt marker, got %q", model.lastMessages[0].Content)
 	}
 	if model.lastMessages[1].Role != "user" {
@@ -100,24 +100,24 @@ func TestCuratorBuildsRequestShape(t *testing.T) {
 	}
 }
 
-func TestCuratorDefaultModelLeavesModelEmpty(t *testing.T) {
-	model := &capturingCuratorModel{text: "entry"}
-	c := NewCurator(model, "")
+func TestSummarizerDefaultModelLeavesModelEmpty(t *testing.T) {
+	model := &capturingSummarizerModel{text: "entry"}
+	s := NewKnowledgeSummarizer(model, "")
 
-	_, err := c.Curate(context.Background(), []string{"source"})
+	_, err := s.Summarize(context.Background(), []string{"source"})
 	if err != nil {
-		t.Fatalf("Curate returned error: %v", err)
+		t.Fatalf("Summarize returned error: %v", err)
 	}
 	if model.lastConfig.Model != "" {
 		t.Fatalf("expected config.Model == \"\", got %q", model.lastConfig.Model)
 	}
 }
 
-func TestCuratorEmptySourcesErrorsWithoutCallingModel(t *testing.T) {
-	model := &capturingCuratorModel{text: "entry"}
-	c := NewCurator(model, "gpt-x")
+func TestSummarizerEmptySourcesErrorsWithoutCallingModel(t *testing.T) {
+	model := &capturingSummarizerModel{text: "entry"}
+	s := NewKnowledgeSummarizer(model, "gpt-x")
 
-	_, err := c.Curate(context.Background(), nil)
+	_, err := s.Summarize(context.Background(), nil)
 	if err == nil {
 		t.Fatalf("expected error on empty sources")
 	}
@@ -126,22 +126,22 @@ func TestCuratorEmptySourcesErrorsWithoutCallingModel(t *testing.T) {
 	}
 }
 
-func TestCuratorNilResponseErrors(t *testing.T) {
-	model := &nilCuratorModel{}
-	c := NewCurator(model, "")
+func TestSummarizerNilResponseErrors(t *testing.T) {
+	model := &nilSummarizerModel{}
+	s := NewKnowledgeSummarizer(model, "")
 
-	_, err := c.Curate(context.Background(), []string{"source"})
+	_, err := s.Summarize(context.Background(), []string{"source"})
 	if err == nil {
 		t.Fatalf("expected error on nil response")
 	}
 }
 
-type nilCuratorModel struct{}
+type nilSummarizerModel struct{}
 
-func (nilCuratorModel) Chat(context.Context, []types.Message, []types.JSONSchema, types.ModelConfig) (*types.ChatResponse, error) {
+func (nilSummarizerModel) Chat(context.Context, []types.Message, []types.JSONSchema, types.ModelConfig) (*types.ChatResponse, error) {
 	return nil, nil
 }
 
-func (nilCuratorModel) ChatStream(context.Context, []types.Message, []types.JSONSchema, types.ModelConfig) (<-chan types.ChatChunk, error) {
+func (nilSummarizerModel) ChatStream(context.Context, []types.Message, []types.JSONSchema, types.ModelConfig) (<-chan types.ChatChunk, error) {
 	return nil, nil
 }

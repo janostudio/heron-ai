@@ -30,8 +30,26 @@ func (l *ConfigLoader) LoadRuntimeLimits() types.RuntimeLimits {
 	return limits
 }
 
+// LoadLoggingSettings 读取 .agents/settings.json 的 logging 段。
+// 文件缺失/字段缺失时返回零值 LoggingConfig（各字段为空字符串/0）。
+func (l *ConfigLoader) LoadLoggingSettings() types.LoggingConfig {
+	var cfg types.LoggingConfig
+	path := filepath.Join(".agents", "settings.json")
+	data, err := l.fileStore.Read(path)
+	if err != nil {
+		return cfg
+	}
+	var raw struct {
+		Logging types.LoggingConfig `json:"logging"`
+	}
+	if err := json.Unmarshal(data, &raw); err == nil {
+		cfg = raw.Logging
+	}
+	return cfg
+}
+
 // LoadKnowledgeSettings 读取 .agents/settings.json 的 knowledge 段。
-// 文件缺失/字段缺失时返回零值 KnowledgeConfig（CuratorModel=""）。
+// 文件缺失/字段缺失时返回零值 KnowledgeConfig（SummaryModel=""）。
 func (l *ConfigLoader) LoadKnowledgeSettings() types.KnowledgeConfig {
 	var cfg types.KnowledgeConfig
 	path := filepath.Join(".agents", "settings.json")

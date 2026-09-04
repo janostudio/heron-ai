@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -165,13 +166,13 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		maxRounds = agent.Budget.MaxModelRounds
 	}
 	toolSchemas := t.buildToolSchemas(agent)
-	var summarizer Summarizer
-	if strings.EqualFold(agent.Context.Summarizer, "mechanical") {
-		summarizer = mechanicalSummarizer{}
+	var compactor Compactor
+	if strings.EqualFold(agent.Context.Compactor, "mechanical") {
+		compactor = mechanicalCompactor{}
 	} else {
-		summarizer = NewLLMSummarizer(t.model, agent.Model)
+		compactor = NewLLMCompactor(t.model, agent.Model)
 	}
-	contextManager := NewContextManagerWithSummarizer(t.contextConfig(agent), nil, summarizer)
+	contextManager := NewContextManagerWithCompactor(t.contextConfig(agent), nil, compactor)
 	contextManager.SetToolSchemas(toolSchemas)
 	if req.ResumeCheckpointID != "" && t.checkpoints == nil {
 		return nil, fmt.Errorf("agent checkpoint store is not configured")
@@ -414,6 +415,12 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		}
 		if round == 0 && t.guardrail != nil {
 			if guardErr := t.guardrail.CheckInput(inputText); guardErr != nil {
+				logging.Warn("guardrail blocked input", map[string]any{
+					"call_id":  req.CallID,
+					"agent_id": req.AgentID,
+					"team_id":  req.TeamID,
+					"error":    guardErr.Error(),
+				})
 				t.emitErrorHook(ctx, agent, req, round, guardErr)
 				return &types.AgentResult{Status: types.TurnFailed, Reply: guardErr.Error(), Error: guardErr.Error(), Next: &types.Route{Action: types.NextCoordinate, Reason: guardErr.Error()}}, nil
 			}
@@ -461,12 +468,29 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				break
 			}
 			modelRetries++
+			logging.Warn("model call failed, retrying", map[string]any{
+				"call_id":  req.CallID,
+				"agent_id": req.AgentID,
+				"team_id":  req.TeamID,
+				"round":    round,
+				"retry":    modelRetries,
+				"model":    modelConfig.Model,
+				"error":    chatErr.Error(),
+			})
 			if retryErr := waitModelRetry(ctx, modelRetries); retryErr != nil {
 				chatErr = retryErr
 				break
 			}
 		}
 		if chatErr != nil {
+			logging.Error("model chat failed", map[string]any{
+				"call_id":  req.CallID,
+				"agent_id": req.AgentID,
+				"team_id":  req.TeamID,
+				"round":    round,
+				"model":    modelConfig.Model,
+				"error":    chatErr.Error(),
+			})
 			t.emitErrorHook(ctx, agent, req, round, chatErr)
 			return nil, fmt.Errorf("llm chat: %w", chatErr)
 		}
@@ -534,6 +558,13 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		if len(resp.ToolCalls) == 0 {
 			if t.guardrail != nil {
 				if guardErr := t.guardrail.CheckOutput(resp.Text); guardErr != nil {
+					logging.Warn("guardrail blocked output", map[string]any{
+						"call_id":  req.CallID,
+						"agent_id": req.AgentID,
+						"team_id":  req.TeamID,
+						"round":    round,
+						"error":    guardErr.Error(),
+					})
 					t.emitErrorHook(ctx, agent, req, round, guardErr)
 					return &types.AgentResult{Status: types.TurnFailed, Reply: resp.Text, Error: guardErr.Error(), Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls, Next: &types.Route{Action: types.NextCoordinate, Reason: guardErr.Error()}}, nil
 				}
@@ -967,6 +998,14 @@ func (t *TurnLoop) saveCheckpoint(
 		Compatibility: checkpointCompatibility(agent, contextManager),
 	}
 	if err := t.checkpoints.Save(ctx, *checkpoint); err != nil {
+		logging.Error("checkpoint save failed", map[string]any{
+			"flow_session_id": req.FlowSessionID,
+			"call_id":         req.CallID,
+			"agent_id":        req.AgentID,
+			"team_id":         req.TeamID,
+			"checkpoint_id":   checkpoint.ID,
+			"error":           err.Error(),
+		})
 		return nil, err
 	}
 	return checkpoint, nil
@@ -1219,6 +1258,14 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 		}
 		result, err := t.toolExecutor.Execute(ctx, call.Name, call.Arguments)
 		if err != nil {
+			logging.Error("tool execution failed", map[string]any{
+				"call_id":   req.CallID,
+				"agent_id":  req.AgentID,
+				"team_id":   req.TeamID,
+				"round":     round,
+				"tool_name": call.Name,
+				"error":     err.Error(),
+			})
 			result = &types.ToolResult{Success: false, Error: err.Error()}
 		}
 		if result == nil {
@@ -1711,14 +1758,14 @@ func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema 
 		"TodoRead":  {Name: "TodoRead", Type: "object", Properties: map[string]types.JSONProperty{}},
 		"Spawn": {
 			Name: "Spawn", Type: "object",
-			Description: "Spawn dynamic agent entities and execute them. wait=true blocks until children finish; wait=false returns handles immediately. Entities are reused by key and keep persistent memory.",
+			Description: "Spawn dynamic agent entities and execute them. wait=true blocks until children finish; wait=false returns handles immediately. Entities are reused by key and keep persistent state.",
 			Properties: map[string]types.JSONProperty{
 				"agent":   {Type: "string", Description: "Target agent id; defaults to the spawning agent itself"},
 				"item":    {Type: "any", Description: "Single task item (any JSON value) delivered to the child entity"},
 				"items":   {Type: "array", Description: "Multiple task items; one child entity per item, executed in parallel"},
 				"wait":    {Type: "boolean", Description: "true: block until children finish; false: return handles immediately (deliver=parent collects later with Collect; deliver=downstream children run in the Team DAG)"},
 				"deliver": {Type: "string", Enum: []string{"parent", "downstream"}, Description: "parent: results return to you; downstream: results are published as records of your call (downstream calls wait for you and all your spawned children)"},
-				"key":     {Type: "string", Description: "Entity key to reuse an existing entity (with its memory); only valid with a single item"},
+				"key":     {Type: "string", Description: "Entity key to reuse an existing entity (with its state); only valid with a single item"},
 			},
 		},
 		"Collect": {

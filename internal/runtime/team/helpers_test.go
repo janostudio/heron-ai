@@ -110,27 +110,27 @@ func TestAddUsageNilReceiverIsNoop(t *testing.T) {
 	})
 }
 
-func TestRenderMemory(t *testing.T) {
+func TestRenderState(t *testing.T) {
 	tests := []struct {
 		name     string
-		snapshot types.MemorySnapshot
+		snapshot types.StateSnapshot
 		expected string
 	}{
 		{
 			name:     "empty snapshot",
-			snapshot: types.MemorySnapshot{},
+			snapshot: types.StateSnapshot{},
 			expected: "",
 		},
 		{
 			name: "goal only",
-			snapshot: types.MemorySnapshot{
+			snapshot: types.StateSnapshot{
 				Goal: "fix the bug",
 			},
 			expected: "Goal: fix the bug",
 		},
 		{
 			name: "goal plus lists",
-			snapshot: types.MemorySnapshot{
+			snapshot: types.StateSnapshot{
 				Goal:          "g",
 				Confirmed:     []string{"a", "b"},
 				OpenQuestions: []string{"q"},
@@ -145,7 +145,7 @@ func TestRenderMemory(t *testing.T) {
 		},
 		{
 			name: "lists without goal",
-			snapshot: types.MemorySnapshot{
+			snapshot: types.StateSnapshot{
 				NextSteps: []string{"n1"},
 			},
 			expected: "Next Steps:\n- n1",
@@ -153,7 +153,7 @@ func TestRenderMemory(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, renderMemory(tt.snapshot))
+			assert.Equal(t, tt.expected, renderState(tt.snapshot))
 		})
 	}
 }

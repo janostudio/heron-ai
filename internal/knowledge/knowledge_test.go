@@ -202,7 +202,7 @@ func TestKnowledgeExtractor_ExtractHighImportance(t *testing.T) {
 	idx := NewKnowledgeIndex()
 	extractor := NewKnowledgeExtractor(idx)
 
-	memories := []types.MemoryObservation{
+	states := []types.StateObservation{
 		{
 			Content:    "The API rate limit is 100 requests per minute",
 			Importance: "high",
@@ -211,7 +211,7 @@ func TestKnowledgeExtractor_ExtractHighImportance(t *testing.T) {
 		},
 	}
 
-	entries, err := extractor.Extract(context.Background(), memories)
+	entries, err := extractor.Extract(context.Background(), states)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -230,22 +230,22 @@ func TestKnowledgeExtractor_ExtractSkipsLowImportance(t *testing.T) {
 	idx := NewKnowledgeIndex()
 	extractor := NewKnowledgeExtractor(idx)
 
-	memories := []types.MemoryObservation{
+	states := []types.StateObservation{
 		{
-			Content:    "low importance memory",
+			Content:    "low importance state",
 			Importance: "low",
 			Source:     "agent1",
 			Round:      1,
 		},
 		{
-			Content:    "medium importance memory",
+			Content:    "medium importance state",
 			Importance: "medium",
 			Source:     "agent1",
 			Round:      2,
 		},
 	}
 
-	entries, err := extractor.Extract(context.Background(), memories)
+	entries, err := extractor.Extract(context.Background(), states)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestKnowledgeExtractor_ExtractAddsToIndex(t *testing.T) {
 	idx := NewKnowledgeIndex()
 	extractor := NewKnowledgeExtractor(idx)
 
-	memories := []types.MemoryObservation{
+	states := []types.StateObservation{
 		{
 			Content:    "Critical security vulnerability found",
 			Importance: "critical",
@@ -267,7 +267,7 @@ func TestKnowledgeExtractor_ExtractAddsToIndex(t *testing.T) {
 		},
 	}
 
-	_, err := extractor.Extract(context.Background(), memories)
+	_, err := extractor.Extract(context.Background(), states)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

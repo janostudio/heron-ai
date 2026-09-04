@@ -39,10 +39,10 @@ func TestSimpleQAExampleUsesNewRuntimeConfiguration(t *testing.T) {
 	team := definitions.Teams["qa_team"]
 	require.Equal(t, "qa_team", team.ID)
 	require.Len(t, team.Calls, 1)
-	require.True(t, team.Memory.Enabled)
-	require.Equal(t, 20, team.Memory.MaxItems)
-	require.Equal(t, 4000, team.Memory.MaxChars)
-	require.True(t, team.Memory.InjectSummary)
+	require.True(t, team.State.Enabled)
+	require.Equal(t, 20, team.State.MaxItems)
+	require.Equal(t, 4000, team.State.MaxChars)
+	require.True(t, team.State.InjectSummary)
 
 	answer := team.Calls["answer"]
 	require.Equal(t, types.CallAgent, answer.Type)

@@ -15,7 +15,9 @@ import (
 
 	"github.com/heron-ai/heron-engine/internal/app"
 	"github.com/heron-ai/heron-engine/internal/config"
+	"github.com/heron-ai/heron-engine/internal/knowledge"
 	"github.com/heron-ai/heron-engine/internal/model"
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/internal/view"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -23,6 +25,11 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "summary" {
+		runSummaryCLI(os.Args[2:])
+		return
+	}
+
 	prompt := flag.String("prompt", "", "Run one FlowTurn and exit")
 	flow := flag.String("flow", "", "Flow config path (default: .agents/flows/default.yml)")
 	sessionID := flag.String("session", "", "Resume an existing FlowSession")
@@ -180,6 +187,128 @@ func runPrompt(flowPath, sessionID, prompt string) {
 	}
 }
 
+// runSummaryCLI parses the `heron summary <session-id> [--flow <path>]`
+// subcommand arguments and dispatches to runSummary.
+func runSummaryCLI(args []string) {
+	fs := flag.NewFlagSet("summary", flag.ExitOnError)
+	flow := fs.String("flow", "", "Flow config path (default: .agents/flows/default.yml)")
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: heron summary <session-id> [--flow <path>]")
+		os.Exit(1)
+	}
+	sessionID := fs.Arg(0)
+
+	flowPath := resolveFlowPath(*flow)
+	if flowPath == "" {
+		fmt.Fprintln(os.Stderr, "Error: a new-format Flow config is required")
+		fmt.Fprintln(os.Stderr, "Use --flow .agents/flows/default.yml")
+		os.Exit(1)
+	}
+
+	if err := runSummary(sessionID, flowPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runSummary distills a session's published SharedRecords into a proposed
+// Knowledge entry via the KnowledgeSummarizer and writes it to
+// .agents/knowledge/proposed/<session-id>.md.
+func runSummary(sessionID, flowPath string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("session id is required")
+	}
+
+	ctx := context.Background()
+	definitions, provider, err := buildProvider(ctx, flowPath)
+	if err != nil {
+		return err
+	}
+
+	files := storage.NewFileStore(".")
+	sessions := storage.NewJSONLSessionWriter(files)
+	replay, err := sessions.Replay(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("replay session %q: %w", sessionID, err)
+	}
+
+	records := extractSharedRecords(replay)
+	if len(records) == 0 {
+		return fmt.Errorf("session %q has no shared records to summarize", sessionID)
+	}
+
+	sources := recordsToSources(records)
+	summarizer := knowledge.NewKnowledgeSummarizer(provider, definitions.Knowledge.SummaryModel)
+	md, err := summarizer.Summarize(ctx, sources)
+	if err != nil {
+		return fmt.Errorf("summarize knowledge: %w", err)
+	}
+	if strings.TrimSpace(md) == "" {
+		return fmt.Errorf("knowledge summarizer returned empty markdown")
+	}
+
+	path := filepath.Join(".agents", "knowledge", "proposed", sessionID+".md")
+	if err := files.Write(path, []byte(md+"\n")); err != nil {
+		return fmt.Errorf("write knowledge %s: %w", path, err)
+	}
+
+	fmt.Printf("Knowledge written to %s\n", path)
+	return nil
+}
+
+// extractSharedRecords collects every SharedRecord published to a session's
+// event timeline. Each shared_record.published event carries its record under
+// payload["record"]; after JSON round-trip the record value is a map[string]any
+// that must be re-marshaled back into types.SharedRecord.
+func extractSharedRecords(replay *storage.SessionReplay) []types.SharedRecord {
+	if replay == nil {
+		return nil
+	}
+	var records []types.SharedRecord
+	for _, event := range replay.Events {
+		if event.Type != types.EventSharedRecordPublished {
+			continue
+		}
+		raw, ok := event.Payload["record"]
+		if !ok {
+			continue
+		}
+		data, err := json.Marshal(raw)
+		if err != nil {
+			continue
+		}
+		var record types.SharedRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			continue
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+// recordsToSources converts SharedRecords into the text fragments the
+// KnowledgeSummarizer expects, mirroring the summary command's source building.
+func recordsToSources(records []types.SharedRecord) []string {
+	sources := make([]string, 0, len(records))
+	for _, r := range records {
+		name := strings.TrimSpace(r.Name)
+		summary := strings.TrimSpace(r.Summary)
+		switch {
+		case name == "" && summary == "":
+			continue
+		case name == "":
+			sources = append(sources, summary)
+		case summary == "":
+			sources = append(sources, name)
+		default:
+			sources = append(sources, fmt.Sprintf("[%s] %s", name, summary))
+		}
+	}
+	return sources
+}
+
 func runTUI(flowPath string) {
 	ctx := context.Background()
 	bundle, modelName, err := buildCurrentRuntime(ctx, flowPath)
@@ -253,41 +382,52 @@ func aggregateTeamUsage(results []types.TeamTurnResult) types.TokenUsage {
 }
 
 func buildCurrentRuntime(ctx context.Context, flowPath string) (*app.RuntimeBundle, string, error) {
-	loader := config.NewConfigLoader(".")
-	definitions, err := loader.LoadDefinitions(ctx, config.DefinitionsLoadRequest{
-		FlowPath: flowPath,
-	})
+	definitions, provider, err := buildProvider(ctx, flowPath)
 	if err != nil {
 		return nil, "", err
-	}
-
-	models, err := loadModelsConfig()
-	if err != nil {
-		return nil, "", fmt.Errorf("load .agents/models.json: %w", err)
-	}
-	if models == nil || len(models.Models) == 0 {
-		return nil, "", fmt.Errorf("models.json has no models")
-	}
-	for i := range models.Models {
-		models.Models[i].APIKey = resolveAPIKey(models.Models[i].APIKey, apiKeyFallbackFor(models.Models[i]))
-	}
-	defaultProfile, err := resolveModelProfile(models)
-	if err != nil {
-		return nil, "", err
-	}
-	if defaultProfile.APIKey == "" {
-		return nil, "", fmt.Errorf("API key for default model %q is not set", defaultProfile.Name)
-	}
-
-	provider, err := model.NewProviderRouter(models.Model, models.Models)
-	if err != nil {
-		return nil, "", fmt.Errorf("build model providers: %w", err)
 	}
 	bundle, err := app.BuildRuntime(ctx, definitions, provider, ".")
 	if err != nil {
 		return nil, "", err
 	}
 	return bundle, provider.DefaultModel(), nil
+}
+
+// buildProvider loads flow definitions and constructs the model provider
+// router. It is shared by the interactive/HTTP runtimes and the summary CLI so
+// provider construction stays in one place.
+func buildProvider(ctx context.Context, flowPath string) (*types.Definitions, *model.ProviderRouter, error) {
+	loader := config.NewConfigLoader(".")
+	definitions, err := loader.LoadDefinitions(ctx, config.DefinitionsLoadRequest{
+		FlowPath: flowPath,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	models, err := loadModelsConfig()
+	if err != nil {
+		return nil, nil, fmt.Errorf("load .agents/models.json: %w", err)
+	}
+	if models == nil || len(models.Models) == 0 {
+		return nil, nil, fmt.Errorf("models.json has no models")
+	}
+	for i := range models.Models {
+		models.Models[i].APIKey = resolveAPIKey(models.Models[i].APIKey, apiKeyFallbackFor(models.Models[i]))
+	}
+	defaultProfile, err := resolveModelProfile(models)
+	if err != nil {
+		return nil, nil, err
+	}
+	if defaultProfile.APIKey == "" {
+		return nil, nil, fmt.Errorf("API key for default model %q is not set", defaultProfile.Name)
+	}
+
+	provider, err := model.NewProviderRouter(models.Model, models.Models)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build model providers: %w", err)
+	}
+	return definitions, provider, nil
 }
 
 type ModelsConfig struct {

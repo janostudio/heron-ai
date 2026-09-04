@@ -328,24 +328,24 @@ scripts:
 	require.ErrorContains(t, err, `skill script "scripts/missing.sh" does not exist`)
 }
 
-func TestLoadKnowledgeSettings_ReadsCuratorModel(t *testing.T) {
+func TestLoadKnowledgeSettings_ReadsSummaryModel(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "settings.json"), []byte(`{
   "knowledge": {
-    "curator_model": "gpt-x"
+    "summary_model": "gpt-x"
   }
 }`), 0644))
 
 	cfg := NewConfigLoader(root).LoadKnowledgeSettings()
-	require.Equal(t, "gpt-x", cfg.CuratorModel)
+	require.Equal(t, "gpt-x", cfg.SummaryModel)
 }
 
 func TestLoadKnowledgeSettings_MissingFileReturnsZero(t *testing.T) {
 	root := t.TempDir()
 
 	cfg := NewConfigLoader(root).LoadKnowledgeSettings()
-	require.Equal(t, "", cfg.CuratorModel)
+	require.Equal(t, "", cfg.SummaryModel)
 }
 
 func TestLoadDefinitionsLoadsRuntimeLimits(t *testing.T) {
@@ -386,4 +386,34 @@ calls: {}
 	require.Equal(t, 3, definitions.Limits.MaxParallelTeams)
 	require.Equal(t, 4, definitions.Limits.MaxParallelCalls)
 	require.Equal(t, 4, definitions.Limits.MaxParallelTools)
+}
+
+func TestLoadLoggingSettings_ReadsConfig(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "settings.json"), []byte(`{
+  "logging": {
+    "level": "debug",
+    "dir": ".agents/data/logs",
+    "max_file_size": "10MB",
+    "max_backups": 3,
+    "retention_days": 14
+  }
+}`), 0644))
+
+	cfg := NewConfigLoader(root).LoadLoggingSettings()
+	require.Equal(t, "debug", cfg.Level)
+	require.Equal(t, ".agents/data/logs", cfg.Dir)
+	require.Equal(t, "10MB", cfg.MaxFileSize)
+	require.Equal(t, 3, cfg.MaxBackups)
+	require.Equal(t, 14, cfg.RetentionDays)
+}
+
+func TestLoadLoggingSettings_MissingFileReturnsZero(t *testing.T) {
+	root := t.TempDir()
+
+	cfg := NewConfigLoader(root).LoadLoggingSettings()
+	require.Equal(t, "", cfg.Level)
+	require.Equal(t, "", cfg.Dir)
+	require.Equal(t, 0, cfg.RetentionDays)
 }

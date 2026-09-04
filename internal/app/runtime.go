@@ -9,15 +9,16 @@ import (
 
 	"github.com/heron-ai/heron-engine/internal/agent"
 	"github.com/heron-ai/heron-engine/internal/agentstore"
-	"github.com/heron-ai/heron-engine/internal/consolidation"
+	"github.com/heron-ai/heron-engine/internal/config"
 	"github.com/heron-ai/heron-engine/internal/knowledge"
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/media"
-	"github.com/heron-ai/heron-engine/internal/memory"
 	"github.com/heron-ai/heron-engine/internal/prompt"
 	"github.com/heron-ai/heron-engine/internal/runtime/call"
 	"github.com/heron-ai/heron-engine/internal/runtime/flow"
 	"github.com/heron-ai/heron-engine/internal/runtime/team"
 	"github.com/heron-ai/heron-engine/internal/skill"
+	"github.com/heron-ai/heron-engine/internal/state"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/internal/tool"
 	"github.com/heron-ai/heron-engine/internal/workspace"
@@ -88,6 +89,10 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 
 	teamRuntime := team.NewRuntime(executors, definitions.Agents)
 	files := storage.NewFileStore(workspaceRoot)
+
+	// Global execution logger: rotating file logs under .agents/data/logs,
+	// configured via .agents/settings.json (logging section).
+	logging.SetDefault(buildLogger(workspaceRoot))
 	// One entity is one agent: the Spawn tool's inline children, durable
 	// SpawnChild tasks, and the Team scheduler's synthetic calls (batch C)
 	// share one entity lock set so the same dynamic entity never runs two
@@ -104,7 +109,7 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 		turnLoop,
 		definitions.Agents,
 		agentstore.NewRegistry(files),
-		memory.NewStore(files, memory.Limits{}),
+		state.NewStore(files, state.Limits{}),
 	)
 	spawnTool.SetEntityLocks(entityLocks)
 	toolRegistry.Register(spawnTool)
@@ -112,17 +117,7 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 	if setter, ok := provider.(types.MediaResolverSetter); ok {
 		setter.SetMediaResolver(mediaStore)
 	}
-	teamRuntime.SetMemoryStore(memory.NewStore(files, memory.Limits{}))
-	dreamWorker := consolidation.NewWorker(
-		consolidation.NewFileJobStore(files),
-		memory.NewStore(files, memory.Limits{}),
-	)
-	curator := knowledge.NewCurator(provider, definitions.Knowledge.CuratorModel)
-	dreamWorker.SetCurator(curator, files)
-	if err := dreamWorker.Start(ctx); err != nil {
-		return nil, err
-	}
-	teamRuntime.SetConsolidationEnqueuer(dreamWorker)
+	teamRuntime.SetStateStore(state.NewStore(files, state.Limits{}))
 	skillRegistry := skill.NewSkillRegistry()
 	for _, definition := range definitions.Skills {
 		if err := skillRegistry.Register(definition); err != nil {
@@ -240,6 +235,21 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 		Tasks:        taskStore,
 		TaskControl:  taskRunner,
 	}, nil
+}
+
+// buildLogger constructs the global execution logger from .agents/settings.json
+// (logging section). It falls back to default settings when the config is
+// absent or invalid.
+func buildLogger(workspaceRoot string) *logging.RotatingLogger {
+	loader := config.NewConfigLoader(workspaceRoot)
+	cfg := loader.LoadLoggingSettings()
+	return logging.NewRotatingLogger(workspaceRoot, logging.Config{
+		Level:         cfg.Level,
+		Dir:           cfg.Dir,
+		MaxFileSize:   cfg.MaxFileSize,
+		MaxBackups:    cfg.MaxBackups,
+		RetentionDays: cfg.RetentionDays,
+	})
 }
 
 type promptAdapter struct {

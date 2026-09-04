@@ -125,31 +125,6 @@ type AgentCheckpoint struct {
 	UpdatedAt       time.Time                    `json:"updated_at"`
 }
 
-// ContextConsolidation is a durable, non-blocking memory-maintenance request.
-// It is intentionally separate from AgentTurn and never changes the current
-// answer. A later worker may use it to produce proposed Knowledge.
-type ContextConsolidation struct {
-	ID            string         `json:"id"`
-	FlowSessionID string         `json:"flow_session_id,omitempty"`
-	TeamID        string         `json:"team_id,omitempty"`
-	AgentID       string         `json:"agent_id,omitempty"`
-	CallID        string         `json:"call_id,omitempty"`
-	Status        string         `json:"status"` // queued | running | completed | failed
-	SourceRecords []string       `json:"source_records,omitempty"`
-	Records       []SharedRecord `json:"records,omitempty"`
-	ResultSummary string         `json:"result_summary,omitempty"`
-	Error         string         `json:"error,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-}
-
-// ConsolidationEnqueuer is intentionally a maintenance seam, not a new
-// Flow/Team/Agent execution layer. Completed Agent/Team work can enqueue a
-// durable Dream job without blocking the user-facing turn.
-type ConsolidationEnqueuer interface {
-	Enqueue(ctx context.Context, job ContextConsolidation) error
-}
-
 type ToolTaskStatus string
 
 const (

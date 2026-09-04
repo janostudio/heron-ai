@@ -325,10 +325,10 @@ func TestResolveAPIKey(t *testing.T) {
 	t.Setenv("HERON_EMPTY_KEY", "")
 
 	for _, test := range []struct {
-		name      string
+		name       string
 		configured string
-		fallback  string
-		want      string
+		fallback   string
+		want       string
 	}{
 		{name: "env reference exists", configured: "${HERON_TEST_KEY}", fallback: "fallback", want: "env-secret"},
 		{name: "env reference missing", configured: "${HERON_MISSING_KEY}", fallback: "fallback", want: ""},

@@ -1,6 +1,6 @@
 id: lobby_team
 goal: 主A协调：理解用户意图，规划本轮场景，挑选并组装上场角色卡分配到车道，或直接回复。
-memory:
+state:
   enabled: true
   max_items: 20
   max_chars: 12000

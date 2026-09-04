@@ -1,6 +1,6 @@
 // Package agentstore persists dynamic Agent entities (design doc 20): the
 // runtime-created counterparts of statically configured Agents. An entity is
-// an identity (template + key) with its own persistent memory, stored under
+// an identity (template + key) with its own persistent state, stored under
 // .agents/data/agents/<template>/<key>/.
 package agentstore
 
@@ -32,7 +32,7 @@ type Entity struct {
 }
 
 // Registry tracks dynamic Agent entities on top of a FileStore, mirroring the
-// memory.Store construction pattern.
+// state.Store construction pattern.
 type Registry struct {
 	files       storage.FileStore
 	maxEntities int

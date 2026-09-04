@@ -63,5 +63,5 @@ const (
 	EventSharedRecordPublished    = "shared_record.published"
 	EventRecoveryRequested        = "recovery.requested"
 	EventRecoveryCompleted        = "recovery.completed"
-	EventMemoryUpdated            = "memory.updated"
+	EventStateUpdated             = "state.updated"
 )

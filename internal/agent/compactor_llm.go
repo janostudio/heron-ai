@@ -24,13 +24,13 @@ const compactionSummaryUserTemplate = `Summarize the following dropped conversat
 %s
 </conversation_history>`
 
-// llmSummarizer 用 agent 自己的 model 生成结构化摘要。
-type llmSummarizer struct {
+// llmCompactor 用 agent 自己的 model 生成结构化摘要。
+type llmCompactor struct {
 	model  types.ModelProvider
 	config types.ModelConfig
 }
 
-func (s *llmSummarizer) Summarize(ctx context.Context, groups [][]types.Message) (string, error) {
+func (s *llmCompactor) Compact(ctx context.Context, groups [][]types.Message) (string, error) {
 	material := buildContextSummary(groups, 0)
 	messages := []types.Message{
 		{Role: "system", Content: compactionSummarySystemPrompt},
@@ -41,14 +41,14 @@ func (s *llmSummarizer) Summarize(ctx context.Context, groups [][]types.Message)
 		return "", err
 	}
 	if resp == nil {
-		return "", errors.New("llm summarizer: nil response")
+		return "", errors.New("llm compactor: nil response")
 	}
 	return strings.TrimSpace(resp.Text), nil
 }
 
-// NewLLMSummarizer returns a Summarizer that uses the agent's own model to
+// NewLLMCompactor returns a Compactor that uses the agent's own model to
 // produce a structured summary of dropped message groups.
-func NewLLMSummarizer(model types.ModelProvider, base types.ModelConfig) Summarizer {
+func NewLLMCompactor(model types.ModelProvider, base types.ModelConfig) Compactor {
 	config := base
 	maxOutputTokens := 1024
 	config.MaxOutputTokens = &maxOutputTokens
@@ -56,5 +56,5 @@ func NewLLMSummarizer(model types.ModelProvider, base types.ModelConfig) Summari
 	config.Temperature = &temperature
 	config.Reasoning = nil
 	config.ResponseFormat = nil
-	return &llmSummarizer{model: model, config: config}
+	return &llmCompactor{model: model, config: config}
 }

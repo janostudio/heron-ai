@@ -1,4 +1,4 @@
-package memory
+package state
 
 import (
 	"context"
@@ -21,7 +21,7 @@ const (
 	defaultEntityMaxChars = 4000
 )
 
-// Limits controls the hard size of memory.md snapshots.
+// Limits controls the hard size of state.md snapshots.
 type Limits struct {
 	TeamMaxChars   int
 	AgentMaxChars  int
@@ -29,7 +29,7 @@ type Limits struct {
 	MaxItems       int
 }
 
-// Store persists the two V1 short-term memory layers.
+// Store persists the two V1 short-term state layers.
 type Store struct {
 	files  storage.FileStore
 	limits Limits
@@ -53,9 +53,9 @@ func NewStore(files storage.FileStore, limits Limits) *Store {
 
 // ForConfig returns a view of the Store with the limits configured by one
 // Team. The underlying FileStore is shared, while the limits remain scoped to
-// the current TeamTurn. This keeps MemoryConfig effective even when a
+// the current TeamTurn. This keeps StateConfig effective even when a
 // runtime contains several Teams with different bounds.
-func (s *Store) ForConfig(config types.MemoryConfig) *Store {
+func (s *Store) ForConfig(config types.StateConfig) *Store {
 	if s == nil {
 		return nil
 	}
@@ -64,8 +64,8 @@ func (s *Store) ForConfig(config types.MemoryConfig) *Store {
 		limits.MaxItems = config.MaxItems
 	}
 	if config.MaxChars > 0 {
-		// MemoryConfig intentionally exposes one compact size budget. Apply it
-		// to both bounded snapshots so Team and Agent memory obey the same
+		// StateConfig intentionally exposes one compact size budget. Apply it
+		// to both bounded snapshots so Team and Agent state obey the same
 		// project-level contract.
 		limits.TeamMaxChars = config.MaxChars
 		limits.AgentMaxChars = config.MaxChars
@@ -73,37 +73,37 @@ func (s *Store) ForConfig(config types.MemoryConfig) *Store {
 	return &Store{files: s.files, limits: limits}
 }
 
-func (s *Store) LoadTeam(ctx context.Context, sessionID, teamID string) (types.MemorySnapshot, error) {
-	return s.load(ctx, s.path(sessionID, "teams", teamID, "memory.md"), types.MemoryScopeTeam, sessionID, teamID, "")
+func (s *Store) LoadTeam(ctx context.Context, sessionID, teamID string) (types.StateSnapshot, error) {
+	return s.load(ctx, s.path(sessionID, "teams", teamID, "state.md"), types.StateScopeTeam, sessionID, teamID, "")
 }
 
-func (s *Store) SaveTeam(ctx context.Context, snapshot types.MemorySnapshot) error {
-	snapshot.Scope = types.MemoryScopeTeam
-	return s.save(ctx, s.path(snapshot.SessionID, "teams", snapshot.TeamID, "memory.md"), snapshot, s.limits.TeamMaxChars)
+func (s *Store) SaveTeam(ctx context.Context, snapshot types.StateSnapshot) error {
+	snapshot.Scope = types.StateScopeTeam
+	return s.save(ctx, s.path(snapshot.SessionID, "teams", snapshot.TeamID, "state.md"), snapshot, s.limits.TeamMaxChars)
 }
 
-func (s *Store) LoadAgent(ctx context.Context, sessionID, teamID, callID string) (types.MemorySnapshot, error) {
-	return s.load(ctx, s.path(sessionID, "agents", teamID, callID, "memory.md"), types.MemoryScopeAgent, sessionID, teamID, callID)
+func (s *Store) LoadAgent(ctx context.Context, sessionID, teamID, callID string) (types.StateSnapshot, error) {
+	return s.load(ctx, s.path(sessionID, "agents", teamID, callID, "state.md"), types.StateScopeAgent, sessionID, teamID, callID)
 }
 
-func (s *Store) SaveAgent(ctx context.Context, snapshot types.MemorySnapshot) error {
-	snapshot.Scope = types.MemoryScopeAgent
-	return s.save(ctx, s.path(snapshot.SessionID, "agents", snapshot.TeamID, snapshot.CallID, "memory.md"), snapshot, s.limits.AgentMaxChars)
+func (s *Store) SaveAgent(ctx context.Context, snapshot types.StateSnapshot) error {
+	snapshot.Scope = types.StateScopeAgent
+	return s.save(ctx, s.path(snapshot.SessionID, "agents", snapshot.TeamID, snapshot.CallID, "state.md"), snapshot, s.limits.AgentMaxChars)
 }
 
-// LoadEntity reads the persistent memory of one dynamic Agent entity (design
+// LoadEntity reads the persistent state of one dynamic Agent entity (design
 // doc 20). A missing snapshot is not an error.
-func (s *Store) LoadEntity(ctx context.Context, agentID, key string) (types.MemorySnapshot, error) {
-	return s.load(ctx, s.entityPath(agentID, key), types.MemoryScopeEntity, "", "", "")
+func (s *Store) LoadEntity(ctx context.Context, agentID, key string) (types.StateSnapshot, error) {
+	return s.load(ctx, s.entityPath(agentID, key), types.StateScopeEntity, "", "", "")
 }
 
-// SaveEntity persists one dynamic Agent entity's memory. The snapshot is
+// SaveEntity persists one dynamic Agent entity's state. The snapshot is
 // scoped by agent template + entity key and outlives any session.
-func (s *Store) SaveEntity(ctx context.Context, agentID, key string, snapshot types.MemorySnapshot) error {
+func (s *Store) SaveEntity(ctx context.Context, agentID, key string, snapshot types.StateSnapshot) error {
 	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(key) == "" {
-		return errors.New("entity memory agent and key are required")
+		return errors.New("entity state agent and key are required")
 	}
-	snapshot.Scope = types.MemoryScopeEntity
+	snapshot.Scope = types.StateScopeEntity
 	snapshot.SessionID = ""
 	snapshot.TeamID = ""
 	snapshot.CallID = ""
@@ -111,7 +111,7 @@ func (s *Store) SaveEntity(ctx context.Context, agentID, key string, snapshot ty
 }
 
 func (s *Store) entityPath(agentID, key string) string {
-	return filepath.Join(".agents", "data", "agents", agentID, key, "memory", "memory.md")
+	return filepath.Join(".agents", "data", "agents", agentID, key, "state", "state.md")
 }
 
 func (s *Store) path(sessionID string, parts ...string) string {
@@ -122,17 +122,17 @@ func (s *Store) path(sessionID string, parts ...string) string {
 func (s *Store) load(
 	ctx context.Context,
 	path string,
-	scope types.MemoryScope,
+	scope types.StateScope,
 	sessionID string,
 	teamID string,
 	callID string,
-) (types.MemorySnapshot, error) {
+) (types.StateSnapshot, error) {
 	if err := contextErr(ctx); err != nil {
-		return types.MemorySnapshot{}, err
+		return types.StateSnapshot{}, err
 	}
 	data, err := s.files.Read(path)
 	if errors.Is(err, storage.ErrNotFound) {
-		return types.MemorySnapshot{
+		return types.StateSnapshot{
 			Scope:     scope,
 			SessionID: sessionID,
 			TeamID:    teamID,
@@ -141,12 +141,12 @@ func (s *Store) load(
 		}, nil
 	}
 	if err != nil {
-		return types.MemorySnapshot{}, err
+		return types.StateSnapshot{}, err
 	}
 
-	var snapshot types.MemorySnapshot
+	var snapshot types.StateSnapshot
 	if _, err := frontmatter.Parse(strings.NewReader(string(data)), &snapshot); err != nil {
-		return types.MemorySnapshot{}, fmt.Errorf("parse memory %s: %w", path, err)
+		return types.StateSnapshot{}, fmt.Errorf("parse state %s: %w", path, err)
 	}
 	if snapshot.Scope == "" {
 		snapshot.Scope = scope
@@ -163,16 +163,16 @@ func (s *Store) load(
 	return snapshot, nil
 }
 
-func (s *Store) save(ctx context.Context, path string, snapshot types.MemorySnapshot, maxChars int) error {
+func (s *Store) save(ctx context.Context, path string, snapshot types.StateSnapshot, maxChars int) error {
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
-	if snapshot.Scope != types.MemoryScopeEntity {
+	if snapshot.Scope != types.StateScopeEntity {
 		if snapshot.SessionID == "" || snapshot.TeamID == "" {
-			return errors.New("memory session_id and team_id are required")
+			return errors.New("state session_id and team_id are required")
 		}
-		if snapshot.Scope == types.MemoryScopeAgent && snapshot.CallID == "" {
-			return errors.New("agent memory call_id is required")
+		if snapshot.Scope == types.StateScopeAgent && snapshot.CallID == "" {
+			return errors.New("agent state call_id is required")
 		}
 	}
 	snapshot = Reduce(snapshot, s.limits.MaxItems)
@@ -191,7 +191,7 @@ func (s *Store) save(ctx context.Context, path string, snapshot types.MemorySnap
 		}
 	}
 	if len(data) > maxChars {
-		// Memory is a bounded hint, not a reason to fail the whole TeamTurn.
+		// State is a bounded hint, not a reason to fail the whole TeamTurn.
 		// Keep the newest compact facts and truncate individual text fields as
 		// a final safety valve. The complete reply remains in session/evidence.
 		snapshot = ReduceForSize(snapshot, maxChars)
@@ -217,13 +217,13 @@ func (s *Store) save(ctx context.Context, path string, snapshot types.MemorySnap
 		}
 	}
 	if len(data) > maxChars {
-		return fmt.Errorf("memory exceeds max_chars=%d after reduction", maxChars)
+		return fmt.Errorf("state exceeds max_chars=%d after reduction", maxChars)
 	}
 	return s.files.Write(path, data)
 }
 
-// Reduce keeps the fixed snapshot bounded without turning memory into a log.
-func Reduce(snapshot types.MemorySnapshot, maxItems int) types.MemorySnapshot {
+// Reduce keeps the fixed snapshot bounded without turning state into a log.
+func Reduce(snapshot types.StateSnapshot, maxItems int) types.StateSnapshot {
 	if maxItems <= 0 {
 		maxItems = 40
 	}
@@ -236,7 +236,7 @@ func Reduce(snapshot types.MemorySnapshot, maxItems int) types.MemorySnapshot {
 	return snapshot
 }
 
-func ReduceAggressively(snapshot types.MemorySnapshot) types.MemorySnapshot {
+func ReduceAggressively(snapshot types.StateSnapshot) types.StateSnapshot {
 	snapshot.Confirmed = tail(snapshot.Confirmed, 10)
 	snapshot.OpenQuestions = tail(snapshot.OpenQuestions, 10)
 	snapshot.Decisions = tail(snapshot.Decisions, 10)
@@ -249,10 +249,10 @@ func ReduceAggressively(snapshot types.MemorySnapshot) types.MemorySnapshot {
 	return snapshot
 }
 
-// ReduceForSize makes memory best-effort bounded even when a model returns a
+// ReduceForSize makes state best-effort bounded even when a model returns a
 // long explanatory reply. It intentionally drops old lists before shortening
 // the current goal, because session.jsonl and SharedRecord remain authoritative.
-func ReduceForSize(snapshot types.MemorySnapshot, maxChars int) types.MemorySnapshot {
+func ReduceForSize(snapshot types.StateSnapshot, maxChars int) types.StateSnapshot {
 	if maxChars <= 0 {
 		maxChars = defaultAgentMaxChars
 	}
@@ -292,10 +292,10 @@ func tail[T any](items []T, max int) []T {
 	return items[len(items)-max:]
 }
 
-func encode(snapshot types.MemorySnapshot) ([]byte, error) {
+func encode(snapshot types.StateSnapshot) ([]byte, error) {
 	front, err := yaml.Marshal(snapshot)
 	if err != nil {
-		return nil, fmt.Errorf("marshal memory frontmatter: %w", err)
+		return nil, fmt.Errorf("marshal state frontmatter: %w", err)
 	}
 	var body strings.Builder
 	body.WriteString("---\n")

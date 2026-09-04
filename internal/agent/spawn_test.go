@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/heron-ai/heron-engine/internal/agentstore"
-	"github.com/heron-ai/heron-engine/internal/memory"
+	"github.com/heron-ai/heron-engine/internal/state"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/internal/tool"
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -50,7 +50,7 @@ func (r *fakeSpawnRunner) recorded() []spawnRunnerCall {
 type spawnFixture struct {
 	runner     *fakeSpawnRunner
 	registry   *agentstore.Registry
-	memories   *memory.Store
+	states     *state.Store
 	spawn      *SpawnTool
 	agents     map[string]types.AgentConfig
 	parent     types.AgentRequest
@@ -64,13 +64,13 @@ func newSpawnFixture(t *testing.T, options ...SpawnOption) *spawnFixture {
 	fixture := &spawnFixture{
 		runner:   &fakeSpawnRunner{},
 		registry: agentstore.NewRegistry(files),
-		memories: memory.NewStore(files, memory.Limits{}),
+		states:   state.NewStore(files, state.Limits{}),
 		agents: map[string]types.AgentConfig{
 			"parent-agent": {Name: "parent-agent"},
 			"child-agent":  {Name: "child-agent", Persona: types.PersonaConfig{Role: "child"}},
 		},
 	}
-	fixture.spawn = NewSpawnTool(fixture.runner, fixture.agents, fixture.registry, fixture.memories, options...)
+	fixture.spawn = NewSpawnTool(fixture.runner, fixture.agents, fixture.registry, fixture.states, options...)
 	fixture.parent = types.AgentRequest{
 		FlowSessionID:  "fs-1",
 		TeamID:         "team-1",
@@ -368,29 +368,29 @@ func TestSpawnTool_ReusesEntityByKey(t *testing.T) {
 	assert.Equal(t, "role-a", entities[0].Key)
 }
 
-func TestSpawnTool_EntityMemoryPersistsAcrossSpawns(t *testing.T) {
+func TestSpawnTool_EntityStatePersistsAcrossSpawns(t *testing.T) {
 	fixture := newSpawnFixture(t)
 
 	_, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "first", "key": "role-a"})
 	require.NoError(t, err)
 
-	// Second spawn of the same entity must receive its persisted memory.
+	// Second spawn of the same entity must receive its persisted state.
 	_, err = fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "second", "key": "role-a"})
 	require.NoError(t, err)
 
 	calls := fixture.runner.recorded()
 	require.Len(t, calls, 2)
-	block := contextBlock(calls[1].req.ContextBlocks, "entity_memory")
-	require.NotNil(t, block, "entity_memory block missing on reuse")
+	block := contextBlock(calls[1].req.ContextBlocks, "entity_state")
+	require.NotNil(t, block, "entity_state block missing on reuse")
 	assert.Contains(t, block.Text, "child reply for "+calls[0].req.CallID)
 
-	snapshot, loadErr := fixture.memories.LoadEntity(context.Background(), "parent-agent", "role-a")
+	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent", "role-a")
 	require.NoError(t, loadErr)
 	assert.Equal(t, `"first"`, snapshot.Goal)
 	assert.Contains(t, snapshot.Confirmed, "child reply for "+calls[0].req.CallID)
 }
 
-func TestSpawnTool_EntityMemoryIsolatedBetweenEntities(t *testing.T) {
+func TestSpawnTool_EntityStateIsolatedBetweenEntities(t *testing.T) {
 	fixture := newSpawnFixture(t)
 
 	_, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "a", "key": "one"})
@@ -400,7 +400,7 @@ func TestSpawnTool_EntityMemoryIsolatedBetweenEntities(t *testing.T) {
 
 	calls := fixture.runner.recorded()
 	for _, call := range calls {
-		assert.Nil(t, contextBlock(call.req.ContextBlocks, "entity_memory"))
+		assert.Nil(t, contextBlock(call.req.ContextBlocks, "entity_state"))
 	}
 }
 
@@ -436,7 +436,7 @@ func TestSpawnTool_ChildFailureReportedPerChild(t *testing.T) {
 	assert.True(t, sawSuccess)
 }
 
-func TestSpawnTool_FailedChildSkipsMemoryWrite(t *testing.T) {
+func TestSpawnTool_FailedChildSkipsStateWrite(t *testing.T) {
 	fixture := newSpawnFixture(t)
 	fixture.runner.result = func(call spawnRunnerCall) (*types.AgentResult, error) {
 		return &types.AgentResult{Status: types.TurnFailed, Error: "boom"}, nil
@@ -445,7 +445,7 @@ func TestSpawnTool_FailedChildSkipsMemoryWrite(t *testing.T) {
 	_, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "a", "key": "k"})
 	require.NoError(t, err)
 
-	snapshot, loadErr := fixture.memories.LoadEntity(context.Background(), "parent-agent", "k")
+	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent", "k")
 	require.NoError(t, loadErr)
 	assert.Empty(t, snapshot.Confirmed)
 	assert.Empty(t, snapshot.NextSteps)
@@ -470,7 +470,7 @@ func TestSpawnTool_NestedDownstreamRecordCollectorPropagates(t *testing.T) {
 		// complete without further nesting.
 		if spawnDepthFromContext(call.ctx) == 2 {
 			assert.Same(t, collector, agentstore.RecordCollectorFromContext(call.ctx))
-			nested := NewSpawnTool(fixture.runner, fixture.agents, fixture.registry, fixture.memories)
+			nested := NewSpawnTool(fixture.runner, fixture.agents, fixture.registry, fixture.states)
 			nestedResult, nestedErr := nested.Execute(call.ctx, map[string]any{
 				"item": "nested", "deliver": "downstream",
 			})
@@ -617,7 +617,7 @@ func TestTurnLoop_SpawnDeclaredExecutesInline(t *testing.T) {
 	require.Len(t, entities, 1)
 	assert.Equal(t, "role-a", entities[0].Key)
 
-	snapshot, loadErr := fixture.memories.LoadEntity(context.Background(), "parent-agent", "role-a")
+	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent", "role-a")
 	require.NoError(t, loadErr)
 	assert.NotEmpty(t, snapshot.Confirmed)
 }

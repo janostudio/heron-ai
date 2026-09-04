@@ -10,9 +10,9 @@ import (
 
 func TestCallTurnID(t *testing.T) {
 	tests := []struct {
-		name    string
-		req     types.CallRequest
-		want    string
+		name string
+		req  types.CallRequest
+		want string
 	}{
 		{
 			name: "explicit call turn id",

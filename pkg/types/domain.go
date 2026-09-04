@@ -45,13 +45,13 @@ type Team struct {
 	Inputs  InputSpec       `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	Output  OutputSpec      `yaml:"output,omitempty" json:"output,omitempty"`
 	Outputs OutputSpec      `yaml:"outputs,omitempty" json:"outputs,omitempty"`
-	Memory  MemoryConfig    `yaml:"memory,omitempty" json:"memory,omitempty"`
+	State   StateConfig     `yaml:"state,omitempty" json:"state,omitempty"`
 	Goal    string          `yaml:"goal,omitempty" json:"goal,omitempty"`
 }
 
-// MemoryConfig is the small core-facing configuration slot for the optional
-// Memory Extension.
-type MemoryConfig struct {
+// StateConfig is the small core-facing configuration slot for the optional
+// State Extension.
+type StateConfig struct {
 	Enabled       bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	MaxItems      int  `yaml:"max_items,omitempty" json:"max_items,omitempty"`
 	MaxChars      int  `yaml:"max_chars,omitempty" json:"max_chars,omitempty"`

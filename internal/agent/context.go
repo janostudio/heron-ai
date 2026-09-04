@@ -42,7 +42,7 @@ type MessageContextManager struct {
 	mu            sync.RWMutex
 	config        types.ContextConfig
 	estimator     ContextTokenEstimator
-	summarizer    Summarizer
+	compactor     Compactor
 	canonical     []types.Message
 	active        []types.Message
 	tools         []types.JSONSchema
@@ -55,20 +55,20 @@ func NewContextManager(config types.ContextConfig) *MessageContextManager {
 }
 
 func NewContextManagerWithEstimator(config types.ContextConfig, estimator ContextTokenEstimator) *MessageContextManager {
-	return NewContextManagerWithSummarizer(config, estimator, nil)
+	return NewContextManagerWithCompactor(config, estimator, nil)
 }
 
-func NewContextManagerWithSummarizer(config types.ContextConfig, estimator ContextTokenEstimator, summarizer Summarizer) *MessageContextManager {
+func NewContextManagerWithCompactor(config types.ContextConfig, estimator ContextTokenEstimator, compactor Compactor) *MessageContextManager {
 	if estimator == nil {
 		estimator = defaultContextTokenEstimator{}
 	}
-	if summarizer == nil {
-		summarizer = mechanicalSummarizer{}
+	if compactor == nil {
+		compactor = mechanicalCompactor{}
 	}
 	return &MessageContextManager{
-		config:     config.WithDefaults(),
-		estimator:  estimator,
-		summarizer: summarizer,
+		config:    config.WithDefaults(),
+		estimator: estimator,
+		compactor: compactor,
 	}
 }
 
@@ -326,7 +326,7 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	}
 
 	candidate := cloneMessages(prefix)
-	nextSummary, err := m.summarizer.Summarize(ctx, dropped)
+	nextSummary, err := m.compactor.Compact(ctx, dropped)
 	if err != nil || strings.TrimSpace(nextSummary) == "" {
 		nextSummary = buildContextSummary(dropped, 0)
 	}

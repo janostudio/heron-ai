@@ -830,7 +830,7 @@ func TestTurnLoop_RetriesOnceAfterProviderContextLimit(t *testing.T) {
 	)
 	result, err := loop.Run(context.Background(), types.AgentConfig{
 		Loop:    types.LoopConfig{MaxRounds: 1},
-		Context: types.ContextConfig{Summarizer: "mechanical"},
+		Context: types.ContextConfig{Compactor: "mechanical"},
 	}, types.AgentRequest{})
 	require.NoError(t, err)
 	require.Equal(t, "recovered", result.Reply)

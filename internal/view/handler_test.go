@@ -15,12 +15,12 @@ import (
 
 func TestRequestContextBlocks(t *testing.T) {
 	tests := []struct {
-		name        string
-		req         flowInputRequest
-		wantBlocks  int
-		wantText    string
-		wantParts   int
-		wantErr     bool
+		name       string
+		req        flowInputRequest
+		wantBlocks int
+		wantText   string
+		wantParts  int
+		wantErr    bool
 	}{
 		{
 			name:       "empty request returns nil",
@@ -28,33 +28,33 @@ func TestRequestContextBlocks(t *testing.T) {
 			wantBlocks: 0,
 		},
 		{
-			name: "string content only",
-			req:  flowInputRequest{Content: json.RawMessage(`"hello world"`)},
+			name:       "string content only",
+			req:        flowInputRequest{Content: json.RawMessage(`"hello world"`)},
 			wantBlocks: 1,
 			wantText:   "hello world",
 		},
 		{
-			name: "content envelope with content field",
-			req:  flowInputRequest{Content: json.RawMessage(`{"content":"nested text"}`)},
+			name:       "content envelope with content field",
+			req:        flowInputRequest{Content: json.RawMessage(`{"content":"nested text"}`)},
 			wantBlocks: 1,
 			wantText:   "nested text",
 		},
 		{
-			name: "content blocks array with text",
-			req:  flowInputRequest{Content: json.RawMessage(`[{"type":"text","text":"part1"},{"type":"text","text":"part2"}]`)},
+			name:       "content blocks array with text",
+			req:        flowInputRequest{Content: json.RawMessage(`[{"type":"text","text":"part1"},{"type":"text","text":"part2"}]`)},
 			wantBlocks: 1,
 			wantText:   "part1part2",
 		},
 		{
-			name: "image content block produces part",
-			req:  flowInputRequest{Content: json.RawMessage(`[{"type":"image","source":{"type":"url","url":"http://example.com/a.png"}}]`)},
+			name:       "image content block produces part",
+			req:        flowInputRequest{Content: json.RawMessage(`[{"type":"image","source":{"type":"url","url":"http://example.com/a.png"}}]`)},
 			wantBlocks: 1,
 			wantParts:  1,
 		},
 		{
-			name:       "invalid content returns error",
-			req:        flowInputRequest{Content: json.RawMessage(`{"type":"bogus"}`)},
-			wantErr:    true,
+			name:    "invalid content returns error",
+			req:     flowInputRequest{Content: json.RawMessage(`{"type":"bogus"}`)},
+			wantErr: true,
 		},
 		{
 			name: "attachment with base64 infers source type",

@@ -388,7 +388,7 @@ func scopeAllows(scope types.Scope, agentName, teamName string) bool {
 	}
 }
 
-// KnowledgeExtractor extracts knowledge from agent memories
+// KnowledgeExtractor extracts knowledge from agent state observations
 type KnowledgeExtractor struct {
 	index *KnowledgeIndex
 }
@@ -397,12 +397,12 @@ func NewKnowledgeExtractor(index *KnowledgeIndex) *KnowledgeExtractor {
 	return &KnowledgeExtractor{index: index}
 }
 
-// Extract converts memories into knowledge entries
-func (e *KnowledgeExtractor) Extract(ctx context.Context, memories []types.MemoryObservation) ([]types.KnowledgeEntry, error) {
+// Extract converts state observations into knowledge entries
+func (e *KnowledgeExtractor) Extract(ctx context.Context, states []types.StateObservation) ([]types.KnowledgeEntry, error) {
 	var entries []types.KnowledgeEntry
 
-	for _, mem := range memories {
-		// Only extract high/critical importance memories
+	for _, mem := range states {
+		// Only extract high/critical importance states
 		if mem.Importance != "high" && mem.Importance != "critical" {
 			continue
 		}

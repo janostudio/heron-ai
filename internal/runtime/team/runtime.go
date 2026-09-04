@@ -11,9 +11,10 @@ import (
 
 	"github.com/heron-ai/heron-engine/internal/agentstore"
 	"github.com/heron-ai/heron-engine/internal/knowledge"
-	"github.com/heron-ai/heron-engine/internal/memory"
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/runtime/call"
 	"github.com/heron-ai/heron-engine/internal/skill"
+	"github.com/heron-ai/heron-engine/internal/state"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -24,12 +25,11 @@ import (
 type Runtime struct {
 	executors  *call.Registry
 	agents     map[string]types.AgentConfig
-	memories   *memory.Store
+	states     *state.Store
 	knowledge  *knowledge.KnowledgeInjector
 	skills     *skill.SkillInjector
 	rules      map[string]types.RuleItem
 	sessions   storage.SessionWriter
-	dream      types.ConsolidationEnqueuer
 	entityLock *agentstore.EntityLocks
 }
 
@@ -41,10 +41,10 @@ func NewRuntime(executors *call.Registry, agentDefinitions ...map[string]types.A
 	return &Runtime{executors: executors, agents: agents}
 }
 
-// SetMemoryStore wires the optional Team/Agent memory extension without
-// making memory a hard dependency of the core Team scheduler.
-func (r *Runtime) SetMemoryStore(store *memory.Store) {
-	r.memories = store
+// SetStateStore wires the optional Team/Agent state extension without
+// making state a hard dependency of the core Team scheduler.
+func (r *Runtime) SetStateStore(store *state.Store) {
+	r.states = store
 }
 
 // SetKnowledgeInjector wires the optional long-term Knowledge extension.
@@ -69,10 +69,6 @@ func (r *Runtime) SetRuleDefinitions(rules map[string]types.RuleItem) {
 
 func (r *Runtime) SetSessionWriter(writer storage.SessionWriter) {
 	r.sessions = writer
-}
-
-func (r *Runtime) SetConsolidationEnqueuer(enqueuer types.ConsolidationEnqueuer) {
-	r.dream = enqueuer
 }
 
 // SetEntityLocks shares one entity lock set with the Spawn tool so inline
@@ -101,19 +97,19 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		return result, err
 	}
 
-	var teamMemory types.MemorySnapshot
-	memories := r.memories
-	if memories != nil && req.Team.Memory.Enabled {
-		memories = memories.ForConfig(req.Team.Memory)
+	var teamState types.StateSnapshot
+	states := r.states
+	if states != nil && req.Team.State.Enabled {
+		states = states.ForConfig(req.Team.State)
 	}
-	if memories != nil && req.Team.Memory.Enabled {
-		loaded, err := memories.LoadTeam(ctx, req.FlowSession.ID, req.Team.ID)
+	if states != nil && req.Team.State.Enabled {
+		loaded, err := states.LoadTeam(ctx, req.FlowSession.ID, req.Team.ID)
 		if err != nil {
 			result.Error = err.Error()
 			result.Next = &types.Route{Action: types.NextCoordinate, Reason: err.Error()}
 			return result, err
 		}
-		teamMemory = loaded
+		teamState = loaded
 	}
 
 	remaining := make(map[string]types.Call, len(req.Team.Calls))
@@ -177,6 +173,12 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		if len(ready) == 0 {
 			result.Error = "team call dependency graph cannot make progress"
 			result.Next = &types.Route{Action: types.NextFail, Reason: result.Error}
+			logging.Error("team call dependency graph cannot make progress", map[string]any{
+				"flow_session_id": req.FlowSession.ID,
+				"team_id":         req.Team.ID,
+				"team_turn_id":    req.TeamTurn.ID,
+				"error":           result.Error,
+			})
 			return result, fmt.Errorf("%s", result.Error)
 		}
 		if teamCalls+len(ready) > limits.MaxCallsPerTeamTurn {
@@ -186,7 +188,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		}
 		teamCalls += len(ready)
 
-		batchResults, err := r.runBatch(ctx, memories, req, state, ready, result.CallResults)
+		batchResults, err := r.runBatch(ctx, states, req, state, ready, result.CallResults)
 		if err != nil {
 			for _, name := range sortedCallResultNames(batchResults) {
 				callResult := batchResults[name]
@@ -203,6 +205,12 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 			result.Error = err.Error()
 			result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
 			result.Turn.Status = types.TurnFailed
+			logging.Error("team batch failed", map[string]any{
+				"flow_session_id": req.FlowSession.ID,
+				"team_id":         req.Team.ID,
+				"team_turn_id":    req.TeamTurn.ID,
+				"error":           err.Error(),
+			})
 			return result, err
 		}
 
@@ -247,6 +255,13 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 				result.Error = fmt.Sprintf("call %q failed: %s", name, callResult.Error)
 				result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
 				result.Turn.Status = types.TurnFailed
+				logging.Error("team call failed", map[string]any{
+					"flow_session_id": req.FlowSession.ID,
+					"team_id":         req.Team.ID,
+					"team_turn_id":    req.TeamTurn.ID,
+					"call_id":         name,
+					"error":           result.Error,
+				})
 				return result, fmt.Errorf("%s", result.Error)
 			}
 		}
@@ -275,12 +290,12 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 	result.Next = resolveNext(req.Team, result.CallResults)
 	result.Turn.Status = types.TurnCompleted
 	result.Turn.RecordIDs = recordIDs(result.Records)
-	if memories != nil && req.Team.Memory.Enabled {
-		teamMemory.RecordIDs = append(teamMemory.RecordIDs, result.Turn.RecordIDs...)
+	if states != nil && req.Team.State.Enabled {
+		teamState.RecordIDs = append(teamState.RecordIDs, result.Turn.RecordIDs...)
 		if reply := strings.TrimSpace(result.Reply); reply != "" {
-			teamMemory.NextSteps = append(teamMemory.NextSteps, reply)
+			teamState.NextSteps = append(teamState.NextSteps, reply)
 		}
-		if err := memories.SaveTeam(ctx, teamMemory); err != nil {
+		if err := states.SaveTeam(ctx, teamState); err != nil {
 			return result, err
 		}
 	}
@@ -298,7 +313,7 @@ func sortedCallResultNames(results map[string]types.CallResult) []string {
 
 func (r *Runtime) runBatch(
 	ctx context.Context,
-	memories *memory.Store,
+	states *state.Store,
 	req types.TeamTurnRequest,
 	state *runState,
 	ready map[string]types.Call,
@@ -377,20 +392,20 @@ func (r *Runtime) runBatch(
 			callReq.ResumeTaskID = resume.TaskID
 			callReq.ResumeApprovalID = resume.ApprovalID
 			callReq.ResumeApproval = resume.Approval
-			if memories != nil && req.Team.Memory.Enabled {
-				teamSnapshot, memoryErr := memories.LoadTeam(ctx, req.FlowSession.ID, req.Team.ID)
-				if memoryErr != nil {
+			if states != nil && req.Team.State.Enabled {
+				teamSnapshot, stateErr := states.LoadTeam(ctx, req.FlowSession.ID, req.Team.ID)
+				if stateErr != nil {
 					mu.Lock()
 					if firstErr == nil {
-						firstErr = memoryErr
+						firstErr = stateErr
 					}
-					results[name] = types.CallResult{Status: types.TurnFailed, Error: memoryErr.Error()}
+					results[name] = types.CallResult{Status: types.TurnFailed, Error: stateErr.Error()}
 					mu.Unlock()
 					return
 				}
 				callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
-					Kind: "team_memory", Text: renderMemory(teamSnapshot),
-					Source: "team_memory", Stability: "dynamic", Priority: 70,
+					Kind: "team_state", Text: renderState(teamSnapshot),
+					Source: "team_state", Stability: "dynamic", Priority: 70,
 					Compressible: true,
 				})
 			}
@@ -453,42 +468,42 @@ func (r *Runtime) runBatch(
 				}
 				callReq.AgentDefinition = &agent
 				if isSpawned {
-					// Entity memory routing (design 20 §5): a synthetic call reads
-					// its entity's persistent memory, not the session-scoped
-					// per-call memory — the same scope inline spawned children
+					// Entity state routing (design 20 §5): a synthetic call reads
+					// its entity's persistent state, not the session-scoped
+					// per-call state — the same scope inline spawned children
 					// use.
-					if memories != nil {
-						snapshot, memoryErr := memories.LoadEntity(ctx, spec.AgentID, spec.Key)
-						if memoryErr != nil {
+					if states != nil {
+						snapshot, stateErr := states.LoadEntity(ctx, spec.AgentID, spec.Key)
+						if stateErr != nil {
 							mu.Lock()
 							if firstErr == nil {
-								firstErr = memoryErr
+								firstErr = stateErr
 							}
-							results[name] = types.CallResult{Status: types.TurnFailed, Error: memoryErr.Error()}
+							results[name] = types.CallResult{Status: types.TurnFailed, Error: stateErr.Error()}
 							mu.Unlock()
 							return
 						}
-						if text := renderMemory(snapshot); text != "" {
+						if text := renderState(snapshot); text != "" {
 							callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
-								Kind: "entity_memory", Text: text, Source: "entity_memory",
+								Kind: "entity_state", Text: text, Source: "entity_state",
 								Stability: "dynamic", Priority: 60, Compressible: true,
 							})
 						}
 					}
-				} else if memories != nil && req.Team.Memory.Enabled {
-					snapshot, memoryErr := memories.LoadAgent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
-					if memoryErr != nil {
+				} else if states != nil && req.Team.State.Enabled {
+					snapshot, stateErr := states.LoadAgent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
+					if stateErr != nil {
 						mu.Lock()
 						if firstErr == nil {
-							firstErr = memoryErr
+							firstErr = stateErr
 						}
-						results[name] = types.CallResult{Status: types.TurnFailed, Error: memoryErr.Error()}
+						results[name] = types.CallResult{Status: types.TurnFailed, Error: stateErr.Error()}
 						mu.Unlock()
 						return
 					}
 					callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
-						Kind: "agent_memory", Text: renderMemory(snapshot),
-						Source: "agent_memory", Stability: "dynamic", Priority: 60,
+						Kind: "agent_state", Text: renderState(snapshot),
+						Source: "agent_state", Stability: "dynamic", Priority: 60,
 						Compressible: true,
 					})
 				}
@@ -529,42 +544,36 @@ func (r *Runtime) runBatch(
 			}
 			callResult, err := r.executors.Execute(execCtx, callReq)
 			unlockEntity()
+			if err != nil {
+				logging.Error("call executor failed", map[string]any{
+					"flow_session_id": req.FlowSession.ID,
+					"team_id":         req.Team.ID,
+					"team_turn_id":    req.TeamTurn.ID,
+					"call_id":         name,
+					"call_type":       string(configured.Type),
+					"error":           err.Error(),
+				})
+			}
 			if callReq.ResumeApproval != nil {
 				decision := *callReq.ResumeApproval
 				callResult.Approval = &decision
 			}
-			if err == nil && callResult.Status == types.TurnCompleted && memories != nil {
+			if err == nil && callResult.Status == types.TurnCompleted && states != nil {
 				if isSpawned {
-					// Entity memory routing: persist to the entity scope with
+					// Entity state routing: persist to the entity scope with
 					// the same deterministic update inline children apply.
-					if memoryErr := saveEntityMemory(ctx, memories, *spec, contextBlockText(callReq.ContextBlocks, "entity_memory"), callResult); memoryErr != nil {
-						err = memoryErr
+					if stateErr := saveEntityState(ctx, states, *spec, contextBlockText(callReq.ContextBlocks, "entity_state"), callResult); stateErr != nil {
+						err = stateErr
 						callResult.Status = types.TurnFailed
-						callResult.Error = memoryErr.Error()
+						callResult.Error = stateErr.Error()
 					}
-				} else if req.Team.Memory.Enabled {
-					if memoryErr := r.saveAgentMemory(ctx, memories, req, configured, contextBlockText(callReq.ContextBlocks, "agent_memory"), callResult); memoryErr != nil {
-						err = memoryErr
+				} else if req.Team.State.Enabled {
+					if stateErr := r.saveAgentState(ctx, states, req, configured, contextBlockText(callReq.ContextBlocks, "agent_state"), callResult); stateErr != nil {
+						err = stateErr
 						callResult.Status = types.TurnFailed
-						callResult.Error = memoryErr.Error()
+						callResult.Error = stateErr.Error()
 					}
 				}
-			}
-			if err == nil && callResult.Status == types.TurnCompleted &&
-				!isSpawned &&
-				r.dream != nil && req.Team.Memory.Enabled && len(callResult.Records) > 0 {
-				// Dream maintenance is best effort and never changes the
-				// user-facing call result. Synthetic calls are skipped: their
-				// memory lives in the entity scope, not the session-scoped
-				// per-call memory the consolidation worker writes.
-				_ = r.dream.Enqueue(context.Background(), types.ContextConsolidation{
-					FlowSessionID: callReq.FlowSession.ID,
-					TeamID:        callReq.TeamTurn.TeamID,
-					AgentID:       callReq.Call.AgentID,
-					CallID:        callReq.Call.ID,
-					Records:       callResult.Records,
-					Status:        "queued",
-				})
 			}
 			mu.Lock()
 			defer mu.Unlock()
@@ -864,18 +873,18 @@ func sessionStatusForCall(status types.TurnStatus) types.SessionStatus {
 	}
 }
 
-func (r *Runtime) saveAgentMemory(
+func (r *Runtime) saveAgentState(
 	ctx context.Context,
-	memories *memory.Store,
+	states *state.Store,
 	req types.TeamTurnRequest,
 	configured types.Call,
 	previousText string,
 	result types.CallResult,
 ) error {
-	if configured.Type != types.CallAgent || memories == nil {
+	if configured.Type != types.CallAgent || states == nil {
 		return nil
 	}
-	snapshot, err := memories.LoadAgent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
+	snapshot, err := states.LoadAgent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
 	if err != nil {
 		return err
 	}
@@ -892,15 +901,15 @@ func (r *Runtime) saveAgentMemory(
 		if operation.Path == "" {
 			continue
 		}
-		snapshot.Workspace = append(snapshot.Workspace, types.MemoryWorkspaceRef{
+		snapshot.Workspace = append(snapshot.Workspace, types.StateWorkspaceRef{
 			Path:     operation.Path,
 			Revision: operation.Revision,
 		})
 	}
-	return memories.SaveAgent(ctx, snapshot)
+	return states.SaveAgent(ctx, snapshot)
 }
 
-func renderMemory(snapshot types.MemorySnapshot) string {
+func renderState(snapshot types.StateSnapshot) string {
 	var sections []string
 	if snapshot.Goal != "" {
 		sections = append(sections, "Goal: "+snapshot.Goal)

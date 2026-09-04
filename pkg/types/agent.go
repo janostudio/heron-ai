@@ -112,7 +112,7 @@ type ContextConfig struct {
 	MicrocompactThresholdChars int     `yaml:"microcompact_threshold_chars,omitempty" json:"microcompact_threshold_chars,omitempty"`
 	MicrocompactMaxChars       int     `yaml:"microcompact_max_chars,omitempty" json:"microcompact_max_chars,omitempty"`
 	RecentMessageGroups        int     `yaml:"recent_message_groups,omitempty" json:"recent_message_groups,omitempty"`
-	Summarizer                 string  `yaml:"summarizer,omitempty" json:"summarizer,omitempty"` // "model"(默认) | "mechanical"
+	Compactor                  string  `yaml:"compactor,omitempty" json:"compactor,omitempty"` // "model"(默认) | "mechanical"
 }
 
 func (c ContextConfig) WithDefaults() ContextConfig {

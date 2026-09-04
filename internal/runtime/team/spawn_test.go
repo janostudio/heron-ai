@@ -12,8 +12,8 @@ import (
 
 	"github.com/heron-ai/heron-engine/internal/agent"
 	"github.com/heron-ai/heron-engine/internal/agentstore"
-	"github.com/heron-ai/heron-engine/internal/memory"
 	"github.com/heron-ai/heron-engine/internal/runtime/call"
+	"github.com/heron-ai/heron-engine/internal/state"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/internal/tool"
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -310,7 +310,7 @@ func newDownstreamRuntime(t *testing.T, runner agent.AgentRunner, files storage.
 		"child-agent":  {Name: "child-agent"},
 		"verify-agent": {Name: "verify-agent"},
 	})
-	runtime.SetMemoryStore(memory.NewStore(files, memory.Limits{}))
+	runtime.SetStateStore(state.NewStore(files, state.Limits{}))
 	return runtime
 }
 
@@ -394,18 +394,18 @@ func TestRuntime_AsyncDownstreamChildFailureFailsTeamWithKey(t *testing.T) {
 	assert.False(t, ran, "downstream must not run after a group member failed")
 }
 
-func TestRuntime_EntityMemoryRoutingForSyntheticCalls(t *testing.T) {
+func TestRuntime_EntityStateRoutingForSyntheticCalls(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
-	memories := memory.NewStore(files, memory.Limits{})
-	// Pre-existing entity memory must reach the child as entity_memory.
-	require.NoError(t, memories.SaveEntity(context.Background(), "child-agent", "k1", types.MemorySnapshot{
+	states := state.NewStore(files, state.Limits{})
+	// Pre-existing entity state must reach the child as entity_state.
+	require.NoError(t, states.SaveEntity(context.Background(), "child-agent", "k1", types.StateSnapshot{
 		Goal: "keep fixing",
 	}))
 	runner := &downstreamSpawnRunner{items: []downstreamSpawnItem{{Key: "k1", Item: "fix a.go"}}}
 	runtime := newDownstreamRuntime(t, runner, files)
 
 	team := downstreamSpawnTeam()
-	team.Memory = types.MemoryConfig{Enabled: true}
+	team.State = types.StateConfig{Enabled: true}
 	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
 		FlowSession: types.FlowSession{ID: "fs-1"},
 		FlowTurn:    types.FlowTurn{ID: "ft-1"},
@@ -416,39 +416,39 @@ func TestRuntime_EntityMemoryRoutingForSyntheticCalls(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.TurnCompleted, result.Turn.Status)
 
-	// The static parent kept its session-scoped per-call memory.
-	parentMemory, err := memories.LoadAgent(context.Background(), "fs-1", "fix-team", "fixer")
+	// The static parent kept its session-scoped per-call state.
+	parentState, err := states.LoadAgent(context.Background(), "fs-1", "fix-team", "fixer")
 	require.NoError(t, err)
-	assert.Equal(t, "dispatch fixes", parentMemory.Goal)
+	assert.Equal(t, "dispatch fixes", parentState.Goal)
 
-	// The synthetic child loaded the entity memory as a context block...
+	// The synthetic child loaded the entity state as a context block...
 	blocks := runner.capturedChildBlocks()
 	sawItem, sawEntity := false, false
 	for _, block := range blocks {
 		if block.Kind == "fanout_item" && strings.Contains(block.Text, "fix a.go") {
 			sawItem = true
 		}
-		if block.Kind == "entity_memory" && strings.Contains(block.Text, "keep fixing") {
+		if block.Kind == "entity_state" && strings.Contains(block.Text, "keep fixing") {
 			sawEntity = true
 		}
 	}
 	assert.True(t, sawItem)
 	assert.True(t, sawEntity)
 
-	// ...and persisted its outcome to the entity scope (previous memory text
+	// ...and persisted its outcome to the entity scope (previous state text
 	// exists, so the reply lands in NextSteps), never to the session scope.
-	entityMemory, err := memories.LoadEntity(context.Background(), "child-agent", "k1")
+	entityState, err := states.LoadEntity(context.Background(), "child-agent", "k1")
 	require.NoError(t, err)
-	assert.Equal(t, "keep fixing", entityMemory.Goal)
-	require.Len(t, entityMemory.NextSteps, 1)
-	assert.Equal(t, "child outcome k1", entityMemory.NextSteps[0])
+	assert.Equal(t, "keep fixing", entityState.Goal)
+	require.Len(t, entityState.NextSteps, 1)
+	assert.Equal(t, "child outcome k1", entityState.NextSteps[0])
 
-	// No session-scoped memory was created for the synthetic call id.
-	childSessionMemory, err := memories.LoadAgent(context.Background(), "fs-1", "fix-team", "fixer/k1")
+	// No session-scoped state was created for the synthetic call id.
+	childSessionState, err := states.LoadAgent(context.Background(), "fs-1", "fix-team", "fixer/k1")
 	require.NoError(t, err)
-	assert.Empty(t, childSessionMemory.Goal)
-	assert.Empty(t, childSessionMemory.Confirmed)
-	assert.Empty(t, childSessionMemory.NextSteps)
+	assert.Empty(t, childSessionState.Goal)
+	assert.Empty(t, childSessionState.Confirmed)
+	assert.Empty(t, childSessionState.NextSteps)
 }
 
 // busyEntityRunner inserts two children with the same entity key from two
@@ -714,16 +714,16 @@ func TestRuntime_TurnLoopSpawnDownstreamEndToEnd(t *testing.T) {
 		callMarkerRenderer{},
 	)
 	entityRegistry := agentstore.NewRegistry(files)
-	memories := memory.NewStore(files, memory.Limits{})
+	states := state.NewStore(files, state.Limits{})
 	entityLocks := agentstore.NewEntityLocks()
-	spawnTool := agent.NewSpawnTool(turnLoop, agents, entityRegistry, memories)
+	spawnTool := agent.NewSpawnTool(turnLoop, agents, entityRegistry, states)
 	spawnTool.SetEntityLocks(entityLocks)
 	toolRegistry.Register(spawnTool)
 
 	executors := call.NewRegistry()
 	require.NoError(t, executors.Register(call.NewAgentExecutor(turnLoop)))
 	runtime := NewRuntime(executors, agents)
-	runtime.SetMemoryStore(memories)
+	runtime.SetStateStore(states)
 	runtime.SetEntityLocks(entityLocks)
 
 	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
@@ -765,7 +765,7 @@ func TestRuntime_TurnLoopSpawnDownstreamEndToEnd(t *testing.T) {
 	assert.Contains(t, verifierPrompt, "fixes dispatched", "downstream inputs must carry the parent record")
 
 	// ## Your Item reached the child, and the entity was persisted with its
-	// own memory scope.
+	// own state scope.
 	childPrompt := model.promptFor("fixer/k1")
 	assert.Contains(t, childPrompt, "fix a.go")
 
@@ -773,9 +773,9 @@ func TestRuntime_TurnLoopSpawnDownstreamEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "child-agent", entity.Agent)
 
-	entityMemory, err := memories.LoadEntity(context.Background(), "child-agent", "k1")
+	entityState, err := states.LoadEntity(context.Background(), "child-agent", "k1")
 	require.NoError(t, err)
-	assert.Equal(t, `"fix a.go"`, entityMemory.Goal)
-	require.Len(t, entityMemory.Confirmed, 1)
-	assert.Equal(t, "child outcome", entityMemory.Confirmed[0])
+	assert.Equal(t, `"fix a.go"`, entityState.Goal)
+	require.Len(t, entityState.Confirmed, 1)
+	assert.Equal(t, "child outcome", entityState.Confirmed[0])
 }

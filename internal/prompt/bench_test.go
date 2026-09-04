@@ -43,7 +43,7 @@ func BenchmarkRenderPrompt(b *testing.B) {
 		ContextBlocks: []types.ContextBlock{
 			{Kind: "rules", Text: "Do not expose secrets.", Placement: "system", Source: "rule"},
 			{Kind: "knowledge", Text: "The repository uses append-only JSONL sessions.", Placement: "system", Source: "knowledge"},
-			{Kind: "team_memory", Text: "We already inspected the loader.", Placement: "user", Source: "team_memory"},
+			{Kind: "team_state", Text: "We already inspected the loader.", Placement: "user", Source: "team_state"},
 			{Kind: "records", Text: recordJSON(), Placement: "user", Source: "shared_records"},
 		},
 	}

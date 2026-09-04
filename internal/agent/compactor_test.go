@@ -9,7 +9,7 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-func TestMechanicalSummarizerMatchesBuildContextSummary(t *testing.T) {
+func TestMechanicalCompactorMatchesBuildContextSummary(t *testing.T) {
 	groups := [][]types.Message{
 		{
 			{Role: "user", Content: "please implement the parser"},
@@ -20,9 +20,9 @@ func TestMechanicalSummarizerMatchesBuildContextSummary(t *testing.T) {
 		},
 	}
 
-	got, err := (mechanicalSummarizer{}).Summarize(context.Background(), groups)
+	got, err := (mechanicalCompactor{}).Compact(context.Background(), groups)
 	if err != nil {
-		t.Fatalf("Summarize returned error: %v", err)
+		t.Fatalf("Compact returned error: %v", err)
 	}
 	want := buildContextSummary(groups, 0)
 	if got != want {
@@ -30,15 +30,15 @@ func TestMechanicalSummarizerMatchesBuildContextSummary(t *testing.T) {
 	}
 }
 
-type errorSummarizer struct{}
+type errorCompactor struct{}
 
-func (errorSummarizer) Summarize(context.Context, [][]types.Message) (string, error) {
-	return "", errors.New("summarizer boom")
+func (errorCompactor) Compact(context.Context, [][]types.Message) (string, error) {
+	return "", errors.New("compactor boom")
 }
 
-func TestCompactFallsBackToMechanicalOnSummarizerError(t *testing.T) {
+func TestCompactFallsBackToMechanicalOnCompactorError(t *testing.T) {
 	config := types.ContextConfig{MaxInputTokens: 2000, RecentMessageGroups: 1}
-	mgr := NewContextManagerWithSummarizer(config, nil, errorSummarizer{})
+	mgr := NewContextManagerWithCompactor(config, nil, errorCompactor{})
 
 	// Add enough messages to be dropped on forced compaction.
 	for i := 0; i < 20; i++ {
@@ -69,15 +69,15 @@ func TestCompactFallsBackToMechanicalOnSummarizerError(t *testing.T) {
 	}
 }
 
-type fixedSummarizer struct{ text string }
+type fixedCompactor struct{ text string }
 
-func (f fixedSummarizer) Summarize(context.Context, [][]types.Message) (string, error) {
+func (f fixedCompactor) Compact(context.Context, [][]types.Message) (string, error) {
 	return f.text, nil
 }
 
-func TestCompactUsesInjectedSummarizer(t *testing.T) {
+func TestCompactUsesInjectedCompactor(t *testing.T) {
 	config := types.ContextConfig{MaxInputTokens: 2000, RecentMessageGroups: 1}
-	mgr := NewContextManagerWithSummarizer(config, nil, fixedSummarizer{text: "LLM-produced summary of the dropped context"})
+	mgr := NewContextManagerWithCompactor(config, nil, fixedCompactor{text: "LLM-produced summary of the dropped context"})
 
 	for i := 0; i < 20; i++ {
 		if err := mgr.AddMessage(types.Message{Role: "user", Content: strings.Repeat("x", 100)}); err != nil {
@@ -97,19 +97,19 @@ func TestCompactUsesInjectedSummarizer(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("expected injected summarizer text in compaction summary")
+		t.Fatalf("expected injected compactor text in compaction summary")
 	}
 }
 
-func TestNewContextManagerWithSummarizerNilDefaults(t *testing.T) {
-	mgr := NewContextManagerWithSummarizer(types.ContextConfig{}, nil, nil)
-	if mgr.summarizer == nil {
-		t.Fatalf("expected default mechanical summarizer when nil")
+func TestNewContextManagerWithCompactorNilDefaults(t *testing.T) {
+	mgr := NewContextManagerWithCompactor(types.ContextConfig{}, nil, nil)
+	if mgr.compactor == nil {
+		t.Fatalf("expected default mechanical compactor when nil")
 	}
 	if mgr.estimator == nil {
 		t.Fatalf("expected default estimator when nil")
 	}
-	if _, ok := mgr.summarizer.(mechanicalSummarizer); !ok {
-		t.Fatalf("expected mechanicalSummarizer, got %T", mgr.summarizer)
+	if _, ok := mgr.compactor.(mechanicalCompactor); !ok {
+		t.Fatalf("expected mechanicalCompactor, got %T", mgr.compactor)
 	}
 }

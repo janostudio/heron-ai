@@ -18,30 +18,30 @@ func newRegistryWith(t *testing.T, infos ...ExtensionInfo) *ExtensionRegistry {
 
 func TestCheckCapabilities_AllRequiredSatisfied(t *testing.T) {
 	reg := newRegistryWith(t,
-		ExtensionInfo{Name: "memory", Type: "lua", Enabled: true},
+		ExtensionInfo{Name: "state", Type: "lua", Enabled: true},
 		ExtensionInfo{Name: "knowledge", Type: "lua", Enabled: true},
 	)
 
-	missing, err := reg.CheckCapabilities([]string{"memory", "knowledge"}, nil)
+	missing, err := reg.CheckCapabilities([]string{"state", "knowledge"}, nil)
 	require.NoError(t, err)
 	assert.Empty(t, missing)
 }
 
 func TestCheckCapabilities_MissingRequiredReturnsError(t *testing.T) {
-	reg := newRegistryWith(t, ExtensionInfo{Name: "memory", Type: "lua", Enabled: true})
+	reg := newRegistryWith(t, ExtensionInfo{Name: "state", Type: "lua", Enabled: true})
 
-	missing, err := reg.CheckCapabilities([]string{"memory", "guardrail"}, nil)
+	missing, err := reg.CheckCapabilities([]string{"state", "guardrail"}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "guardrail")
 	assert.Nil(t, missing)
 }
 
 func TestCheckCapabilities_RequiredDisabledReturnsError(t *testing.T) {
-	reg := newRegistryWith(t, ExtensionInfo{Name: "memory", Type: "lua", Enabled: false})
+	reg := newRegistryWith(t, ExtensionInfo{Name: "state", Type: "lua", Enabled: false})
 
-	_, err := reg.CheckCapabilities([]string{"memory"}, nil)
+	_, err := reg.CheckCapabilities([]string{"state"}, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "memory")
+	assert.Contains(t, err.Error(), "state")
 }
 
 func TestCheckCapabilities_WorkspaceAndRecordsExempt(t *testing.T) {
@@ -53,10 +53,10 @@ func TestCheckCapabilities_WorkspaceAndRecordsExempt(t *testing.T) {
 }
 
 func TestCheckCapabilities_OptionalMissingNotErrorButReported(t *testing.T) {
-	reg := newRegistryWith(t, ExtensionInfo{Name: "memory", Type: "lua", Enabled: true})
+	reg := newRegistryWith(t, ExtensionInfo{Name: "state", Type: "lua", Enabled: true})
 
 	missing, err := reg.CheckCapabilities(
-		[]string{"memory"},
+		[]string{"state"},
 		[]string{"knowledge", "observability"},
 	)
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func TestCheckCapabilities_OptionalMissingNotErrorButReported(t *testing.T) {
 
 func TestCheckCapabilities_OptionalSatisfiedNotReported(t *testing.T) {
 	reg := newRegistryWith(t,
-		ExtensionInfo{Name: "memory", Type: "lua", Enabled: true},
+		ExtensionInfo{Name: "state", Type: "lua", Enabled: true},
 		ExtensionInfo{Name: "knowledge", Type: "lua", Enabled: true},
 	)
 
@@ -75,13 +75,13 @@ func TestCheckCapabilities_OptionalSatisfiedNotReported(t *testing.T) {
 }
 
 func TestHasCapability_RegisteredEnabled(t *testing.T) {
-	reg := newRegistryWith(t, ExtensionInfo{Name: "memory", Type: "lua", Enabled: true})
-	assert.True(t, reg.HasCapability("memory"))
+	reg := newRegistryWith(t, ExtensionInfo{Name: "state", Type: "lua", Enabled: true})
+	assert.True(t, reg.HasCapability("state"))
 }
 
 func TestHasCapability_RegisteredDisabled(t *testing.T) {
-	reg := newRegistryWith(t, ExtensionInfo{Name: "memory", Type: "lua", Enabled: false})
-	assert.False(t, reg.HasCapability("memory"))
+	reg := newRegistryWith(t, ExtensionInfo{Name: "state", Type: "lua", Enabled: false})
+	assert.False(t, reg.HasCapability("state"))
 }
 
 func TestHasCapability_NotRegistered(t *testing.T) {
@@ -92,8 +92,8 @@ func TestHasCapability_NotRegistered(t *testing.T) {
 func TestHasCapability_DoesNotMatchByType(t *testing.T) {
 	// A capability must be registered under its Name; the Type field
 	// ("lua"/"wasm") is the runtime format, not a capability key.
-	reg := newRegistryWith(t, ExtensionInfo{Name: "ext1", Type: "memory", Enabled: true})
-	assert.False(t, reg.HasCapability("memory"))
+	reg := newRegistryWith(t, ExtensionInfo{Name: "ext1", Type: "state", Enabled: true})
+	assert.False(t, reg.HasCapability("state"))
 	assert.True(t, reg.HasCapability("ext1"))
 }
 

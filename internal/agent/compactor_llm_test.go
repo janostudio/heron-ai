@@ -8,9 +8,9 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// capturingSummarizerModel captures the Chat arguments so tests can assert on
-// the request the llmSummarizer produced.
-type capturingSummarizerModel struct {
+// capturingCompactorModel captures the Chat arguments so tests can assert on
+// the request the llmCompactor produced.
+type capturingCompactorModel struct {
 	lastMessages []types.Message
 	lastTools    []types.JSONSchema
 	lastConfig   types.ModelConfig
@@ -18,7 +18,7 @@ type capturingSummarizerModel struct {
 	err          error
 }
 
-func (m *capturingSummarizerModel) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
+func (m *capturingCompactorModel) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
 	m.lastMessages = messages
 	m.lastTools = tools
 	m.lastConfig = config
@@ -31,21 +31,21 @@ func (m *capturingSummarizerModel) Chat(ctx context.Context, messages []types.Me
 	return &types.ChatResponse{Text: m.text}, nil
 }
 
-func (m *capturingSummarizerModel) ChatStream(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (<-chan types.ChatChunk, error) {
+func (m *capturingCompactorModel) ChatStream(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (<-chan types.ChatChunk, error) {
 	return nil, nil
 }
 
-func TestLLMSummarizerBuildsRequest(t *testing.T) {
-	model := &capturingSummarizerModel{text: "  summarized state  "}
+func TestLLMCompactorBuildsRequest(t *testing.T) {
+	model := &capturingCompactorModel{text: "  summarized state  "}
 	base := types.ModelConfig{Model: "test-model", APIKey: "key"}
-	s := NewLLMSummarizer(model, base)
+	s := NewLLMCompactor(model, base)
 
 	groups := [][]types.Message{
 		{{Role: "user", Content: "build the thing"}},
 	}
-	got, err := s.Summarize(context.Background(), groups)
+	got, err := s.Compact(context.Background(), groups)
 	if err != nil {
-		t.Fatalf("Summarize returned error: %v", err)
+		t.Fatalf("Compact returned error: %v", err)
 	}
 	if got != "summarized state" {
 		t.Fatalf("expected trimmed text, got %q", got)
@@ -88,14 +88,14 @@ func TestLLMSummarizerBuildsRequest(t *testing.T) {
 	}
 }
 
-func TestLLMSummarizerNilResponse(t *testing.T) {
-	model := &capturingSummarizerModel{}
-	s := NewLLMSummarizer(model, types.ModelConfig{})
+func TestLLMCompactorNilResponse(t *testing.T) {
+	model := &capturingCompactorModel{}
+	s := NewLLMCompactor(model, types.ModelConfig{})
 
 	// Force nil response via a model that returns nil, nil.
 	nilModel := &nilResponseModel{}
-	s2 := NewLLMSummarizer(nilModel, types.ModelConfig{})
-	_, err := s2.Summarize(context.Background(), [][]types.Message{{{Role: "user", Content: "x"}}})
+	s2 := NewLLMCompactor(nilModel, types.ModelConfig{})
+	_, err := s2.Compact(context.Background(), [][]types.Message{{{Role: "user", Content: "x"}}})
 	if err == nil {
 		t.Fatalf("expected error on nil response")
 	}

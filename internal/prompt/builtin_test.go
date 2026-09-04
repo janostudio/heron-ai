@@ -8,7 +8,7 @@ import (
 )
 
 func TestBuiltinTemplates(t *testing.T) {
-	expected := []string{"execution-management", "tool-usage", "memory-management", "knowledge-query", "perspective-isolation", "output-format"}
+	expected := []string{"execution-management", "tool-usage", "state-management", "knowledge-query", "perspective-isolation", "output-format"}
 	if len(BuiltinTemplates) != len(expected) {
 		t.Fatalf("templates=%d want=%d", len(BuiltinTemplates), len(expected))
 	}
@@ -45,9 +45,9 @@ func TestBuildUserPromptUsesContextBlocksOnly(t *testing.T) {
 	prompt := r.BuildUserPrompt(types.AgentConfig{}, types.AgentRequest{}, RenderContext{ContextBlocks: []types.ContextBlock{
 		{Kind: "responsibility", Text: "Analyze the data", Source: "call", Priority: 100},
 		{Kind: "input", Text: "Hello, world", Source: "user", Priority: 80},
-		{Kind: "team_memory", Text: "Already inspected the loader", Source: "team_memory", Priority: 70},
+		{Kind: "team_state", Text: "Already inspected the loader", Source: "team_state", Priority: 70},
 	}})
-	for _, expected := range []string{"## Responsibility", "Analyze the data", "## Input", "Hello, world", "## Team Memory", "Already inspected the loader"} {
+	for _, expected := range []string{"## Responsibility", "Analyze the data", "## Input", "Hello, world", "## Team State", "Already inspected the loader"} {
 		if !strings.Contains(prompt, expected) {
 			t.Errorf("missing %q:\n%s", expected, prompt)
 		}
@@ -63,7 +63,7 @@ func TestBuildUserPromptRendersRecordContextBlock(t *testing.T) {
 	data := formatRecords(records)
 	prompt := r.BuildUserPrompt(types.AgentConfig{}, types.AgentRequest{}, RenderContext{ContextBlocks: []types.ContextBlock{
 		{Kind: "knowledge", Text: "The repository uses JSONL sessions.", Source: "knowledge"},
-		{Kind: "agent_memory", Text: "Keep changes small.", Source: "agent_memory"},
+		{Kind: "agent_state", Text: "Keep changes small.", Source: "agent_state"},
 		{Kind: "records", Text: data, Source: "shared_records"},
 	}})
 	for _, expected := range []string{"The repository uses JSONL sessions.", "Keep changes small.", "## Shared Records", "DiagnosisReport", "confidence: 0.9"} {
@@ -77,9 +77,9 @@ func TestBuildUserPromptRendersSpawnContextBlocks(t *testing.T) {
 	r := NewPromptRenderer(nil)
 	prompt := r.BuildUserPrompt(types.AgentConfig{}, types.AgentRequest{}, RenderContext{ContextBlocks: []types.ContextBlock{
 		{Kind: "fanout_item", Text: `{"file":"a.go"}`, Source: "spawn", Priority: 85},
-		{Kind: "entity_memory", Text: "Goal: fix the assigned file", Source: "entity_memory", Priority: 60},
+		{Kind: "entity_state", Text: "Goal: fix the assigned file", Source: "entity_state", Priority: 60},
 	}})
-	for _, expected := range []string{"## Your Item", `{"file":"a.go"}`, "## Entity Memory", "Goal: fix the assigned file"} {
+	for _, expected := range []string{"## Your Item", `{"file":"a.go"}`, "## Entity State", "Goal: fix the assigned file"} {
 		if !strings.Contains(prompt, expected) {
 			t.Errorf("missing %q:\n%s", expected, prompt)
 		}
@@ -91,7 +91,7 @@ func TestRenderKeepsSystemAndUserContextSeparated(t *testing.T) {
 	messages, err := r.Render(types.AgentConfig{Persona: types.PersonaConfig{Role: "Assistant"}}, types.AgentRequest{}, RenderContext{ContextBlocks: []types.ContextBlock{
 		{Kind: "rules", Text: "stable rule", Placement: "system", Source: "rule"},
 		{Kind: "input", Text: "Read project/src/config.js", Placement: "user", Source: "user"},
-		{Kind: "team_memory", Text: "known revision", Placement: "user", Source: "team_memory"},
+		{Kind: "team_state", Text: "known revision", Placement: "user", Source: "team_state"},
 	}})
 	if err != nil {
 		t.Fatal(err)

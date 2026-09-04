@@ -21,15 +21,17 @@ type SettingsConfig struct {
 
 // KnowledgeConfig 配置知识自动学习相关能力。
 type KnowledgeConfig struct {
-	// CuratorModel 为 Knowledge Curator 提炼指定的模型名；空 = 用默认模型。
-	CuratorModel string `json:"curator_model,omitempty"`
+	// SummaryModel 为知识总结指定的模型名；空 = 用默认模型。
+	SummaryModel string `json:"summary_model,omitempty"`
 }
 
 type LoggingConfig struct {
-	Level       string `json:"level"`
-	Output      string `json:"output"`
-	MaxFileSize string `json:"max_file_size"`
-	MaxBackups  int    `json:"max_backups"`
+	Level         string `json:"level"`
+	Output        string `json:"output"`
+	Dir           string `json:"dir"`
+	MaxFileSize   string `json:"max_file_size"`
+	MaxBackups    int    `json:"max_backups"`
+	RetentionDays int    `json:"retention_days"`
 }
 
 type ObservabilityConfig struct {

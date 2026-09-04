@@ -1,7 +1,7 @@
 id: qa_team
 goal: 回答用户的问题。
 
-memory:
+state:
   enabled: true
   max_items: 20
   max_chars: 4000

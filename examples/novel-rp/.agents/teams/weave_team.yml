@@ -1,6 +1,6 @@
 id: weave_team
 goal: 旁白把各车道演绎编织成本轮正文 StoryTurn，作为回合终止节点输出给用户。
-memory:
+state:
   enabled: true
   max_items: 20
   max_chars: 12000

@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"github.com/heron-ai/heron-engine/internal/agentstore"
-	"github.com/heron-ai/heron-engine/internal/memory"
+	"github.com/heron-ai/heron-engine/internal/state"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -218,18 +218,18 @@ func (s *runState) tryLockEntity(agentID, key string) (func(), bool) {
 	return s.locks.TryLock(agentID, key)
 }
 
-// saveEntityMemory applies the same deterministic update the Spawn tool uses
-// for inline children (spawn.go saveEntityMemory): the item becomes the goal,
+// saveEntityState applies the same deterministic update the Spawn tool uses
+// for inline children (spawn.go saveEntityState): the item becomes the goal,
 // the first reply is confirmed, later replies become next steps, and
 // workspace refs are tracked.
-func saveEntityMemory(
+func saveEntityState(
 	ctx context.Context,
-	memories *memory.Store,
+	states *state.Store,
 	spec agentstore.SpawnedCallSpec,
-	previousMemoryText string,
+	previousStateText string,
 	result types.CallResult,
 ) error {
-	snapshot, err := memories.LoadEntity(ctx, spec.AgentID, spec.Key)
+	snapshot, err := states.LoadEntity(ctx, spec.AgentID, spec.Key)
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func saveEntityMemory(
 		snapshot.Goal = string(itemJSON)
 	}
 	if reply := strings.TrimSpace(result.Reply); reply != "" {
-		if strings.TrimSpace(previousMemoryText) == "" {
+		if strings.TrimSpace(previousStateText) == "" {
 			snapshot.Confirmed = append(snapshot.Confirmed, reply)
 		} else {
 			snapshot.NextSteps = append(snapshot.NextSteps, reply)
@@ -251,10 +251,10 @@ func saveEntityMemory(
 		if operation.Path == "" {
 			continue
 		}
-		snapshot.Workspace = append(snapshot.Workspace, types.MemoryWorkspaceRef{
+		snapshot.Workspace = append(snapshot.Workspace, types.StateWorkspaceRef{
 			Path:     operation.Path,
 			Revision: operation.Revision,
 		})
 	}
-	return memories.SaveEntity(ctx, spec.AgentID, spec.Key, snapshot)
+	return states.SaveEntity(ctx, spec.AgentID, spec.Key, snapshot)
 }
