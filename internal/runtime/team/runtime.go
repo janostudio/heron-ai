@@ -679,8 +679,28 @@ func (r *Runtime) appendCallStarted(ctx context.Context, req types.CallRequest, 
 			CreatedAt:     req.TeamSession.CreatedAt,
 			UpdatedAt:     time.Now().UTC(),
 		}
-		if _, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
-			Type:          types.EventAgentSessionCreated,
+		if _, err := r.sessions.Append(ctx, req.FlowSession.ID, storage.LayerTeam, storage.SessionEvent{
+			EventHeader: types.EventHeader{
+				Type:          types.EventAgentSessionCreated,
+				FlowSessionID: req.FlowSession.ID,
+				FlowTurnID:    req.FlowTurn.ID,
+				TeamSessionID: req.TeamSession.ID,
+				TeamTurnID:    req.TeamTurn.ID,
+				TeamID:        req.TeamTurn.TeamID,
+				CallID:        req.Call.ID,
+				CallTurnID:    req.CallTurnID,
+				CallType:      req.Call.Type,
+				Attempt:       req.Attempt,
+				RecoveryOf:    req.RecoveryOf,
+			},
+			Payload: map[string]any{"agent_session": agentSession},
+		}); err != nil {
+			return err
+		}
+	}
+	_, err := r.sessions.Append(ctx, req.FlowSession.ID, storage.LayerTeam, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          eventType,
 			FlowSessionID: req.FlowSession.ID,
 			FlowTurnID:    req.FlowTurn.ID,
 			TeamSessionID: req.TeamSession.ID,
@@ -691,23 +711,7 @@ func (r *Runtime) appendCallStarted(ctx context.Context, req types.CallRequest, 
 			CallType:      req.Call.Type,
 			Attempt:       req.Attempt,
 			RecoveryOf:    req.RecoveryOf,
-			Payload:       map[string]any{"agent_session": agentSession},
-		}); err != nil {
-			return err
-		}
-	}
-	_, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
-		Type:          eventType,
-		FlowSessionID: req.FlowSession.ID,
-		FlowTurnID:    req.FlowTurn.ID,
-		TeamSessionID: req.TeamSession.ID,
-		TeamTurnID:    req.TeamTurn.ID,
-		TeamID:        req.TeamTurn.TeamID,
-		CallID:        req.Call.ID,
-		CallTurnID:    req.CallTurnID,
-		CallType:      req.Call.Type,
-		Attempt:       req.Attempt,
-		RecoveryOf:    req.RecoveryOf,
+		},
 		Payload: spawnEventPayload(map[string]any{
 			"call":  req.Call,
 			"input": req.Input,
@@ -727,23 +731,9 @@ func (r *Runtime) appendCallCompleted(ctx context.Context, req types.CallRequest
 	case types.CallWebhook:
 		eventType = types.EventWebhookTurnCompleted
 	}
-	if _, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
-		Type:          eventType,
-		FlowSessionID: req.FlowSession.ID,
-		FlowTurnID:    req.FlowTurn.ID,
-		TeamSessionID: req.TeamSession.ID,
-		TeamTurnID:    req.TeamTurn.ID,
-		TeamID:        req.TeamTurn.TeamID,
-		CallID:        req.Call.ID,
-		CallTurnID:    req.CallTurnID,
-		CallType:      req.Call.Type,
-		Payload:       spawnEventPayload(map[string]any{"call_result": result}, spawn),
-	}); err != nil {
-		return err
-	}
-	if result.Approval != nil {
-		_, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
-			Type:          types.EventApprovalResolved,
+	if _, err := r.sessions.Append(ctx, req.FlowSession.ID, storage.LayerTeam, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          eventType,
 			FlowSessionID: req.FlowSession.ID,
 			FlowTurnID:    req.FlowTurn.ID,
 			TeamSessionID: req.TeamSession.ID,
@@ -752,9 +742,27 @@ func (r *Runtime) appendCallCompleted(ctx context.Context, req types.CallRequest
 			CallID:        req.Call.ID,
 			CallTurnID:    req.CallTurnID,
 			CallType:      req.Call.Type,
-			Attempt:       req.Attempt,
-			RecoveryOf:    req.RecoveryOf,
-			Payload:       map[string]any{"approval": result.Approval},
+		},
+		Payload: spawnEventPayload(map[string]any{"call_result": result}, spawn),
+	}); err != nil {
+		return err
+	}
+	if result.Approval != nil {
+		_, err := r.sessions.Append(ctx, req.FlowSession.ID, storage.LayerTeam, storage.SessionEvent{
+			EventHeader: types.EventHeader{
+				Type:          types.EventApprovalResolved,
+				FlowSessionID: req.FlowSession.ID,
+				FlowTurnID:    req.FlowTurn.ID,
+				TeamSessionID: req.TeamSession.ID,
+				TeamTurnID:    req.TeamTurn.ID,
+				TeamID:        req.TeamTurn.TeamID,
+				CallID:        req.Call.ID,
+				CallTurnID:    req.CallTurnID,
+				CallType:      req.Call.Type,
+				Attempt:       req.Attempt,
+				RecoveryOf:    req.RecoveryOf,
+			},
+			Payload: map[string]any{"approval": result.Approval},
 		})
 		if err != nil {
 			return err
@@ -777,29 +785,9 @@ func (r *Runtime) appendCallWaiting(ctx context.Context, req types.CallRequest, 
 	case types.TurnWaitingApproval:
 		eventType = types.EventAgentTurnWaitingApproval
 	}
-	if _, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
-		Type:          eventType,
-		FlowSessionID: req.FlowSession.ID,
-		FlowTurnID:    req.FlowTurn.ID,
-		TeamSessionID: req.TeamSession.ID,
-		TeamTurnID:    req.TeamTurn.ID,
-		TeamID:        req.TeamTurn.TeamID,
-		CallID:        req.Call.ID,
-		CallTurnID:    req.CallTurnID,
-		CallType:      req.Call.Type,
-		Attempt:       req.Attempt,
-		RecoveryOf:    req.RecoveryOf,
-		Payload: spawnEventPayload(map[string]any{
-			"call_result":   result,
-			"checkpoint_id": result.CheckpointID,
-			"task_id":       result.TaskID,
-		}, spawn),
-	}); err != nil {
-		return err
-	}
-	if result.PendingApproval != nil {
-		_, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
-			Type:          types.EventApprovalRequested,
+	if _, err := r.sessions.Append(ctx, req.FlowSession.ID, storage.LayerTeam, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          eventType,
 			FlowSessionID: req.FlowSession.ID,
 			FlowTurnID:    req.FlowTurn.ID,
 			TeamSessionID: req.TeamSession.ID,
@@ -810,7 +798,31 @@ func (r *Runtime) appendCallWaiting(ctx context.Context, req types.CallRequest, 
 			CallType:      req.Call.Type,
 			Attempt:       req.Attempt,
 			RecoveryOf:    req.RecoveryOf,
-			Payload:       map[string]any{"approval": result.PendingApproval},
+		},
+		Payload: spawnEventPayload(map[string]any{
+			"call_result":   result,
+			"checkpoint_id": result.CheckpointID,
+			"task_id":       result.TaskID,
+		}, spawn),
+	}); err != nil {
+		return err
+	}
+	if result.PendingApproval != nil {
+		_, err := r.sessions.Append(ctx, req.FlowSession.ID, storage.LayerTeam, storage.SessionEvent{
+			EventHeader: types.EventHeader{
+				Type:          types.EventApprovalRequested,
+				FlowSessionID: req.FlowSession.ID,
+				FlowTurnID:    req.FlowTurn.ID,
+				TeamSessionID: req.TeamSession.ID,
+				TeamTurnID:    req.TeamTurn.ID,
+				TeamID:        req.TeamTurn.TeamID,
+				CallID:        req.Call.ID,
+				CallTurnID:    req.CallTurnID,
+				CallType:      req.Call.Type,
+				Attempt:       req.Attempt,
+				RecoveryOf:    req.RecoveryOf,
+			},
+			Payload: map[string]any{"approval": result.PendingApproval},
 		})
 		if err != nil {
 			return err
@@ -837,19 +849,21 @@ func (r *Runtime) appendAgentSessionUpdated(
 		CreatedAt:     req.TeamSession.CreatedAt,
 		UpdatedAt:     time.Now().UTC(),
 	}
-	_, err := r.sessions.Append(ctx, req.FlowSession.ID, types.SessionEvent{
-		Type:          types.EventAgentSessionUpdated,
-		FlowSessionID: req.FlowSession.ID,
-		FlowTurnID:    req.FlowTurn.ID,
-		TeamSessionID: req.TeamSession.ID,
-		TeamTurnID:    req.TeamTurn.ID,
-		TeamID:        req.TeamTurn.TeamID,
-		CallID:        req.Call.ID,
-		CallTurnID:    req.CallTurnID,
-		CallType:      req.Call.Type,
-		Attempt:       req.Attempt,
-		RecoveryOf:    req.RecoveryOf,
-		Payload:       map[string]any{"agent_session": agentSession},
+	_, err := r.sessions.Append(ctx, req.FlowSession.ID, storage.LayerTeam, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventAgentSessionUpdated,
+			FlowSessionID: req.FlowSession.ID,
+			FlowTurnID:    req.FlowTurn.ID,
+			TeamSessionID: req.TeamSession.ID,
+			TeamTurnID:    req.TeamTurn.ID,
+			TeamID:        req.TeamTurn.TeamID,
+			CallID:        req.Call.ID,
+			CallTurnID:    req.CallTurnID,
+			CallType:      req.Call.Type,
+			Attempt:       req.Attempt,
+			RecoveryOf:    req.RecoveryOf,
+		},
+		Payload: map[string]any{"agent_session": agentSession},
 	})
 	return err
 }

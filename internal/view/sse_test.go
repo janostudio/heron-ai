@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -64,7 +65,7 @@ func TestWriteSessionEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	ev := types.SessionEvent{Seq: 42, Type: "flow_turn.completed", FlowSessionID: "s1"}
+	ev := storage.SessionEvent{EventHeader: types.EventHeader{Seq: 42, Type: "flow_turn.completed", FlowSessionID: "s1"}}
 	if err := w.WriteSessionEvent(ev); err != nil {
 		t.Fatalf("WriteSessionEvent: %v", err)
 	}

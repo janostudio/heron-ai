@@ -148,6 +148,7 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 	sessionWriter := storage.NewJSONLSessionWriter(files)
 	checkpointStore := agent.NewFileCheckpointStore(files)
 	taskStore := agent.NewFileToolTaskStore(files)
+	turnLoop.SetSessionWriter(sessionWriter)
 	// Durable SpawnChild tasks (asynchronous Spawn, batch B) route through the
 	// dispatcher into the Spawn tool; every other async tool keeps its normal
 	// execution path. The shared executor gives spawned children the same

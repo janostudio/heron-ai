@@ -78,7 +78,7 @@ func NewBaseEvent(eventType string) BaseEvent {
 }
 
 // Common event types. These are optional observability projections; the
-// authoritative persisted envelope is types.SessionEvent.
+// authoritative persisted envelope is storage.SessionEvent.
 type FlowSessionStartedEvent struct {
 	BaseEvent
 	FlowSessionID string

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -32,6 +33,7 @@ type TurnLoop struct {
 	taskRunner     *AsyncToolExecutor
 	toolPolicy     ToolPolicy
 	contextPolicy  ContextPolicy
+	sessionWriter  storage.SessionWriter
 }
 
 // ModelContextSizer is an optional provider capability. The Agent package
@@ -88,6 +90,13 @@ func (t *TurnLoop) SetCheckpointStore(store types.AgentCheckpointStore) {
 	t.checkpoints = store
 }
 
+// SetSessionWriter wires the optional per-layer session writer used to emit
+// agent-internal events (model requests/responses, tool calls, compaction)
+// into agent.jsonl. When unset, agent-level event emission is a no-op.
+func (t *TurnLoop) SetSessionWriter(writer storage.SessionWriter) {
+	t.sessionWriter = writer
+}
+
 func (t *TurnLoop) SetTaskRunner(runner *AsyncToolExecutor) {
 	t.taskRunner = runner
 }
@@ -102,6 +111,33 @@ func (t *TurnLoop) SetContextPolicy(policy ContextPolicy) {
 	if policy != nil {
 		t.contextPolicy = policy
 	}
+}
+
+// emitAgentEvent appends one agent-internal event into agent.jsonl. Emission is
+// a no-op when no session writer is wired or the request carries no flow
+// session to write into. All events share the call/turn identity fields so
+// they can be correlated back to the team/flow layers.
+func (t *TurnLoop) emitAgentEvent(ctx context.Context, req types.AgentRequest, round int, eventType string, payload map[string]any) {
+	if t == nil || t.sessionWriter == nil || strings.TrimSpace(req.FlowSessionID) == "" {
+		return
+	}
+	event := storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          eventType,
+			FlowSessionID: req.FlowSessionID,
+			TeamID:        req.TeamID,
+			TeamTurnID:    req.TeamTurnID,
+			CallID:        req.CallID,
+			CallTurnID:    req.CallTurnID,
+			CallType:      types.CallAgent,
+			Attempt:       req.Attempt,
+			RecoveryOf:    req.RecoveryOf,
+		},
+		AgentTurnID: req.AgentTurnID,
+		Round:       round,
+		Payload:     payload,
+	}
+	_, _ = t.sessionWriter.Append(ctx, req.FlowSessionID, storage.LayerAgent, event)
 }
 
 // Run executes one AgentTurn. An Agent is request/response in V1:
@@ -174,6 +210,12 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 	}
 	contextManager := NewContextManagerWithCompactor(t.contextConfig(agent), nil, compactor)
 	contextManager.SetToolSchemas(toolSchemas)
+	contextManager.SetCompactHook(func(summary string, droppedCount int) {
+		t.emitAgentEvent(ctx, req, lastRound, types.EventContextCompacted, map[string]any{
+			"summary":       summary,
+			"dropped_count": droppedCount,
+		})
+	})
 	if req.ResumeCheckpointID != "" && t.checkpoints == nil {
 		return nil, fmt.Errorf("agent checkpoint store is not configured")
 	}
@@ -194,6 +236,10 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			t.emitErrorHook(ctx, agent, req, 0, err)
 			return nil, fmt.Errorf("render prompt: %w", err)
 		}
+		// Replay the previous execution's agent-internal events so a
+		// normally-completed turn can be continued with its prior context,
+		// rather than restarting from a blank transcript.
+		messages = t.replayAgentContext(ctx, req, messages)
 	}
 
 	totalUsage := types.TokenUsage{}
@@ -450,6 +496,14 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				if resp.Model != "" {
 					requestStats[requestStatIndex].Model = resp.Model
 				}
+				t.emitAgentEvent(ctx, req, round, types.EventAgentModelResponse, map[string]any{
+					"round":         round,
+					"text":          resp.Text,
+					"tool_calls":    resp.ToolCalls,
+					"usage":         resp.Usage,
+					"finish_reason": resp.FinishReason,
+					"model":         resp.Model,
+				})
 			}
 			if chatErr == nil {
 				break
@@ -627,9 +681,14 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				if addErr := contextManager.AddMessage(types.Message{Role: "assistant", Content: resp.Text}); addErr != nil {
 					return nil, addErr
 				}
-				if addErr := contextManager.AddMessage(types.Message{Role: "user", Content: "## Completion Feedback\n" + feedback}); addErr != nil {
+				feedbackMsg := "## Completion Feedback\n" + feedback
+				if addErr := contextManager.AddMessage(types.Message{Role: "user", Content: feedbackMsg}); addErr != nil {
 					return nil, addErr
 				}
+				t.emitAgentEvent(ctx, req, round, types.EventAgentFeedback, map[string]any{
+					"round":   round,
+					"content": feedbackMsg,
+				})
 				lastText = resp.Text
 				continue
 			}
@@ -1245,6 +1304,11 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 				t.emitErrorHook(ctx, agent, req, round, err)
 				continue
 			}
+			t.emitAgentEvent(ctx, req, round, types.EventToolCallStarted, map[string]any{
+				"round":     round,
+				"tool_name": call.Name,
+				"arguments": call.Arguments,
+			})
 			parallelCalls = append(parallelCalls, call)
 			parallelIndexes = append(parallelIndexes, i)
 		}
@@ -1252,6 +1316,23 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 		for i, result := range batchResults {
 			results[parallelIndexes[i]] = result
 			t.emitToolEndHook(ctx, agent, req, round, parallelCalls[i], result)
+			if result != nil && result.Success {
+				t.emitAgentEvent(ctx, req, round, types.EventToolCallCompleted, map[string]any{
+					"round":     round,
+					"tool_name": parallelCalls[i].Name,
+					"content":   toolResultContent(result),
+				})
+			} else {
+				errMsg := "tool returned nil result"
+				if result != nil {
+					errMsg = result.Error
+				}
+				t.emitAgentEvent(ctx, req, round, types.EventToolCallFailed, map[string]any{
+					"round":     round,
+					"tool_name": parallelCalls[i].Name,
+					"error":     errMsg,
+				})
+			}
 		}
 		return results
 	}
@@ -1271,6 +1352,11 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 			t.emitErrorHook(ctx, agent, req, round, err)
 			continue
 		}
+		t.emitAgentEvent(ctx, req, round, types.EventToolCallStarted, map[string]any{
+			"round":     round,
+			"tool_name": call.Name,
+			"arguments": call.Arguments,
+		})
 		result, err := t.toolExecutor.Execute(ctx, call.Name, call.Arguments)
 		if err != nil {
 			logging.Error("tool execution failed", map[string]any{
@@ -1285,6 +1371,19 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 		}
 		if result == nil {
 			result = &types.ToolResult{Success: false, Error: "tool returned nil result"}
+		}
+		if result.Success {
+			t.emitAgentEvent(ctx, req, round, types.EventToolCallCompleted, map[string]any{
+				"round":     round,
+				"tool_name": call.Name,
+				"content":   toolResultContent(result),
+			})
+		} else {
+			t.emitAgentEvent(ctx, req, round, types.EventToolCallFailed, map[string]any{
+				"round":     round,
+				"tool_name": call.Name,
+				"error":     result.Error,
+			})
 		}
 		results[i] = result
 		t.emitToolEndHook(ctx, agent, req, round, call, result)

@@ -474,35 +474,43 @@ func TestRuntimeRecoveryStatusFindsInterruptedCall(t *testing.T) {
 
 	sessionID := "fs-interrupted"
 	now := time.Now().UTC()
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventFlowSessionCreated,
-		FlowSessionID: sessionID,
-		Payload:       map[string]any{"session": types.FlowSession{ID: sessionID, FlowID: "code-fix", Status: types.SessionRunning, CreatedAt: now, UpdatedAt: now}},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowSessionCreated,
+			FlowSessionID: sessionID,
+		},
+		Payload: map[string]any{"session": types.FlowSession{ID: sessionID, FlowID: "code-fix", Status: types.SessionRunning, CreatedAt: now, UpdatedAt: now}},
 	}))
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventFlowTurnStarted,
-		FlowSessionID: sessionID,
-		FlowTurnID:    "ft-1",
-		Payload:       map[string]any{"input": "fix it"},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowTurnStarted,
+			FlowSessionID: sessionID,
+			FlowTurnID:    "ft-1",
+		},
+		Payload: map[string]any{"input": "fix it"},
 	}))
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventTeamTurnStarted,
-		FlowSessionID: sessionID,
-		FlowTurnID:    "ft-1",
-		TeamID:        "verify",
-		TeamTurnID:    "tt-1",
-		Payload:       map[string]any{"input": "fix it"},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventTeamTurnStarted,
+			FlowSessionID: sessionID,
+			FlowTurnID:    "ft-1",
+			TeamID:        "verify",
+			TeamTurnID:    "tt-1",
+		},
+		Payload: map[string]any{"input": "fix it"},
 	}))
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventCommandTurnStarted,
-		FlowSessionID: sessionID,
-		FlowTurnID:    "ft-1",
-		TeamID:        "verify",
-		TeamTurnID:    "tt-1",
-		CallID:        "test",
-		CallTurnID:    "mt-1",
-		CallType:      types.CallCommand,
-		Payload:       map[string]any{"input": "fix it"},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventCommandTurnStarted,
+			FlowSessionID: sessionID,
+			FlowTurnID:    "ft-1",
+			TeamID:        "verify",
+			TeamTurnID:    "tt-1",
+			CallID:        "test",
+			CallTurnID:    "mt-1",
+			CallType:      types.CallCommand,
+		},
+		Payload: map[string]any{"input": "fix it"},
 	}))
 
 	status, err := runtime.RecoveryStatus(context.Background(), sessionID)
@@ -519,24 +527,30 @@ func TestRuntimeBlocksNormalInputUntilInterruptedExecutionIsRecovered(t *testing
 
 	sessionID := "fs-interrupted-input"
 	now := time.Now().UTC()
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventFlowSessionCreated,
-		FlowSessionID: sessionID,
-		Payload:       map[string]any{"session": types.FlowSession{ID: sessionID, FlowID: "code-fix", Status: types.SessionRunning, CreatedAt: now, UpdatedAt: now}},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowSessionCreated,
+			FlowSessionID: sessionID,
+		},
+		Payload: map[string]any{"session": types.FlowSession{ID: sessionID, FlowID: "code-fix", Status: types.SessionRunning, CreatedAt: now, UpdatedAt: now}},
 	}))
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventFlowTurnStarted,
-		FlowSessionID: sessionID,
-		FlowTurnID:    "ft-input",
-		Payload:       map[string]any{"input": "original input"},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowTurnStarted,
+			FlowSessionID: sessionID,
+			FlowTurnID:    "ft-input",
+		},
+		Payload: map[string]any{"input": "original input"},
 	}))
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventTeamTurnStarted,
-		FlowSessionID: sessionID,
-		FlowTurnID:    "ft-input",
-		TeamID:        "verify",
-		TeamTurnID:    "tt-input",
-		Payload:       map[string]any{"input": "original input"},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventTeamTurnStarted,
+			FlowSessionID: sessionID,
+			FlowTurnID:    "ft-input",
+			TeamID:        "verify",
+			TeamTurnID:    "tt-input",
+		},
+		Payload: map[string]any{"input": "original input"},
 	}))
 
 	_, err := runtime.HandleInput(context.Background(), sessionID, "new input")
@@ -550,24 +564,30 @@ func TestRuntimeRecoveryRetryRequiresExplicitSideEffectPermission(t *testing.T) 
 
 	sessionID := "fs-retry-policy"
 	now := time.Now().UTC()
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventFlowSessionCreated,
-		FlowSessionID: sessionID,
-		Payload:       map[string]any{"session": types.FlowSession{ID: sessionID, FlowID: "code-fix", Status: types.SessionRunning, CreatedAt: now, UpdatedAt: now}},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowSessionCreated,
+			FlowSessionID: sessionID,
+		},
+		Payload: map[string]any{"session": types.FlowSession{ID: sessionID, FlowID: "code-fix", Status: types.SessionRunning, CreatedAt: now, UpdatedAt: now}},
 	}))
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventFlowTurnStarted,
-		FlowSessionID: sessionID,
-		FlowTurnID:    "ft-retry",
-		Payload:       map[string]any{"input": "retry input"},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowTurnStarted,
+			FlowSessionID: sessionID,
+			FlowTurnID:    "ft-retry",
+		},
+		Payload: map[string]any{"input": "retry input"},
 	}))
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventTeamTurnStarted,
-		FlowSessionID: sessionID,
-		FlowTurnID:    "ft-retry",
-		TeamID:        "verify",
-		TeamTurnID:    "tt-retry",
-		Payload:       map[string]any{"input": "retry input"},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventTeamTurnStarted,
+			FlowSessionID: sessionID,
+			FlowTurnID:    "ft-retry",
+			TeamID:        "verify",
+			TeamTurnID:    "tt-retry",
+		},
+		Payload: map[string]any{"input": "retry input"},
 	}))
 
 	_, err := runtime.Recover(context.Background(), sessionID, types.RecoveryRequest{
@@ -584,24 +604,30 @@ func TestRuntimeRecoveryRetryRunsContainingTeamAndMarksRecoveryComplete(t *testi
 
 	sessionID := "fs-retry"
 	now := time.Now().UTC()
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventFlowSessionCreated,
-		FlowSessionID: sessionID,
-		Payload:       map[string]any{"session": types.FlowSession{ID: sessionID, FlowID: "code-fix", Status: types.SessionRunning, CreatedAt: now, UpdatedAt: now}},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowSessionCreated,
+			FlowSessionID: sessionID,
+		},
+		Payload: map[string]any{"session": types.FlowSession{ID: sessionID, FlowID: "code-fix", Status: types.SessionRunning, CreatedAt: now, UpdatedAt: now}},
 	}))
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventFlowTurnStarted,
-		FlowSessionID: sessionID,
-		FlowTurnID:    "ft-retry",
-		Payload:       map[string]any{"input": "retry input"},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowTurnStarted,
+			FlowSessionID: sessionID,
+			FlowTurnID:    "ft-retry",
+		},
+		Payload: map[string]any{"input": "retry input"},
 	}))
-	require.NoError(t, appendTestEvent(sessionWriter, sessionID, types.SessionEvent{
-		Type:          types.EventTeamTurnStarted,
-		FlowSessionID: sessionID,
-		FlowTurnID:    "ft-retry",
-		TeamID:        "verify",
-		TeamTurnID:    "tt-retry",
-		Payload:       map[string]any{"input": "retry input"},
+	require.NoError(t, appendTestEvent(sessionWriter, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventTeamTurnStarted,
+			FlowSessionID: sessionID,
+			FlowTurnID:    "ft-retry",
+			TeamID:        "verify",
+			TeamTurnID:    "tt-retry",
+		},
+		Payload: map[string]any{"input": "retry input"},
 	}))
 
 	result, err := runtime.Recover(context.Background(), sessionID, types.RecoveryRequest{
@@ -619,7 +645,7 @@ func TestRuntimeRecoveryRetryRunsContainingTeamAndMarksRecoveryComplete(t *testi
 	require.Empty(t, status.Interrupted)
 }
 
-func appendTestEvent(writer storage.SessionWriter, sessionID string, event types.SessionEvent) error {
-	_, err := writer.Append(context.Background(), sessionID, event)
+func appendTestEvent(writer storage.SessionWriter, sessionID string, event storage.SessionEvent) error {
+	_, err := writer.Append(context.Background(), sessionID, storage.LayerFlow, event)
 	return err
 }

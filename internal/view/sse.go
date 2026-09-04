@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -47,7 +48,7 @@ func (s *SSEWriter) WriteEvent(event types.SSEEvent) error {
 	return nil
 }
 
-func (s *SSEWriter) WriteSessionEvent(event types.SessionEvent) error {
+func (s *SSEWriter) WriteSessionEvent(event storage.SessionEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

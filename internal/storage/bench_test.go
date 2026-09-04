@@ -20,10 +20,12 @@ func BenchmarkSessionAppend(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			if _, err := writer.Append(ctx, "bench-flow", types.SessionEvent{
-				Type:          types.EventAgentTurnCompleted,
-				FlowSessionID: "bench-flow",
-				Payload:       map[string]any{"answer": "hello", "tokens": 1234},
+			if _, err := writer.Append(ctx, "bench-flow", LayerFlow, SessionEvent{
+				EventHeader: types.EventHeader{
+					Type:          types.EventAgentTurnCompleted,
+					FlowSessionID: "bench-flow",
+				},
+				Payload: map[string]any{"answer": "hello", "tokens": 1234},
 			}); err != nil {
 				b.Fatal(err)
 			}
@@ -38,10 +40,12 @@ func BenchmarkSessionAppend(b *testing.B) {
 		b.ResetTimer()
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
-				if _, err := writer.Append(ctx, "bench-flow", types.SessionEvent{
-					Type:          types.EventToolCallCompleted,
-					FlowSessionID: "bench-flow",
-					Payload:       map[string]any{"result": "ok"},
+				if _, err := writer.Append(ctx, "bench-flow", LayerFlow, SessionEvent{
+					EventHeader: types.EventHeader{
+						Type:          types.EventToolCallCompleted,
+						FlowSessionID: "bench-flow",
+					},
+					Payload: map[string]any{"result": "ok"},
 				}); err != nil {
 					b.Fatal(err)
 				}
@@ -62,10 +66,12 @@ func BenchmarkSessionReplay(b *testing.B) {
 			writer := NewJSONLSessionWriter(store)
 			ctx := context.Background()
 			for i := 0; i < n; i++ {
-				if _, err := writer.Append(ctx, "bench-flow", types.SessionEvent{
-					Type:          types.EventAgentTurnCompleted,
-					FlowSessionID: "bench-flow",
-					Payload:       map[string]any{"i": i},
+				if _, err := writer.Append(ctx, "bench-flow", LayerFlow, SessionEvent{
+					EventHeader: types.EventHeader{
+						Type:          types.EventAgentTurnCompleted,
+						FlowSessionID: "bench-flow",
+					},
+					Payload: map[string]any{"i": i},
 				}); err != nil {
 					b.Fatal(err)
 				}
@@ -91,7 +97,7 @@ func BenchmarkSessionSubscribe(b *testing.B) {
 	store := NewFileStore(b.TempDir())
 	writer := NewJSONLSessionWriter(store)
 	ctx := context.Background()
-	if _, err := writer.Append(ctx, "bench-flow", types.SessionEvent{Type: types.EventFlowSessionCreated}); err != nil {
+	if _, err := writer.Append(ctx, "bench-flow", LayerFlow, SessionEvent{EventHeader: types.EventHeader{Type: types.EventFlowSessionCreated}}); err != nil {
 		b.Fatal(err)
 	}
 
@@ -107,7 +113,7 @@ func BenchmarkSessionSubscribe(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// Consume previous event while publishing the next so the buffered
 		// channel never blocks and we measure the publish path, not the reader.
-		if _, err := writer.Append(ctx, "bench-flow", types.SessionEvent{Type: types.EventAgentTurnCompleted}); err != nil {
+		if _, err := writer.Append(ctx, "bench-flow", LayerFlow, SessionEvent{EventHeader: types.EventHeader{Type: types.EventAgentTurnCompleted}}); err != nil {
 			b.Fatal(err)
 		}
 		select {

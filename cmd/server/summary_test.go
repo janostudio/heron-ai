@@ -18,26 +18,34 @@ func TestExtractSharedRecords(t *testing.T) {
 
 	replay := &storage.SessionReplay{
 		SessionID: "s1",
-		Events: []types.SessionEvent{
+		Events: []storage.SessionEvent{
 			{
-				Type:          types.EventSharedRecordPublished,
-				FlowSessionID: "s1",
-				Payload:       map[string]any{"record": record},
+				EventHeader: types.EventHeader{
+					Type:          types.EventSharedRecordPublished,
+					FlowSessionID: "s1",
+				},
+				Payload: map[string]any{"record": record},
 			},
 			{
-				Type:          types.EventTeamTurnCompleted,
-				FlowSessionID: "s1",
-				Payload:       map[string]any{"team_result": "ignored"},
+				EventHeader: types.EventHeader{
+					Type:          types.EventTeamTurnCompleted,
+					FlowSessionID: "s1",
+				},
+				Payload: map[string]any{"team_result": "ignored"},
 			},
 			{
-				Type:          types.EventSharedRecordPublished,
-				FlowSessionID: "s1",
-				Payload:       map[string]any{}, // missing record key
+				EventHeader: types.EventHeader{
+					Type:          types.EventSharedRecordPublished,
+					FlowSessionID: "s1",
+				},
+				Payload: map[string]any{}, // missing record key
 			},
 			{
-				Type:          types.EventSharedRecordPublished,
-				FlowSessionID: "s1",
-				Payload:       map[string]any{"record": "not-a-record"}, // invalid shape
+				EventHeader: types.EventHeader{
+					Type:          types.EventSharedRecordPublished,
+					FlowSessionID: "s1",
+				},
+				Payload: map[string]any{"record": "not-a-record"}, // invalid shape
 			},
 		},
 	}

@@ -104,10 +104,12 @@ func (r *Runtime) Start(ctx context.Context, req types.StartFlowRequest) (types.
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}
-	if err := r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
-		Type:          types.EventFlowSessionCreated,
-		FlowSessionID: session.ID,
-		Payload:       map[string]any{"session": session},
+	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowSessionCreated,
+			FlowSessionID: session.ID,
+		},
+		Payload: map[string]any{"session": session},
 	}); err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -375,16 +377,18 @@ func (r *Runtime) Recover(ctx context.Context, sessionID string, req types.Recov
 	if err != nil {
 		return types.FlowTurnResult{}, err
 	}
-	if err := r.appendSessionEvent(ctx, sessionID, types.SessionEvent{
-		Type:          types.EventRecoveryRequested,
-		FlowSessionID: sessionID,
-		TeamID:        target.TeamID,
-		TeamTurnID:    target.TeamTurnID,
-		CallID:        target.CallID,
-		CallTurnID:    target.CallTurnID,
-		Attempt:       target.Attempt + 1,
-		RecoveryOf:    recoveryTargetID(target),
-		Payload:       map[string]any{"request": req, "target": target},
+	if err := r.appendSessionEvent(ctx, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventRecoveryRequested,
+			FlowSessionID: sessionID,
+			TeamID:        target.TeamID,
+			TeamTurnID:    target.TeamTurnID,
+			CallID:        target.CallID,
+			CallTurnID:    target.CallTurnID,
+			Attempt:       target.Attempt + 1,
+			RecoveryOf:    recoveryTargetID(target),
+		},
+		Payload: map[string]any{"request": req, "target": target},
 	}); err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -397,10 +401,12 @@ func (r *Runtime) Recover(ctx context.Context, sessionID string, req types.Recov
 		}
 		session.Status = types.SessionInterrupted
 		session.UpdatedAt = time.Now().UTC()
-		if err := r.appendSessionEvent(ctx, sessionID, types.SessionEvent{
-			Type:          types.EventFlowSessionUpdated,
-			FlowSessionID: sessionID,
-			Payload:       map[string]any{"session": session},
+		if err := r.appendSessionEvent(ctx, sessionID, storage.SessionEvent{
+			EventHeader: types.EventHeader{
+				Type:          types.EventFlowSessionUpdated,
+				FlowSessionID: sessionID,
+			},
+			Payload: map[string]any{"session": session},
 		}); err != nil {
 			return types.FlowTurnResult{}, err
 		}
@@ -455,10 +461,12 @@ func (r *Runtime) Cancel(ctx context.Context, sessionID string) error {
 	}
 	session.Status = types.SessionCancelled
 	session.UpdatedAt = time.Now().UTC()
-	return r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
-		Type:          types.EventFlowSessionUpdated,
-		FlowSessionID: session.ID,
-		Payload:       map[string]any{"session": session},
+	return r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowSessionUpdated,
+			FlowSessionID: session.ID,
+		},
+		Payload: map[string]any{"session": session},
 	})
 }
 
@@ -521,20 +529,24 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		Status:        types.TurnRunning,
 		StartedAt:     time.Now().UTC(),
 	}
-	if err := r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
-		Type:          types.EventFlowSessionUpdated,
-		FlowSessionID: session.ID,
-		FlowTurnID:    turn.ID,
-		Payload:       map[string]any{"session": session},
+	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowSessionUpdated,
+			FlowSessionID: session.ID,
+			FlowTurnID:    turn.ID,
+		},
+		Payload: map[string]any{"session": session},
 	}); err != nil {
 		return types.FlowTurnResult{}, err
 	}
-	if err := r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
-		Type:          types.EventFlowTurnStarted,
-		FlowSessionID: session.ID,
-		FlowTurnID:    turn.ID,
-		Attempt:       turn.Attempt,
-		RecoveryOf:    turn.RecoveryOf,
+	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowTurnStarted,
+			FlowSessionID: session.ID,
+			FlowTurnID:    turn.ID,
+			Attempt:       turn.Attempt,
+			RecoveryOf:    turn.RecoveryOf,
+		},
 		Payload: map[string]any{
 			"turn":  turn,
 			"input": input,
@@ -956,15 +968,17 @@ func (r *Runtime) executeTeamTurn(
 	if err := r.appendTeamStartedEvents(ctx, session.ID, flowTurn, teamSession, teamTurn, team); err != nil {
 		return execution, err
 	}
-	if err := r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
-		Type:          types.EventTeamTurnStarted,
-		FlowSessionID: session.ID,
-		FlowTurnID:    flowTurn.ID,
-		TeamSessionID: teamSession.ID,
-		TeamTurnID:    teamTurn.ID,
-		TeamID:        teamTurn.TeamID,
-		Attempt:       teamTurn.Attempt,
-		RecoveryOf:    teamTurn.RecoveryOf,
+	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventTeamTurnStarted,
+			FlowSessionID: session.ID,
+			FlowTurnID:    flowTurn.ID,
+			TeamSessionID: teamSession.ID,
+			TeamTurnID:    teamTurn.ID,
+			TeamID:        teamTurn.TeamID,
+			Attempt:       teamTurn.Attempt,
+			RecoveryOf:    teamTurn.RecoveryOf,
+		},
 		Payload: map[string]any{
 			"team_turn": teamTurn,
 			"input":     teamInput(input, binding.Inputs),
@@ -1080,13 +1094,15 @@ func (r *Runtime) executeTeamTurn(
 				return execution, err
 			}
 		}
-		if err := r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
-			Type:          types.EventSharedRecordPublished,
-			FlowSessionID: session.ID,
-			FlowTurnID:    flowTurn.ID,
-			TeamSessionID: teamSession.ID,
-			TeamTurnID:    teamTurn.ID,
-			Payload:       map[string]any{"record": record},
+		if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+			EventHeader: types.EventHeader{
+				Type:          types.EventSharedRecordPublished,
+				FlowSessionID: session.ID,
+				FlowTurnID:    flowTurn.ID,
+				TeamSessionID: teamSession.ID,
+				TeamTurnID:    teamTurn.ID,
+			},
+			Payload: map[string]any{"record": record},
 		}); err != nil {
 			return execution, err
 		}
@@ -1100,30 +1116,34 @@ func (r *Runtime) executeTeamTurn(
 	} else if waitingInput && teamResult.Error == "" {
 		eventType = types.EventTeamTurnWaitingInput
 	}
-	if err := r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
-		Type:          eventType,
-		FlowSessionID: session.ID,
-		FlowTurnID:    flowTurn.ID,
-		TeamSessionID: teamSession.ID,
-		TeamTurnID:    teamTurn.ID,
-		TeamID:        teamTurn.TeamID,
-		Attempt:       teamTurn.Attempt,
-		RecoveryOf:    teamTurn.RecoveryOf,
-		Payload:       map[string]any{"team_result": teamResult},
+	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          eventType,
+			FlowSessionID: session.ID,
+			FlowTurnID:    flowTurn.ID,
+			TeamSessionID: teamSession.ID,
+			TeamTurnID:    teamTurn.ID,
+			TeamID:        teamTurn.TeamID,
+			Attempt:       teamTurn.Attempt,
+			RecoveryOf:    teamTurn.RecoveryOf,
+		},
+		Payload: map[string]any{"team_result": teamResult},
 	}); err != nil {
 		return execution, err
 	}
 	teamSession.Status = sessionStatusForTurn(teamResult.Turn.Status)
 	teamSession.UpdatedAt = now
-	if err := r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
-		Type:          types.EventTeamSessionUpdated,
-		FlowSessionID: session.ID,
-		FlowTurnID:    flowTurn.ID,
-		TeamSessionID: teamSession.ID,
-		TeamTurnID:    teamTurn.ID,
-		Attempt:       teamTurn.Attempt,
-		RecoveryOf:    teamTurn.RecoveryOf,
-		Payload:       map[string]any{"team_session": teamSession},
+	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventTeamSessionUpdated,
+			FlowSessionID: session.ID,
+			FlowTurnID:    flowTurn.ID,
+			TeamSessionID: teamSession.ID,
+			TeamTurnID:    teamTurn.ID,
+			Attempt:       teamTurn.Attempt,
+			RecoveryOf:    teamTurn.RecoveryOf,
+		},
+		Payload: map[string]any{"team_session": teamSession},
 	}); err != nil {
 		return execution, err
 	}
@@ -1147,15 +1167,17 @@ func (r *Runtime) publishFlowRecord(
 			return err
 		}
 	}
-	return r.appendSessionEvent(ctx, session.ID, types.SessionEvent{
-		Type:          types.EventSharedRecordPublished,
-		FlowSessionID: session.ID,
-		FlowTurnID:    flowTurn.ID,
-		TeamID:        record.Producer.TeamID,
-		TeamTurnID:    record.Producer.TeamTurnID,
-		CallID:        record.Producer.CallID,
-		CallTurnID:    record.Producer.CallTurnID,
-		Payload:       map[string]any{"record": record},
+	return r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventSharedRecordPublished,
+			FlowSessionID: session.ID,
+			FlowTurnID:    flowTurn.ID,
+			TeamID:        record.Producer.TeamID,
+			TeamTurnID:    record.Producer.TeamTurnID,
+			CallID:        record.Producer.CallID,
+			CallTurnID:    record.Producer.CallTurnID,
+		},
+		Payload: map[string]any{"record": record},
 	})
 }
 
@@ -1255,11 +1277,13 @@ func (r *Runtime) finishTurn(
 	case types.SessionWaitingApproval:
 		eventType = types.EventFlowTurnWaitingApproval
 	}
-	if err := r.appendSessionEvent(ctx, result.Session.ID, types.SessionEvent{
-		Type:          eventType,
-		FlowSessionID: result.Session.ID,
-		FlowTurnID:    result.Turn.ID,
-		Payload:       map[string]any{"session": result.Session, "turn": result.Turn},
+	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          eventType,
+			FlowSessionID: result.Session.ID,
+			FlowTurnID:    result.Turn.ID,
+		},
+		Payload: map[string]any{"session": result.Session, "turn": result.Turn},
 	}); err != nil {
 		return result, err
 	}
@@ -1291,11 +1315,11 @@ func (r *Runtime) loadSession(ctx context.Context, sessionID string) (types.Flow
 	return session, nil
 }
 
-func (r *Runtime) appendSessionEvent(ctx context.Context, sessionID string, event types.SessionEvent) error {
+func (r *Runtime) appendSessionEvent(ctx context.Context, sessionID string, event storage.SessionEvent) error {
 	if r.sessions == nil {
 		return errors.New("session writer is nil")
 	}
-	_, err := r.sessions.Append(ctx, sessionID, event)
+	_, err := r.sessions.Append(ctx, sessionID, storage.LayerFlow, event)
 	return err
 }
 
@@ -1318,13 +1342,15 @@ func (r *Runtime) appendTeamStartedEvents(
 	teamTurn types.TeamTurn,
 	team types.Team,
 ) error {
-	if err := r.appendSessionEvent(ctx, sessionID, types.SessionEvent{
-		Type:          types.EventTeamSessionCreated,
-		FlowSessionID: flowTurn.FlowSessionID,
-		FlowTurnID:    flowTurn.ID,
-		TeamSessionID: teamSession.ID,
-		TeamTurnID:    teamTurn.ID,
-		Payload:       map[string]any{"team_session": teamSession},
+	if err := r.appendSessionEvent(ctx, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventTeamSessionCreated,
+			FlowSessionID: flowTurn.FlowSessionID,
+			FlowTurnID:    flowTurn.ID,
+			TeamSessionID: teamSession.ID,
+			TeamTurnID:    teamTurn.ID,
+		},
+		Payload: map[string]any{"team_session": teamSession},
 	}); err != nil {
 		return err
 	}
@@ -1350,9 +1376,9 @@ func sessionStatusForTurn(status types.TurnStatus) types.SessionStatus {
 	}
 }
 
-func interruptedExecutions(events []types.SessionEvent) []types.InterruptedExecution {
+func interruptedExecutions(events []storage.SessionEvent) []types.InterruptedExecution {
 	type started struct {
-		event types.SessionEvent
+		event storage.SessionEvent
 		input string
 	}
 	startedCalls := make(map[string]started)
@@ -1440,7 +1466,7 @@ func interruptedExecutions(events []types.SessionEvent) []types.InterruptedExecu
 	return interrupted
 }
 
-func interruptedFromEvent(kind string, event types.SessionEvent, input string) types.InterruptedExecution {
+func interruptedFromEvent(kind string, event storage.SessionEvent, input string) types.InterruptedExecution {
 	safe := kind == "flow_turn" || kind == "team_turn"
 	reason := "call execution may have side effects; inspect before retry"
 	if safe {
@@ -1502,7 +1528,7 @@ type pendingTeamResumeInfo struct {
 	PendingApprovals []types.AgentPendingApproval
 }
 
-func pendingTeamResume(events []types.SessionEvent) (pendingTeamResumeInfo, bool) {
+func pendingTeamResume(events []storage.SessionEvent) (pendingTeamResumeInfo, bool) {
 	for index := len(events) - 1; index >= 0; index-- {
 		event := events[index]
 		if event.Type != types.EventTeamTurnWaitingTool &&
@@ -1580,7 +1606,7 @@ func hasPendingCall(items []types.PendingToolTask, callID string) bool {
 	return false
 }
 
-func pendingAgentResume(events []types.SessionEvent) (pendingAgentResumeInfo, bool) {
+func pendingAgentResume(events []storage.SessionEvent) (pendingAgentResumeInfo, bool) {
 	for index := len(events) - 1; index >= 0; index-- {
 		event := events[index]
 		if event.Type != types.EventAgentTurnWaitingInput &&
@@ -1627,7 +1653,7 @@ func sortInterrupted(items []types.InterruptedExecution) {
 	})
 }
 
-func recoveryHistory(events []types.SessionEvent) []types.RecoveryEvent {
+func recoveryHistory(events []storage.SessionEvent) []types.RecoveryEvent {
 	history := make([]types.RecoveryEvent, 0)
 	for _, event := range events {
 		var status string
@@ -1708,18 +1734,20 @@ func (r *Runtime) appendRecoveryCompleted(
 	target types.InterruptedExecution,
 	request types.RecoveryRequest,
 ) error {
-	return r.appendSessionEvent(ctx, sessionID, types.SessionEvent{
-		Type:          types.EventRecoveryCompleted,
-		FlowSessionID: sessionID,
-		FlowTurnID:    target.FlowTurnID,
-		TeamID:        target.TeamID,
-		TeamTurnID:    target.TeamTurnID,
-		CallID:        target.CallID,
-		CallTurnID:    target.CallTurnID,
-		CallType:      target.CallType,
-		Attempt:       target.Attempt + 1,
-		RecoveryOf:    recoveryTargetID(target),
-		Payload:       map[string]any{"request": request, "target": target},
+	return r.appendSessionEvent(ctx, sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventRecoveryCompleted,
+			FlowSessionID: sessionID,
+			FlowTurnID:    target.FlowTurnID,
+			TeamID:        target.TeamID,
+			TeamTurnID:    target.TeamTurnID,
+			CallID:        target.CallID,
+			CallTurnID:    target.CallTurnID,
+			CallType:      target.CallType,
+			Attempt:       target.Attempt + 1,
+			RecoveryOf:    recoveryTargetID(target),
+		},
+		Payload: map[string]any{"request": request, "target": target},
 	})
 }
 

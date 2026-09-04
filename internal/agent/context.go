@@ -48,6 +48,7 @@ type MessageContextManager struct {
 	tools         []types.JSONSchema
 	compactions   int
 	microcompacts int
+	compactHook   func(summary string, droppedCount int)
 }
 
 func NewContextManager(config types.ContextConfig) *MessageContextManager {
@@ -185,6 +186,16 @@ func (m *MessageContextManager) CompactionCount() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.compactions
+}
+
+// SetCompactHook installs an optional callback invoked after each successful
+// active-context compaction. It receives the merged summary and the number of
+// dropped message groups. The hook is invoked while the manager lock is held,
+// so it must not call back into the manager.
+func (m *MessageContextManager) SetCompactHook(hook func(summary string, droppedCount int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.compactHook = hook
 }
 
 // ContextStats describes the bounded context currently sent to the model.
@@ -362,6 +373,9 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 
 	m.active = candidate
 	m.compactions++
+	if m.compactHook != nil {
+		m.compactHook(summary, len(dropped))
+	}
 	if m.exceedsHardLimitLocked() {
 		return fmt.Errorf("%w after compaction: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
 	}

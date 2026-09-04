@@ -19,10 +19,10 @@ import (
 // child turns.
 type fakeSessionWriter struct {
 	mu     sync.Mutex
-	events []types.SessionEvent
+	events []storage.SessionEvent
 }
 
-func (w *fakeSessionWriter) Append(ctx context.Context, sessionID string, event types.SessionEvent) (types.SessionEvent, error) {
+func (w *fakeSessionWriter) Append(ctx context.Context, sessionID string, layer storage.EventLayer, event storage.SessionEvent) (storage.SessionEvent, error) {
 	w.mu.Lock()
 	w.events = append(w.events, event)
 	w.mu.Unlock()
@@ -33,17 +33,17 @@ func (w *fakeSessionWriter) Append(ctx context.Context, sessionID string, event 
 func (w *fakeSessionWriter) Replay(ctx context.Context, sessionID string) (*storage.SessionReplay, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return &storage.SessionReplay{SessionID: sessionID, Events: append([]types.SessionEvent(nil), w.events...)}, nil
+	return &storage.SessionReplay{SessionID: sessionID, Events: append([]storage.SessionEvent(nil), w.events...)}, nil
 }
 
-func (w *fakeSessionWriter) Subscribe(ctx context.Context, sessionID string, afterSeq int64) (<-chan types.SessionEvent, error) {
+func (w *fakeSessionWriter) Subscribe(ctx context.Context, sessionID string, afterSeq int64) (<-chan storage.SessionEvent, error) {
 	return nil, nil
 }
 
-func (w *fakeSessionWriter) recorded() []types.SessionEvent {
+func (w *fakeSessionWriter) recorded() []storage.SessionEvent {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return append([]types.SessionEvent(nil), w.events...)
+	return append([]storage.SessionEvent(nil), w.events...)
 }
 
 // newAsyncSpawnFixture wires the Spawn tool with a durable task store and the

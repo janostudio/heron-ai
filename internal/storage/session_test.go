@@ -17,11 +17,11 @@ func TestJSONLSessionWriterAssignsMonotonicSequence(t *testing.T) {
 	writer := NewJSONLSessionWriter(store)
 	ctx := context.Background()
 
-	first, err := writer.Append(ctx, "flow-1", types.SessionEvent{Type: types.EventFlowSessionCreated})
+	first, err := writer.Append(ctx, "flow-1", LayerFlow, SessionEvent{EventHeader: types.EventHeader{Type: types.EventFlowSessionCreated}})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), first.Seq)
 
-	second, err := writer.Append(ctx, "flow-1", types.SessionEvent{Type: types.EventFlowTurnStarted})
+	second, err := writer.Append(ctx, "flow-1", LayerFlow, SessionEvent{EventHeader: types.EventHeader{Type: types.EventFlowTurnStarted}})
 	require.NoError(t, err)
 	require.Equal(t, int64(2), second.Seq)
 
@@ -43,8 +43,8 @@ func TestJSONLSessionWriterSupportsConcurrentAppends(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := writer.Append(context.Background(), "flow-1", types.SessionEvent{
-				Type: types.EventToolCallCompleted,
+			_, err := writer.Append(context.Background(), "flow-1", LayerFlow, SessionEvent{
+				EventHeader: types.EventHeader{Type: types.EventToolCallCompleted},
 			})
 			errs <- err
 		}()
@@ -67,7 +67,7 @@ func TestJSONLSessionWriterSupportsConcurrentAppends(t *testing.T) {
 func TestJSONLSessionWriterIgnoresPartialFinalLine(t *testing.T) {
 	root := t.TempDir()
 	store := NewFileStore(root)
-	path := filepath.Join(".agents", "data", "sessions", "flow-1", "session.jsonl")
+	path := filepath.Join(".agents", "data", "sessions", "flow-1", "flow.jsonl")
 	require.NoError(t, store.Append(path, []byte(`{"seq":1,"event_id":"e1","type":"flow_session.created"}`+"\n")))
 	require.NoError(t, store.Append(path, []byte(`{"seq":2,"event_id":"e2","type":"flow_turn.started"`)))
 
@@ -77,19 +77,45 @@ func TestJSONLSessionWriterIgnoresPartialFinalLine(t *testing.T) {
 	require.Equal(t, int64(1), replay.LastSeq)
 }
 
+func TestJSONLSessionWriterRoutesByLayer(t *testing.T) {
+	store := NewFileStore(t.TempDir())
+	writer := NewJSONLSessionWriter(store)
+	ctx := context.Background()
+
+	_, err := writer.Append(ctx, "flow-1", LayerFlow, SessionEvent{EventHeader: types.EventHeader{Type: types.EventFlowTurnStarted}})
+	require.NoError(t, err)
+	_, err = writer.Append(ctx, "flow-1", LayerTeam, SessionEvent{EventHeader: types.EventHeader{Type: types.EventAgentTurnStarted}})
+	require.NoError(t, err)
+	_, err = writer.Append(ctx, "flow-1", LayerAgent, SessionEvent{EventHeader: types.EventHeader{Type: types.EventAgentModelResponse}})
+	require.NoError(t, err)
+
+	// Each layer lands in its own file with a globally monotonic seq.
+	require.True(t, store.Exists(filepath.Join(".agents", "data", "sessions", "flow-1", "flow.jsonl")))
+	require.True(t, store.Exists(filepath.Join(".agents", "data", "sessions", "flow-1", "team.jsonl")))
+	require.True(t, store.Exists(filepath.Join(".agents", "data", "sessions", "flow-1", "agent.jsonl")))
+
+	replay, err := writer.Replay(ctx, "flow-1")
+	require.NoError(t, err)
+	require.Len(t, replay.Events, 3)
+	require.Equal(t, int64(3), replay.LastSeq)
+	for i, event := range replay.Events {
+		require.Equal(t, int64(i+1), event.Seq)
+	}
+}
+
 func TestJSONLSessionWriterSubscribeReplaysAndPublishes(t *testing.T) {
 	store := NewFileStore(t.TempDir())
 	writer := NewJSONLSessionWriter(store)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err := writer.Append(context.Background(), "flow-1", types.SessionEvent{Type: "one"})
+	_, err := writer.Append(context.Background(), "flow-1", LayerFlow, SessionEvent{EventHeader: types.EventHeader{Type: "one"}})
 	require.NoError(t, err)
 
 	events, err := writer.Subscribe(ctx, "flow-1", 1)
 	require.NoError(t, err)
 
-	_, err = writer.Append(context.Background(), "flow-1", types.SessionEvent{Type: "two"})
+	_, err = writer.Append(context.Background(), "flow-1", LayerFlow, SessionEvent{EventHeader: types.EventHeader{Type: "two"}})
 	require.NoError(t, err)
 
 	select {

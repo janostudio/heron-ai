@@ -161,7 +161,7 @@ func TestHandler_HandleStreamReplaysFromLastEventID(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	writer := storage.NewJSONLSessionWriter(fileStore)
 	for _, eventType := range []string{"one", "two", types.EventFlowTurnCompleted} {
-		if _, err := writer.Append(context.Background(), "fs-1", types.SessionEvent{Type: eventType}); err != nil {
+		if _, err := writer.Append(context.Background(), "fs-1", storage.LayerFlow, storage.SessionEvent{EventHeader: types.EventHeader{Type: eventType}}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -40,7 +40,7 @@ func TestJSONLSessionWriterSubscribeDoesNotLeakGoroutines(t *testing.T) {
 	writer := NewJSONLSessionWriter(store)
 	ctx := context.Background()
 
-	if _, err := writer.Append(ctx, "leak-flow", types.SessionEvent{Type: types.EventFlowSessionCreated}); err != nil {
+	if _, err := writer.Append(ctx, "leak-flow", LayerFlow, SessionEvent{EventHeader: types.EventHeader{Type: types.EventFlowSessionCreated}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -79,10 +79,12 @@ func TestJSONLSessionWriterAppendDoesNotLeakGoroutines(t *testing.T) {
 
 	const appends = 10000
 	for i := 0; i < appends; i++ {
-		if _, err := writer.Append(ctx, "leak-flow", types.SessionEvent{
-			Type:          types.EventAgentTurnCompleted,
-			FlowSessionID: "leak-flow",
-			Payload:       map[string]any{"i": i},
+		if _, err := writer.Append(ctx, "leak-flow", LayerFlow, SessionEvent{
+			EventHeader: types.EventHeader{
+				Type:          types.EventAgentTurnCompleted,
+				FlowSessionID: "leak-flow",
+			},
+			Payload: map[string]any{"i": i},
 		}); err != nil {
 			t.Fatal(err)
 		}

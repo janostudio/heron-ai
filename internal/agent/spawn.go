@@ -548,14 +548,16 @@ func (t *SpawnTool) emitChildEvent(
 	if t == nil || t.sessions == nil || strings.TrimSpace(parent.FlowSessionID) == "" {
 		return
 	}
-	event := types.SessionEvent{
-		Type:          eventType,
-		FlowSessionID: parent.FlowSessionID,
-		TeamID:        parent.TeamID,
-		TeamTurnID:    parent.TeamTurnID,
-		CallID:        childCall,
-		CallTurnID:    childTurn,
-		CallType:      types.CallAgent,
+	event := storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          eventType,
+			FlowSessionID: parent.FlowSessionID,
+			TeamID:        parent.TeamID,
+			TeamTurnID:    parent.TeamTurnID,
+			CallID:        childCall,
+			CallTurnID:    childTurn,
+			CallType:      types.CallAgent,
+		},
 		Payload: map[string]any{
 			"spawn": map[string]any{
 				"agent":          agentID,
@@ -582,7 +584,7 @@ func (t *SpawnTool) emitChildEvent(
 		}
 		event.Payload["call_result"] = callResult
 	}
-	_, _ = t.sessions.Append(ctx, parent.FlowSessionID, event)
+	_, _ = t.sessions.Append(ctx, parent.FlowSessionID, storage.LayerTeam, event)
 }
 
 // saveEntityState applies the same deterministic update the Team runtime

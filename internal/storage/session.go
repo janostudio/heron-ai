@@ -14,20 +14,57 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// SessionReplay is the ordered event view reconstructed from session.jsonl.
-// The storage layer does not interpret business state; Runtime can fold
+// EventLayer identifies which layer runtime produced an event, and therefore
+// which per-layer jsonl file it is persisted to.
+type EventLayer int
+
+const (
+	LayerFlow EventLayer = iota
+	LayerTeam
+	LayerAgent
+)
+
+// layerFile maps an EventLayer to its per-session jsonl file name.
+func layerFile(layer EventLayer) string {
+	switch layer {
+	case LayerTeam:
+		return "team.jsonl"
+	case LayerAgent:
+		return "agent.jsonl"
+	default:
+		return "flow.jsonl"
+	}
+}
+
+// SessionEvent is the on-disk session event envelope. It is the union of the
+// three layer event types (types.FlowEvent / types.TeamEvent / types.AgentEvent):
+// the common types.EventHeader plus the agent-specific AgentTurnID/Round and the
+// business Payload. A single type keeps Replay/Subscribe able to merge the three
+// per-layer files into one globally-ordered timeline.
+type SessionEvent struct {
+	types.EventHeader
+	AgentTurnID string         `json:"agent_turn_id,omitempty"`
+	Round       int            `json:"round,omitempty"`
+	Payload     map[string]any `json:"payload,omitempty"`
+}
+
+// SessionReplay is the ordered event view reconstructed from the three layer
+// files. The storage layer does not interpret business state; Runtime can fold
 // Events into FlowSession/Turn state later.
 type SessionReplay struct {
 	SessionID string
-	Events    []types.SessionEvent
+	Events    []SessionEvent
 	LastSeq   int64
 }
 
-// SessionWriter appends ordered session events and replays them.
+// SessionWriter appends ordered session events and replays them. Append routes
+// each event to the per-layer file derived from the EventLayer, but allocates
+// sequence numbers from one global counter per session so the three files can
+// always be re-merged into a single monotonic timeline.
 type SessionWriter interface {
-	Append(ctx context.Context, sessionID string, event types.SessionEvent) (types.SessionEvent, error)
+	Append(ctx context.Context, sessionID string, layer EventLayer, event SessionEvent) (SessionEvent, error)
 	Replay(ctx context.Context, sessionID string) (*SessionReplay, error)
-	Subscribe(ctx context.Context, sessionID string, afterSeq int64) (<-chan types.SessionEvent, error)
+	Subscribe(ctx context.Context, sessionID string, afterSeq int64) (<-chan SessionEvent, error)
 }
 
 // JSONLSessionWriter is a single-writer implementation backed by the current
@@ -37,7 +74,7 @@ type JSONLSessionWriter struct {
 	fileStore FileStore
 	mu        sync.Mutex
 	nextSeq   map[string]int64
-	subs      map[string]map[int]chan types.SessionEvent
+	subs      map[string]map[int]chan SessionEvent
 	nextSubID int
 }
 
@@ -45,19 +82,19 @@ func NewJSONLSessionWriter(fileStore FileStore) *JSONLSessionWriter {
 	return &JSONLSessionWriter{
 		fileStore: fileStore,
 		nextSeq:   make(map[string]int64),
-		subs:      make(map[string]map[int]chan types.SessionEvent),
+		subs:      make(map[string]map[int]chan SessionEvent),
 	}
 }
 
-func (w *JSONLSessionWriter) Append(ctx context.Context, sessionID string, event types.SessionEvent) (types.SessionEvent, error) {
+func (w *JSONLSessionWriter) Append(ctx context.Context, sessionID string, layer EventLayer, event SessionEvent) (SessionEvent, error) {
 	if err := contextErr(ctx); err != nil {
-		return types.SessionEvent{}, err
+		return SessionEvent{}, err
 	}
 	if strings.TrimSpace(sessionID) == "" {
-		return types.SessionEvent{}, errors.New("session id is required")
+		return SessionEvent{}, errors.New("session id is required")
 	}
 	if strings.TrimSpace(event.Type) == "" {
-		return types.SessionEvent{}, errors.New("event type is required")
+		return SessionEvent{}, errors.New("event type is required")
 	}
 
 	w.mu.Lock()
@@ -66,7 +103,7 @@ func (w *JSONLSessionWriter) Append(ctx context.Context, sessionID string, event
 	if _, ok := w.nextSeq[sessionID]; !ok {
 		replay, err := w.replayLocked(sessionID)
 		if err != nil && !errors.Is(err, ErrNotFound) {
-			return types.SessionEvent{}, err
+			return SessionEvent{}, err
 		}
 		if replay != nil {
 			w.nextSeq[sessionID] = replay.LastSeq + 1
@@ -86,19 +123,19 @@ func (w *JSONLSessionWriter) Append(ctx context.Context, sessionID string, event
 
 	data, err := json.Marshal(event)
 	if err != nil {
-		return types.SessionEvent{}, fmt.Errorf("marshal session event: %w", err)
+		return SessionEvent{}, fmt.Errorf("marshal session event: %w", err)
 	}
 	data = append(data, '\n')
 
-	path := filepath.Join(".agents", "data", "sessions", sessionID, "session.jsonl")
+	path := filepath.Join(".agents", "data", "sessions", sessionID, layerFile(layer))
 	if err := w.fileStore.Append(path, data); err != nil {
-		return types.SessionEvent{}, fmt.Errorf("append session event: %w", err)
+		return SessionEvent{}, fmt.Errorf("append session event: %w", err)
 	}
 	w.publishLocked(sessionID, event)
 	return event, nil
 }
 
-func (w *JSONLSessionWriter) Subscribe(ctx context.Context, sessionID string, afterSeq int64) (<-chan types.SessionEvent, error) {
+func (w *JSONLSessionWriter) Subscribe(ctx context.Context, sessionID string, afterSeq int64) (<-chan SessionEvent, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, errors.New("session id is required")
 	}
@@ -120,11 +157,11 @@ func (w *JSONLSessionWriter) Subscribe(ctx context.Context, sessionID string, af
 		w.mu.Unlock()
 		return nil, ErrNotFound
 	}
-	ch := make(chan types.SessionEvent, len(replay.Events)+64)
+	ch := make(chan SessionEvent, len(replay.Events)+64)
 	w.nextSubID++
 	subID := w.nextSubID
 	if w.subs[sessionID] == nil {
-		w.subs[sessionID] = make(map[int]chan types.SessionEvent)
+		w.subs[sessionID] = make(map[int]chan SessionEvent)
 	}
 	w.subs[sessionID][subID] = ch
 	for _, event := range replay.Events {
@@ -151,7 +188,7 @@ func (w *JSONLSessionWriter) Subscribe(ctx context.Context, sessionID string, af
 	return ch, nil
 }
 
-func (w *JSONLSessionWriter) publishLocked(sessionID string, event types.SessionEvent) {
+func (w *JSONLSessionWriter) publishLocked(sessionID string, event SessionEvent) {
 	for subID, ch := range w.subs[sessionID] {
 		select {
 		case ch <- event:
@@ -181,13 +218,37 @@ func (w *JSONLSessionWriter) Replay(ctx context.Context, sessionID string) (*Ses
 }
 
 func (w *JSONLSessionWriter) replayLocked(sessionID string) (*SessionReplay, error) {
-	path := filepath.Join(".agents", "data", "sessions", sessionID, "session.jsonl")
-	data, err := w.fileStore.Read(path)
-	if err != nil {
-		return nil, err
+	replay := &SessionReplay{SessionID: sessionID}
+
+	// Read every layer file and merge into one globally-ordered timeline. A
+	// layer file that has not been written yet simply contributes no events.
+	layers := []EventLayer{LayerFlow, LayerTeam, LayerAgent}
+	found := false
+	for _, layer := range layers {
+		path := filepath.Join(".agents", "data", "sessions", sessionID, layerFile(layer))
+		data, err := w.fileStore.Read(path)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		found = true
+		if err := decodeEventLines(data, replay); err != nil {
+			return nil, err
+		}
 	}
 
-	replay := &SessionReplay{SessionID: sessionID}
+	if !found || len(replay.Events) == 0 {
+		return nil, ErrNotFound
+	}
+	sort.SliceStable(replay.Events, func(i, j int) bool {
+		return replay.Events[i].Seq < replay.Events[j].Seq
+	})
+	return replay, nil
+}
+
+func decodeEventLines(data []byte, replay *SessionReplay) error {
 	content := string(data)
 	lines := strings.Split(content, "\n")
 	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
@@ -201,22 +262,16 @@ func (w *JSONLSessionWriter) replayLocked(sessionID string) (*SessionReplay, err
 			continue
 		}
 
-		var event types.SessionEvent
+		var event SessionEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return nil, fmt.Errorf("decode session event: %w", err)
+			return fmt.Errorf("decode session event: %w", err)
 		}
 		replay.Events = append(replay.Events, event)
 		if event.Seq > replay.LastSeq {
 			replay.LastSeq = event.Seq
 		}
 	}
-	if len(replay.Events) == 0 {
-		return nil, ErrNotFound
-	}
-	sort.SliceStable(replay.Events, func(i, j int) bool {
-		return replay.Events[i].Seq < replay.Events[j].Seq
-	})
-	return replay, nil
+	return nil
 }
 
 func contextErr(ctx context.Context) error {
