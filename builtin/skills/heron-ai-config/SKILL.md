@@ -25,6 +25,7 @@ scripts:
 | `references/fields.md` | **每个配置字段的含义**（Flow/Team/Call/Agent/record/rules） |
 | `references/organization.md` | 目录组织、三层编排、设计优势 |
 | `references/operations.md` | 下载/使用/启动/关闭的详细命令 |
+| `references/debug.md` | **排查与诊断**：三层 jsonl / 执行日志 / 证据链的读取与 jq 查询 |
 
 读取方式：用 `Read` 打开 `references/<name>.md`（本 skill 目录下）。
 
