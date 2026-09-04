@@ -32,17 +32,17 @@ heron-ai/
 │   ├── agent/           # AgentTurn loop, guardrail, signal parser, HITL
 │   ├── tool/            # Tool registry, executor, builtin tools
 │   ├── skill/           # Skill registry, loader, injector
-│   ├── context/         # Agent memory, history, compressor
-│   ├── knowledge/       # Knowledge index, injector
+│   ├── knowledge/       # Knowledge index, injector, summarizer
 │   ├── model/           # LLM provider abstraction
 │   ├── config/          # Config loader (flows/teams/agents)
 │   ├── storage/         # File store, run state persistence
+│   ├── state/           # Short-term session state snapshots
+│   ├── logging/         # Rotating execution log
 │   ├── observability/   # Logger, event bus, metrics
 │   ├── view/            # TUI (bubbletea), HTTP handler, SSE
 │   ├── eval/            # Evaluation engine
 │   ├── mcp/             # MCP adapter
-│   ├── extension/       # Extension registry
-│   └── consolidation/   # Consolidation agent
+│   └── extension/       # Extension registry
 ```
 
 ## Signal Routing

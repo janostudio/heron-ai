@@ -2,7 +2,7 @@
 
 Agents are reusable model and prompt definitions. Every Agent uses a
 directory. The main configuration file is always `AGENT.md`; private
-knowledge, rules, memory and future extensions live beside it.
+knowledge, rules, state and future extensions live beside it.
 
 ## Standard Directory Form
 
@@ -21,7 +21,7 @@ An Agent directory may also contain:
 ```text
 .agents/agents/my_agent/
 ├── skills/               # Agent-local skills, when needed
-├── memory/               # Optional persistent memory files
+├── state/               # Optional persistent state files
 ├── scripts/              # Agent-local helper scripts
 └── extensions/           # Optional Agent-specific extensions
 ```

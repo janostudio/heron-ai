@@ -25,7 +25,7 @@ CodeBuddy 是面向用户的 CLI 产品，heron-ai 是通用多 Agent 引擎。�
 |---|---|---|
 | `execution-management` | ✅ 已增强 | 任务闭环、进度追踪 |
 | `tool-usage` | ✅ 已增强 | 工具是 ground truth |
-| `memory-management` | ✅ 已增强 | 决策+依据 |
+| `state-management` | ✅ 已增强 | 决策+依据 |
 | `perspective-isolation` | ✅ 已增强 | 多 agent 知识边界 |
 | `output-format` | ⚠️ 简略 | 被 `structuredOutputContract` 部分覆盖 |
 | `knowledge-query` | ❌ **死代码** | 从未被 `BuildSystemPrompt` 引用 |
@@ -42,7 +42,7 @@ CodeBuddy 是面向用户的 CLI 产品，heron-ai 是通用多 Agent 引擎。�
 
 CodeBuddy 的 `prompts` 数组（60+ 条）可归为几类：
 
-1. **元任务提示词**：`terminal-title-generator-instructions`、`summary-generator-instructions`、`memory-selector-instructions`、`compact-prompt`
+1. **元任务提示词**：`terminal-title-generator-instructions`、`summary-generator-instructions`、`state-selector-instructions`、`compact-prompt`
 2. **主 Agent 提示词**：`cli-agent-prompt`、`base-agent-instructions`、`system-reminder-*`
 3. **工具描述提示词**：`tool-read-description`、`tool-bash-description`、`tool-edit-description` 等
 4. **产品功能提示词**：`command-commit-prompt`、`command-security-review-prompt`、`insights-facet-*`、`init-prompt`、`content-analyzer-*`
@@ -78,7 +78,7 @@ CodeBuddy 的 `prompts` 数组（60+ 条）可归为几类：
 - **归属**：这是**能力级**的——只有支持 spawn 的 agent 需要，应做成内置 skill（如 `entity-spawn`），agent 声明 `skills: [entity-spawn]` 后注入。
 - **提示词要点**：
   - 我是动态 spawn 的子实体，只处理 `## Your Item` 交给我的那一项
-  - 我有独立持久 memory（keyed by `key`），先读自己的 memory
+  - 我有独立持久 state（keyed by `key`），先读自己的 state
   - 完成后用固定结构回报（见 2.5）
 
 #### 2.4 `structured-output` 收紧 —— 引擎级，措辞增强
@@ -126,7 +126,7 @@ CodeBuddy 的 `prompts` 数组（60+ 条）可归为几类：
 ├── 所有 agent 都需要 → builtin.go 模板（引擎级）
 │   ├── execution-management ✅
 │   ├── tool-usage ✅
-│   ├── memory-management ✅
+│   ├── state-management ✅
 │   ├── perspective-isolation ✅
 │   ├── knowledge-query（激活）
 │   └── output-format（收紧）

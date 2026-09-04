@@ -509,7 +509,7 @@ Tool 可以独立注册和替换，不绑定具体 Agent 实现。
 - Structured Output
 - HITL
 - Hooks
-- Memory
+- State
 
 ## 9. 主要缺点和功能缺失
 

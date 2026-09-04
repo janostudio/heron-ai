@@ -2,10 +2,10 @@
 
 > 本文是 heron-ai 提示词的**落地设计方案**。结合：
 > - `BUILTIN-PROMPTS-ANALYSIS.zh-CN.md`（哪些提示词该内置）
-> - 已实现的 LLM 摘要式压缩（`internal/agent/summarizer_llm.go`）
+> - 已实现的 LLM 摘要式压缩（`internal/agent/compactor_llm.go`）
 > - `docs/generic-engine/16-memory-knowledge-learning.md`（Knowledge 格式与自动学习约定）
 >
-> 范围：本次聚焦 **Knowledge 总结**（Knowledge Curator 提示词），去掉 session-title（非核心）。
+> 范围：本次聚焦 **Knowledge 总结**（Knowledge Summarizer 提示词），去掉 session-title（非核心）。
 
 ## 0. 定位：提示词在引擎里的三个归属层
 
@@ -14,7 +14,7 @@
 | 层 | 载体 | 本次动作 |
 |---|---|---|
 | **引擎级强制策略** | `internal/prompt/builtin.go` | 激活 `knowledge-query`（教模型"如何用注入的知识"） |
-| **能力级可选提示词** | 内置 Skill / 独立模块常量 | 新增 Knowledge Curator 提炼提示词 |
+| **能力级可选提示词** | 内置 Skill / 独立模块常量 | 新增 Knowledge Summarizer 提炼提示词 |
 | **产品层政策** | 用户 `agent.body` | 不涉及 |
 
 ## 1. 问题：knowledge 总结缺什么
@@ -22,10 +22,10 @@
 对照 16 号文档的「自动学习两阶段」，当前引擎的缺口：
 
 ```
-阶段一：确定性候选收集（SharedRecord + Workspace diff + Memory Confirmed/Decisions）
+阶段一：确定性候选收集（SharedRecord + Workspace diff + State Confirmed/Decisions）
   → 已有（候选来源在 Session 里）
-阶段二：Knowledge Curator（候选 → 固定格式 Knowledge Markdown）
-  → ❌ 缺：当前 KnowledgeExtractor.Extract 只是把 high/critical memory 的
+阶段二：Knowledge Summarizer（候选 → 固定格式 Knowledge Markdown）
+  → ❌ 缺：当前 KnowledgeExtractor.Extract 只是把 high/critical state 的
      Content 原样搬成 entry，没有「提炼」，不产出 frontmatter 与固定 section
 ```
 
@@ -57,21 +57,21 @@ When background knowledge is injected into your context:
 
 > 注意：当前注入格式是 `## Knowledge Context`（代码 `formatEntries`），与 16 号文档 6.3 的 `## Relevant Knowledge` 标题不一致。方案里保留现状标题 `## Knowledge Context`，避免本次改动牵扯注入格式；标题统一留待 Knowledge 注入重构时一并处理。
 
-### 2.2 能力级：Knowledge Curator 提炼提示词
+### 2.2 能力级：Knowledge Summarizer 提炼提示词
 
 **对应 16 号文档 5.5 / 7.2**：把候选来源提炼成固定 frontmatter + section 的 Knowledge Markdown。
 
-**归属**：这是「知识自动学习」的能力，不是所有 agent 的常规职责。应作为**独立模块的提示词常量**（类似 `summarizer_llm.go` 的摘要提示词），由 Knowledge Curator 调用，而非注入主 agent 系统提示。
+**归属**：这是「知识自动学习」的能力，不是所有 agent 的常规职责。应作为**独立模块的提示词常量**（类似 `compactor_llm.go` 的摘要提示词），由 Knowledge Summarizer 调用，而非注入主 agent 系统提示。
 
 **提示词文本**：
 
 ```
-You are a knowledge curator. Your task is to distill candidate sources into a
+You are a knowledge summarizer. Your task is to distill candidate sources into a
 single, precisely-formatted Knowledge entry.
 
 ## Input
 You are given candidate sources: SharedRecords, Workspace diffs, test results,
-and Confirmed/Decisions from Memory. Not every source is worth keeping.
+and Confirmed/Decisions from State. Not every source is worth keeping.
 
 ## Selection rules
 - Only distill durable, reusable knowledge (facts, rules, preferences,
@@ -121,15 +121,15 @@ keywords: [ ... ]
 
 ## 3. 与已实现「LLM 摘要压缩」的关系
 
-| 维度 | 压缩摘要（已实现） | Knowledge Curator（本方案） |
+| 维度 | 压缩摘要（已实现） | Knowledge Summarizer（本方案） |
 |---|---|---|
 | 目的 | 保住当前对话的续聊上下文 | 沉淀跨会话可复用知识 |
-| 输入 | 被裁剪的消息组 | SharedRecord + Workspace diff + Memory |
+| 输入 | 被裁剪的消息组 | SharedRecord + Workspace diff + State |
 | 输出 | `## Compacted Agent Context` 纯文本 | 固定 frontmatter + section 的 Markdown |
 | 调用时机 | 压缩时同步 | 会话封存后异步 |
-| 归属 | 引擎级（`summarizer_llm.go`） | 能力级（Knowledge Curator 模块） |
+| 归属 | 引擎级（`compactor_llm.go`） | 能力级（Knowledge Summarizer 模块） |
 
-二者**共用**同一个技术模式：`ModelProvider.Chat()` 无 tools 轻量调用 + 严格输出约束 + 失败降级（压缩已实现降级回机械，Curator 应同样实现「提炼失败则丢弃候选或退回原始 memory，不产出脏知识」）。
+二者**共用**同一个技术模式：`ModelProvider.Chat()` 无 tools 轻量调用 + 严格输出约束 + 失败降级（压缩已实现降级回机械，KnowledgeSummarizer 应同样实现「提炼失败则丢弃候选或退回原始 state，不产出脏知识」）。
 
 ## 4. 落地路径
 
@@ -138,16 +138,16 @@ keywords: [ ... ]
 - 替换 `internal/prompt/builtin.go` 的死代码 `knowledgeQueryTemplate` 常量文本为增强版（若指令放 knowledge 包，则同步删除或改由 knowledge 包引用）。
 - 测试：新增断言「`InjectWithAllowlist` 命中知识时，输出含 `## Knowledge Usage` 指令 + 知识条目；未命中（空）时不含指令」。
 
-### Phase 2：Knowledge Curator 提示词 + 调用骨架（P1）
-- 新增 `internal/knowledge/curator.go`：`Curator` 结构体，持有 `types.ModelProvider` + `ModelConfig`，`Curate(ctx, sources) (types.KnowledgeEntry, error)`。
-- 提示词常量放同文件（参考 `summarizer_llm.go` 的 `NewLLMSummarizer` 模式：覆盖 `MaxOutputTokens`/`Temperature`/`Reasoning=nil`）。
-- 替换/增强现有 `KnowledgeExtractor.Extract`：不再机械搬运，改为调 `Curator.Curate` 提炼（或保留 `Extract` 作为无 LLM 的降级路径，Curator 作为 LLM 增强路径——与压缩的 mechanical/llm 双实现一致）。
-- 失败降级：`Curate` 失败则丢弃候选（不产出脏知识），记录日志。
+### Phase 2：Knowledge Summarizer 提示词 + 调用骨架（P1）
+- 新增 `internal/knowledge/summarizer.go`：`KnowledgeSummarizer` 结构体，持有 `types.ModelProvider` + `ModelConfig`，`Summarize(ctx, sources) (types.KnowledgeEntry, error)`。
+- 提示词常量放同文件（参考 `compactor_llm.go` 的 `NewLLMCompactor` 模式：覆盖 `MaxOutputTokens`/`Temperature`/`Reasoning=nil`）。
+- 替换/增强现有 `KnowledgeExtractor.Extract`：不再机械搬运，改为调 `KnowledgeSummarizer.Summarize` 提炼（或保留 `Extract` 作为无 LLM 的降级路径，KnowledgeSummarizer 作为 LLM 增强路径——与压缩的 mechanical/llm 双实现一致）。
+- 失败降级：`Summarize` 失败则丢弃候选（不产出脏知识），记录日志。
 
-#### Curator 模型可配置（已确认）
+#### KnowledgeSummarizer 模型可配置（已确认）
 
-- Curator 复用 `types.ModelProvider`（实际是 `ProviderRouter`）。`ProviderRouter.providerFor` 在 `config.Model == ""` 时自动回退到 `defaultModel`。
-- 因此：**Curator 模型配置 = 给 `ModelConfig.Model` 赋值；不配置（空字符串）= 自动用默认模型**，引擎已天然支持，无需新增路由逻辑。
+- KnowledgeSummarizer 复用 `types.ModelProvider`（实际是 `ProviderRouter`）。`ProviderRouter.providerFor` 在 `config.Model == ""` 时自动回退到 `defaultModel`。
+- 因此：**KnowledgeSummarizer 模型配置 = 给 `ModelConfig.Model` 赋值；不配置（空字符串）= 自动用默认模型**，引擎已天然支持，无需新增路由逻辑。
 - 配置位置：`EngineConfig.Settings` 下新增 `Knowledge` 段：
 
 ```go
@@ -161,15 +161,15 @@ type SettingsConfig struct {
 }
 
 type KnowledgeConfig struct {
-    // CuratorModel 为 Curator 提炼指定的模型名；空 = 用默认模型。
-    CuratorModel string `json:"curator_model,omitempty"`
+    // SummaryModel 为 KnowledgeSummarizer 提炼指定的模型名；空 = 用默认模型。
+    SummaryModel string `json:"summary_model,omitempty"`
 }
 ```
 
-- `NewCurator(provider types.ModelProvider, curatorModel string)`：`curatorModel` 为空时 `config.Model = ""`（走默认），否则 `config.Model = curatorModel`。
+- `NewKnowledgeSummarizer(provider types.ModelProvider, summaryModel string)`：`summaryModel` 为空时 `config.Model = ""`（走默认），否则 `config.Model = summaryModel`。
 
 ### Phase 3：接入触发时机（P2，依赖 16 号文档 7.3）
-- 会话封存后异步调 Curator，产出 `proposed/` 候选。
+- 会话封存后异步调 KnowledgeSummarizer，产出 `proposed/` 候选。
 - 此阶段依赖 Session 封存钩子与异步任务，不在本次提示词方案范围内，仅标注。
 
 ## 5. 明确不做
@@ -177,11 +177,11 @@ type KnowledgeConfig struct {
 1. 不做 session-title（用户明确去除非核心）。
 2. 不统一 `## Knowledge Context` → `## Relevant Knowledge` 标题（牵扯注入格式重构，另立任务）。
 3. 不做向量检索/rerank（16 号文档 6.2 的规模扩展项）。
-4. 不做 Curator 的发布门槛自动化（7.4 的人工确认策略，另立任务）。
-5. 不把 Curator 提示词注入主 agent 系统提示（它是独立元任务，非 agent 常规职责）。
+4. 不做 KnowledgeSummarizer 的发布门槛自动化（7.4 的人工确认策略，另立任务）。
+5. 不把 KnowledgeSummarizer 提示词注入主 agent 系统提示（它是独立元任务，非 agent 常规职责）。
 
 ## 6. 已确认决策
 
-1. **Curator 模型可配置**：`Settings.Knowledge.CuratorModel` 指定，空则用默认模型（`ProviderRouter` 原生支持，无需新路由）。
-2. **Curator 与 KnowledgeExtractor 关系**：保留机械 `Extract` 作为降级、新增 `Curator` 作为 LLM 增强（对齐压缩的双实现模式）。—— 待最终确认。
-3. **Phase 2 是否本次实现**：提示词方案文档已定稿，实现（Curator 代码）是否立即启动，待确认。
+1. **KnowledgeSummarizer 模型可配置**：`Settings.Knowledge.SummaryModel` 指定，空则用默认模型（`ProviderRouter` 原生支持，无需新路由）。
+2. **KnowledgeSummarizer 与 KnowledgeExtractor 关系**：保留机械 `Extract` 作为降级、新增 `KnowledgeSummarizer` 作为 LLM 增强（对齐压缩的双实现模式）。—— 待最终确认。
+3. **Phase 2 是否本次实现**：提示词方案文档已定稿，实现（KnowledgeSummarizer 代码）是否立即启动，待确认。

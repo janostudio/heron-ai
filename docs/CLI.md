@@ -19,6 +19,9 @@ heron --serve --port 8080
 # Resume a waiting FlowSession
 heron --prompt "Continue..." --session <flow_session_id> --flow .agents/flows/default.yml
 
+# Summarize a session's SharedRecords into proposed Knowledge
+heron summary <flow_session_id> --flow .agents/flows/default.yml
+
 # Version
 heron --version
 ```

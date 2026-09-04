@@ -157,7 +157,7 @@ heron --json-rpc
 - 不解析 Claude Code 或 Codex 的私有输出格式；
 - 不把 Team、Agent、Command、Webhook 的内部事件作为外部强制协议；
 - 不要求 `heron-connect` 了解 Heron 的 Flow 配置；
-- 不要求 `heron-connect` 了解 SharedRecord、Evidence、Memory 等内部数据；
+- 不要求 `heron-connect` 了解 SharedRecord、Evidence、State 等内部数据；
 - 不在第一期实现完整的实时进度流；
 - 不在第一期实现外部权限审批协议。
 
@@ -798,8 +798,8 @@ session.jsonl
 evidence.jsonl
     = 跨 Team/Agent 查询的精简证据
 
-memory
-    = Team/Agent 短期记忆
+state
+    = Team/Agent 短期状态
 ```
 
 JSON-RPC 响应只返回当前 FlowTurn 的结果，不返回完整 `session.jsonl`。

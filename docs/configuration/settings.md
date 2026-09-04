@@ -8,9 +8,11 @@ Engine behavior configuration. Optional - defaults are used if not present.
 {
   "logging": {
     "level": "info",
-    "output": "stdout",
+    "output": "file",
+    "dir": ".agents/data/logs",
     "max_file_size": "50MB",
-    "max_backups": 5
+    "max_backups": 5,
+    "retention_days": 7
   },
   "observability": {
     "retention_days": 30,
@@ -41,9 +43,15 @@ Engine behavior configuration. Optional - defaults are used if not present.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `level` | string | `info` | Log level: debug, info, warn, error |
-| `output` | string | `stdout` | Output: stdout or file path |
-| `max_file_size` | string | `50MB` | Max log file size before rotation |
-| `max_backups` | integer | `5` | Number of rotated files to keep |
+| `output` | string | `file` | Output: stdout or file |
+| `dir` | string | `.agents/data/logs` | Log directory (relative to workspace root or absolute) |
+| `max_file_size` | string | `50MB` | Max log file size before rotation (supports B/KB/MB/GB) |
+| `max_backups` | integer | `5` | Number of rotated files to keep per day |
+| `retention_days` | integer | `7` | Days to keep log files; negative disables cleanup |
+
+Log files are named by date (`YYYY-MM-DD.log`) and split with a sequence suffix
+(`YYYY-MM-DD.1.log`) once they exceed `max_file_size`. Files older than
+`retention_days` are removed on rotation.
 
 ### observability
 

@@ -81,7 +81,7 @@ command:
 | `goal` | string | Team 目标 |
 | `calls` | object | Team 内的 Agent、Command、Webhook 配置 |
 | `output` | object | Team 对外发布的 SharedRecord |
-| `memory` | object | 可选 Team Memory 配置 |
+| `state` | object | 可选 Team State 配置 |
 
 ### Call
 
