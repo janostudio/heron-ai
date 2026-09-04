@@ -1,6 +1,8 @@
 package team
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -248,6 +250,113 @@ func TestRenderRules(t *testing.T) {
 func TestRenderRulesEmptyDefinitions(t *testing.T) {
 	assert.Equal(t, "", renderRules(nil, []string{"r"}, "a", "t"))
 	assert.Equal(t, "", renderRules(map[string]types.RuleItem{}, []string{"r"}, "a", "t"))
+}
+
+func TestRenderRulesWithLoader(t *testing.T) {
+	ctx := context.Background()
+
+	definitions := map[string]types.RuleItem{
+		"r-loaded": {
+			ID: "r-loaded", Type: "hard", Path: "rules/loaded.md",
+			Scope: types.Scope{Type: "all"},
+		},
+		"r-memory": {
+			ID: "r-memory", Content: "in memory", Path: "rules/memory.md",
+			Scope: types.Scope{Type: "all"},
+		},
+		"r-gated": {
+			ID: "r-gated", Path: "rules/gated.md",
+			Paths: []string{"src/*.go"},
+			Scope: types.Scope{Type: "all"},
+		},
+		"r-nopath": {
+			ID: "r-nopath", Path: "rules/nopath.md",
+			Scope: types.Scope{Type: "all"},
+		},
+		"r-err": {
+			ID: "r-err", Path: "rules/err.md",
+			Scope: types.Scope{Type: "all"},
+		},
+	}
+
+	loader := func(_ context.Context, p string) (string, error) {
+		switch p {
+		case "rules/loaded.md":
+			return "loaded body", nil
+		case "rules/memory.md":
+			return "should not be used", nil
+		case "rules/gated.md":
+			return "gated body", nil
+		case "rules/nopath.md":
+			return "", nil
+		case "rules/err.md":
+			return "", errors.New("boom")
+		default:
+			return "", errors.New("unexpected path " + p)
+		}
+	}
+
+	t.Run("loader reads body for empty content", func(t *testing.T) {
+		r := &Runtime{ruleLoader: loader}
+		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-loaded"}, "any", "any", "")
+		assert.Equal(t, "### r-loaded (hard)\nloaded body", out)
+	})
+
+	t.Run("in-memory content wins over loader", func(t *testing.T) {
+		r := &Runtime{ruleLoader: loader}
+		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-memory"}, "any", "any", "")
+		assert.Equal(t, "### r-memory\nin memory", out)
+	})
+
+	t.Run("paths gate matches", func(t *testing.T) {
+		r := &Runtime{ruleLoader: loader}
+		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-gated"}, "any", "any", "fix src/main.go now")
+		assert.Equal(t, "### r-gated\ngated body", out)
+	})
+
+	t.Run("paths gate misses", func(t *testing.T) {
+		r := &Runtime{ruleLoader: loader}
+		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-gated"}, "any", "any", "fix README.md now")
+		assert.Equal(t, "", out)
+	})
+
+	t.Run("loader empty body skipped", func(t *testing.T) {
+		r := &Runtime{ruleLoader: loader}
+		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-nopath"}, "any", "any", "")
+		assert.Equal(t, "", out)
+	})
+
+	t.Run("loader error skipped", func(t *testing.T) {
+		r := &Runtime{ruleLoader: loader}
+		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-err"}, "any", "any", "")
+		assert.Equal(t, "", out)
+	})
+
+	t.Run("nil loader skips empty-content rules", func(t *testing.T) {
+		r := &Runtime{}
+		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-loaded"}, "any", "any", "")
+		assert.Equal(t, "", out)
+	})
+}
+
+func TestRulePathsMatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		patterns []string
+		ctx      string
+		expected bool
+	}{
+		{"empty patterns always match", nil, "anything", true},
+		{"glob hit", []string{"src/*.go"}, "edit src/main.go", true},
+		{"glob miss", []string{"src/*.go"}, "edit README.md", false},
+		{"multiple patterns one hit", []string{"docs/*.md", "src/*.go"}, "edit src/a.go", true},
+		{"token split on quotes", []string{"pkg/*.go"}, `open "pkg/x.go"`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, rulePathsMatch(tt.patterns, tt.ctx))
+		})
+	}
 }
 
 func TestRuleVisible(t *testing.T) {

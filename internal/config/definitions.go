@@ -312,7 +312,7 @@ func (l *ConfigLoader) loadRuleDefinitions(dir string) (map[string]types.RuleIte
 		if filepath.Ext(name) != ".md" {
 			continue
 		}
-		rule, err := l.loadRule(filepath.Join(dir, name))
+		rule, err := l.loadRuleMeta(filepath.Join(dir, name))
 		if err != nil {
 			return nil, fmt.Errorf("decode %s: %w", name, err)
 		}

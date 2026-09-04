@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ type Runtime struct {
 	knowledge  *knowledge.KnowledgeInjector
 	skills     *skill.SkillInjector
 	rules      map[string]types.RuleItem
+	ruleLoader func(ctx context.Context, path string) (string, error)
 	sessions   storage.SessionWriter
 	entityLock *agentstore.EntityLocks
 }
@@ -65,6 +67,12 @@ func (r *Runtime) SetSkillInjector(injector *skill.SkillInjector) {
 // into the Agent prompt without becoming a second orchestration protocol.
 func (r *Runtime) SetRuleDefinitions(rules map[string]types.RuleItem) {
 	r.rules = rules
+}
+
+// SetRuleLoader wires a loader that resolves a rule's body from its source
+// path on demand, so rule bodies are not read into memory at load time.
+func (r *Runtime) SetRuleLoader(loader func(ctx context.Context, path string) (string, error)) {
+	r.ruleLoader = loader
 }
 
 func (r *Runtime) SetSessionWriter(writer storage.SessionWriter) {
@@ -460,7 +468,7 @@ func (r *Runtime) runBatch(
 					}
 					agent.Tools.Builtin = appendUnique(agent.Tools.Builtin, tools...)
 				}
-				if text := renderRules(r.rules, agent.Rules, configured.AgentID, req.Team.ID); text != "" {
+				if text := r.renderRulesWithLoader(ctx, r.rules, agent.Rules, configured.AgentID, req.Team.ID, configured.Responsibility+"\n"+req.Input); text != "" {
 					callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
 						Kind: "rules", Text: text, Source: "rule",
 						Placement: "system", Stability: "stable", Priority: 90,
@@ -959,6 +967,64 @@ func renderRules(definitions map[string]types.RuleItem, names []string, agentID,
 		sections = append(sections, "### "+label+"\n"+strings.TrimSpace(rule.Content))
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+// renderRulesWithLoader renders rules, deferring body reads to the loader.
+// For each referenced rule it applies scope and paths gating, then uses the
+// in-memory Content when present, otherwise loads the body via ruleLoader.
+func (r *Runtime) renderRulesWithLoader(ctx context.Context, definitions map[string]types.RuleItem, names []string, agentID, teamID, pathContext string) string {
+	if len(definitions) == 0 || len(names) == 0 {
+		return ""
+	}
+
+	var sections []string
+	for _, name := range names {
+		rule, ok := definitions[name]
+		if !ok || !ruleVisible(rule, agentID, teamID) {
+			continue
+		}
+		if len(rule.Paths) > 0 && !rulePathsMatch(rule.Paths, pathContext) {
+			continue
+		}
+
+		content := strings.TrimSpace(rule.Content)
+		if content == "" && rule.Path != "" && r.ruleLoader != nil {
+			loaded, err := r.ruleLoader(ctx, rule.Path)
+			if err != nil {
+				continue
+			}
+			content = strings.TrimSpace(loaded)
+		}
+		if content == "" {
+			continue
+		}
+
+		label := rule.ID
+		if rule.Type != "" {
+			label += " (" + rule.Type + ")"
+		}
+		sections = append(sections, "### "+label+"\n"+content)
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+// rulePathsMatch reports whether any path token in pathContext matches any
+// glob in patterns. pathContext is split on whitespace and quotes.
+func rulePathsMatch(patterns []string, pathContext string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	tokens := strings.FieldsFunc(pathContext, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '"' || r == '\'' || r == '`'
+	})
+	for _, token := range tokens {
+		for _, pattern := range patterns {
+			if matched, err := path.Match(pattern, token); err == nil && matched {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func ruleVisible(rule types.RuleItem, agentID, teamID string) bool {

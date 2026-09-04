@@ -5,7 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/adrg/frontmatter"
 
 	"github.com/heron-ai/heron-engine/internal/agent"
 	"github.com/heron-ai/heron-engine/internal/agentstore"
@@ -126,6 +129,18 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 	}
 	teamRuntime.SetSkillInjector(skill.NewSkillInjector(skillRegistry))
 	teamRuntime.SetRuleDefinitions(definitions.Rules)
+	teamRuntime.SetRuleLoader(func(ctx context.Context, path string) (string, error) {
+		data, err := files.Read(path)
+		if err != nil {
+			return "", err
+		}
+		var meta types.RuleItem
+		body, err := frontmatter.Parse(strings.NewReader(string(data)), &meta)
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
+	})
 	knowledgeStore := knowledge.NewMarkdownStore(files, ".agents/knowledge")
 	if entries, loadErr := knowledgeStore.Load(ctx); loadErr == nil {
 		index := knowledge.NewKnowledgeIndex()
