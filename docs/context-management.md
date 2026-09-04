@@ -274,13 +274,60 @@ Claude Code 还附带**冷路径**：摘要里引用完整 transcript 的文件�
 masking 是"原地裁剪 tool 结果"，一直在跑；摘要是"超阈值折叠旧消息"，默认 LLM、
 可选机械。无论第 3 层用哪种模式，masking 都在前面两层执行。
 
-## 6. 相关文件索引
+## 6. 会话持久化与恢复（三层 jsonl）
+
+### 6.1 三层独立事件流
+
+`session.jsonl` 已拆分为三层独立事件流，每层记录自己关心的事情，用 ID 串联：
+
+```
+.agents/data/sessions/<session_id>/
+├── flow.jsonl    # flow 层：flow_session/turn + team_turn（flow 调度 team）
+├── team.jsonl    # team 层：team_session + agent/command/webhook turn + approval
+└── agent.jsonl   # agent 层：agent 内部行为（model_response/tool_call/feedback/compact）
+```
+
+分层原则：**按产生者分**——哪层 runtime 的代码写的，就进哪个 jsonl。
+flow 记录 team_turn（因为 flow 调度 team，能看到 team 进度），team 记录 agent_turn
+（因为 team 调度 call，能看到 call 进度）。这体现"分层可见性"。
+
+ID 串联字段（`EventHeader`）：`FlowSessionID` / `FlowTurnID` / `TeamSessionID` /
+`TeamTurnID` / `TeamID` / `CallID` / `CallTurnID`，跨层关联。
+
+### 6.2 agent.jsonl 事件与回放恢复
+
+agent.jsonl 记录 agent 内部行为（增量事件，非完整 prompt 快照）：
+
+| 事件 | 内容 | 回放行为 |
+|---|---|---|
+| `agent.model_response` | text/tool_calls/usage/finish_reason | 追加 assistant 消息 |
+| `tool_call.completed` | tool_name/content | 追加 tool 消息 |
+| `agent.feedback` | content（completion feedback / structured retry 提示） | 追加 user 消息 |
+| `context.compacted` | summary/dropped_count | 折叠：前 N 组 → 摘要 |
+
+**回放恢复**（`internal/agent/replay.go`）：场景 A（TurnCompleted 续聊）时，agent
+回放 agent.jsonl，从后往前重建 active 上下文，实现"执行完再执行，context 持续"。
+
+### 6.3 checkpoint 与回放的分工
+
+| 机制 | 职责 | 场景 |
+|---|---|---|
+| **回放 agent.jsonl** | 消息上下文恢复 | 场景 A：完成态续聊 |
+| **checkpoint** | 等待态执行状态（等哪个异步工具/审批） | 场景 B：等待态中断恢复 |
+
+两者分工，不冲突：checkpoint 存的是"等待哪个工具/审批"这种异步指针（事件流难以表达），
+回放存的是"消息序列"（事件流擅长）。checkpoint 不能删，但回放弥补了它"完成态丢上下文"的缺陷。
+
+## 7. 相关文件索引
 
 | 文件 | 职责 |
 |---|---|
 | `internal/agent/context.go` | MessageContextManager、分层、压缩、microcompact |
 | `internal/agent/compactor.go` | Compactor 接口 + 机械实现 |
 | `internal/agent/compactor_llm.go` | LLM 压缩实现 |
+| `internal/agent/replay.go` | agent.jsonl 回放恢复 |
 | `internal/prompt/builtin.go` | PromptRenderer、系统/用户提示词拼接、ContextBlock 渲染 |
+| `internal/storage/session.go` | 三层 jsonl 存储 + 全局 seq + Replay/Subscribe |
 | `pkg/types/agent.go` | ContextConfig 配置 |
+| `pkg/types/event.go` | EventHeader + 三组事件常量 |
 | `pkg/types/execution.go` | ContextBlock 定义 |
