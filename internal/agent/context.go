@@ -480,6 +480,10 @@ func removeCompactionSummary(messages []types.Message) []types.Message {
 
 const compactedContextMarker = "## Compacted Agent Context\n"
 
+// compactedContextPreamble is prepended to a compaction summary so the model
+// understands the session continued across a context reset.
+const compactedContextPreamble = "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation."
+
 func trimToolMessagesToLimit(messages []types.Message, estimator ContextTokenEstimator, maxTokens int) ([]types.Message, bool) {
 	result := cloneMessages(messages)
 	for estimator.EstimateMessages(result) > maxTokens {
@@ -632,6 +636,13 @@ func buildContextSummary(groups [][]types.Message, maxChars int) string {
 			if content == "" {
 				continue
 			}
+			// User messages carry the original intent and constraint changes.
+			// Preserve them verbatim to prevent goal drift; only truncate
+			// assistant/tool content which is more disposable.
+			if message.Role == "user" {
+				parts = append(parts, fmt.Sprintf("%s: %s", message.Role, content))
+				continue
+			}
 			parts = append(parts, fmt.Sprintf("%s: %s", message.Role, truncateContextText(content, 500)))
 		}
 	}
@@ -691,10 +702,11 @@ func appendCompactionSummary(base, summary string) string {
 	if summary == "" {
 		return base
 	}
+	prefixed := compactedContextPreamble + "\n\n" + compactedContextMarker + summary
 	if base == "" {
-		return compactedContextMarker + summary
+		return prefixed
 	}
-	return base + "\n\n" + compactedContextMarker + summary
+	return base + "\n\n" + prefixed
 }
 
 func mergeCompactionSummary(existing, next string) string {

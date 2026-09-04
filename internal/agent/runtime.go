@@ -515,6 +515,21 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		totalUsage.PromptCacheMissTokens += resp.Usage.PromptCacheMissTokens
 		totalUsage.CacheReadInputTokens += resp.Usage.CacheReadInputTokens
 		totalUsage.CacheCreationInputTokens += resp.Usage.CacheCreationInputTokens
+		logging.Debug("model request usage", map[string]any{
+			"flow_session_id":             req.FlowSessionID,
+			"team_id":                     req.TeamID,
+			"call_id":                     req.CallID,
+			"agent_id":                    req.AgentID,
+			"round":                       round,
+			"model":                       modelConfig.Model,
+			"prompt_tokens":               resp.Usage.PromptTokens,
+			"completion_tokens":           resp.Usage.CompletionTokens,
+			"total_tokens":                resp.Usage.TotalTokens,
+			"cache_read_input_tokens":     resp.Usage.CacheReadInputTokens,
+			"cache_creation_input_tokens": resp.Usage.CacheCreationInputTokens,
+			"prompt_cache_hit_tokens":     resp.Usage.PromptCacheHitTokens,
+			"prompt_cache_miss_tokens":    resp.Usage.PromptCacheMissTokens,
+		})
 		if agent.Structured != nil && isStructuredOutputTruncated(resp.FinishReason) {
 			truncatedErr := errors.New("structured output truncated: model stopped at the output token limit")
 			if structuredRetries < 1 && round+1 < maxRounds {
