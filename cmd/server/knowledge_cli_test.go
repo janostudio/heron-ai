@@ -101,22 +101,3 @@ func TestShouldArchive(t *testing.T) {
 	}
 }
 
-func TestScopeMatches(t *testing.T) {
-	cases := []struct {
-		scope  types.Scope
-		filter string
-		want   bool
-	}{
-		{types.Scope{Type: "all"}, "flow", true},
-		{types.Scope{Type: "all"}, "all", true},
-		{types.Scope{Type: "team"}, "team", true},
-		{types.Scope{Type: "agents"}, "agent", true},
-		{types.Scope{Type: "all"}, "team", false},
-		{types.Scope{Type: "team"}, "", true},
-	}
-	for _, c := range cases {
-		if got := scopeMatches(c.scope, c.filter); got != c.want {
-			t.Fatalf("scopeMatches(%v, %q) = %v, want %v", c.scope, c.filter, got, c.want)
-		}
-	}
-}

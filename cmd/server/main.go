@@ -393,16 +393,12 @@ func parseKnowledgeMarkdown(md, sessionID, scope string) (types.KnowledgeEntry, 
 // runKnowledgeCLI dispatches `heron knowledge <subcommand>`.
 func runKnowledgeCLI(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: heron knowledge <learn|list|archive|gc> [args]")
+		fmt.Fprintln(os.Stderr, "Usage: heron knowledge <learn|gc> [args]")
 		os.Exit(1)
 	}
 	switch args[0] {
 	case "learn":
 		runLearnCLI(args[1:])
-	case "list":
-		runKnowledgeListCLI(args[1:])
-	case "archive":
-		runKnowledgeArchiveCLI(args[1:])
 	case "gc":
 		runKnowledgeGCCLI(args[1:])
 	default:
@@ -415,64 +411,6 @@ func knowledgeStore() (*knowledge.MarkdownStore, *knowledge.StatsRecorder) {
 	files := storage.NewFileStore(".")
 	root := filepath.Join(".agents", "knowledge")
 	return knowledge.NewMarkdownStore(files, root), knowledge.NewStatsRecorder(files, root)
-}
-
-func runKnowledgeListCLI(args []string) {
-	fs := flag.NewFlagSet("knowledge list", flag.ExitOnError)
-	scope := fs.String("scope", "", "Filter by scope type (flow|team|agent)")
-	status := fs.String("status", "", "Filter by status (active|deprecated|archived)")
-	_ = fs.Parse(args)
-
-	store, stats := knowledgeStore()
-	entries, err := store.LoadAll(context.Background())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	hitCounts, err := stats.HitCounts()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("%-32s %-40s %-12s %-8s %-10s %-10s %-20s %-20s\n",
-		"ID", "TITLE", "STATUS", "VERSION", "CONFIDENCE", "HITS", "CREATED_AT", "EXPIRES_AT")
-	for _, e := range entries {
-		if *scope != "" && !scopeMatches(e.Scope, *scope) {
-			continue
-		}
-		if *status != "" && e.Status != *status {
-			continue
-		}
-		fmt.Printf("%-32s %-40s %-12s %-8d %-10s %-10d %-20s %-20s\n",
-			truncate(e.ID, 32),
-			truncate(e.Title, 40),
-			e.Status,
-			e.Version,
-			e.Confidence,
-			hitCounts[e.ID],
-			e.CreatedAt,
-			e.ExpiresAt,
-		)
-	}
-}
-
-func runKnowledgeArchiveCLI(args []string) {
-	fs := flag.NewFlagSet("knowledge archive", flag.ExitOnError)
-	_ = fs.Parse(args)
-
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: heron knowledge archive <id>")
-		os.Exit(1)
-	}
-	id := fs.Arg(0)
-
-	store, _ := knowledgeStore()
-	if err := store.Archive(context.Background(), id); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Knowledge %q archived.\n", id)
 }
 
 func runKnowledgeGCCLI(args []string) {
@@ -536,26 +474,6 @@ func shouldArchive(e types.KnowledgeEntry, hitCount int, now time.Time, window t
 		return hitCount == 0
 	}
 	return false
-}
-
-func scopeMatches(s types.Scope, filter string) bool {
-	switch strings.ToLower(filter) {
-	case "flow", "all":
-		return s.Type == "all"
-	case "team":
-		return s.Type == "team"
-	case "agent":
-		return s.Type == "agents" || s.Type == "agent"
-	default:
-		return true
-	}
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
 }
 
 func firstLineOf(content string) string {
