@@ -39,7 +39,7 @@ type RuntimeBundle struct {
 	TaskControl  types.ToolTaskCanceller
 }
 
-func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider types.ModelProvider, workspaceRoot string) (*RuntimeBundle, error) {
+func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider types.ModelProvider, workspaceRoot string, logLevelOverride string) (*RuntimeBundle, error) {
 	if definitions == nil {
 		return nil, errors.New("definitions are required")
 	}
@@ -94,8 +94,9 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 	files := storage.NewFileStore(workspaceRoot)
 
 	// Global execution logger: rotating file logs under .agents/data/logs,
-	// configured via .agents/settings.json (logging section).
-	logging.SetDefault(buildLogger(workspaceRoot))
+	// configured via .agents/settings.json (logging section), with an optional
+	// command-line level override.
+	logging.SetDefault(buildLogger(workspaceRoot, logLevelOverride))
 	// One entity is one agent: the Spawn tool's inline children, durable
 	// SpawnChild tasks, and the Team scheduler's synthetic calls (batch C)
 	// share one entity lock set so the same dynamic entity never runs two
@@ -255,10 +256,13 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 
 // buildLogger constructs the global execution logger from .agents/settings.json
 // (logging section). It falls back to default settings when the config is
-// absent or invalid.
-func buildLogger(workspaceRoot string) *logging.RotatingLogger {
+// absent or invalid. logLevelOverride, when non-empty, wins over the config.
+func buildLogger(workspaceRoot, logLevelOverride string) *logging.RotatingLogger {
 	loader := config.NewConfigLoader(workspaceRoot)
 	cfg := loader.LoadLoggingSettings()
+	if strings.TrimSpace(logLevelOverride) != "" {
+		cfg.Level = logLevelOverride
+	}
 	return logging.NewRotatingLogger(workspaceRoot, logging.Config{
 		Level:         cfg.Level,
 		Dir:           cfg.Dir,

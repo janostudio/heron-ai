@@ -326,9 +326,9 @@ func (s *jsonRPCServer) write(response jsonRPCResponse) error {
 	return nil
 }
 
-func runJSONRPC(flowPath string) {
+func runJSONRPC(flowPath string, o cliOverrides) {
 	ctx := context.Background()
-	bundle, _, err := buildCurrentRuntime(ctx, flowPath)
+	bundle, _, err := buildCurrentRuntime(ctx, flowPath, o)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building runtime: %v\n", err)
 		os.Exit(1)

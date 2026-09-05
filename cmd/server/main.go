@@ -33,6 +33,9 @@ func main() {
 	prompt := flag.String("prompt", "", "Run one FlowTurn and exit")
 	flow := flag.String("flow", "", "Flow config path (default: .agents/flows/default.yml)")
 	sessionID := flag.String("session", "", "Resume an existing FlowSession")
+	modelOverride := flag.String("model", "", "Override the default model (models.json \"model\" field)")
+	logLevel := flag.String("log-level", "", "Override log level (debug/info/warn/error)")
+	maxRounds := flag.Int("max-rounds", 0, "Override max agent rounds (0 = use config)")
 	jsonRPC := flag.Bool("json-rpc", false, "Run a long-lived JSON-RPC 2.0 server over stdin/stdout")
 	inputFormat := flag.String("input-format", "", "Machine input format (stream-json)")
 	outputFormat := flag.String("output-format", "", "Machine output format (stream-json)")
@@ -71,18 +74,19 @@ func main() {
 	}
 
 	flowPath := resolveFlowPath(*flow)
+	overrides := cliOverrides{model: *modelOverride, logLevel: *logLevel, maxRounds: *maxRounds}
 	if *jsonRPC {
 		if flowPath == "" {
 			fmt.Fprintln(os.Stderr, "Error: --json-rpc requires a new-format Flow config")
 			fmt.Fprintln(os.Stderr, "Use --flow .agents/flows/default.yml")
 			os.Exit(1)
 		}
-		runJSONRPC(flowPath)
+		runJSONRPC(flowPath, overrides)
 		return
 	}
 
 	if *serve {
-		startServer(flowPath, *port)
+		startServer(flowPath, *port, overrides)
 		return
 	}
 	if flowPath == "" {
@@ -92,10 +96,10 @@ func main() {
 	}
 
 	if *prompt != "" {
-		runPrompt(flowPath, *sessionID, *prompt)
+		runPrompt(flowPath, *sessionID, *prompt, overrides)
 		return
 	}
-	runTUI(flowPath)
+	runTUI(flowPath, overrides)
 }
 
 func resolveFlowPath(flowPath string) string {
@@ -113,13 +117,13 @@ func resolveFlowPath(flowPath string) string {
 	return ""
 }
 
-func startServer(flowPath, port string) {
+func startServer(flowPath, port string, o cliOverrides) {
 	if flowPath == "" {
 		fmt.Fprintln(os.Stderr, "Error: --serve requires a new-format Flow config")
 		os.Exit(1)
 	}
 
-	bundle, _, err := buildCurrentRuntime(context.Background(), flowPath)
+	bundle, _, err := buildCurrentRuntime(context.Background(), flowPath, o)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building runtime: %v\n", err)
 		os.Exit(1)
@@ -161,9 +165,9 @@ func startServer(flowPath, port string) {
 	}
 }
 
-func runPrompt(flowPath, sessionID, prompt string) {
+func runPrompt(flowPath, sessionID, prompt string, o cliOverrides) {
 	ctx := context.Background()
-	bundle, modelName, err := buildCurrentRuntime(ctx, flowPath)
+	bundle, modelName, err := buildCurrentRuntime(ctx, flowPath, o)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building runtime: %v\n", err)
 		os.Exit(1)
@@ -192,10 +196,11 @@ func runPrompt(flowPath, sessionID, prompt string) {
 func runSummaryCLI(args []string) {
 	fs := flag.NewFlagSet("summary", flag.ExitOnError)
 	flow := fs.String("flow", "", "Flow config path (default: .agents/flows/default.yml)")
+	modelOverride := fs.String("model", "", "Override the default model (models.json \"model\" field)")
 	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: heron summary <session-id> [--flow <path>]")
+		fmt.Fprintln(os.Stderr, "Usage: heron summary <session-id> [--flow <path>] [--model <name>]")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
@@ -207,7 +212,7 @@ func runSummaryCLI(args []string) {
 		os.Exit(1)
 	}
 
-	if err := runSummary(sessionID, flowPath); err != nil {
+	if err := runSummary(sessionID, flowPath, *modelOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -216,13 +221,13 @@ func runSummaryCLI(args []string) {
 // runSummary distills a session's published SharedRecords into a proposed
 // Knowledge entry via the KnowledgeSummarizer and writes it to
 // .agents/knowledge/proposed/<session-id>.md.
-func runSummary(sessionID, flowPath string) error {
+func runSummary(sessionID, flowPath, modelOverride string) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("session id is required")
 	}
 
 	ctx := context.Background()
-	definitions, provider, err := buildProvider(ctx, flowPath)
+	definitions, provider, err := buildProvider(ctx, flowPath, modelOverride)
 	if err != nil {
 		return err
 	}
@@ -309,9 +314,9 @@ func recordsToSources(records []types.SharedRecord) []string {
 	return sources
 }
 
-func runTUI(flowPath string) {
+func runTUI(flowPath string, o cliOverrides) {
 	ctx := context.Background()
-	bundle, modelName, err := buildCurrentRuntime(ctx, flowPath)
+	bundle, modelName, err := buildCurrentRuntime(ctx, flowPath, o)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building runtime: %v\n", err)
 		os.Exit(1)
@@ -381,12 +386,23 @@ func aggregateTeamUsage(results []types.TeamTurnResult) types.TokenUsage {
 	return usage
 }
 
-func buildCurrentRuntime(ctx context.Context, flowPath string) (*app.RuntimeBundle, string, error) {
-	definitions, provider, err := buildProvider(ctx, flowPath)
+// cliOverrides carries command-line overrides for settings that normally come
+// from .agents/settings.json or .agents/models.json.
+type cliOverrides struct {
+	model     string
+	logLevel  string
+	maxRounds int
+}
+
+func buildCurrentRuntime(ctx context.Context, flowPath string, o cliOverrides) (*app.RuntimeBundle, string, error) {
+	definitions, provider, err := buildProvider(ctx, flowPath, o.model)
 	if err != nil {
 		return nil, "", err
 	}
-	bundle, err := app.BuildRuntime(ctx, definitions, provider, ".")
+	if o.maxRounds > 0 {
+		definitions.Limits.MaxAgentRounds = o.maxRounds
+	}
+	bundle, err := app.BuildRuntime(ctx, definitions, provider, ".", o.logLevel)
 	if err != nil {
 		return nil, "", err
 	}
@@ -395,8 +411,9 @@ func buildCurrentRuntime(ctx context.Context, flowPath string) (*app.RuntimeBund
 
 // buildProvider loads flow definitions and constructs the model provider
 // router. It is shared by the interactive/HTTP runtimes and the summary CLI so
-// provider construction stays in one place.
-func buildProvider(ctx context.Context, flowPath string) (*types.Definitions, *model.ProviderRouter, error) {
+// provider construction stays in one place. modelOverride, when non-empty,
+// replaces the default model selected by models.json's "model" field.
+func buildProvider(ctx context.Context, flowPath, modelOverride string) (*types.Definitions, *model.ProviderRouter, error) {
 	loader := config.NewConfigLoader(".")
 	definitions, err := loader.LoadDefinitions(ctx, config.DefinitionsLoadRequest{
 		FlowPath: flowPath,
@@ -411,6 +428,9 @@ func buildProvider(ctx context.Context, flowPath string) (*types.Definitions, *m
 	}
 	if models == nil || len(models.Models) == 0 {
 		return nil, nil, fmt.Errorf("models.json has no models")
+	}
+	if strings.TrimSpace(modelOverride) != "" {
+		models.Model = modelOverride
 	}
 	for i := range models.Models {
 		models.Models[i].APIKey = resolveAPIKey(models.Models[i].APIKey, apiKeyFallbackFor(models.Models[i]))
