@@ -20,7 +20,7 @@ func TestMarkdownStoreSaveLoadAndRebuildIndex(t *testing.T) {
 		Summary: "Retry requests must use the same idempotency key.",
 		Content: "Retry requests must use the same idempotency key.",
 		Keys:    []string{"payment", "retry", "idempotency"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 		Status:  "active",
 	}
 
@@ -53,7 +53,7 @@ func TestMarkdownStoreIgnoresIndexAndRejectsPathEscape(t *testing.T) {
 		ID:      "bad",
 		Path:    ".agents/outside.md",
 		Content: "bad",
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "escapes root")
@@ -67,7 +67,7 @@ func TestMarkdownStore_UpsertActiveVersionBump(t *testing.T) {
 		ID:      "payment-idempotency",
 		Title:   "Payment Idempotency",
 		Content: "Retry requests must use the same idempotency key.",
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, first.Version)
@@ -77,7 +77,7 @@ func TestMarkdownStore_UpsertActiveVersionBump(t *testing.T) {
 		ID:      "payment-idempotency",
 		Title:   "Payment Idempotency",
 		Content: "Updated idempotency rule.",
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, 2, second.Version)
@@ -110,14 +110,14 @@ func TestMarkdownStore_ArchiveAndLoadFiltering(t *testing.T) {
 		ID:      "keep-me",
 		Title:   "Keep",
 		Content: "keep",
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 	require.NoError(t, err)
 	_, err = store.UpsertActive(context.Background(), types.KnowledgeEntry{
 		ID:      "archive-me",
 		Title:   "Archive",
 		Content: "archive",
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 	require.NoError(t, err)
 
@@ -132,8 +132,8 @@ func TestMarkdownStore_ArchiveAndLoadFiltering(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all, 2)
 
-	// The archived file must still exist on disk.
-	require.True(t, files.Exists(".agents/knowledge/archive-me.md"))
+	// The archived file must still exist on disk (in its layer subdirectory).
+	require.True(t, files.Exists(".agents/knowledge/flow/archive-me.md"))
 }
 
 func TestMarkdownStore_FindDuplicate(t *testing.T) {
@@ -144,7 +144,7 @@ func TestMarkdownStore_FindDuplicate(t *testing.T) {
 		ID:      "payment-idempotency",
 		Title:   "Payment Idempotency",
 		Content: "Retry requests must use the same idempotency key.",
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 	require.NoError(t, err)
 

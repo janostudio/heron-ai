@@ -25,7 +25,7 @@ func TestKnowledgeIndex_AddAndSearch(t *testing.T) {
 		ID:      "1",
 		Content: "Go is a programming language",
 		Keys:    []string{"go", "programming", "language"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	results, err := idx.Search(context.Background(), "go")
@@ -46,7 +46,7 @@ func TestKnowledgeIndex_SearchWithScope_AllScope(t *testing.T) {
 		ID:      "1",
 		Content: "test content",
 		Keys:    []string{"test"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	results, err := idx.SearchWithScope(context.Background(), "test", "agent1", "team1")
@@ -107,7 +107,7 @@ func TestKnowledgeIndex_SearchWithScope_AgentScope(t *testing.T) {
 		Content: "agent specific content",
 		Keys:    []string{"agent"},
 		Scope: types.Scope{
-			Type:   "agents",
+			Type:   "agent",
 			Agents: []string{"agent1"},
 		},
 	})
@@ -127,7 +127,7 @@ func TestKnowledgeIndex_KeywordMatchingInContent(t *testing.T) {
 		ID:      "1",
 		Content: "Heron AI is a multi-agent framework",
 		Keys:    []string{},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	results, err := idx.Search(context.Background(), "heron")
@@ -145,7 +145,7 @@ func TestKnowledgeIndex_KeywordMatchingInKeys(t *testing.T) {
 		ID:      "1",
 		Content: "some content",
 		Keys:    []string{"heron", "ai", "framework"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	results, err := idx.Search(context.Background(), "heron")
@@ -163,7 +163,7 @@ func TestKnowledgeIndex_SearchMatchesTermsInsideLongRuntimeQuery(t *testing.T) {
 		ID:      "qa-guide",
 		Content: "The project service must be tested after a revision-aware write.",
 		Keys:    []string{"project", "service", "test"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	results, err := idx.Search(context.Background(), "回答用户的问题。\n请检查 project service 并运行 test")
@@ -177,8 +177,8 @@ func TestKnowledgeIndex_SearchMatchesTermsInsideLongRuntimeQuery(t *testing.T) {
 
 func TestKnowledgeIndex_List(t *testing.T) {
 	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{ID: "1", Content: "first", Scope: types.Scope{Type: "all"}})
-	idx.Add(types.KnowledgeEntry{ID: "2", Content: "second", Scope: types.Scope{Type: "all"}})
+	idx.Add(types.KnowledgeEntry{ID: "1", Content: "first", Scope: types.Scope{Type: "flow"}})
+	idx.Add(types.KnowledgeEntry{ID: "2", Content: "second", Scope: types.Scope{Type: "flow"}})
 
 	results := idx.List()
 	if len(results) != 2 {
@@ -192,7 +192,7 @@ func TestKnowledgeIndex_Count(t *testing.T) {
 		t.Fatalf("expected 0, got %d", idx.Count())
 	}
 
-	idx.Add(types.KnowledgeEntry{ID: "1", Content: "test", Scope: types.Scope{Type: "all"}})
+	idx.Add(types.KnowledgeEntry{ID: "1", Content: "test", Scope: types.Scope{Type: "flow"}})
 	if idx.Count() != 1 {
 		t.Fatalf("expected 1, got %d", idx.Count())
 	}
@@ -283,7 +283,7 @@ func TestKnowledgeInjector_InjectReturnsFormattedText(t *testing.T) {
 		ID:      "1",
 		Content: "Important knowledge",
 		Keys:    []string{"important", "knowledge"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	injector := NewKnowledgeInjector(idx)
@@ -308,7 +308,7 @@ func TestKnowledgeInjector_InjectNoMatchesReturnsEmpty(t *testing.T) {
 		ID:      "1",
 		Content: "Important knowledge",
 		Keys:    []string{"important"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	injector := NewKnowledgeInjector(idx)
@@ -352,7 +352,7 @@ func TestKnowledgeInjector_InjectWithAllowlistNoMatchOmitsUsageInstruction(t *te
 		ID:      "1",
 		Content: "Important knowledge",
 		Keys:    []string{"important"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	injector := NewKnowledgeInjector(idx)
@@ -373,7 +373,7 @@ func TestKnowledgeInjector_InjectAllWithScopeFiltering(t *testing.T) {
 	idx.Add(types.KnowledgeEntry{
 		ID:      "1",
 		Content: "Global knowledge",
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 	idx.Add(types.KnowledgeEntry{
 		ID:      "2",
@@ -387,7 +387,7 @@ func TestKnowledgeInjector_InjectAllWithScopeFiltering(t *testing.T) {
 		ID:      "3",
 		Content: "Agent specific knowledge",
 		Scope: types.Scope{
-			Type:   "agents",
+			Type:   "agent",
 			Agents: []string{"agent2"},
 		},
 	})

@@ -21,7 +21,7 @@ type KnowledgeEntry struct {
 
 // Scope defines which agents can see a knowledge entry
 type Scope struct {
-	Type   string   `yaml:"type" json:"type"` // all | team | agents
+	Type   string   `yaml:"type" json:"type"` // flow | team | agent
 	Teams  []string `yaml:"teams,omitempty" json:"teams,omitempty"`
 	Agents []string `yaml:"agents,omitempty" json:"agents,omitempty"`
 }

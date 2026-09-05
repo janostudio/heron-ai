@@ -244,27 +244,20 @@ func recordsToSources(records []types.SharedRecord) []string {
 	return sources
 }
 
-// runLearnCLI parses `heron knowledge learn <session-id> [--flow] [--model] [--scope]`
-// and dispatches to runLearn.
+// runLearnCLI parses `heron knowledge <session-id> [--flow] [--model]` and
+// dispatches to learnOneSession. The scope is no longer a command-line flag:
+// knowledge is layered by the event source it came from (flow/team/agent).
 func runLearnCLI(args []string) {
 	fs := flag.NewFlagSet("learn", flag.ExitOnError)
 	flow := fs.String("flow", "", "Flow config path (default: .agents/flows/default.yml)")
 	modelOverride := fs.String("model", "", "Override the default model (models.json \"model\" field)")
-	scope := fs.String("scope", "flow", "Knowledge scope (flow|team|agent)")
 	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: heron knowledge learn <session-id> [--flow <path>] [--model <name>] [--scope flow|team|agent]")
+		fmt.Fprintln(os.Stderr, "Usage: heron knowledge <session-id> [--flow <path>] [--model <name>]")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
-
-	switch strings.ToLower(*scope) {
-	case "flow", "team", "agent":
-	default:
-		fmt.Fprintln(os.Stderr, "Error: --scope must be one of flow|team|agent")
-		os.Exit(1)
-	}
 
 	flowPath := resolveFlowPath(*flow)
 	if flowPath == "" {
@@ -273,68 +266,223 @@ func runLearnCLI(args []string) {
 		os.Exit(1)
 	}
 
-	if err := runLearn(sessionID, flowPath, *modelOverride, strings.ToLower(*scope)); err != nil {
+	if err := learnOneSession(sessionID, flowPath, *modelOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// runLearn distills a session's SharedRecords into a knowledge entry and saves
-// it directly to the active knowledge area (one-step learning), handling
-// dedup and version bumping.
-func runLearn(sessionID, flowPath, modelOverride, scope string) error {
-	if strings.TrimSpace(sessionID) == "" {
-		return fmt.Errorf("session id is required")
+// learnAllSessions enumerates every session directory and incrementally learns
+// each one (skipping sessions with no new events since their last checkpoint).
+func learnAllSessions(flowPath, modelOverride string) error {
+	ctx := context.Background()
+	files := storage.NewFileStore(".")
+	progress := knowledge.NewLearnProgress(files, filepath.Join(".agents", "knowledge"))
+
+	names, err := files.List(filepath.Join(".agents", "data", "sessions"))
+	if err != nil {
+		return fmt.Errorf("list sessions: %w", err)
 	}
 
+	learned := 0
+	for _, name := range names {
+		sessionID := strings.TrimSpace(name)
+		if sessionID == "" {
+			continue
+		}
+		changed, err := learnOneSessionWithFiles(ctx, files, progress, sessionID, flowPath, modelOverride)
+		if err != nil {
+			return fmt.Errorf("learn session %q: %w", sessionID, err)
+		}
+		if changed {
+			learned++
+		}
+	}
+	fmt.Printf("Learned %d session(s).\n", learned)
+	return nil
+}
+
+// learnOneSession is the entry point for `heron knowledge <sid>`. It builds the
+// model provider then delegates to the shared incremental learning path.
+func learnOneSession(sessionID, flowPath, modelOverride string) error {
 	ctx := context.Background()
-	definitions, provider, err := buildProvider(ctx, flowPath, modelOverride)
-	if err != nil {
+	files := storage.NewFileStore(".")
+	progress := knowledge.NewLearnProgress(files, filepath.Join(".agents", "knowledge"))
+
+	if _, err := learnOneSessionWithFiles(ctx, files, progress, sessionID, flowPath, modelOverride); err != nil {
 		return err
 	}
+	return nil
+}
 
-	files := storage.NewFileStore(".")
+// learnOneSessionWithFiles incrementally learns one session: it reads the
+// session's events beyond the recorded last_seq, groups them by source layer,
+// distills each layer into one or more knowledge entries, saves them, and
+// advances the checkpoint. It returns true when new knowledge was produced.
+func learnOneSessionWithFiles(
+	ctx context.Context,
+	files storage.FileStore,
+	progress *knowledge.LearnProgress,
+	sessionID, flowPath, modelOverride string,
+) (bool, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return false, fmt.Errorf("session id is required")
+	}
+
+	definitions, provider, err := buildProvider(ctx, flowPath, modelOverride)
+	if err != nil {
+		return false, err
+	}
+
 	sessions := storage.NewJSONLSessionWriter(files)
 	replay, err := sessions.Replay(ctx, sessionID)
 	if err != nil {
-		return fmt.Errorf("replay session %q: %w", sessionID, err)
+		return false, fmt.Errorf("replay session %q: %w", sessionID, err)
 	}
 
-	records := extractSharedRecords(replay)
-	if len(records) == 0 {
-		return fmt.Errorf("session %q has no shared records to summarize", sessionID)
+	lastSeq, err := progress.LastSeq(sessionID)
+	if err != nil {
+		return false, err
 	}
 
-	sources := recordsToSources(records)
+	// Filter to events beyond the checkpoint.
+	var newEvents []storage.SessionEvent
+	for _, event := range replay.Events {
+		if event.Seq > lastSeq {
+			newEvents = append(newEvents, event)
+		}
+	}
+	if len(newEvents) == 0 {
+		fmt.Printf("Session %q: no new events, skipped.\n", sessionID)
+		return false, nil
+	}
+
+	sources := eventsToLayeredSources(newEvents)
+	if len(sources) == 0 {
+		// Nothing distillable, but still advance the checkpoint so we don't
+		// re-process these events next time.
+		if err := progress.Update(sessionID, replay.LastSeq); err != nil {
+			return false, err
+		}
+		fmt.Printf("Session %q: no distillable events, checkpoint advanced.\n", sessionID)
+		return false, nil
+	}
+
 	summarizer := knowledge.NewKnowledgeSummarizer(provider, definitions.Knowledge.SummaryModel)
-	md, err := summarizer.Summarize(ctx, sources)
+	docs, err := summarizer.SummarizeLayered(ctx, sources)
 	if err != nil {
-		return fmt.Errorf("summarize knowledge: %w", err)
-	}
-	if strings.TrimSpace(md) == "" {
-		return fmt.Errorf("knowledge summarizer returned empty markdown")
-	}
-
-	entry, err := parseKnowledgeMarkdown(md, sessionID, scope)
-	if err != nil {
-		return err
+		return false, fmt.Errorf("summarize knowledge: %w", err)
 	}
 
 	store := knowledge.NewMarkdownStore(files, filepath.Join(".agents", "knowledge"))
-
-	// Dedup: skip if an active entry already matches by keyword.
-	if dup, dupErr := store.FindDuplicate(ctx, entry); dupErr == nil && dup != nil {
-		fmt.Printf("Knowledge already exists (matches %q), skipped.\n", dup.ID)
-		return nil
+	saved := 0
+	for _, md := range docs {
+		entry, parseErr := parseKnowledgeMarkdown(md, sessionID, "")
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: skip unparsable knowledge: %v\n", parseErr)
+			continue
+		}
+		// Dedup: skip if an active entry already matches by keyword.
+		if dup, dupErr := store.FindDuplicate(ctx, entry); dupErr == nil && dup != nil {
+			fmt.Printf("Knowledge already exists (matches %q), skipped.\n", dup.ID)
+			continue
+		}
+		savedEntry, saveErr := store.UpsertActive(ctx, entry)
+		if saveErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: save knowledge: %v\n", saveErr)
+			continue
+		}
+		fmt.Printf("Knowledge learned: %s [%s] (version %d)\n", savedEntry.ID, savedEntry.Scope.Type, savedEntry.Version)
+		saved++
 	}
 
-	saved, err := store.UpsertActive(ctx, entry)
+	if err := progress.Update(sessionID, replay.LastSeq); err != nil {
+		return false, err
+	}
+	return saved > 0, nil
+}
+
+// eventLayer maps a session event type to its source layer (flow/team/agent).
+// flow_* and shared_record.published are flow; team_* is team; agent-layer
+// events (agent_*, agent.*, tool_call.*, context.compacted) are agent.
+// Team-orchestrated events without a clear prefix (approval, command_turn,
+// webhook_turn) default to team.
+func eventLayer(eventType string) string {
+	switch {
+	case eventType == types.EventSharedRecordPublished:
+		return "flow"
+	case strings.HasPrefix(eventType, "flow_"):
+		return "flow"
+	case strings.HasPrefix(eventType, "team_"):
+		return "team"
+	case strings.HasPrefix(eventType, "agent_"),
+		strings.HasPrefix(eventType, "agent."),
+		strings.HasPrefix(eventType, "tool_call"),
+		strings.HasPrefix(eventType, "context.compacted"):
+		return "agent"
+	default:
+		return "team"
+	}
+}
+
+// eventsToLayeredSources converts session events into layer-tagged text
+// fragments for the layered summarizer. SharedRecord payloads are rendered as
+// "[name] summary"; other events fall back to their type as a lightweight
+// signal.
+func eventsToLayeredSources(events []storage.SessionEvent) []knowledge.LayeredSource {
+	var sources []knowledge.LayeredSource
+	for _, event := range events {
+		layer := eventLayer(event.Type)
+		text := eventSourceText(event)
+		if text == "" {
+			continue
+		}
+		sources = append(sources, knowledge.LayeredSource{Layer: layer, Text: text})
+	}
+	return sources
+}
+
+// eventSourceText renders a single session event as a text fragment suitable
+// for distillation. SharedRecord payloads carry their name/summary; other
+// events contribute their type plus a compact JSON payload when non-empty.
+func eventSourceText(event storage.SessionEvent) string {
+	if event.Type == types.EventSharedRecordPublished {
+		raw, ok := event.Payload["record"]
+		if !ok {
+			return ""
+		}
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return ""
+		}
+		var record types.SharedRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			return ""
+		}
+		name := strings.TrimSpace(record.Name)
+		summary := strings.TrimSpace(record.Summary)
+		switch {
+		case name == "" && summary == "":
+			return ""
+		case name == "":
+			return summary
+		case summary == "":
+			return name
+		default:
+			return fmt.Sprintf("[%s] %s", name, summary)
+		}
+	}
+
+	// Non-shared-record events: use the type and, when present, a compact
+	// payload so the summarizer can see the substantive content.
+	if len(event.Payload) == 0 {
+		return event.Type
+	}
+	data, err := json.Marshal(event.Payload)
 	if err != nil {
-		return fmt.Errorf("save knowledge: %w", err)
+		return event.Type
 	}
-
-	fmt.Printf("Knowledge learned: %s (version %d)\n", saved.ID, saved.Version)
-	return nil
+	return fmt.Sprintf("%s %s", event.Type, string(data))
 }
 
 // parseKnowledgeMarkdown converts the summarizer's markdown output into a
@@ -371,9 +519,7 @@ func parseKnowledgeMarkdown(md, sessionID, scope string) (types.KnowledgeEntry, 
 	if scopeType == "" {
 		scopeType = strings.ToLower(meta.Scope)
 	}
-	if scopeType == "flow" {
-		scopeType = "all"
-	}
+	scopeType = normalizeScope(scopeType)
 
 	entry := types.KnowledgeEntry{
 		ID:         id,
@@ -390,20 +536,45 @@ func parseKnowledgeMarkdown(md, sessionID, scope string) (types.KnowledgeEntry, 
 	return entry, nil
 }
 
-// runKnowledgeCLI dispatches `heron knowledge <subcommand>`.
+// runKnowledgeCLI dispatches `heron knowledge <sid|gc>`. With no argument it
+// learns every session; with `gc` it archives stale knowledge; otherwise the
+// argument is treated as a session id to learn incrementally.
 func runKnowledgeCLI(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: heron knowledge <learn|gc> [args]")
-		os.Exit(1)
+		flowPath := resolveFlowPath("")
+		if flowPath == "" {
+			fmt.Fprintln(os.Stderr, "Error: a new-format Flow config is required")
+			fmt.Fprintln(os.Stderr, "Use --flow .agents/flows/default.yml")
+			os.Exit(1)
+		}
+		if err := learnAllSessions(flowPath, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
+
 	switch args[0] {
-	case "learn":
-		runLearnCLI(args[1:])
 	case "gc":
 		runKnowledgeGCCLI(args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown knowledge subcommand %q\n", args[0])
-		os.Exit(1)
+		runLearnCLI(args)
+	}
+}
+
+// normalizeScope maps a scope string onto the canonical flow|team|agent set.
+// Legacy values ("all" -> flow, "agents" -> agent) are tolerated so old
+// frontmatter keeps loading correctly.
+func normalizeScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "team", "agent":
+		return strings.ToLower(strings.TrimSpace(scope))
+	case "all":
+		return "flow"
+	case "agents":
+		return "agent"
+	default:
+		return "flow"
 	}
 }
 
@@ -438,7 +609,7 @@ func runKnowledgeGCCLI(args []string) {
 		if e.Status != "active" {
 			continue
 		}
-		if shouldArchive(e, hitCounts[e.ID], now, window) {
+		if shouldArchive(e, hitCounts[knowledge.StatsKey(e)], now, window) {
 			if err := store.Archive(context.Background(), e.ID); err != nil {
 				fmt.Fprintf(os.Stderr, "Error archiving %q: %v\n", e.ID, err)
 				os.Exit(1)

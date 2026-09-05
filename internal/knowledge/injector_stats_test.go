@@ -14,7 +14,7 @@ func TestKnowledgeInjector_RecordsHits(t *testing.T) {
 		ID:      "1",
 		Content: "Important knowledge",
 		Keys:    []string{"important"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	files := storage.NewFileStore(t.TempDir())
@@ -32,8 +32,8 @@ func TestKnowledgeInjector_RecordsHits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hit counts: %v", err)
 	}
-	if counts["1"] != 1 {
-		t.Fatalf("expected id '1' hit once, got %d", counts["1"])
+	if counts["flow-1"] != 1 {
+		t.Fatalf("expected id 'flow-1' hit once, got %d", counts["flow-1"])
 	}
 }
 
@@ -43,7 +43,7 @@ func TestKnowledgeInjector_NoHitsWhenNoMatch(t *testing.T) {
 		ID:      "1",
 		Content: "Important knowledge",
 		Keys:    []string{"important"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	files := storage.NewFileStore(t.TempDir())
@@ -72,7 +72,7 @@ func TestKnowledgeInjector_NoRecorderIsSafe(t *testing.T) {
 		ID:      "1",
 		Content: "Important knowledge",
 		Keys:    []string{"important"},
-		Scope:   types.Scope{Type: "all"},
+		Scope:   types.Scope{Type: "flow"},
 	})
 
 	injector := NewKnowledgeInjector(idx)

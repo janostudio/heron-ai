@@ -166,7 +166,7 @@ func (s *MarkdownStore) Save(ctx context.Context, entry types.KnowledgeEntry) er
 		entry.Version = 1
 	}
 	if entry.Path == "" {
-		entry.Path = filepath.Join(s.root, entry.ID+".md")
+		entry.Path = filepath.Join(s.root, scopeDir(entry.Scope.Type), entry.ID+".md")
 	}
 	if err := s.ensureWithinRoot(entry.Path); err != nil {
 		return err
@@ -269,7 +269,7 @@ func (s *MarkdownStore) UpsertActive(ctx context.Context, entry types.KnowledgeE
 		// not collide with the new active entry written to <id>.md.
 		old := *existing
 		old.Status = "deprecated"
-		old.Path = filepath.Join(s.root, fmt.Sprintf("%s.v%d.md", old.ID, old.Version))
+		old.Path = filepath.Join(s.root, scopeDir(old.Scope.Type), fmt.Sprintf("%s.v%d.md", old.ID, old.Version))
 		if err := s.Save(ctx, old); err != nil {
 			return types.KnowledgeEntry{}, err
 		}
@@ -531,7 +531,7 @@ func knowledgeTerms(query string) []string {
 // scopeAllows checks if the scope permits access for the given agent/team
 func scopeAllows(scope types.Scope, agentName, teamName string) bool {
 	switch scope.Type {
-	case "all":
+	case "flow":
 		return true
 	case "team":
 		for _, t := range scope.Teams {
@@ -540,7 +540,7 @@ func scopeAllows(scope types.Scope, agentName, teamName string) bool {
 			}
 		}
 		return false
-	case "agents":
+	case "agent":
 		for _, a := range scope.Agents {
 			if a == agentName {
 				return true
@@ -549,6 +549,18 @@ func scopeAllows(scope types.Scope, agentName, teamName string) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+// scopeDir maps a knowledge scope type to its on-disk subdirectory under the
+// knowledge root. Unknown/empty scopes default to "flow" so existing top-level
+// entries keep working (they are treated as flow-visible).
+func scopeDir(scopeType string) string {
+	switch scopeType {
+	case "team", "agent":
+		return scopeType
+	default:
+		return "flow"
 	}
 }
 
@@ -575,7 +587,7 @@ func (e *KnowledgeExtractor) Extract(ctx context.Context, states []types.StateOb
 			ID:         fmt.Sprintf("mem-%s-%d", mem.Source, mem.Round),
 			Content:    mem.Content,
 			Keys:       extractKeywords(mem.Content),
-			Scope:      types.Scope{Type: "all"},
+			Scope:      types.Scope{Type: "flow"},
 			Confidence: mem.Importance,
 			Source:     mem.Source,
 			RoundNum:   mem.Round,

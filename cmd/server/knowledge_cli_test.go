@@ -35,8 +35,8 @@ Retry requests must use the same idempotency key.
 	if entry.Confidence != "high" {
 		t.Fatalf("expected confidence high, got %q", entry.Confidence)
 	}
-	if entry.Scope.Type != "all" {
-		t.Fatalf("expected scope 'all' for flow, got %q", entry.Scope.Type)
+	if entry.Scope.Type != "flow" {
+		t.Fatalf("expected scope 'flow' for flow, got %q", entry.Scope.Type)
 	}
 	if entry.Status != "active" {
 		t.Fatalf("expected status active, got %q", entry.Status)

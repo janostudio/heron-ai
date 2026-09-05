@@ -73,8 +73,18 @@ func (i *KnowledgeInjector) recordHits(entries []types.KnowledgeEntry) {
 		return
 	}
 	for _, entry := range entries {
-		_ = i.stats.RecordHit(entry.ID)
+		_ = i.stats.RecordHit(StatsKey(entry))
 	}
+}
+
+// StatsKey prefixes an entry's ID with its scope layer so entries in different
+// layers that share an ID do not collide in the hit-stats file.
+func StatsKey(entry types.KnowledgeEntry) string {
+	layer := entry.Scope.Type
+	if layer == "" {
+		layer = "flow"
+	}
+	return layer + "-" + entry.ID
 }
 
 // InjectAll returns all knowledge entries for an agent
