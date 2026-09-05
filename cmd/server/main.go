@@ -27,14 +27,6 @@ import (
 var version = "dev"
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "summary" {
-		runSummaryCLI(os.Args[2:])
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "learn" {
-		runLearnCLI(os.Args[2:])
-		return
-	}
 	if len(os.Args) > 1 && os.Args[1] == "knowledge" {
 		runKnowledgeCLI(os.Args[2:])
 		return
@@ -201,78 +193,6 @@ func runPrompt(flowPath, sessionID, prompt string, o cliOverrides) {
 	}
 }
 
-// runSummaryCLI parses the `heron summary <session-id> [--flow <path>]`
-// subcommand arguments and dispatches to runSummary.
-func runSummaryCLI(args []string) {
-	fs := flag.NewFlagSet("summary", flag.ExitOnError)
-	flow := fs.String("flow", "", "Flow config path (default: .agents/flows/default.yml)")
-	modelOverride := fs.String("model", "", "Override the default model (models.json \"model\" field)")
-	_ = fs.Parse(args)
-
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: heron summary <session-id> [--flow <path>] [--model <name>]")
-		os.Exit(1)
-	}
-	sessionID := fs.Arg(0)
-
-	flowPath := resolveFlowPath(*flow)
-	if flowPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: a new-format Flow config is required")
-		fmt.Fprintln(os.Stderr, "Use --flow .agents/flows/default.yml")
-		os.Exit(1)
-	}
-
-	if err := runSummary(sessionID, flowPath, *modelOverride); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// runSummary distills a session's published SharedRecords into a proposed
-// Knowledge entry via the KnowledgeSummarizer and writes it to
-// .agents/knowledge/proposed/<session-id>.md.
-func runSummary(sessionID, flowPath, modelOverride string) error {
-	if strings.TrimSpace(sessionID) == "" {
-		return fmt.Errorf("session id is required")
-	}
-
-	ctx := context.Background()
-	definitions, provider, err := buildProvider(ctx, flowPath, modelOverride)
-	if err != nil {
-		return err
-	}
-
-	files := storage.NewFileStore(".")
-	sessions := storage.NewJSONLSessionWriter(files)
-	replay, err := sessions.Replay(ctx, sessionID)
-	if err != nil {
-		return fmt.Errorf("replay session %q: %w", sessionID, err)
-	}
-
-	records := extractSharedRecords(replay)
-	if len(records) == 0 {
-		return fmt.Errorf("session %q has no shared records to summarize", sessionID)
-	}
-
-	sources := recordsToSources(records)
-	summarizer := knowledge.NewKnowledgeSummarizer(provider, definitions.Knowledge.SummaryModel)
-	md, err := summarizer.Summarize(ctx, sources)
-	if err != nil {
-		return fmt.Errorf("summarize knowledge: %w", err)
-	}
-	if strings.TrimSpace(md) == "" {
-		return fmt.Errorf("knowledge summarizer returned empty markdown")
-	}
-
-	path := filepath.Join(".agents", "knowledge", "proposed", sessionID+".md")
-	if err := files.Write(path, []byte(md+"\n")); err != nil {
-		return fmt.Errorf("write knowledge %s: %w", path, err)
-	}
-
-	fmt.Printf("Knowledge written to %s\n", path)
-	return nil
-}
-
 // extractSharedRecords collects every SharedRecord published to a session's
 // event timeline. Each shared_record.published event carries its record under
 // payload["record"]; after JSON round-trip the record value is a map[string]any
@@ -324,7 +244,7 @@ func recordsToSources(records []types.SharedRecord) []string {
 	return sources
 }
 
-// runLearnCLI parses `heron learn <session-id> [--flow] [--model] [--scope]`
+// runLearnCLI parses `heron knowledge learn <session-id> [--flow] [--model] [--scope]`
 // and dispatches to runLearn.
 func runLearnCLI(args []string) {
 	fs := flag.NewFlagSet("learn", flag.ExitOnError)
@@ -334,7 +254,7 @@ func runLearnCLI(args []string) {
 	_ = fs.Parse(args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: heron learn <session-id> [--flow <path>] [--model <name>] [--scope flow|team|agent]")
+		fmt.Fprintln(os.Stderr, "Usage: heron knowledge learn <session-id> [--flow <path>] [--model <name>] [--scope flow|team|agent]")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
@@ -473,10 +393,12 @@ func parseKnowledgeMarkdown(md, sessionID, scope string) (types.KnowledgeEntry, 
 // runKnowledgeCLI dispatches `heron knowledge <subcommand>`.
 func runKnowledgeCLI(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: heron knowledge <list|archive|gc> [args]")
+		fmt.Fprintln(os.Stderr, "Usage: heron knowledge <learn|list|archive|gc> [args]")
 		os.Exit(1)
 	}
 	switch args[0] {
+	case "learn":
+		runLearnCLI(args[1:])
 	case "list":
 		runKnowledgeListCLI(args[1:])
 	case "archive":
