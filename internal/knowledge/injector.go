@@ -22,10 +22,18 @@ When background knowledge is injected into your context:
 // KnowledgeInjector injects knowledge into agent context
 type KnowledgeInjector struct {
 	index *KnowledgeIndex
+	stats *StatsRecorder
 }
 
 func NewKnowledgeInjector(index *KnowledgeIndex) *KnowledgeInjector {
 	return &KnowledgeInjector{index: index}
+}
+
+// SetStatsRecorder wires an optional hit-stats recorder into the injector.
+// When set, every successful knowledge match appends a hit event so the
+// knowledge lifecycle commands can compute usage statistics.
+func (i *KnowledgeInjector) SetStatsRecorder(rec *StatsRecorder) {
+	i.stats = rec
 }
 
 // Inject searches knowledge and formats it for prompt injection
@@ -53,7 +61,20 @@ func (i *KnowledgeInjector) InjectWithAllowlist(
 		return "", nil
 	}
 
+	i.recordHits(entries)
+
 	return i.formatEntries(entries), nil
+}
+
+// recordHits appends a stats event for each matched entry when a recorder is
+// wired in. Recording is best-effort and must never fail the injection.
+func (i *KnowledgeInjector) recordHits(entries []types.KnowledgeEntry) {
+	if i.stats == nil {
+		return
+	}
+	for _, entry := range entries {
+		_ = i.stats.RecordHit(entry.ID)
+	}
 }
 
 // InjectAll returns all knowledge entries for an agent
@@ -70,6 +91,8 @@ func (i *KnowledgeInjector) InjectAll(ctx context.Context, agentName string, tea
 	if len(filtered) == 0 {
 		return "", nil
 	}
+
+	i.recordHits(filtered)
 
 	return i.formatEntries(filtered), nil
 }

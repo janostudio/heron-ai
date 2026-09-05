@@ -159,7 +159,9 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 				}
 			}
 		}
-		teamRuntime.SetKnowledgeInjector(knowledge.NewKnowledgeInjector(index))
+		injector := knowledge.NewKnowledgeInjector(index)
+		injector.SetStatsRecorder(knowledge.NewStatsRecorder(files, ".agents/knowledge"))
+		teamRuntime.SetKnowledgeInjector(injector)
 	}
 	sessionWriter := storage.NewJSONLSessionWriter(files)
 	checkpointStore := agent.NewFileCheckpointStore(files)

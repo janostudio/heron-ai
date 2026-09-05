@@ -10,9 +10,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/adrg/frontmatter"
 	"github.com/heron-ai/heron-engine/internal/app"
 	"github.com/heron-ai/heron-engine/internal/config"
 	"github.com/heron-ai/heron-engine/internal/knowledge"
@@ -27,6 +29,14 @@ var version = "dev"
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "summary" {
 		runSummaryCLI(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "learn" {
+		runLearnCLI(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "knowledge" {
+		runKnowledgeCLI(os.Args[2:])
 		return
 	}
 
@@ -312,6 +322,325 @@ func recordsToSources(records []types.SharedRecord) []string {
 		}
 	}
 	return sources
+}
+
+// runLearnCLI parses `heron learn <session-id> [--flow] [--model] [--scope]`
+// and dispatches to runLearn.
+func runLearnCLI(args []string) {
+	fs := flag.NewFlagSet("learn", flag.ExitOnError)
+	flow := fs.String("flow", "", "Flow config path (default: .agents/flows/default.yml)")
+	modelOverride := fs.String("model", "", "Override the default model (models.json \"model\" field)")
+	scope := fs.String("scope", "flow", "Knowledge scope (flow|team|agent)")
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: heron learn <session-id> [--flow <path>] [--model <name>] [--scope flow|team|agent]")
+		os.Exit(1)
+	}
+	sessionID := fs.Arg(0)
+
+	switch strings.ToLower(*scope) {
+	case "flow", "team", "agent":
+	default:
+		fmt.Fprintln(os.Stderr, "Error: --scope must be one of flow|team|agent")
+		os.Exit(1)
+	}
+
+	flowPath := resolveFlowPath(*flow)
+	if flowPath == "" {
+		fmt.Fprintln(os.Stderr, "Error: a new-format Flow config is required")
+		fmt.Fprintln(os.Stderr, "Use --flow .agents/flows/default.yml")
+		os.Exit(1)
+	}
+
+	if err := runLearn(sessionID, flowPath, *modelOverride, strings.ToLower(*scope)); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runLearn distills a session's SharedRecords into a knowledge entry and saves
+// it directly to the active knowledge area (one-step learning), handling
+// dedup and version bumping.
+func runLearn(sessionID, flowPath, modelOverride, scope string) error {
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("session id is required")
+	}
+
+	ctx := context.Background()
+	definitions, provider, err := buildProvider(ctx, flowPath, modelOverride)
+	if err != nil {
+		return err
+	}
+
+	files := storage.NewFileStore(".")
+	sessions := storage.NewJSONLSessionWriter(files)
+	replay, err := sessions.Replay(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("replay session %q: %w", sessionID, err)
+	}
+
+	records := extractSharedRecords(replay)
+	if len(records) == 0 {
+		return fmt.Errorf("session %q has no shared records to summarize", sessionID)
+	}
+
+	sources := recordsToSources(records)
+	summarizer := knowledge.NewKnowledgeSummarizer(provider, definitions.Knowledge.SummaryModel)
+	md, err := summarizer.Summarize(ctx, sources)
+	if err != nil {
+		return fmt.Errorf("summarize knowledge: %w", err)
+	}
+	if strings.TrimSpace(md) == "" {
+		return fmt.Errorf("knowledge summarizer returned empty markdown")
+	}
+
+	entry, err := parseKnowledgeMarkdown(md, sessionID, scope)
+	if err != nil {
+		return err
+	}
+
+	store := knowledge.NewMarkdownStore(files, filepath.Join(".agents", "knowledge"))
+
+	// Dedup: skip if an active entry already matches by keyword.
+	if dup, dupErr := store.FindDuplicate(ctx, entry); dupErr == nil && dup != nil {
+		fmt.Printf("Knowledge already exists (matches %q), skipped.\n", dup.ID)
+		return nil
+	}
+
+	saved, err := store.UpsertActive(ctx, entry)
+	if err != nil {
+		return fmt.Errorf("save knowledge: %w", err)
+	}
+
+	fmt.Printf("Knowledge learned: %s (version %d)\n", saved.ID, saved.Version)
+	return nil
+}
+
+// parseKnowledgeMarkdown converts the summarizer's markdown output into a
+// KnowledgeEntry, extracting the stable id/scope/confidence/keywords from the
+// frontmatter and the title/body from the document.
+func parseKnowledgeMarkdown(md, sessionID, scope string) (types.KnowledgeEntry, error) {
+	var meta struct {
+		ID         string   `yaml:"id"`
+		Scope      string   `yaml:"scope"`
+		Confidence string   `yaml:"confidence"`
+		Keywords   []string `yaml:"keywords"`
+		Status     string   `yaml:"status"`
+	}
+	body, err := frontmatter.Parse(strings.NewReader(md), &meta)
+	if err != nil {
+		return types.KnowledgeEntry{}, fmt.Errorf("parse knowledge markdown: %w", err)
+	}
+	content := strings.TrimSpace(string(body))
+	if content == "" {
+		return types.KnowledgeEntry{}, fmt.Errorf("knowledge summarizer returned empty body")
+	}
+
+	id := strings.TrimSpace(meta.ID)
+	if id == "" {
+		id = sessionID
+	}
+
+	title := firstLineOf(content)
+	if strings.HasPrefix(title, "#") {
+		title = strings.TrimSpace(strings.TrimLeft(title, "#"))
+	}
+
+	scopeType := strings.ToLower(scope)
+	if scopeType == "" {
+		scopeType = strings.ToLower(meta.Scope)
+	}
+	if scopeType == "flow" {
+		scopeType = "all"
+	}
+
+	entry := types.KnowledgeEntry{
+		ID:         id,
+		Title:      title,
+		Content:    content,
+		Keys:       meta.Keywords,
+		Scope:      types.Scope{Type: scopeType},
+		Status:     "active",
+		Confidence: meta.Confidence,
+		Source:     sessionID,
+		Basis:      []types.BasisRef{{Kind: "session", Path: sessionID}},
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	return entry, nil
+}
+
+// runKnowledgeCLI dispatches `heron knowledge <subcommand>`.
+func runKnowledgeCLI(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: heron knowledge <list|archive|gc> [args]")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "list":
+		runKnowledgeListCLI(args[1:])
+	case "archive":
+		runKnowledgeArchiveCLI(args[1:])
+	case "gc":
+		runKnowledgeGCCLI(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown knowledge subcommand %q\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func knowledgeStore() (*knowledge.MarkdownStore, *knowledge.StatsRecorder) {
+	files := storage.NewFileStore(".")
+	root := filepath.Join(".agents", "knowledge")
+	return knowledge.NewMarkdownStore(files, root), knowledge.NewStatsRecorder(files, root)
+}
+
+func runKnowledgeListCLI(args []string) {
+	fs := flag.NewFlagSet("knowledge list", flag.ExitOnError)
+	scope := fs.String("scope", "", "Filter by scope type (flow|team|agent)")
+	status := fs.String("status", "", "Filter by status (active|deprecated|archived)")
+	_ = fs.Parse(args)
+
+	store, stats := knowledgeStore()
+	entries, err := store.LoadAll(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	hitCounts, err := stats.HitCounts()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("%-32s %-40s %-12s %-8s %-10s %-10s %-20s %-20s\n",
+		"ID", "TITLE", "STATUS", "VERSION", "CONFIDENCE", "HITS", "CREATED_AT", "EXPIRES_AT")
+	for _, e := range entries {
+		if *scope != "" && !scopeMatches(e.Scope, *scope) {
+			continue
+		}
+		if *status != "" && e.Status != *status {
+			continue
+		}
+		fmt.Printf("%-32s %-40s %-12s %-8d %-10s %-10d %-20s %-20s\n",
+			truncate(e.ID, 32),
+			truncate(e.Title, 40),
+			e.Status,
+			e.Version,
+			e.Confidence,
+			hitCounts[e.ID],
+			e.CreatedAt,
+			e.ExpiresAt,
+		)
+	}
+}
+
+func runKnowledgeArchiveCLI(args []string) {
+	fs := flag.NewFlagSet("knowledge archive", flag.ExitOnError)
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: heron knowledge archive <id>")
+		os.Exit(1)
+	}
+	id := fs.Arg(0)
+
+	store, _ := knowledgeStore()
+	if err := store.Archive(context.Background(), id); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Knowledge %q archived.\n", id)
+}
+
+func runKnowledgeGCCLI(args []string) {
+	fs := flag.NewFlagSet("knowledge gc", flag.ExitOnError)
+	windowDays := fs.Int("window", 15, "GC window in days (default: 15)")
+	_ = fs.Parse(args)
+
+	store, stats := knowledgeStore()
+	entries, err := store.LoadAll(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	hitCounts, err := stats.HitCounts()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	now := time.Now().UTC()
+	window := time.Duration(*windowDays) * 24 * time.Hour
+
+	archived := 0
+	for _, e := range entries {
+		if e.Status != "active" {
+			continue
+		}
+		if shouldArchive(e, hitCounts[e.ID], now, window) {
+			if err := store.Archive(context.Background(), e.ID); err != nil {
+				fmt.Fprintf(os.Stderr, "Error archiving %q: %v\n", e.ID, err)
+				os.Exit(1)
+			}
+			fmt.Printf("Archived %q\n", e.ID)
+			archived++
+		}
+	}
+	fmt.Printf("GC complete: %d knowledge archived.\n", archived)
+}
+
+// shouldArchive decides whether an active entry should be archived during GC.
+func shouldArchive(e types.KnowledgeEntry, hitCount int, now time.Time, window time.Duration) bool {
+	// Condition 1: explicit ExpiresAt already passed.
+	if e.ExpiresAt != "" {
+		if t, err := time.Parse(time.RFC3339, e.ExpiresAt); err == nil {
+			return now.After(t)
+		}
+	}
+
+	// Condition 2: implicit expiry (CreatedAt+window) or zero hits within the
+	// window. Only applies when no explicit ExpiresAt governs the entry.
+	if e.CreatedAt == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, e.CreatedAt)
+	if err != nil {
+		return false
+	}
+	age := now.Sub(t)
+	if age > window {
+		// Expired by age alone, or zero hits within the window.
+		return hitCount == 0
+	}
+	return false
+}
+
+func scopeMatches(s types.Scope, filter string) bool {
+	switch strings.ToLower(filter) {
+	case "flow", "all":
+		return s.Type == "all"
+	case "team":
+		return s.Type == "team"
+	case "agent":
+		return s.Type == "agents" || s.Type == "agent"
+	default:
+		return true
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+func firstLineOf(content string) string {
+	if index := strings.IndexByte(content, '\n'); index >= 0 {
+		return strings.TrimSpace(content[:index])
+	}
+	return strings.TrimSpace(content)
 }
 
 func runTUI(flowPath string, o cliOverrides) {

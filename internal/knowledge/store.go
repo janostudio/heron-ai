@@ -48,7 +48,7 @@ func (idx *KnowledgeIndex) Search(ctx context.Context, query string) ([]types.Kn
 	var results []types.KnowledgeEntry
 
 	for _, entry := range idx.entries {
-		if entry.Status == "deprecated" {
+		if entry.Status == "deprecated" || entry.Status == "archived" {
 			continue
 		}
 		if entryMatches(entry, queryLower) {
@@ -81,7 +81,7 @@ func (idx *KnowledgeIndex) SearchWithScopeAndAllowlist(
 	var results []types.KnowledgeEntry
 
 	for _, entry := range idx.entries {
-		if entry.Status == "deprecated" {
+		if entry.Status == "deprecated" || entry.Status == "archived" {
 			continue
 		}
 		if !entryMatches(entry, queryLower) {
@@ -144,6 +144,9 @@ func (s *MarkdownStore) Load(ctx context.Context) ([]types.KnowledgeEntry, error
 		if entry.ID == "" {
 			entry.ID = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		}
+		if entry.Status == "archived" {
+			continue
+		}
 		entries = append(entries, entry)
 	}
 	return entries, nil
@@ -176,6 +179,167 @@ func (s *MarkdownStore) Save(ctx context.Context, entry types.KnowledgeEntry) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.files.Write(entry.Path, data)
+}
+
+// Archive marks a knowledge entry as archived without deleting its file. The
+// entry is located by ID (falling back to a <root>/<id>.md path lookup), its
+// frontmatter Status is rewritten to "archived", and the file is re-written in
+// place. Archived entries are filtered out of Load and search thereafter.
+func (s *MarkdownStore) Archive(ctx context.Context, id string) error {
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("knowledge id is required")
+	}
+
+	entries, err := s.Load(ctx)
+	if err != nil {
+		return err
+	}
+	var target *types.KnowledgeEntry
+	for i := range entries {
+		if entries[i].ID == id {
+			target = &entries[i]
+			break
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("knowledge %q not found", id)
+	}
+
+	target.Status = "archived"
+	return s.Save(ctx, *target)
+}
+
+// FindDuplicate scans the store for an active entry whose content overlaps the
+// candidate by keyword matching (reusing entryMatches). It returns the first
+// match or nil. Matching against empty candidate text is always a non-match.
+func (s *MarkdownStore) FindDuplicate(ctx context.Context, candidate types.KnowledgeEntry) (*types.KnowledgeEntry, error) {
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	entries, err := s.Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	query := strings.ToLower(strings.TrimSpace(candidate.Title + " " + candidate.Summary + " " + candidate.Content))
+	if query == "" {
+		return nil, nil
+	}
+	for i := range entries {
+		entry := entries[i]
+		if entry.Status != "active" {
+			continue
+		}
+		if entry.ID == candidate.ID {
+			continue
+		}
+		if entryMatches(entry, query) {
+			return &entry, nil
+		}
+	}
+	return nil, nil
+}
+
+// UpsertActive saves a knowledge entry to the active area, handling the
+// lifecycle semantics of `heron learn`:
+//   - If an entry with the same ID already exists (any status), the new entry's
+//     version is bumped to oldVersion+1 and the old entry is marked deprecated.
+//   - Otherwise the entry is written fresh with the given version (default 1).
+func (s *MarkdownStore) UpsertActive(ctx context.Context, entry types.KnowledgeEntry) (types.KnowledgeEntry, error) {
+	if err := contextErr(ctx); err != nil {
+		return types.KnowledgeEntry{}, err
+	}
+	if strings.TrimSpace(entry.ID) == "" {
+		return types.KnowledgeEntry{}, fmt.Errorf("knowledge id is required")
+	}
+	if entry.Status == "" {
+		entry.Status = "active"
+	}
+
+	existing, err := s.findByID(ctx, entry.ID)
+	if err != nil {
+		return types.KnowledgeEntry{}, err
+	}
+
+	if existing != nil {
+		// Bump version relative to the existing entry and deprecate it. The
+		// deprecated version is persisted to a versioned filename so it does
+		// not collide with the new active entry written to <id>.md.
+		old := *existing
+		old.Status = "deprecated"
+		old.Path = filepath.Join(s.root, fmt.Sprintf("%s.v%d.md", old.ID, old.Version))
+		if err := s.Save(ctx, old); err != nil {
+			return types.KnowledgeEntry{}, err
+		}
+		if entry.Version <= old.Version {
+			entry.Version = old.Version + 1
+		}
+	}
+
+	if entry.Version <= 0 {
+		entry.Version = 1
+	}
+	entry.Path = ""
+	if err := s.Save(ctx, entry); err != nil {
+		return types.KnowledgeEntry{}, err
+	}
+	return entry, nil
+}
+
+// findByID locates an entry by ID across all statuses (Load filters archived,
+// so a raw disk scan is required to also detect archived entries).
+func (s *MarkdownStore) findByID(ctx context.Context, id string) (*types.KnowledgeEntry, error) {
+	entries, err := s.Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		if entries[i].ID == id {
+			return &entries[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// LoadAll is like Load but includes archived entries. It is used by the
+// lifecycle commands (list/archive) which must observe archived knowledge.
+func (s *MarkdownStore) LoadAll(ctx context.Context) ([]types.KnowledgeEntry, error) {
+	if err := contextErr(ctx); err != nil {
+		return nil, err
+	}
+	paths, err := s.listMarkdown(s.root)
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]types.KnowledgeEntry, 0, len(paths))
+	for _, path := range paths {
+		if filepath.Base(path) == "index.md" {
+			continue
+		}
+		data, err := s.files.Read(path)
+		if err != nil {
+			return nil, fmt.Errorf("read knowledge %s: %w", path, err)
+		}
+
+		var entry types.KnowledgeEntry
+		body, err := frontmatter.Parse(strings.NewReader(string(data)), &entry)
+		if err != nil {
+			return nil, fmt.Errorf("parse knowledge %s: %w", path, err)
+		}
+		entry.Content = strings.TrimSpace(string(body))
+		entry.Path = path
+		if entry.Status == "" {
+			entry.Status = "active"
+		}
+		if entry.ID == "" {
+			entry.ID = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
 }
 
 func (s *MarkdownStore) RebuildIndex(ctx context.Context) error {

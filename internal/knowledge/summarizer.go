@@ -18,7 +18,7 @@ You are given candidate sources: SharedRecords, Workspace diffs, test results, a
 - Only distill durable, reusable knowledge (facts, rules, preferences, procedures, decisions, lessons).
 - Drop raw natural-language chatter, private drafts, and unreleased tool output.
 - If a candidate lacks a verifiable basis, discard it — never invent provenance.
-- If a candidate conflicts with active knowledge, keep it as proposed and mark the conflict; do not silently rewrite history.
+- If a candidate conflicts with active knowledge, mark the conflict; do not silently rewrite history.
 
 ## Output format (STRICT)
 Emit exactly one Markdown document with a YAML frontmatter and the following sections. No preamble, no extra text outside the document.
@@ -30,7 +30,7 @@ id: <stable-id>
 scope: <flow|team|agent>
 workspace_id: <workspace>
 flow: <flow-id>
-status: proposed
+status: active
 confidence: <high|medium|low>
 keywords: [ ... ]
 ---

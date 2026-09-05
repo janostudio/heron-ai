@@ -58,3 +58,110 @@ func TestMarkdownStoreIgnoresIndexAndRejectsPathEscape(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "escapes root")
 }
+
+func TestMarkdownStore_UpsertActiveVersionBump(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := NewMarkdownStore(files, ".agents/knowledge")
+
+	first, err := store.UpsertActive(context.Background(), types.KnowledgeEntry{
+		ID:      "payment-idempotency",
+		Title:   "Payment Idempotency",
+		Content: "Retry requests must use the same idempotency key.",
+		Scope:   types.Scope{Type: "all"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Version)
+	require.Equal(t, "active", first.Status)
+
+	second, err := store.UpsertActive(context.Background(), types.KnowledgeEntry{
+		ID:      "payment-idempotency",
+		Title:   "Payment Idempotency",
+		Content: "Updated idempotency rule.",
+		Scope:   types.Scope{Type: "all"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, second.Version)
+	require.Equal(t, "active", second.Status)
+
+	// LoadAll must reveal both versions: the deprecated v1 and active v2.
+	all, err := store.LoadAll(context.Background())
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+
+	// Load excludes archived only; deprecated is still returned here and is
+	// filtered at search time. The active v2 must be present.
+	loaded, err := store.Load(context.Background())
+	require.NoError(t, err)
+	require.Len(t, loaded, 2)
+	var activeVersion int
+	for _, e := range loaded {
+		if e.Status == "active" {
+			activeVersion = e.Version
+		}
+	}
+	require.Equal(t, 2, activeVersion)
+}
+
+func TestMarkdownStore_ArchiveAndLoadFiltering(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := NewMarkdownStore(files, ".agents/knowledge")
+
+	_, err := store.UpsertActive(context.Background(), types.KnowledgeEntry{
+		ID:      "keep-me",
+		Title:   "Keep",
+		Content: "keep",
+		Scope:   types.Scope{Type: "all"},
+	})
+	require.NoError(t, err)
+	_, err = store.UpsertActive(context.Background(), types.KnowledgeEntry{
+		ID:      "archive-me",
+		Title:   "Archive",
+		Content: "archive",
+		Scope:   types.Scope{Type: "all"},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, store.Archive(context.Background(), "archive-me"))
+
+	active, err := store.Load(context.Background())
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	require.Equal(t, "keep-me", active[0].ID)
+
+	all, err := store.LoadAll(context.Background())
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+
+	// The archived file must still exist on disk.
+	require.True(t, files.Exists(".agents/knowledge/archive-me.md"))
+}
+
+func TestMarkdownStore_FindDuplicate(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := NewMarkdownStore(files, ".agents/knowledge")
+
+	_, err := store.UpsertActive(context.Background(), types.KnowledgeEntry{
+		ID:      "payment-idempotency",
+		Title:   "Payment Idempotency",
+		Content: "Retry requests must use the same idempotency key.",
+		Scope:   types.Scope{Type: "all"},
+	})
+	require.NoError(t, err)
+
+	dup, err := store.FindDuplicate(context.Background(), types.KnowledgeEntry{
+		ID:      "another-id",
+		Content: "idempotency key for retries",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, dup)
+	require.Equal(t, "payment-idempotency", dup.ID)
+
+	// A genuinely unrelated candidate must not match.
+	unrelated, err := store.FindDuplicate(context.Background(), types.KnowledgeEntry{
+		ID:      "another-id",
+		Content: "quantum banana sandwich",
+	})
+	require.NoError(t, err)
+	require.Nil(t, unrelated)
+}
+

@@ -8,7 +8,7 @@ type KnowledgeEntry struct {
 	Content    string     `yaml:"content,omitempty" json:"content"`
 	Keys       []string   `yaml:"keys,omitempty" json:"keys"`
 	Scope      Scope      `yaml:"scope" json:"scope"`
-	Status     string     `yaml:"status,omitempty" json:"status,omitempty"` // active | proposed | deprecated
+	Status     string     `yaml:"status,omitempty" json:"status,omitempty"` // active | deprecated | archived
 	Path       string     `yaml:"path,omitempty" json:"path,omitempty"`
 	Basis      []BasisRef `yaml:"basis,omitempty" json:"basis,omitempty"`
 	Version    int        `yaml:"version,omitempty" json:"version,omitempty"`
