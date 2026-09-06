@@ -1,6 +1,6 @@
-// Package agentstore no longer persists dynamic Agent entities as separate
-// identity files. Since design doc 26, the entity layer has been folded into
-// the agent layer: state is one workbench per agent (see internal/state).
+// Package agentstore no longer persists dynamic Agent instances as separate
+// identity files. Since design doc 26, the instance layer has been folded
+// into the agent layer: state is one workbench per agent (see internal/state).
 // What remains here is the key machinery for concurrent instances — a key is
 // now a transient instance number used to distinguish concurrent turns (and
 // their call IDs / session events), not a durable identity.
@@ -23,10 +23,10 @@ const (
 	maxKeyLength = 128
 )
 
-// Entity is the transient identity of one concurrent Agent instance. The key
-// is an instance number used for call/event disambiguation only; no file is
-// persisted for it.
-type Entity struct {
+// Instance is the transient identity of one concurrent Agent instance. The
+// key is an instance number used for call/event disambiguation only; no file
+// is persisted for it.
+type Instance struct {
 	Agent string `json:"agent"`
 	Key   string `json:"key"`
 	// CreatedAt and LastUsedAt are kept for call-site compatibility but carry
@@ -36,23 +36,23 @@ type Entity struct {
 }
 
 // Registry produces instance keys for concurrent Agent instances. It no
-// longer reads or writes entity.json.
+// longer reads or writes an identity file.
 type Registry struct {
 	mu sync.Mutex
 }
 
 // Option configures a Registry. Retained for API compatibility; the former
-// WithMaxEntities bound is no longer meaningful since entities are not
+// WithMaxInstances bound is no longer meaningful since instances are not
 // persisted.
 type Option func(*Registry)
 
-// WithMaxEntities is a no-op kept for backward compatibility with callers.
-func WithMaxEntities(max int) Option {
+// WithMaxInstances is a no-op kept for backward compatibility with callers.
+func WithMaxInstances(max int) Option {
 	return func(r *Registry) {}
 }
 
 // NewRegistry creates a Registry. The files argument is accepted for
-// signature compatibility but no longer used (entities are not persisted).
+// signature compatibility but no longer used (instances are not persisted).
 func NewRegistry(files storage.FileStore, options ...Option) *Registry {
 	registry := &Registry{}
 	for _, option := range options {
@@ -61,10 +61,10 @@ func NewRegistry(files storage.FileStore, options ...Option) *Registry {
 	return registry
 }
 
-// EnsureEntity returns the instance key for agentID+key. An empty key is
+// NextInstanceKey returns the instance key for agentID+key. An empty key is
 // auto-generated; explicit keys are sanitized. This is a pure in-memory
 // operation — no identity file is created.
-func (r *Registry) EnsureEntity(ctx context.Context, agentID, key string) (*Entity, error) {
+func (r *Registry) NextInstanceKey(ctx context.Context, agentID, key string) (*Instance, error) {
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
@@ -79,7 +79,7 @@ func (r *Registry) EnsureEntity(ctx context.Context, agentID, key string) (*Enti
 		key = r.generateKey()
 	}
 	now := time.Now().UTC()
-	return &Entity{Agent: agentID, Key: key, CreatedAt: now, LastUsedAt: now}, nil
+	return &Instance{Agent: agentID, Key: key, CreatedAt: now, LastUsedAt: now}, nil
 }
 
 // generateKey produces a fresh instance key under the registry lock. Instance

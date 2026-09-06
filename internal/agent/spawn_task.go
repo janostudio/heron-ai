@@ -8,7 +8,7 @@ import (
 
 // SpawnTaskDispatcher is the ToolExecutor handed to the shared
 // AsyncToolExecutor (design 21 §4.3). It routes the internal SpawnChild task
-// name to the Spawn tool — which runs one spawned child entity turn — and
+// name to the Spawn tool — which runs one spawned child instance turn — and
 // forwards every other tool to the base executor unchanged. SpawnChild is
 // never registered in the Tool registry, so models cannot invoke it; only
 // durable tasks created by an asynchronous Spawn (wait=false) reach this

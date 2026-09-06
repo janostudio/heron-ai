@@ -209,8 +209,6 @@ func renderContextBlock(block types.ContextBlock) string {
 		return "## Team State\n" + block.Text
 	case "agent_state":
 		return "## Agent State\n" + block.Text
-	case "entity_state":
-		return "## Entity State\n" + block.Text
 	case "fanout_item":
 		return "## Your Item\n" + block.Text
 	case "records":

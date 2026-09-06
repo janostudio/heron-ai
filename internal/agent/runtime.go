@@ -1892,14 +1892,14 @@ func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema 
 		"TodoRead":  {Name: "TodoRead", Type: "object", Properties: map[string]types.JSONProperty{}},
 		"Spawn": {
 			Name: "Spawn", Type: "object",
-			Description: "Spawn dynamic agent entities and execute them. wait=true blocks until children finish; wait=false returns handles immediately. Entities are reused by key and keep persistent state.",
+			Description: "Spawn dynamic agent instances and execute them. wait=true blocks until children finish; wait=false returns handles immediately. Instances are reused by key and keep persistent state.",
 			Properties: map[string]types.JSONProperty{
 				"agent":   {Type: "string", Description: "Target agent id; defaults to the spawning agent itself"},
-				"item":    {Type: "any", Description: "Single task item (any JSON value) delivered to the child entity"},
-				"items":   {Type: "array", Description: "Multiple task items; one child entity per item, executed in parallel"},
+				"item":    {Type: "any", Description: "Single task item (any JSON value) delivered to the child instance"},
+				"items":   {Type: "array", Description: "Multiple task items; one child instance per item, executed in parallel"},
 				"wait":    {Type: "boolean", Description: "true: block until children finish; false: return handles immediately (deliver=parent collects later with Collect; deliver=downstream children run in the Team DAG)"},
 				"deliver": {Type: "string", Enum: []string{"parent", "downstream"}, Description: "parent: results return to you; downstream: results are published as records of your call (downstream calls wait for you and all your spawned children)"},
-				"key":     {Type: "string", Description: "Entity key to reuse an existing entity (with its state); only valid with a single item"},
+				"key":     {Type: "string", Description: "Instance key to reuse a given instance number (with its state); only valid with a single item"},
 			},
 		},
 		"Collect": {

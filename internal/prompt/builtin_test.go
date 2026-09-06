@@ -77,9 +77,9 @@ func TestBuildUserPromptRendersSpawnContextBlocks(t *testing.T) {
 	r := NewPromptRenderer(nil)
 	prompt := r.BuildUserPrompt(types.AgentConfig{}, types.AgentRequest{}, RenderContext{ContextBlocks: []types.ContextBlock{
 		{Kind: "fanout_item", Text: `{"file":"a.go"}`, Source: "spawn", Priority: 85},
-		{Kind: "entity_state", Text: "Goal: fix the assigned file", Source: "entity_state", Priority: 60},
+		{Kind: "agent_state", Text: "Goal: fix the assigned file", Source: "agent_state", Priority: 60},
 	}})
-	for _, expected := range []string{"## Your Item", `{"file":"a.go"}`, "## Entity State", "Goal: fix the assigned file"} {
+	for _, expected := range []string{"## Your Item", `{"file":"a.go"}`, "## Agent State", "Goal: fix the assigned file"} {
 		if !strings.Contains(prompt, expected) {
 			t.Errorf("missing %q:\n%s", expected, prompt)
 		}

@@ -45,12 +45,12 @@ func TestSetClearGoal(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, store.SetGoal(ctx, "agent-a", "ship the feature"))
-	snapshot, err := store.LoadEntity(ctx, "agent-a")
+	snapshot, err := store.LoadAgentState(ctx, "agent-a")
 	require.NoError(t, err)
 	assert.Equal(t, "ship the feature", snapshot.Goal)
 
 	require.NoError(t, store.ClearGoal(ctx, "agent-a"))
-	snapshot, err = store.LoadEntity(ctx, "agent-a")
+	snapshot, err = store.LoadAgentState(ctx, "agent-a")
 	require.NoError(t, err)
 	assert.Empty(t, snapshot.Goal)
 }

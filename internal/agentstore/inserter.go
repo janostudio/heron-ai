@@ -2,15 +2,15 @@ package agentstore
 
 import "context"
 
-// SpawnedCallSpec identifies one dynamically spawned child entity that joins
-// the Team DAG as a synthetic call (design 21 §4.4, batch C): the child runs
-// independently as a member of the spawning parent call's group and publishes
-// records under the parent call's output.record name.
+// SpawnedCallSpec identifies one dynamically spawned child instance that
+// joins the Team DAG as a synthetic call (design 21 §4.4, batch C): the child
+// runs independently as a member of the spawning parent call's group and
+// publishes records under the parent call's output.record name.
 type SpawnedCallSpec struct {
 	// AgentID is the target agent template.
 	AgentID string
 	// Key is the resolved instance key (a transient instance number from
-	// Registry.EnsureEntity), used only to disambiguate concurrent turns.
+	// Registry.NextInstanceKey), used only to disambiguate concurrent turns.
 	Key string
 	// Item is the task data delivered to the child as the ## Your Item block.
 	Item any
@@ -25,7 +25,7 @@ type SpawnedCallSpec struct {
 // scheduler's main loop. The Team runtime creates one instance per Run and
 // injects it into the execution context (the same wiring pattern as
 // RecordCollector); Spawn(wait=false, deliver=downstream) consumes it to
-// register each child entity as a synthetic Team call. Implementations must
+// register each child instance as a synthetic Team call. Implementations must
 // be safe for concurrent use.
 type ChildInserter interface {
 	InsertSpawnedCall(ctx context.Context, parentCallID string, spec SpawnedCallSpec) error

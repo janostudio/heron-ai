@@ -10,7 +10,7 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// RecordCollector receives records produced by spawned child entities during
+// RecordCollector receives records produced by spawned child instances during
 // one parent Agent call. The call executor creates the collector with the
 // parent call's output.record name and drains it into CallResult.Records, so
 // downstream consumers aggregate the children through the existing

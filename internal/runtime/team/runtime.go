@@ -78,11 +78,11 @@ func (r *Runtime) SetSessionWriter(writer storage.SessionWriter) {
 	r.sessions = writer
 }
 
-// SetEntityLocks is retained for API compatibility. Since design doc 26 the
-// turn lock has been removed: same-agent instances run concurrently and their
-// shared state is protected by the agent-level CRUD lock inside the state
-// Store (wired via SetStateStore's store, not here).
-func (r *Runtime) SetEntityLocks(locks *agentstore.EntityLocks) {}
+// SetAgentStateLocks is retained for API compatibility. Since design doc 26
+// the turn lock has been removed: same-agent instances run concurrently and
+// their shared state is protected by the agent-level CRUD lock inside the
+// state Store (wired via SetStateStore's store, not here).
+func (r *Runtime) SetAgentStateLocks(locks *agentstore.AgentStateLocks) {}
 
 func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
 	result := types.TeamTurnResult{
@@ -471,12 +471,12 @@ func (r *Runtime) runBatch(
 				}
 				callReq.AgentDefinition = &agent
 				if isSpawned {
-					// Entity state routing (design 20 §5): a synthetic call reads
-					// its entity's persistent state, not the session-scoped
-					// per-call state — the same scope inline spawned children
-					// use.
+					// Agent state routing (design 20 §5): a synthetic call reads
+					// its agent's persistent cross-session state, not the
+					// session-scoped per-call state — the same scope inline
+					// spawned children use.
 					if states != nil {
-						snapshot, stateErr := states.LoadEntity(ctx, spec.AgentID)
+						snapshot, stateErr := states.LoadAgentState(ctx, spec.AgentID)
 						if stateErr != nil {
 							mu.Lock()
 							if firstErr == nil {
@@ -488,7 +488,7 @@ func (r *Runtime) runBatch(
 						}
 						if text := renderState(snapshot); text != "" {
 							callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
-								Kind: "entity_state", Text: text, Source: "entity_state",
+								Kind: "agent_state", Text: text, Source: "agent_state",
 								Stability: "dynamic", Priority: 60, Compressible: true,
 							})
 						}
@@ -548,9 +548,10 @@ func (r *Runtime) runBatch(
 			}
 			if err == nil && callResult.Status == types.TurnCompleted && states != nil {
 				if isSpawned {
-					// Entity state routing: persist to the entity scope with
-					// the same deterministic update inline children apply.
-					if stateErr := saveEntityState(ctx, states, *spec, contextBlockText(callReq.ContextBlocks, "entity_state"), callResult); stateErr != nil {
+					// Agent state routing: persist to the cross-session agent
+					// scope with the same deterministic update inline children
+					// apply.
+					if stateErr := saveSpawnedAgentState(ctx, states, *spec, contextBlockText(callReq.ContextBlocks, "agent_state"), callResult); stateErr != nil {
 						err = stateErr
 						callResult.Status = types.TurnFailed
 						callResult.Error = stateErr.Error()

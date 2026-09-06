@@ -45,7 +45,7 @@ func newRunState(remaining map[string]types.Call, completed map[string]bool) *ru
 }
 
 // InsertSpawnedCall implements agentstore.ChildInserter: it registers one
-// spawned child entity as a synthetic agent call in the parent call's group.
+// spawned child instance as a synthetic agent call in the parent call's group.
 // It runs inside the Spawn tool while the parent call is executing, so the
 // parent is still in remaining — insertions strictly precede the parent's
 // completion accounting and no termination race with the main loop exists.
@@ -60,7 +60,7 @@ func (s *runState) InsertSpawnedCall(ctx context.Context, parentCallID string, s
 		return errors.New("spawn: agent id is required")
 	}
 	if strings.TrimSpace(spec.Key) == "" {
-		return errors.New("spawn: entity key is required")
+		return errors.New("spawn: instance key is required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,22 +205,18 @@ func (s *runState) producersFromLocked(callID string) []string {
 	return result
 }
 
-// tryLockEntity is removed: same-agent instances run concurrently and their
-// shared state is protected by the short-held agent-level CRUD lock inside
-// the state Store (design doc 26 §5).
-
-// saveEntityState applies the same deterministic update the Spawn tool uses
-// for inline children (spawn.go saveEntityState): the item becomes the goal,
-// the first reply is confirmed, later replies become next steps, and
+// saveSpawnedAgentState applies the same deterministic update the Spawn tool
+// uses for inline children (spawn.go saveAgentState): the item becomes the
+// goal, the first reply is confirmed, later replies become next steps, and
 // workspace refs are tracked.
-func saveEntityState(
+func saveSpawnedAgentState(
 	ctx context.Context,
 	states *state.Store,
 	spec agentstore.SpawnedCallSpec,
 	previousStateText string,
 	result types.CallResult,
 ) error {
-	snapshot, err := states.LoadEntity(ctx, spec.AgentID)
+	snapshot, err := states.LoadAgentState(ctx, spec.AgentID)
 	if err != nil {
 		return err
 	}
@@ -248,5 +244,5 @@ func saveEntityState(
 			Revision: operation.Revision,
 		})
 	}
-	return states.SaveEntity(ctx, spec.AgentID, snapshot)
+	return states.SaveAgentState(ctx, spec.AgentID, snapshot)
 }

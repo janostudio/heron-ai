@@ -16,8 +16,8 @@ import (
 
 // Design docs 20/21: batch A added synchronous Spawn; batch B adds the
 // asynchronous+parent combination (wait=false, deliver=parent). The Spawn tool
-// is the single primitive for dynamic agent entities — it registers (or
-// reuses) the target entity, runs child AgentTurns inline (wait=true) or as
+// is the single primitive for dynamic agent instances — it registers (or
+// reuses) the target agent, runs child AgentTurns inline (wait=true) or as
 // durable async tasks collected later with Collect (wait=false).
 
 // SpawnChildToolName is the internal tool name of the durable task that runs
@@ -131,11 +131,11 @@ func NewSpawnTool(
 	return spawn
 }
 
-// SetEntityLocks is retained for API compatibility. Since design doc 26 the
-// turn lock has been removed: same-agent instances run concurrently and their
-// shared state is protected by the agent-level CRUD lock inside the state
-// Store.
-func (t *SpawnTool) SetEntityLocks(locks *agentstore.EntityLocks) {}
+// SetAgentStateLocks is retained for API compatibility. Since design doc 26
+// the turn lock has been removed: same-agent instances run concurrently and
+// their shared state is protected by the agent-level CRUD lock inside the
+// state Store.
+func (t *SpawnTool) SetAgentStateLocks(locks *agentstore.AgentStateLocks) {}
 
 // SetTaskRunner wires the durable async task executor used by wait=false
 // spawns. It must be set before asynchronous Spawn can run.
@@ -154,7 +154,7 @@ func (t *SpawnTool) SetSessionWriter(writer storage.SessionWriter) {
 func (t *SpawnTool) Name() string { return "Spawn" }
 
 func (t *SpawnTool) Description() string {
-	return "Spawn dynamic agent entities and execute them. wait=true blocks until children finish; " +
+	return "Spawn dynamic agent instances and execute them. wait=true blocks until children finish; " +
 		"wait=false returns handles immediately — deliver=parent children are collected later with Collect, " +
 		"deliver=downstream children join your call's Team group and publish records for downstream calls. " +
 		"Each item is delivered to its child as ## Your Item; all instances of an agent share one cross-session state."
@@ -174,11 +174,11 @@ func (t *SpawnTool) Parameters() map[string]any {
 		},
 		"item": map[string]any{
 			"type":        "any",
-			"description": "Single task item (any JSON value) delivered to the child entity",
+			"description": "Single task item (any JSON value) delivered to the child instance",
 		},
 		"items": map[string]any{
 			"type":        "array",
-			"description": "Multiple task items; one child entity per item, executed in parallel",
+			"description": "Multiple task items; one child instance per item, executed in parallel",
 		},
 		"wait": map[string]any{
 			"type":        "boolean",
@@ -256,7 +256,7 @@ func (t *SpawnTool) Execute(ctx context.Context, params map[string]any) (*types.
 		return spawnError(`Spawn deliver must be "parent" or "downstream"`), nil
 	}
 	if strings.TrimSpace(key) != "" && len(items) > 1 {
-		return spawnError("Spawn key is only valid with a single item; items spawn one entity per item"), nil
+		return spawnError("Spawn key is only valid with a single item; items spawn one instance per item"), nil
 	}
 
 	identity := spawnIdentityFromContext(ctx)
@@ -406,8 +406,8 @@ func spawnOutcomeEntry(outcome *spawnOutcome, includeReply bool) map[string]any 
 	return entry
 }
 
-// runChild ensures the entity exists, executes one child AgentTurn inline,
-// and persists the entity state afterwards. The child context carries the
+// runChild ensures the instance exists, executes one child AgentTurn inline,
+// and persists the agent state afterwards. The child context carries the
 // spawn depth (and inherits the record collector) for nested spawning. Child
 // turns emit agent-level session events so their consumption lands in the
 // same session.jsonl fact source as ordinary agent turns.
@@ -422,18 +422,18 @@ func (t *SpawnTool) runChild(
 ) *spawnOutcome {
 	childCtx := withSpawnDepth(ctx, depth)
 
-	entity, err := t.registry.EnsureEntity(childCtx, agentID, key)
+	instance, err := t.registry.NextInstanceKey(childCtx, agentID, key)
 	if err != nil {
 		return &spawnOutcome{Key: key, Error: err.Error()}
 	}
 
 	itemJSON, err := json.Marshal(item)
 	if err != nil {
-		return &spawnOutcome{Key: entity.Key, Error: fmt.Sprintf("encode item: %v", err)}
+		return &spawnOutcome{Key: instance.Key, Error: fmt.Sprintf("encode item: %v", err)}
 	}
 
-	childCall := childCallID(parent.CallID, entity.Key)
-	childTurn := childTurnID(parent, entity.Key)
+	childCall := childCallID(parent.CallID, instance.Key)
+	childTurn := childTurnID(parent, instance.Key)
 
 	blocks := []types.ContextBlock{{
 		Kind:      "fanout_item",
@@ -443,26 +443,26 @@ func (t *SpawnTool) runChild(
 		Priority:  85,
 	}}
 
-	snapshot, err := t.states.LoadEntity(childCtx, agentID)
+	snapshot, err := t.states.LoadAgentState(childCtx, agentID)
 	if err != nil {
-		return &spawnOutcome{Key: entity.Key, Error: err.Error()}
+		return &spawnOutcome{Key: instance.Key, Error: err.Error()}
 	}
-	stateText := renderEntityState(snapshot)
+	stateText := renderAgentState(snapshot)
 	if stateText != "" {
 		blocks = append(blocks, types.ContextBlock{
-			Kind:         "entity_state",
+			Kind:         "agent_state",
 			Text:         stateText,
-			Source:       "entity_state",
+			Source:       "agent_state",
 			Stability:    "dynamic",
 			Priority:     60,
 			Compressible: true,
 		})
 	}
 
-	t.emitChildEvent(childCtx, types.EventAgentTurnStarted, agentID, entity.Key, parent, childCall, childTurn, nil)
+	t.emitChildEvent(childCtx, types.EventAgentTurnStarted, agentID, instance.Key, parent, childCall, childTurn, nil)
 	var outcome *spawnOutcome
 	defer func() {
-		t.emitChildEvent(childCtx, types.EventAgentTurnCompleted, agentID, entity.Key, parent, childCall, childTurn, outcome)
+		t.emitChildEvent(childCtx, types.EventAgentTurnCompleted, agentID, instance.Key, parent, childCall, childTurn, outcome)
 	}()
 
 	result, err := t.runner.Run(childCtx, def, types.AgentRequest{
@@ -478,15 +478,15 @@ func (t *SpawnTool) runChild(
 		MaxParallelTools: parent.MaxParallelTools,
 	})
 	if err != nil {
-		outcome = &spawnOutcome{Key: entity.Key, Status: types.TurnFailed, Error: err.Error()}
+		outcome = &spawnOutcome{Key: instance.Key, Status: types.TurnFailed, Error: err.Error()}
 		return outcome
 	}
 	if result == nil {
-		outcome = &spawnOutcome{Key: entity.Key, Status: types.TurnFailed, Error: "child agent returned a nil result"}
+		outcome = &spawnOutcome{Key: instance.Key, Status: types.TurnFailed, Error: "child agent returned a nil result"}
 		return outcome
 	}
 	outcome = &spawnOutcome{
-		Key:      entity.Key,
+		Key:      instance.Key,
 		Status:   result.Status,
 		Reply:    result.Reply,
 		Usage:    result.Usage,
@@ -500,8 +500,8 @@ func (t *SpawnTool) runChild(
 		outcome.Error = fmt.Sprintf("child ended with status %s", result.Status)
 		return outcome
 	}
-	if err := t.saveEntityState(childCtx, agentID, string(itemJSON), stateText, result); err != nil {
-		outcome.Error = fmt.Sprintf("save entity state: %v", err)
+	if err := t.saveAgentState(childCtx, agentID, string(itemJSON), stateText, result); err != nil {
+		outcome.Error = fmt.Sprintf("save agent state: %v", err)
 	}
 	return outcome
 }
@@ -509,7 +509,7 @@ func (t *SpawnTool) runChild(
 // emitChildEvent appends one agent-level session event for a spawned child
 // turn. The event reuses the ordinary agent_turn.* structure; the producer is
 // distinguished by CallID "<parent-call>/<key>" and a payload.spawn block
-// carrying the entity agent/key. Emission is skipped when no session writer
+// carrying the instance agent/key. Emission is skipped when no session writer
 // is wired or the parent has no flow session to write into.
 func (t *SpawnTool) emitChildEvent(
 	ctx context.Context,
@@ -561,15 +561,15 @@ func (t *SpawnTool) emitChildEvent(
 	_, _ = t.sessions.Append(ctx, parent.FlowSessionID, storage.LayerTeam, event)
 }
 
-// saveEntityState applies the same deterministic update the Team runtime
+// saveAgentState applies the same deterministic update the Team runtime
 // uses for per-call agent state: first outcome is confirmed, later replies
 // become next steps, workspace refs are tracked.
-func (t *SpawnTool) saveEntityState(
+func (t *SpawnTool) saveAgentState(
 	ctx context.Context,
 	agentID, itemJSON, previousStateText string,
 	result *types.AgentResult,
 ) error {
-	snapshot, err := t.states.LoadEntity(ctx, agentID)
+	snapshot, err := t.states.LoadAgentState(ctx, agentID)
 	if err != nil {
 		return err
 	}
@@ -594,7 +594,7 @@ func (t *SpawnTool) saveEntityState(
 			Revision: operation.Revision,
 		})
 	}
-	return t.states.SaveEntity(ctx, agentID, snapshot)
+	return t.states.SaveAgentState(ctx, agentID, snapshot)
 }
 
 func childCallID(parentCallID, key string) string {
@@ -614,7 +614,7 @@ func childTurnID(parent types.AgentRequest, key string) string {
 
 // executeAsync implements wait=false + deliver=parent (design 21 §4.3): each
 // child becomes a durable SpawnChild task on the shared AsyncToolExecutor,
-// the tool returns handles (task id + entity key) immediately, and the parent
+// the tool returns handles (task id + instance key) immediately, and the parent
 // collects results later with the Collect tool. Children run concurrently —
 // one task per item, bounded by the same maxChildren limit as the sync path.
 func (t *SpawnTool) executeAsync(
@@ -628,15 +628,15 @@ func (t *SpawnTool) executeAsync(
 	if t.tasks == nil {
 		return spawnError("asynchronous Spawn requires the async tool task runner; it is not configured"), nil
 	}
-	// Resolve every entity before starting any task so a failing EnsureEntity
-	// cannot leave partially started children behind.
+	// Resolve every instance before starting any task so a failing
+	// NextInstanceKey cannot leave partially started children behind.
 	keys := make([]string, len(items))
 	for i := range items {
-		entity, err := t.registry.EnsureEntity(ctx, agentID, key)
+		instance, err := t.registry.NextInstanceKey(ctx, agentID, key)
 		if err != nil {
 			return spawnError(err.Error()), nil
 		}
-		keys[i] = entity.Key
+		keys[i] = instance.Key
 	}
 	entries := make([]map[string]any, len(items))
 	for i := range items {
@@ -674,7 +674,7 @@ func (t *SpawnTool) executeAsync(
 }
 
 // executeAsyncDownstream implements wait=false + deliver=downstream (design
-// 21 §4.4, batch C): each child entity is registered as a synthetic call in
+// 21 §4.4, batch C): each child instance is registered as a synthetic call in
 // the spawning parent call's Team group through the insertion channel in ctx,
 // and the tool returns handles immediately. The children execute later in the
 // Team scheduler's normal batch path and publish records under the parent
@@ -699,15 +699,15 @@ func (t *SpawnTool) executeAsyncDownstream(
 	if inserter == nil {
 		return spawnError("asynchronous Spawn with deliver=downstream requires the parent call to be scheduled by a Team; spawned background children (deliver=parent) have no Team call channel to join"), nil
 	}
-	// Resolve every entity before inserting any child so a failing
-	// EnsureEntity cannot leave a partially joined group behind.
+	// Resolve every instance before inserting any child so a failing
+	// NextInstanceKey cannot leave a partially joined group behind.
 	keys := make([]string, len(items))
 	for i := range items {
-		entity, err := t.registry.EnsureEntity(ctx, agentID, key)
+		instance, err := t.registry.NextInstanceKey(ctx, agentID, key)
 		if err != nil {
 			return spawnError(err.Error()), nil
 		}
-		keys[i] = entity.Key
+		keys[i] = instance.Key
 	}
 	entries := make([]map[string]any, len(items))
 	for i := range items {
@@ -742,7 +742,7 @@ func (t *SpawnTool) executeAsyncDownstream(
 // executeChildTask runs one durable SpawnChild task (the dispatcher entry
 // point). Arguments are the persisted spawnChildArguments payload; the child
 // executes through the same runChild path as synchronous spawns, including
-// entity state persistence and agent-level session events.
+// agent state persistence and agent-level session events.
 func (t *SpawnTool) executeChildTask(ctx context.Context, args map[string]any) (*types.ToolResult, error) {
 	if t == nil || t.runner == nil || t.registry == nil {
 		return spawnError("Spawn tool is not configured"), nil
@@ -776,7 +776,7 @@ func (t *SpawnTool) executeChildTask(ctx context.Context, args map[string]any) (
 }
 
 // spawnChildArguments captures everything a durable SpawnChild task needs to
-// re-create the child turn after a process restart: target agent, entity key,
+// re-create the child turn after a process restart: target agent, instance key,
 // spawn depth, the fanout item, and the parent request identity.
 func spawnChildArguments(
 	agentID string,
@@ -851,7 +851,7 @@ func spawnTaskID(parent types.AgentRequest, key string) string {
 	return fmt.Sprintf("%s:spawn:%s:%d", base, key, spawnTurnSeq.Add(1))
 }
 
-func renderEntityState(snapshot types.StateSnapshot) string {
+func renderAgentState(snapshot types.StateSnapshot) string {
 	var sections []string
 	if snapshot.Goal != "" {
 		sections = append(sections, "Goal: "+snapshot.Goal)

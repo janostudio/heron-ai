@@ -13,18 +13,15 @@ type StateObservation struct {
 	Timestamp  string `json:"timestamp"`
 }
 
-// StateScope identifies the two V1 short-term state layers.
+// StateScope identifies the two V1 state layers (team and agent). Both
+// scopes persist across sessions: team state lives under the session's team
+// directory, while agent state has a session-scoped per-call form and a
+// cross-session form keyed only by agent id (design doc 26).
 type StateScope string
 
 const (
 	StateScopeTeam  StateScope = "team"
 	StateScopeAgent StateScope = "agent"
-	// StateScopeEntity is the persistent cross-session state of one Agent.
-	// The entity layer has been folded into the agent layer (design doc 26):
-	// state is now one workbench per agent, not per entity/key. The constant
-	// is retained for compatibility with persisted snapshots but is no longer
-	// used as an independent scope.
-	StateScopeEntity StateScope = "entity"
 )
 
 // StateWorkspaceRef keeps only a small pointer to workspace state. Complete

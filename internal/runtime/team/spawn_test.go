@@ -67,7 +67,7 @@ func TestRunState_InsertValidations(t *testing.T) {
 	require.ErrorContains(t, err, "agent id is required")
 
 	err = state.InsertSpawnedCall(ctx, "fixer", agentstore.SpawnedCallSpec{AgentID: "child-agent"})
-	require.ErrorContains(t, err, "entity key is required")
+	require.ErrorContains(t, err, "instance key is required")
 
 	err = state.InsertSpawnedCall(ctx, "ghost", agentstore.SpawnedCallSpec{AgentID: "child-agent", Key: "k1"})
 	require.ErrorContains(t, err, "not a scheduled call")
@@ -394,11 +394,11 @@ func TestRuntime_AsyncDownstreamChildFailureFailsTeamWithKey(t *testing.T) {
 	assert.False(t, ran, "downstream must not run after a group member failed")
 }
 
-func TestRuntime_EntityStateRoutingForSyntheticCalls(t *testing.T) {
+func TestRuntime_AgentStateRoutingForSyntheticCalls(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	states := state.NewStore(files, state.Limits{})
-	// Pre-existing entity state must reach the child as entity_state.
-	require.NoError(t, states.SaveEntity(context.Background(), "child-agent", types.StateSnapshot{
+	// Pre-existing agent state must reach the child as agent_state.
+	require.NoError(t, states.SaveAgentState(context.Background(), "child-agent", types.StateSnapshot{
 		Goal: "keep fixing",
 	}))
 	runner := &downstreamSpawnRunner{items: []downstreamSpawnItem{{Key: "k1", Item: "fix a.go"}}}
@@ -421,27 +421,28 @@ func TestRuntime_EntityStateRoutingForSyntheticCalls(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "dispatch fixes", parentState.Goal)
 
-	// The synthetic child loaded the entity state as a context block...
+	// The synthetic child loaded the agent state as a context block...
 	blocks := runner.capturedChildBlocks()
-	sawItem, sawEntity := false, false
+	sawItem, sawAgent := false, false
 	for _, block := range blocks {
 		if block.Kind == "fanout_item" && strings.Contains(block.Text, "fix a.go") {
 			sawItem = true
 		}
-		if block.Kind == "entity_state" && strings.Contains(block.Text, "keep fixing") {
-			sawEntity = true
+		if block.Kind == "agent_state" && strings.Contains(block.Text, "keep fixing") {
+			sawAgent = true
 		}
 	}
 	assert.True(t, sawItem)
-	assert.True(t, sawEntity)
+	assert.True(t, sawAgent)
 
-	// ...and persisted its outcome to the entity scope (previous state text
-	// exists, so the reply lands in NextSteps), never to the session scope.
-	entityState, err := states.LoadEntity(context.Background(), "child-agent")
+	// ...and persisted its outcome to the cross-session agent scope (previous
+	// state text exists, so the reply lands in NextSteps), never to the
+	// session scope.
+	agentState, err := states.LoadAgentState(context.Background(), "child-agent")
 	require.NoError(t, err)
-	assert.Equal(t, "keep fixing", entityState.Goal)
-	require.Len(t, entityState.NextSteps, 1)
-	assert.Equal(t, "child outcome k1", entityState.NextSteps[0].Text)
+	assert.Equal(t, "keep fixing", agentState.Goal)
+	require.Len(t, agentState.NextSteps, 1)
+	assert.Equal(t, "child outcome k1", agentState.NextSteps[0].Text)
 
 	// No session-scoped state was created for the synthetic call id.
 	childSessionState, err := states.LoadAgent(context.Background(), "fs-1", "fix-team", "fixer/k1")
@@ -451,11 +452,11 @@ func TestRuntime_EntityStateRoutingForSyntheticCalls(t *testing.T) {
 	assert.Empty(t, childSessionState.NextSteps)
 }
 
-// busyEntityRunner inserts two children with the same entity key from two
+// busyInstanceRunner inserts two children with the same instance key from two
 // different parents.
-type busyEntityRunner struct{}
+type busyInstanceRunner struct{}
 
-func (r *busyEntityRunner) Run(ctx context.Context, _ types.AgentConfig, req types.AgentRequest) (*types.AgentResult, error) {
+func (r *busyInstanceRunner) Run(ctx context.Context, _ types.AgentConfig, req types.AgentRequest) (*types.AgentResult, error) {
 	if req.CallID == "fixer1" || req.CallID == "fixer2" {
 		inserter := agentstore.ChildInserterFromContext(ctx)
 		if inserter == nil {
@@ -474,7 +475,7 @@ func (r *busyEntityRunner) Run(ctx context.Context, _ types.AgentConfig, req typ
 	return &types.AgentResult{Status: types.TurnFailed, Error: "unexpected call " + req.CallID}, nil
 }
 
-func runBusyEntityTeam(t *testing.T, runtime *Runtime) (types.TeamTurnResult, error) {
+func runBusyInstanceTeam(t *testing.T, runtime *Runtime) (types.TeamTurnResult, error) {
 	t.Helper()
 	return runtime.Run(context.Background(), types.TeamTurnRequest{
 		FlowSession: types.FlowSession{ID: "fs-1"},
@@ -497,19 +498,19 @@ func runBusyEntityTeam(t *testing.T, runtime *Runtime) (types.TeamTurnResult, er
 	})
 }
 
-func TestRuntime_EntityLockSharedAcrossParents(t *testing.T) {
-	// Two parents spawn children with distinct entity keys: both synthetic
+func TestRuntime_InstanceLockSharedAcrossParents(t *testing.T) {
+	// Two parents spawn children with distinct instance keys: both synthetic
 	// calls run normally — the shared lock set does not over-block unrelated
-	// entities. (Same-key contention is covered deterministically by the
-	// pre-locked test below and by the agentstore.EntityLocks unit tests.)
+	// instances. (Same-key contention is covered deterministically by the
+	// pre-locked test below and by the agentstore.AgentStateLocks unit tests.)
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(call.NewAgentExecutor(&distinctKeysRunner{})))
 	runtime := NewRuntime(registry, map[string]types.AgentConfig{
 		"fix-agent":   {Name: "fix-agent"},
 		"child-agent": {Name: "child-agent"},
 	})
-	locks := agentstore.NewEntityLocks()
-	runtime.SetEntityLocks(locks)
+	locks := agentstore.NewAgentStateLocks()
+	runtime.SetAgentStateLocks(locks)
 
 	result, err := runTwoChildTeam(t, runtime)
 	require.NoError(t, err)
@@ -517,7 +518,7 @@ func TestRuntime_EntityLockSharedAcrossParents(t *testing.T) {
 	assert.Equal(t, types.TurnCompleted, result.CallResults["fixer2/c2"].Status)
 }
 
-// distinctKeysRunner spawns two children with different entity keys.
+// distinctKeysRunner spawns two children with different instance keys.
 type distinctKeysRunner struct{}
 
 func (r *distinctKeysRunner) Run(ctx context.Context, _ types.AgentConfig, req types.AgentRequest) (*types.AgentResult, error) {
@@ -567,20 +568,20 @@ func TestRuntime_ConcurrentSameAgentSyntheticCallsBothRun(t *testing.T) {
 	// Since design doc 26 the turn lock is removed: two synthetic calls of the
 	// same agent (shared key) run concurrently and only their shared state
 	// writes serialize. Neither call fails with "already executing".
-	locks := agentstore.NewEntityLocks()
+	locks := agentstore.NewAgentStateLocks()
 	unlock, ok := locks.TryLock("child-agent")
 	require.True(t, ok)
 	unlock()
 
 	registry := call.NewRegistry()
-	require.NoError(t, registry.Register(call.NewAgentExecutor(&busyEntityRunner{})))
+	require.NoError(t, registry.Register(call.NewAgentExecutor(&busyInstanceRunner{})))
 	runtime := NewRuntime(registry, map[string]types.AgentConfig{
 		"fix-agent":   {Name: "fix-agent"},
 		"child-agent": {Name: "child-agent"},
 	})
-	runtime.SetEntityLocks(locks)
+	runtime.SetAgentStateLocks(locks)
 
-	result, err := runBusyEntityTeam(t, runtime)
+	result, err := runBusyInstanceTeam(t, runtime)
 	require.NoError(t, err)
 	assert.Equal(t, types.TurnCompleted, result.CallResults["fixer1/shared"].Status)
 	assert.Equal(t, types.TurnCompleted, result.CallResults["fixer2/shared"].Status)
@@ -712,18 +713,18 @@ func TestRuntime_TurnLoopSpawnDownstreamEndToEnd(t *testing.T) {
 		agent.NewHookExecutor(),
 		callMarkerRenderer{},
 	)
-	entityRegistry := agentstore.NewRegistry(files)
+	instanceRegistry := agentstore.NewRegistry(files)
 	states := state.NewStore(files, state.Limits{})
-	entityLocks := agentstore.NewEntityLocks()
-	spawnTool := agent.NewSpawnTool(turnLoop, agents, entityRegistry, states)
-	spawnTool.SetEntityLocks(entityLocks)
+	agentStateLocks := agentstore.NewAgentStateLocks()
+	spawnTool := agent.NewSpawnTool(turnLoop, agents, instanceRegistry, states)
+	spawnTool.SetAgentStateLocks(agentStateLocks)
 	toolRegistry.Register(spawnTool)
 
 	executors := call.NewRegistry()
 	require.NoError(t, executors.Register(call.NewAgentExecutor(turnLoop)))
 	runtime := NewRuntime(executors, agents)
 	runtime.SetStateStore(states)
-	runtime.SetEntityLocks(entityLocks)
+	runtime.SetAgentStateLocks(agentStateLocks)
 
 	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
 		FlowSession: types.FlowSession{ID: "fs-1"},
@@ -763,14 +764,14 @@ func TestRuntime_TurnLoopSpawnDownstreamEndToEnd(t *testing.T) {
 	assert.Contains(t, verifierPrompt, "child outcome", "downstream inputs must carry the child record")
 	assert.Contains(t, verifierPrompt, "fixes dispatched", "downstream inputs must carry the parent record")
 
-	// ## Your Item reached the child, and the entity was persisted with its
-	// own state scope.
+	// ## Your Item reached the child, and the agent state was persisted with
+	// its own scope.
 	childPrompt := model.promptFor("fixer/k1")
 	assert.Contains(t, childPrompt, "fix a.go")
 
-	entityState, err := states.LoadEntity(context.Background(), "child-agent")
+	agentState, err := states.LoadAgentState(context.Background(), "child-agent")
 	require.NoError(t, err)
-	assert.Equal(t, `"fix a.go"`, entityState.Goal)
-	require.Len(t, entityState.Confirmed, 1)
-	assert.Equal(t, "child outcome", entityState.Confirmed[0].Text)
+	assert.Equal(t, `"fix a.go"`, agentState.Goal)
+	require.Len(t, agentState.Confirmed, 1)
+	assert.Equal(t, "child outcome", agentState.Confirmed[0].Text)
 }

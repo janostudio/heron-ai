@@ -346,7 +346,7 @@ func TestSpawnTool_ExplicitTargetAgent(t *testing.T) {
 	assert.Equal(t, "child-agent", calls[0].req.AgentID)
 }
 
-func TestSpawnTool_ReusesEntityByKey(t *testing.T) {
+func TestSpawnTool_ReusesInstanceByKey(t *testing.T) {
 	fixture := newSpawnFixture(t)
 
 	_, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "a", "key": "role-a"})
@@ -361,30 +361,30 @@ func TestSpawnTool_ReusesEntityByKey(t *testing.T) {
 	assert.Contains(t, calls[1].req.CallID, "call-1/role-a")
 }
 
-func TestSpawnTool_EntityStatePersistsAcrossSpawns(t *testing.T) {
+func TestSpawnTool_AgentStatePersistsAcrossSpawns(t *testing.T) {
 	fixture := newSpawnFixture(t)
 
 	_, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "first", "key": "role-a"})
 	require.NoError(t, err)
 
-	// Second spawn of the same entity must receive its persisted state.
+	// Second spawn of the same agent must receive its persisted state.
 	_, err = fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "second", "key": "role-a"})
 	require.NoError(t, err)
 
 	calls := fixture.runner.recorded()
 	require.Len(t, calls, 2)
-	block := contextBlock(calls[1].req.ContextBlocks, "entity_state")
-	require.NotNil(t, block, "entity_state block missing on reuse")
+	block := contextBlock(calls[1].req.ContextBlocks, "agent_state")
+	require.NotNil(t, block, "agent_state block missing on reuse")
 	assert.Contains(t, block.Text, "child reply for "+calls[0].req.CallID)
 
-	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent")
+	snapshot, loadErr := fixture.states.LoadAgentState(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
 	assert.Equal(t, `"first"`, snapshot.Goal)
 	require.Len(t, snapshot.Confirmed, 1)
 	assert.Equal(t, "child reply for "+calls[0].req.CallID, snapshot.Confirmed[0].Text)
 }
 
-func TestSpawnTool_EntityStateSharedAcrossInstances(t *testing.T) {
+func TestSpawnTool_AgentStateSharedAcrossInstances(t *testing.T) {
 	fixture := newSpawnFixture(t)
 
 	_, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "a", "key": "one"})
@@ -396,7 +396,7 @@ func TestSpawnTool_EntityStateSharedAcrossInstances(t *testing.T) {
 	// instance with a different key observes the first instance's state.
 	calls := fixture.runner.recorded()
 	require.Len(t, calls, 2)
-	assert.NotNil(t, contextBlock(calls[1].req.ContextBlocks, "entity_state"))
+	assert.NotNil(t, contextBlock(calls[1].req.ContextBlocks, "agent_state"))
 }
 
 func TestSpawnTool_ChildFailureReportedPerChild(t *testing.T) {
@@ -440,7 +440,7 @@ func TestSpawnTool_FailedChildSkipsStateWrite(t *testing.T) {
 	_, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "a", "key": "k"})
 	require.NoError(t, err)
 
-	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent")
+	snapshot, loadErr := fixture.states.LoadAgentState(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
 	assert.Empty(t, snapshot.Confirmed)
 	assert.Empty(t, snapshot.NextSteps)
@@ -607,7 +607,7 @@ func TestTurnLoop_SpawnDeclaredExecutesInline(t *testing.T) {
 	assert.Contains(t, calls[0].req.CallID, "call-1/role-a")
 	assert.NotNil(t, contextBlock(calls[0].req.ContextBlocks, "fanout_item"))
 
-	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent")
+	snapshot, loadErr := fixture.states.LoadAgentState(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
 	assert.NotEmpty(t, snapshot.Confirmed)
 }

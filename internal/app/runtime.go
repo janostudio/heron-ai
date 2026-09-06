@@ -97,31 +97,31 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 	// configured via .agents/settings.json (logging section), with an optional
 	// command-line level override.
 	logging.SetDefault(buildLogger(workspaceRoot, logLevelOverride))
-	// One entity is one agent: the Spawn tool's inline children, durable
+	// One agent is one agent: the Spawn tool's inline children, durable
 	// SpawnChild tasks, and the Team scheduler's synthetic calls (batch C)
-	// share one entity lock set so the same dynamic entity never runs two
+	// share one agent-state lock set so the same dynamic agent never runs two
 	// concurrent turns across paths.
-	entityLocks := agentstore.NewEntityLocks()
-	teamRuntime.SetEntityLocks(entityLocks)
-	// One shared state.Store backs both the Spawn tool's entity state and the
-	// Team runtime's team/agent state, plus the builtin State tool (design doc
-	// 26). The store's agent-level write locks guard CRUD atomicity; the
-	// shared lock set is reused across paths.
+	agentStateLocks := agentstore.NewAgentStateLocks()
+	teamRuntime.SetAgentStateLocks(agentStateLocks)
+	// One shared state.Store backs both the Spawn tool's cross-session agent
+	// state and the Team runtime's team/agent state, plus the builtin State
+	// tool (design doc 26). The store's agent-level write locks guard CRUD
+	// atomicity; the shared lock set is reused across paths.
 	stateStore := state.NewStore(files, state.Limits{})
-	stateStore.SetLocks(entityLocks)
+	stateStore.SetLocks(agentStateLocks)
 	// Spawn (design 20/21, batch A): the tool executes child turns through the
 	// same TurnLoop and persists cross-session agent state under the workspace
 	// data dir. Agents must declare Spawn in tools.builtin to see it; everyone
 	// else is unaffected. Batch B wires the async task runner and session
 	// writer below so wait=false spawns run as durable SpawnChild tasks;
-	// batch C wires the shared entity locks for Team DAG insertions.
+	// batch C wires the shared agent-state locks for Team DAG insertions.
 	spawnTool := agent.NewSpawnTool(
 		turnLoop,
 		definitions.Agents,
 		agentstore.NewRegistry(files),
 		stateStore,
 	)
-	spawnTool.SetEntityLocks(entityLocks)
+	spawnTool.SetAgentStateLocks(agentStateLocks)
 	toolRegistry.Register(spawnTool)
 	// State (design doc 26): the builtin tool lets an Agent CRUD its own
 	// cross-session todo state from inside the TurnLoop.

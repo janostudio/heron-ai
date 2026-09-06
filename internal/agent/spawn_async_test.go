@@ -198,8 +198,8 @@ func TestSpawnTool_AsyncChildResultCollected(t *testing.T) {
 	assert.Equal(t, "completed", payload["status"])
 	assert.Contains(t, payload["reply"], "child reply for call-1/k1")
 
-	// Entity state is persisted by the async child, exactly like sync ones.
-	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent")
+	// Agent state is persisted by the async child, exactly like sync ones.
+	snapshot, loadErr := fixture.states.LoadAgentState(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
 	require.NotEmpty(t, snapshot.Confirmed)
 	assert.Contains(t, snapshot.Confirmed[0].Text, "child reply for")
@@ -225,8 +225,8 @@ func TestSpawnTool_AsyncChildFailureStoredPerChild(t *testing.T) {
 	assert.False(t, task.Result.Success)
 	assert.Equal(t, "child exploded", task.Result.Error)
 
-	// A failed child does not write entity state.
-	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent")
+	// A failed child does not write agent state.
+	snapshot, loadErr := fixture.states.LoadAgentState(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
 	assert.Empty(t, snapshot.Confirmed)
 }

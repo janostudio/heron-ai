@@ -17,24 +17,24 @@ import (
 )
 
 const (
-	defaultTeamMaxChars   = 4000
-	defaultAgentMaxChars  = 2000
-	defaultEntityMaxChars = 4000
+	defaultTeamMaxChars        = 4000
+	defaultAgentMaxChars       = 2000
+	defaultAgentStateMaxChars  = 4000
 )
 
 // Limits controls the hard size of state.md snapshots.
 type Limits struct {
-	TeamMaxChars   int
-	AgentMaxChars  int
-	EntityMaxChars int
-	MaxItems       int
+	TeamMaxChars       int
+	AgentMaxChars      int
+	AgentStateMaxChars int
+	MaxItems           int
 }
 
-// Store persists the two V1 short-term state layers.
+// Store persists the two V1 state layers (team and agent).
 type Store struct {
 	files  storage.FileStore
 	limits Limits
-	locks  *agentstore.EntityLocks
+	locks  *agentstore.AgentStateLocks
 }
 
 func NewStore(files storage.FileStore, limits Limits) *Store {
@@ -44,19 +44,19 @@ func NewStore(files storage.FileStore, limits Limits) *Store {
 	if limits.AgentMaxChars <= 0 {
 		limits.AgentMaxChars = defaultAgentMaxChars
 	}
-	if limits.EntityMaxChars <= 0 {
-		limits.EntityMaxChars = defaultEntityMaxChars
+	if limits.AgentStateMaxChars <= 0 {
+		limits.AgentStateMaxChars = defaultAgentStateMaxChars
 	}
 	if limits.MaxItems <= 0 {
 		limits.MaxItems = 40
 	}
-	return &Store{files: files, limits: limits, locks: agentstore.NewEntityLocks()}
+	return &Store{files: files, limits: limits, locks: agentstore.NewAgentStateLocks()}
 }
 
 // SetLocks shares an external agent-level write lock set. When nil, the Store
 // uses its own private lock set. The CRUD operations use it to guard the
 // read-modify-write cycle of one agent's state.
-func (s *Store) SetLocks(locks *agentstore.EntityLocks) {
+func (s *Store) SetLocks(locks *agentstore.AgentStateLocks) {
 	if locks != nil {
 		s.locks = locks
 	}
@@ -102,26 +102,26 @@ func (s *Store) SaveAgent(ctx context.Context, snapshot types.StateSnapshot) err
 	return s.save(ctx, s.path(snapshot.SessionID, "agents", snapshot.TeamID, snapshot.CallID, "state.md"), snapshot, s.limits.AgentMaxChars)
 }
 
-// LoadEntity reads the persistent cross-session state of one Agent (design
-// doc 26). A missing snapshot is not an error.
-func (s *Store) LoadEntity(ctx context.Context, agentID string) (types.StateSnapshot, error) {
-	return s.load(ctx, s.entityPath(agentID), types.StateScopeEntity, "", "", "")
+// LoadAgentState reads the persistent cross-session state of one Agent
+// (design doc 26). A missing snapshot is not an error.
+func (s *Store) LoadAgentState(ctx context.Context, agentID string) (types.StateSnapshot, error) {
+	return s.load(ctx, s.agentStatePath(agentID), types.StateScopeAgent, "", "", "")
 }
 
-// SaveEntity persists one Agent's cross-session state. The snapshot is scoped
-// by agent id and outlives any session.
-func (s *Store) SaveEntity(ctx context.Context, agentID string, snapshot types.StateSnapshot) error {
+// SaveAgentState persists one Agent's cross-session state. The snapshot is
+// scoped by agent id and outlives any session.
+func (s *Store) SaveAgentState(ctx context.Context, agentID string, snapshot types.StateSnapshot) error {
 	if strings.TrimSpace(agentID) == "" {
-		return errors.New("entity state agent is required")
+		return errors.New("agent state agent is required")
 	}
-	snapshot.Scope = types.StateScopeEntity
+	snapshot.Scope = types.StateScopeAgent
 	snapshot.SessionID = ""
 	snapshot.TeamID = ""
 	snapshot.CallID = ""
-	return s.save(ctx, s.entityPath(agentID), snapshot, s.limits.EntityMaxChars)
+	return s.save(ctx, s.agentStatePath(agentID), snapshot, s.limits.AgentStateMaxChars)
 }
 
-func (s *Store) entityPath(agentID string) string {
+func (s *Store) agentStatePath(agentID string) string {
 	return filepath.Join(".agents", "data", "agents", agentID, "state", "state.md")
 }
 
@@ -178,13 +178,13 @@ func (s *Store) save(ctx context.Context, path string, snapshot types.StateSnaps
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
-	if snapshot.Scope != types.StateScopeEntity {
+	if snapshot.Scope == types.StateScopeTeam {
 		if snapshot.SessionID == "" || snapshot.TeamID == "" {
 			return errors.New("state session_id and team_id are required")
 		}
-		if snapshot.Scope == types.StateScopeAgent && snapshot.CallID == "" {
-			return errors.New("agent state call_id is required")
-		}
+	}
+	if snapshot.Scope == types.StateScopeAgent && snapshot.SessionID != "" && snapshot.CallID == "" {
+		return errors.New("agent state call_id is required")
 	}
 	snapshot = Reduce(snapshot, s.limits.MaxItems)
 	snapshot.Revision++

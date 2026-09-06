@@ -75,7 +75,7 @@ func (s *Store) Add(ctx context.Context, agentID string, field StateField, text 
 	}
 	switch field {
 	case FieldWorkspace:
-		return errors.New("state: workspace entries are structural; add them via SaveEntity")
+		return errors.New("state: workspace entries are structural; add them via SaveAgentState")
 	case FieldRecordIDs:
 		return s.addRecordID(ctx, agentID, text)
 	case FieldGoal:
@@ -85,24 +85,24 @@ func (s *Store) Add(ctx context.Context, agentID string, field StateField, text 
 		return fmt.Errorf("state: unsupported field %q", field)
 	}
 	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadEntity(ctx, agentID)
+		snapshot, err := s.LoadAgentState(ctx, agentID)
 		if err != nil {
 			return err
 		}
 		target, _ := fieldItems(&snapshot, field)
 		*target = append(*target, types.StateItem{ID: newItemID(), Text: text})
-		return s.SaveEntity(ctx, agentID, snapshot)
+		return s.SaveAgentState(ctx, agentID, snapshot)
 	})
 }
 
 func (s *Store) addRecordID(ctx context.Context, agentID, value string) error {
 	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadEntity(ctx, agentID)
+		snapshot, err := s.LoadAgentState(ctx, agentID)
 		if err != nil {
 			return err
 		}
 		snapshot.RecordIDs = append(snapshot.RecordIDs, value)
-		return s.SaveEntity(ctx, agentID, snapshot)
+		return s.SaveAgentState(ctx, agentID, snapshot)
 	})
 }
 
@@ -113,7 +113,7 @@ func (s *Store) Remove(ctx context.Context, agentID string, field StateField, id
 		return err
 	}
 	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadEntity(ctx, agentID)
+		snapshot, err := s.LoadAgentState(ctx, agentID)
 		if err != nil {
 			return err
 		}
@@ -165,7 +165,7 @@ func (s *Store) Remove(ctx context.Context, agentID string, field StateField, id
 			}
 			*items = next
 		}
-		return s.SaveEntity(ctx, agentID, snapshot)
+		return s.SaveAgentState(ctx, agentID, snapshot)
 	})
 }
 
@@ -175,7 +175,7 @@ func (s *Store) Update(ctx context.Context, agentID string, field StateField, id
 		return err
 	}
 	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadEntity(ctx, agentID)
+		snapshot, err := s.LoadAgentState(ctx, agentID)
 		if err != nil {
 			return err
 		}
@@ -186,7 +186,7 @@ func (s *Store) Update(ctx context.Context, agentID string, field StateField, id
 		for i := range *items {
 			if (*items)[i].ID == id {
 				(*items)[i].Text = text
-				return s.SaveEntity(ctx, agentID, snapshot)
+				return s.SaveAgentState(ctx, agentID, snapshot)
 			}
 		}
 		return fmt.Errorf("state: item %q not found in %s", id, field)
@@ -198,7 +198,7 @@ func (s *Store) List(ctx context.Context, agentID string, field StateField) ([]t
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
-	snapshot, err := s.LoadEntity(ctx, agentID)
+	snapshot, err := s.LoadAgentState(ctx, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -250,12 +250,12 @@ func (s *Store) SetGoal(ctx context.Context, agentID, text string) error {
 		return err
 	}
 	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadEntity(ctx, agentID)
+		snapshot, err := s.LoadAgentState(ctx, agentID)
 		if err != nil {
 			return err
 		}
 		snapshot.Goal = text
-		return s.SaveEntity(ctx, agentID, snapshot)
+		return s.SaveAgentState(ctx, agentID, snapshot)
 	})
 }
 
@@ -265,11 +265,11 @@ func (s *Store) ClearGoal(ctx context.Context, agentID string) error {
 		return err
 	}
 	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadEntity(ctx, agentID)
+		snapshot, err := s.LoadAgentState(ctx, agentID)
 		if err != nil {
 			return err
 		}
 		snapshot.Goal = ""
-		return s.SaveEntity(ctx, agentID, snapshot)
+		return s.SaveAgentState(ctx, agentID, snapshot)
 	})
 }

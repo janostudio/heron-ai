@@ -32,8 +32,8 @@ func TestChildCallID(t *testing.T) {
 	assert.Equal(t, "spawn/k1", ChildCallID("", "k1"))
 }
 
-func TestEntityLocksTryLock(t *testing.T) {
-	locks := NewEntityLocks()
+func TestAgentStateLocksTryLock(t *testing.T) {
+	locks := NewAgentStateLocks()
 
 	unlock, ok := locks.TryLock("agent-a")
 	require.True(t, ok)
@@ -53,8 +53,8 @@ func TestEntityLocksTryLock(t *testing.T) {
 	unlockAgain()
 }
 
-func TestEntityLocksSharedAcrossPaths(t *testing.T) {
-	locks := NewEntityLocks()
+func TestAgentStateLocksSharedAcrossPaths(t *testing.T) {
+	locks := NewAgentStateLocks()
 	var wg sync.WaitGroup
 	acquired := make([]bool, 8)
 	for i := 0; i < 8; i++ {
@@ -75,8 +75,8 @@ func TestEntityLocksSharedAcrossPaths(t *testing.T) {
 	}
 }
 
-func TestEntityLocksNilSetNeverBlocks(t *testing.T) {
-	var locks *EntityLocks
+func TestAgentStateLocksNilSetNeverBlocks(t *testing.T) {
+	var locks *AgentStateLocks
 	unlock, ok := locks.TryLock("agent-a")
 	require.True(t, ok)
 	require.NotNil(t, unlock)
