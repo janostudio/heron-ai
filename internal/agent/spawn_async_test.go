@@ -138,9 +138,9 @@ func TestSpawnTool_AsyncItemsOneTaskPerItem(t *testing.T) {
 		task := fixture.waitForTask(t, handle["task_id"].(string))
 		assert.Equal(t, types.ToolTaskCompleted, task.Status)
 	}
-	entities, listErr := fixture.registry.List(context.Background(), "parent-agent")
-	require.NoError(t, listErr)
-	assert.Len(t, entities, 3)
+	// All three spawned children completed; instance keys are transient and
+	// no longer enumerated via Registry.List.
+	assert.Len(t, handles, 3)
 }
 
 func TestSpawnTool_AsyncDownstreamRequiresTeamCallChannel(t *testing.T) {
@@ -199,9 +199,10 @@ func TestSpawnTool_AsyncChildResultCollected(t *testing.T) {
 	assert.Contains(t, payload["reply"], "child reply for call-1/k1")
 
 	// Entity state is persisted by the async child, exactly like sync ones.
-	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent", "k1")
+	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
-	assert.Contains(t, snapshot.Confirmed[0], "child reply for")
+	require.NotEmpty(t, snapshot.Confirmed)
+	assert.Contains(t, snapshot.Confirmed[0].Text, "child reply for")
 }
 
 func TestSpawnTool_AsyncChildFailureStoredPerChild(t *testing.T) {
@@ -225,7 +226,7 @@ func TestSpawnTool_AsyncChildFailureStoredPerChild(t *testing.T) {
 	assert.Equal(t, "child exploded", task.Result.Error)
 
 	// A failed child does not write entity state.
-	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent", "bad")
+	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
 	assert.Empty(t, snapshot.Confirmed)
 }
@@ -273,9 +274,12 @@ func TestSpawnTool_AsyncDepthAndChildrenLimits(t *testing.T) {
 	assert.Contains(t, result.Error, "exceeds")
 }
 
-func TestSpawnTool_AsyncEntityBusySameKey(t *testing.T) {
+func TestSpawnTool_AsyncConcurrentSameAgentBothRun(t *testing.T) {
+	// Since design doc 26 the turn lock is removed: same-agent instances run
+	// concurrently and only their shared state writes serialize. Two async
+	// children of the same agent (even the same key) must both complete.
 	fixture := newAsyncSpawnFixture(t)
-	started := make(chan struct{})
+	started := make(chan struct{}, 2)
 	release := make(chan struct{})
 	fixture.runner.result = func(call spawnRunnerCall) (*types.AgentResult, error) {
 		started <- struct{}{}
@@ -288,13 +292,6 @@ func TestSpawnTool_AsyncEntityBusySameKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, first.Success)
-	// Wait until the first child actually executes: it now holds the entity
-	// lock for the duration of its turn.
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		t.Fatal("first spawned child never started")
-	}
 
 	second, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{
 		"item": "b", "key": "shared", "wait": false,
@@ -302,19 +299,26 @@ func TestSpawnTool_AsyncEntityBusySameKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, second.Success)
 
-	// While the first child still holds the entity lock, the second child's
-	// task must terminate with the "already executing" per-child error.
-	secondTask := fixture.waitForTask(t, fixture.spawnHandles(t, second)[0]["task_id"].(string))
-	assert.Equal(t, types.ToolTaskCompleted, secondTask.Status)
-	require.NotNil(t, secondTask.Result)
-	assert.False(t, secondTask.Result.Success)
-	assert.Contains(t, secondTask.Result.Error, "already executing")
+	// Both children actually started concurrently (the turn lock no longer
+	// serializes same-agent instances).
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("spawned child never started")
+		}
+	}
 
 	close(release)
 	firstTask := fixture.waitForTask(t, fixture.spawnHandles(t, first)[0]["task_id"].(string))
 	assert.Equal(t, types.ToolTaskCompleted, firstTask.Status)
 	require.NotNil(t, firstTask.Result)
 	assert.True(t, firstTask.Result.Success)
+
+	secondTask := fixture.waitForTask(t, fixture.spawnHandles(t, second)[0]["task_id"].(string))
+	assert.Equal(t, types.ToolTaskCompleted, secondTask.Status)
+	require.NotNil(t, secondTask.Result)
+	assert.True(t, secondTask.Result.Success)
 }
 
 func TestSpawnTool_AsyncChildEmitsSessionEvents(t *testing.T) {

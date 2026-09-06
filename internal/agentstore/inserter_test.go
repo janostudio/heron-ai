@@ -35,20 +35,20 @@ func TestChildCallID(t *testing.T) {
 func TestEntityLocksTryLock(t *testing.T) {
 	locks := NewEntityLocks()
 
-	unlock, ok := locks.TryLock("agent-a", "k1")
+	unlock, ok := locks.TryLock("agent-a")
 	require.True(t, ok)
 	require.NotNil(t, unlock)
 
-	_, busy := locks.TryLock("agent-a", "k1")
-	assert.False(t, busy, "second turn of the same entity must not acquire the lock")
+	_, busy := locks.TryLock("agent-a")
+	assert.False(t, busy, "second turn of the same agent must not acquire the lock")
 
-	// A different entity is unaffected.
-	otherUnlock, ok := locks.TryLock("agent-a", "k2")
+	// A different agent is unaffected.
+	otherUnlock, ok := locks.TryLock("agent-b")
 	require.True(t, ok)
 	otherUnlock()
 
 	unlock()
-	unlockAgain, ok := locks.TryLock("agent-a", "k1")
+	unlockAgain, ok := locks.TryLock("agent-a")
 	require.True(t, ok)
 	unlockAgain()
 }
@@ -61,7 +61,7 @@ func TestEntityLocksSharedAcrossPaths(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			unlock, ok := locks.TryLock("agent-a", "shared")
+			unlock, ok := locks.TryLock("agent-a")
 			acquired[i] = ok
 			if ok {
 				unlock()
@@ -77,7 +77,7 @@ func TestEntityLocksSharedAcrossPaths(t *testing.T) {
 
 func TestEntityLocksNilSetNeverBlocks(t *testing.T) {
 	var locks *EntityLocks
-	unlock, ok := locks.TryLock("agent-a", "k1")
+	unlock, ok := locks.TryLock("agent-a")
 	require.True(t, ok)
 	require.NotNil(t, unlock)
 	unlock()

@@ -19,9 +19,11 @@ type StateScope string
 const (
 	StateScopeTeam  StateScope = "team"
 	StateScopeAgent StateScope = "agent"
-	// StateScopeEntity is the persistent state of one dynamic Agent entity
-	// (design doc 20). Unlike the session-scoped layers, it survives across
-	// sessions and is keyed by entity, not by call.
+	// StateScopeEntity is the persistent cross-session state of one Agent.
+	// The entity layer has been folded into the agent layer (design doc 26):
+	// state is now one workbench per agent, not per entity/key. The constant
+	// is retained for compatibility with persisted snapshots but is no longer
+	// used as an independent scope.
 	StateScopeEntity StateScope = "entity"
 )
 
@@ -32,9 +34,17 @@ type StateWorkspaceRef struct {
 	Revision string `yaml:"revision,omitempty" json:"revision,omitempty"`
 }
 
+// StateItem is one todo entry in a state list. The ID is engine-generated and
+// unique within the list; Text is the entry content.
+type StateItem struct {
+	ID   string `yaml:"id" json:"id"`
+	Text string `yaml:"text" json:"text"`
+}
+
 // StateSnapshot is the fixed-format short-term work snapshot stored as
 // state.md. It is intentionally bounded and does not replace the session
-// timeline or SharedRecord evidence chain.
+// timeline or SharedRecord evidence chain. The list fields are todo lists of
+// StateItem (id + text), not plain strings.
 type StateSnapshot struct {
 	Scope         StateScope          `yaml:"scope" json:"scope"`
 	SessionID     string              `yaml:"session_id" json:"session_id"`
@@ -42,10 +52,10 @@ type StateSnapshot struct {
 	CallID        string              `yaml:"call_id,omitempty" json:"call_id,omitempty"`
 	Revision      int                 `yaml:"revision" json:"revision"`
 	Goal          string              `yaml:"goal,omitempty" json:"goal,omitempty"`
-	Confirmed     []string            `yaml:"confirmed,omitempty" json:"confirmed,omitempty"`
-	OpenQuestions []string            `yaml:"open_questions,omitempty" json:"open_questions,omitempty"`
-	Decisions     []string            `yaml:"decisions,omitempty" json:"decisions,omitempty"`
-	NextSteps     []string            `yaml:"next_steps,omitempty" json:"next_steps,omitempty"`
+	Confirmed     []StateItem         `yaml:"confirmed,omitempty" json:"confirmed,omitempty"`
+	OpenQuestions []StateItem         `yaml:"open_questions,omitempty" json:"open_questions,omitempty"`
+	Decisions     []StateItem         `yaml:"decisions,omitempty" json:"decisions,omitempty"`
+	NextSteps     []StateItem         `yaml:"next_steps,omitempty" json:"next_steps,omitempty"`
 	Workspace     []StateWorkspaceRef `yaml:"workspace,omitempty" json:"workspace,omitempty"`
 	RecordIDs     []string            `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
 	UpdatedAt     time.Time           `yaml:"updated_at" json:"updated_at"`

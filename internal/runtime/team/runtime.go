@@ -32,7 +32,6 @@ type Runtime struct {
 	rules      map[string]types.RuleItem
 	ruleLoader func(ctx context.Context, path string) (string, error)
 	sessions   storage.SessionWriter
-	entityLock *agentstore.EntityLocks
 }
 
 func NewRuntime(executors *call.Registry, agentDefinitions ...map[string]types.AgentConfig) *Runtime {
@@ -79,15 +78,11 @@ func (r *Runtime) SetSessionWriter(writer storage.SessionWriter) {
 	r.sessions = writer
 }
 
-// SetEntityLocks shares one entity lock set with the Spawn tool so inline
-// spawned children and synthetic Team calls of the same dynamic entity never
-// run concurrently (design 20: one entity is one agent). Each Run falls back
-// to a private lock set when none is wired.
-func (r *Runtime) SetEntityLocks(locks *agentstore.EntityLocks) {
-	if locks != nil {
-		r.entityLock = locks
-	}
-}
+// SetEntityLocks is retained for API compatibility. Since design doc 26 the
+// turn lock has been removed: same-agent instances run concurrently and their
+// shared state is protected by the agent-level CRUD lock inside the state
+// Store (wired via SetStateStore's store, not here).
+func (r *Runtime) SetEntityLocks(locks *agentstore.EntityLocks) {}
 
 func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
 	result := types.TeamTurnResult{
@@ -158,7 +153,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 	// the scheduling sets, so Spawn(wait=false, deliver=downstream) inside a
 	// parent call can append synthetic calls under the run mutex while the
 	// main loop is blocked in runBatch.
-	state := newRunState(remaining, completed, r.entityLock)
+	state := newRunState(remaining, completed)
 	defer state.close()
 	ctx = agentstore.WithChildInserter(ctx, state)
 
@@ -301,7 +296,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 	if states != nil && req.Team.State.Enabled {
 		teamState.RecordIDs = append(teamState.RecordIDs, result.Turn.RecordIDs...)
 		if reply := strings.TrimSpace(result.Reply); reply != "" {
-			teamState.NextSteps = append(teamState.NextSteps, reply)
+			teamState.NextSteps = append(teamState.NextSteps, types.StateItem{ID: states.NextItemID(), Text: reply})
 		}
 		if err := states.SaveTeam(ctx, teamState); err != nil {
 			return result, err
@@ -481,7 +476,7 @@ func (r *Runtime) runBatch(
 					// per-call state — the same scope inline spawned children
 					// use.
 					if states != nil {
-						snapshot, stateErr := states.LoadEntity(ctx, spec.AgentID, spec.Key)
+						snapshot, stateErr := states.LoadEntity(ctx, spec.AgentID)
 						if stateErr != nil {
 							mu.Lock()
 							if firstErr == nil {
@@ -518,30 +513,16 @@ func (r *Runtime) runBatch(
 			}
 			callReq.ContextBlocks = buildContextBlocks(callReq)
 
-			// Depth and entity serialization (runChild parity): the synthetic
-			// call's own Spawn calls must see the spawn depth, and one entity
-			// never runs two concurrent turns. The TryLock happens before the
-			// started event so a busy entity fails without emitting events,
-			// matching the other pre-execution failure paths.
+			// Depth propagation (runChild parity): the synthetic call's own
+			// Spawn calls must see the spawn depth. Same-agent instances now
+			// run concurrently; their shared state is protected by the
+			// short-held agent-level CRUD lock inside the state Store (design
+			// doc 26 §5), not by a whole-turn lock.
 			execCtx := ctx
-			unlockEntity := func() {}
 			if isSpawned {
 				execCtx = agentstore.WithSpawnDepth(ctx, spec.Depth)
-				var acquired bool
-				unlockEntity, acquired = state.tryLockEntity(spec.AgentID, spec.Key)
-				if !acquired {
-					busyErr := fmt.Errorf("entity %q is already executing", spec.Key)
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = fmt.Errorf("call %q: %w", name, busyErr)
-					}
-					results[name] = types.CallResult{Status: types.TurnFailed, Error: busyErr.Error()}
-					mu.Unlock()
-					return
-				}
 			}
 			if err := r.appendCallStarted(ctx, callReq, spec); err != nil {
-				unlockEntity()
 				mu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -551,7 +532,6 @@ func (r *Runtime) runBatch(
 				return
 			}
 			callResult, err := r.executors.Execute(execCtx, callReq)
-			unlockEntity()
 			if err != nil {
 				logging.Error("call executor failed", map[string]any{
 					"flow_session_id": req.FlowSession.ID,
@@ -914,9 +894,9 @@ func (r *Runtime) saveAgentState(
 		snapshot.Goal = configured.Responsibility
 	}
 	if strings.TrimSpace(previousText) == "" && strings.TrimSpace(result.Reply) != "" {
-		snapshot.Confirmed = append(snapshot.Confirmed, result.Reply)
+		snapshot.Confirmed = append(snapshot.Confirmed, types.StateItem{ID: states.NextItemID(), Text: result.Reply})
 	} else if strings.TrimSpace(result.Reply) != "" {
-		snapshot.NextSteps = append(snapshot.NextSteps, result.Reply)
+		snapshot.NextSteps = append(snapshot.NextSteps, types.StateItem{ID: states.NextItemID(), Text: result.Reply})
 	}
 	snapshot.RecordIDs = append(snapshot.RecordIDs, recordIDs(result.Records)...)
 	for _, operation := range result.WorkspaceOps {
@@ -936,11 +916,15 @@ func renderState(snapshot types.StateSnapshot) string {
 	if snapshot.Goal != "" {
 		sections = append(sections, "Goal: "+snapshot.Goal)
 	}
-	appendList := func(title string, values []string) {
+	appendList := func(title string, values []types.StateItem) {
 		if len(values) == 0 {
 			return
 		}
-		sections = append(sections, title+":\n- "+strings.Join(values, "\n- "))
+		texts := make([]string, len(values))
+		for i, item := range values {
+			texts[i] = item.Text
+		}
+		sections = append(sections, title+":\n- "+strings.Join(texts, "\n- "))
 	}
 	appendList("Confirmed", snapshot.Confirmed)
 	appendList("Open Questions", snapshot.OpenQuestions)

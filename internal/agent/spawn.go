@@ -80,7 +80,6 @@ type SpawnTool struct {
 	states      *state.Store
 	tasks       *AsyncToolExecutor
 	sessions    storage.SessionWriter
-	entityLocks *agentstore.EntityLocks
 	maxChildren int
 	maxDepth    int
 }
@@ -123,7 +122,6 @@ func NewSpawnTool(
 		agents:      agents,
 		registry:    registry,
 		states:      states,
-		entityLocks: agentstore.NewEntityLocks(),
 		maxChildren: defaultSpawnMaxChildren,
 		maxDepth:    defaultSpawnMaxDepth,
 	}
@@ -133,14 +131,11 @@ func NewSpawnTool(
 	return spawn
 }
 
-// SetEntityLocks shares one entity lock set with the Team runtime so inline
-// spawned children and synthetic Team calls of the same dynamic entity never
-// run concurrently.
-func (t *SpawnTool) SetEntityLocks(locks *agentstore.EntityLocks) {
-	if locks != nil {
-		t.entityLocks = locks
-	}
-}
+// SetEntityLocks is retained for API compatibility. Since design doc 26 the
+// turn lock has been removed: same-agent instances run concurrently and their
+// shared state is protected by the agent-level CRUD lock inside the state
+// Store.
+func (t *SpawnTool) SetEntityLocks(locks *agentstore.EntityLocks) {}
 
 // SetTaskRunner wires the durable async task executor used by wait=false
 // spawns. It must be set before asynchronous Spawn can run.
@@ -162,7 +157,7 @@ func (t *SpawnTool) Description() string {
 	return "Spawn dynamic agent entities and execute them. wait=true blocks until children finish; " +
 		"wait=false returns handles immediately — deliver=parent children are collected later with Collect, " +
 		"deliver=downstream children join your call's Team group and publish records for downstream calls. " +
-		"Each item is delivered to its child as ## Your Item; entities keep persistent state keyed by `key`."
+		"Each item is delivered to its child as ## Your Item; all instances of an agent share one cross-session state."
 }
 
 func (t *SpawnTool) NeedsApproval() bool { return false }
@@ -196,7 +191,7 @@ func (t *SpawnTool) Parameters() map[string]any {
 		},
 		"key": map[string]any{
 			"type":        "string",
-			"description": "Entity key to reuse an existing entity (with its state); only valid with a single item",
+			"description": "Instance key to reuse a given instance number; only valid with a single item",
 		},
 	}
 }
@@ -437,15 +432,6 @@ func (t *SpawnTool) runChild(
 		return &spawnOutcome{Key: entity.Key, Error: fmt.Sprintf("encode item: %v", err)}
 	}
 
-	// One entity is one agent: never two concurrent turns. TryLock (instead
-	// of Lock) keeps a recursive self-spawn from deadlocking — the reentrant
-	// child fails fast with "already executing" instead of blocking forever.
-	unlock, busy := t.lockEntity(agentID, entity.Key)
-	if busy {
-		return &spawnOutcome{Key: entity.Key, Error: fmt.Sprintf("entity %q is already executing", entity.Key)}
-	}
-	defer unlock()
-
 	childCall := childCallID(parent.CallID, entity.Key)
 	childTurn := childTurnID(parent, entity.Key)
 
@@ -457,7 +443,7 @@ func (t *SpawnTool) runChild(
 		Priority:  85,
 	}}
 
-	snapshot, err := t.states.LoadEntity(childCtx, agentID, entity.Key)
+	snapshot, err := t.states.LoadEntity(childCtx, agentID)
 	if err != nil {
 		return &spawnOutcome{Key: entity.Key, Error: err.Error()}
 	}
@@ -514,22 +500,10 @@ func (t *SpawnTool) runChild(
 		outcome.Error = fmt.Sprintf("child ended with status %s", result.Status)
 		return outcome
 	}
-	if err := t.saveEntityState(childCtx, agentID, entity.Key, string(itemJSON), stateText, result); err != nil {
+	if err := t.saveEntityState(childCtx, agentID, string(itemJSON), stateText, result); err != nil {
 		outcome.Error = fmt.Sprintf("save entity state: %v", err)
 	}
 	return outcome
-}
-
-// lockEntity serializes turns of the same dynamic entity through the shared
-// agentstore.EntityLocks (also used by the Team runtime's synthetic calls).
-// It never blocks: when another turn of the entity is in flight the caller
-// reports "busy".
-func (t *SpawnTool) lockEntity(agentID, key string) (func(), bool) {
-	unlock, acquired := t.entityLocks.TryLock(agentID, key)
-	if !acquired {
-		return nil, true
-	}
-	return unlock, false
 }
 
 // emitChildEvent appends one agent-level session event for a spawned child
@@ -592,10 +566,10 @@ func (t *SpawnTool) emitChildEvent(
 // become next steps, workspace refs are tracked.
 func (t *SpawnTool) saveEntityState(
 	ctx context.Context,
-	agentID, key, itemJSON, previousStateText string,
+	agentID, itemJSON, previousStateText string,
 	result *types.AgentResult,
 ) error {
-	snapshot, err := t.states.LoadEntity(ctx, agentID, key)
+	snapshot, err := t.states.LoadEntity(ctx, agentID)
 	if err != nil {
 		return err
 	}
@@ -604,10 +578,11 @@ func (t *SpawnTool) saveEntityState(
 	}
 	reply := strings.TrimSpace(result.Reply)
 	if reply != "" {
+		item := types.StateItem{ID: t.states.NextItemID(), Text: reply}
 		if strings.TrimSpace(previousStateText) == "" {
-			snapshot.Confirmed = append(snapshot.Confirmed, reply)
+			snapshot.Confirmed = append(snapshot.Confirmed, item)
 		} else {
-			snapshot.NextSteps = append(snapshot.NextSteps, reply)
+			snapshot.NextSteps = append(snapshot.NextSteps, item)
 		}
 	}
 	for _, operation := range result.WorkspaceOps {
@@ -619,7 +594,7 @@ func (t *SpawnTool) saveEntityState(
 			Revision: operation.Revision,
 		})
 	}
-	return t.states.SaveEntity(ctx, agentID, key, snapshot)
+	return t.states.SaveEntity(ctx, agentID, snapshot)
 }
 
 func childCallID(parentCallID, key string) string {
@@ -881,11 +856,15 @@ func renderEntityState(snapshot types.StateSnapshot) string {
 	if snapshot.Goal != "" {
 		sections = append(sections, "Goal: "+snapshot.Goal)
 	}
-	appendList := func(title string, values []string) {
+	appendList := func(title string, values []types.StateItem) {
 		if len(values) == 0 {
 			return
 		}
-		sections = append(sections, title+":\n- "+strings.Join(values, "\n- "))
+		texts := make([]string, len(values))
+		for i, item := range values {
+			texts[i] = item.Text
+		}
+		sections = append(sections, title+":\n- "+strings.Join(texts, "\n- "))
 	}
 	appendList("Confirmed", snapshot.Confirmed)
 	appendList("Open Questions", snapshot.OpenQuestions)

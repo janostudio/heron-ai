@@ -19,9 +19,9 @@ func TestStoreTeamStateUsesFixedMarkdownAndReloads(t *testing.T) {
 		SessionID:     "fs-1",
 		TeamID:        "diagnose",
 		Goal:          "find the root cause",
-		Confirmed:     []string{"callback path is reachable"},
-		OpenQuestions: []string{"is retry idempotent?"},
-		NextSteps:     []string{"inspect retry.go"},
+		Confirmed:     []types.StateItem{{ID: "i-1", Text: "callback path is reachable"}},
+		OpenQuestions: []types.StateItem{{ID: "i-2", Text: "is retry idempotent?"}},
+		NextSteps:     []types.StateItem{{ID: "i-3", Text: "inspect retry.go"}},
 		RecordIDs:     []string{"rec-1"},
 	})
 	require.NoError(t, err)
@@ -48,7 +48,7 @@ func TestStoreAgentStateHasLimit(t *testing.T) {
 		TeamID:    "diagnose",
 		CallID:    "inspect",
 		Goal:      strings.Repeat("goal ", 100),
-		Confirmed: []string{strings.Repeat("fact ", 100)},
+		Confirmed: []types.StateItem{{ID: "i-1", Text: strings.Repeat("fact ", 100)}},
 	})
 	require.NoError(t, err)
 	data, readErr := files.Read(".agents/data/sessions/fs-1/agents/diagnose/inspect/state.md")
@@ -58,7 +58,11 @@ func TestStoreAgentStateHasLimit(t *testing.T) {
 
 func TestReduceKeepsRecentItems(t *testing.T) {
 	snapshot := Reduce(types.StateSnapshot{
-		Confirmed: []string{"one", "two", "three"},
+		Confirmed: []types.StateItem{
+			{ID: "i-1", Text: "one"},
+			{ID: "i-2", Text: "two"},
+			{ID: "i-3", Text: "three"},
+		},
 	}, 2)
-	require.Equal(t, []string{"two", "three"}, snapshot.Confirmed)
+	require.Equal(t, []types.StateItem{{ID: "i-2", Text: "two"}, {ID: "i-3", Text: "three"}}, snapshot.Confirmed)
 }

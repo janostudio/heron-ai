@@ -1,16 +1,16 @@
-// Package agentstore persists dynamic Agent entities (design doc 20): the
-// runtime-created counterparts of statically configured Agents. An entity is
-// an identity (template + key) with its own persistent state, stored under
-// .agents/data/agents/<template>/<key>/.
+// Package agentstore no longer persists dynamic Agent entities as separate
+// identity files. Since design doc 26, the entity layer has been folded into
+// the agent layer: state is one workbench per agent (see internal/state).
+// What remains here is the key machinery for concurrent instances — a key is
+// now a transient instance number used to distinguish concurrent turns (and
+// their call IDs / session events), not a durable identity.
 package agentstore
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -19,50 +19,51 @@ import (
 )
 
 const (
-	// maxKeyLength bounds one entity key (decision D1).
+	// maxKeyLength bounds one instance key.
 	maxKeyLength = 128
 )
 
-// Entity is the durable identity of one dynamic Agent entity.
+// Entity is the transient identity of one concurrent Agent instance. The key
+// is an instance number used for call/event disambiguation only; no file is
+// persisted for it.
 type Entity struct {
-	Agent      string    `json:"agent"`
-	Key        string    `json:"key"`
+	Agent string `json:"agent"`
+	Key   string `json:"key"`
+	// CreatedAt and LastUsedAt are kept for call-site compatibility but carry
+	// no persistence semantics anymore.
 	CreatedAt  time.Time `json:"created_at"`
 	LastUsedAt time.Time `json:"last_used_at"`
 }
 
-// Registry tracks dynamic Agent entities on top of a FileStore, mirroring the
-// state.Store construction pattern.
+// Registry produces instance keys for concurrent Agent instances. It no
+// longer reads or writes entity.json.
 type Registry struct {
-	files       storage.FileStore
-	maxEntities int
-	mu          sync.Mutex
+	mu sync.Mutex
 }
 
-// Option configures a Registry.
+// Option configures a Registry. Retained for API compatibility; the former
+// WithMaxEntities bound is no longer meaningful since entities are not
+// persisted.
 type Option func(*Registry)
 
-// WithMaxEntities bounds how many entities one template may own. Zero (the
-// default) means unlimited. Creating past the limit fails loudly; entities
-// are official records and are never evicted silently.
+// WithMaxEntities is a no-op kept for backward compatibility with callers.
 func WithMaxEntities(max int) Option {
-	return func(r *Registry) {
-		r.maxEntities = max
-	}
+	return func(r *Registry) {}
 }
 
-// NewRegistry creates a Registry rooted at the FileStore base directory.
+// NewRegistry creates a Registry. The files argument is accepted for
+// signature compatibility but no longer used (entities are not persisted).
 func NewRegistry(files storage.FileStore, options ...Option) *Registry {
-	registry := &Registry{files: files}
+	registry := &Registry{}
 	for _, option := range options {
 		option(registry)
 	}
 	return registry
 }
 
-// EnsureEntity returns the entity for agentID+key, creating it when missing
-// and refreshing last_used_at when it already exists. An empty key is
-// auto-generated; explicit keys are sanitized per the D1 rules.
+// EnsureEntity returns the instance key for agentID+key. An empty key is
+// auto-generated; explicit keys are sanitized. This is a pure in-memory
+// operation — no identity file is created.
 func (r *Registry) EnsureEntity(ctx context.Context, agentID, key string) (*Entity, error) {
 	if err := contextErr(ctx); err != nil {
 		return nil, err
@@ -75,136 +76,20 @@ func (r *Registry) EnsureEntity(ctx context.Context, agentID, key string) (*Enti
 
 	key = SanitizeKey(key)
 	if key == "" {
-		key = r.generateKey(agentID)
-	}
-	path := entityPath(agentID, key)
-
-	data, err := r.files.Read(path)
-	if err == nil {
-		var entity Entity
-		if jsonErr := json.Unmarshal(data, &entity); jsonErr != nil {
-			return nil, fmt.Errorf("agentstore: parse entity %s/%s: %w", agentID, key, jsonErr)
-		}
-		entity.Agent = agentID
-		entity.Key = key
-		entity.LastUsedAt = time.Now().UTC()
-		if writeErr := r.writeEntity(path, &entity); writeErr != nil {
-			return nil, writeErr
-		}
-		return &entity, nil
-	}
-	if !errors.Is(err, storage.ErrNotFound) {
-		return nil, err
-	}
-
-	if r.maxEntities > 0 {
-		count, countErr := r.countEntities(agentID)
-		if countErr != nil {
-			return nil, countErr
-		}
-		if count >= r.maxEntities {
-			return nil, fmt.Errorf("agentstore: agent %q reached the max_entities limit of %d; refusing to create entity %q", agentID, r.maxEntities, key)
-		}
+		key = r.generateKey()
 	}
 	now := time.Now().UTC()
-	entity := &Entity{Agent: agentID, Key: key, CreatedAt: now, LastUsedAt: now}
-	if writeErr := r.writeEntity(path, entity); writeErr != nil {
-		return nil, writeErr
-	}
-	return entity, nil
+	return &Entity{Agent: agentID, Key: key, CreatedAt: now, LastUsedAt: now}, nil
 }
 
-// Get returns one entity without mutating it.
-func (r *Registry) Get(ctx context.Context, agentID, key string) (*Entity, error) {
-	if err := contextErr(ctx); err != nil {
-		return nil, err
-	}
-	key = SanitizeKey(key)
-	if key == "" {
-		return nil, fmt.Errorf("agentstore: entity key is required")
-	}
-	data, err := r.files.Read(entityPath(agentID, key))
-	if errors.Is(err, storage.ErrNotFound) {
-		return nil, fmt.Errorf("agentstore: entity %s/%s not found", agentID, key)
-	}
-	if err != nil {
-		return nil, err
-	}
-	var entity Entity
-	if jsonErr := json.Unmarshal(data, &entity); jsonErr != nil {
-		return nil, fmt.Errorf("agentstore: parse entity %s/%s: %w", agentID, key, jsonErr)
-	}
-	return &entity, nil
+// generateKey produces a fresh instance key under the registry lock. Instance
+// keys need not be durable, but must be unique within the process lifetime so
+// concurrent turns of the same agent stay distinguishable.
+func (r *Registry) generateKey() string {
+	return fmt.Sprintf("e-%d", time.Now().UnixNano())
 }
 
-// List returns every entity of one template. Entries without a readable
-// entity.json are skipped.
-func (r *Registry) List(ctx context.Context, agentID string) ([]*Entity, error) {
-	if err := contextErr(ctx); err != nil {
-		return nil, err
-	}
-	entries, err := r.files.List(templateDir(agentID))
-	if err != nil {
-		return nil, err
-	}
-	var entities []*Entity
-	for _, entry := range entries {
-		data, readErr := r.files.Read(entityPath(agentID, entry))
-		if readErr != nil {
-			continue
-		}
-		var entity Entity
-		if jsonErr := json.Unmarshal(data, &entity); jsonErr != nil {
-			continue
-		}
-		entities = append(entities, &entity)
-	}
-	return entities, nil
-}
-
-func (r *Registry) writeEntity(path string, entity *Entity) error {
-	data, err := json.MarshalIndent(entity, "", "  ")
-	if err != nil {
-		return err
-	}
-	return r.files.Write(path, data)
-}
-
-func (r *Registry) countEntities(agentID string) (int, error) {
-	entries, err := r.files.List(templateDir(agentID))
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, entry := range entries {
-		if r.files.Exists(entityPath(agentID, entry)) {
-			count++
-		}
-	}
-	return count, nil
-}
-
-// generateKey produces a fresh key under the registry lock, retrying in the
-// unlikely case of a nanosecond collision.
-func (r *Registry) generateKey(agentID string) string {
-	for attempt := 0; attempt < 16; attempt++ {
-		key := fmt.Sprintf("e-%d", time.Now().UnixNano()+int64(attempt))
-		if !r.files.Exists(entityPath(agentID, key)) {
-			return key
-		}
-	}
-	return fmt.Sprintf("e-%d-x", time.Now().UnixNano())
-}
-
-func templateDir(agentID string) string {
-	return filepath.Join(".agents", "data", "agents", agentID)
-}
-
-func entityPath(agentID, key string) string {
-	return filepath.Join(templateDir(agentID), key, "entity.json")
-}
-
-// SanitizeKey applies the D1 key rules: keep [A-Za-z0-9._-], replace anything
+// SanitizeKey applies the key rules: keep [A-Za-z0-9._-], replace anything
 // else with "_", and bound the length with a short hash suffix. Empty input
 // returns empty so the caller can generate a fresh key.
 func SanitizeKey(key string) string {

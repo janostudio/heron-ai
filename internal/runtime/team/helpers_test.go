@@ -134,10 +134,10 @@ func TestRenderState(t *testing.T) {
 			name: "goal plus lists",
 			snapshot: types.StateSnapshot{
 				Goal:          "g",
-				Confirmed:     []string{"a", "b"},
-				OpenQuestions: []string{"q"},
-				Decisions:     []string{"d1", "d2"},
-				NextSteps:     []string{"n"},
+				Confirmed:     []types.StateItem{{ID: "i-1", Text: "a"}, {ID: "i-2", Text: "b"}},
+				OpenQuestions: []types.StateItem{{ID: "i-3", Text: "q"}},
+				Decisions:     []types.StateItem{{ID: "i-4", Text: "d1"}, {ID: "i-5", Text: "d2"}},
+				NextSteps:     []types.StateItem{{ID: "i-6", Text: "n"}},
 			},
 			expected: "Goal: g\n\n" +
 				"Confirmed:\n- a\n- b\n\n" +
@@ -148,7 +148,7 @@ func TestRenderState(t *testing.T) {
 		{
 			name: "lists without goal",
 			snapshot: types.StateSnapshot{
-				NextSteps: []string{"n1"},
+				NextSteps: []types.StateItem{{ID: "i-7", Text: "n1"}},
 			},
 			expected: "Next Steps:\n- n1",
 		},

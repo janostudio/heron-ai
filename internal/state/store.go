@@ -11,6 +11,7 @@ import (
 	"github.com/adrg/frontmatter"
 	"gopkg.in/yaml.v3"
 
+	"github.com/heron-ai/heron-engine/internal/agentstore"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -33,6 +34,7 @@ type Limits struct {
 type Store struct {
 	files  storage.FileStore
 	limits Limits
+	locks  *agentstore.EntityLocks
 }
 
 func NewStore(files storage.FileStore, limits Limits) *Store {
@@ -48,7 +50,16 @@ func NewStore(files storage.FileStore, limits Limits) *Store {
 	if limits.MaxItems <= 0 {
 		limits.MaxItems = 40
 	}
-	return &Store{files: files, limits: limits}
+	return &Store{files: files, limits: limits, locks: agentstore.NewEntityLocks()}
+}
+
+// SetLocks shares an external agent-level write lock set. When nil, the Store
+// uses its own private lock set. The CRUD operations use it to guard the
+// read-modify-write cycle of one agent's state.
+func (s *Store) SetLocks(locks *agentstore.EntityLocks) {
+	if locks != nil {
+		s.locks = locks
+	}
 }
 
 // ForConfig returns a view of the Store with the limits configured by one
@@ -70,7 +81,7 @@ func (s *Store) ForConfig(config types.StateConfig) *Store {
 		limits.TeamMaxChars = config.MaxChars
 		limits.AgentMaxChars = config.MaxChars
 	}
-	return &Store{files: s.files, limits: limits}
+	return &Store{files: s.files, limits: limits, locks: s.locks}
 }
 
 func (s *Store) LoadTeam(ctx context.Context, sessionID, teamID string) (types.StateSnapshot, error) {
@@ -91,27 +102,27 @@ func (s *Store) SaveAgent(ctx context.Context, snapshot types.StateSnapshot) err
 	return s.save(ctx, s.path(snapshot.SessionID, "agents", snapshot.TeamID, snapshot.CallID, "state.md"), snapshot, s.limits.AgentMaxChars)
 }
 
-// LoadEntity reads the persistent state of one dynamic Agent entity (design
-// doc 20). A missing snapshot is not an error.
-func (s *Store) LoadEntity(ctx context.Context, agentID, key string) (types.StateSnapshot, error) {
-	return s.load(ctx, s.entityPath(agentID, key), types.StateScopeEntity, "", "", "")
+// LoadEntity reads the persistent cross-session state of one Agent (design
+// doc 26). A missing snapshot is not an error.
+func (s *Store) LoadEntity(ctx context.Context, agentID string) (types.StateSnapshot, error) {
+	return s.load(ctx, s.entityPath(agentID), types.StateScopeEntity, "", "", "")
 }
 
-// SaveEntity persists one dynamic Agent entity's state. The snapshot is
-// scoped by agent template + entity key and outlives any session.
-func (s *Store) SaveEntity(ctx context.Context, agentID, key string, snapshot types.StateSnapshot) error {
-	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(key) == "" {
-		return errors.New("entity state agent and key are required")
+// SaveEntity persists one Agent's cross-session state. The snapshot is scoped
+// by agent id and outlives any session.
+func (s *Store) SaveEntity(ctx context.Context, agentID string, snapshot types.StateSnapshot) error {
+	if strings.TrimSpace(agentID) == "" {
+		return errors.New("entity state agent is required")
 	}
 	snapshot.Scope = types.StateScopeEntity
 	snapshot.SessionID = ""
 	snapshot.TeamID = ""
 	snapshot.CallID = ""
-	return s.save(ctx, s.entityPath(agentID, key), snapshot, s.limits.EntityMaxChars)
+	return s.save(ctx, s.entityPath(agentID), snapshot, s.limits.EntityMaxChars)
 }
 
-func (s *Store) entityPath(agentID, key string) string {
-	return filepath.Join(".agents", "data", "agents", agentID, key, "state", "state.md")
+func (s *Store) entityPath(agentID string) string {
+	return filepath.Join(".agents", "data", "agents", agentID, "state", "state.md")
 }
 
 func (s *Store) path(sessionID string, parts ...string) string {
@@ -271,16 +282,16 @@ func ReduceForSize(snapshot types.StateSnapshot, maxChars int) types.StateSnapsh
 	}
 	snapshot.Goal = trim(snapshot.Goal, maxChars/5)
 	for i := range snapshot.Confirmed {
-		snapshot.Confirmed[i] = trim(snapshot.Confirmed[i], maxChars/5)
+		snapshot.Confirmed[i].Text = trim(snapshot.Confirmed[i].Text, maxChars/5)
 	}
 	for i := range snapshot.NextSteps {
-		snapshot.NextSteps[i] = trim(snapshot.NextSteps[i], maxChars/5)
+		snapshot.NextSteps[i].Text = trim(snapshot.NextSteps[i].Text, maxChars/5)
 	}
 	for i := range snapshot.Decisions {
-		snapshot.Decisions[i] = trim(snapshot.Decisions[i], maxChars/5)
+		snapshot.Decisions[i].Text = trim(snapshot.Decisions[i].Text, maxChars/5)
 	}
 	for i := range snapshot.OpenQuestions {
-		snapshot.OpenQuestions[i] = trim(snapshot.OpenQuestions[i], maxChars/5)
+		snapshot.OpenQuestions[i].Text = trim(snapshot.OpenQuestions[i].Text, maxChars/5)
 	}
 	return snapshot
 }
@@ -316,11 +327,27 @@ func encode(snapshot types.StateSnapshot) ([]byte, error) {
 		fmt.Fprintf(&body, "- %s (%s)\n", item.Path, item.Revision)
 	}
 	body.WriteString("\n# SharedRecord Refs\n\n")
-	writeList(&body, snapshot.RecordIDs)
+	writeStrings(&body, snapshot.RecordIDs)
 	return []byte(body.String()), nil
 }
 
-func writeList(builder *strings.Builder, items []string) {
+// writeList renders a StateItem todo list as markdown bullets "id: text". The
+// id is preserved so the CRUD tools can reference entries precisely.
+func writeList(builder *strings.Builder, items []types.StateItem) {
+	for _, item := range items {
+		if item.ID != "" {
+			builder.WriteString("- ")
+			builder.WriteString(item.ID)
+			builder.WriteString(": ")
+		} else {
+			builder.WriteString("- ")
+		}
+		builder.WriteString(item.Text)
+		builder.WriteByte('\n')
+	}
+}
+
+func writeStrings(builder *strings.Builder, items []string) {
 	for _, item := range items {
 		builder.WriteString("- ")
 		builder.WriteString(item)

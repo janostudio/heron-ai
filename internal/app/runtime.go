@@ -103,25 +103,34 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 	// concurrent turns across paths.
 	entityLocks := agentstore.NewEntityLocks()
 	teamRuntime.SetEntityLocks(entityLocks)
+	// One shared state.Store backs both the Spawn tool's entity state and the
+	// Team runtime's team/agent state, plus the builtin State tool (design doc
+	// 26). The store's agent-level write locks guard CRUD atomicity; the
+	// shared lock set is reused across paths.
+	stateStore := state.NewStore(files, state.Limits{})
+	stateStore.SetLocks(entityLocks)
 	// Spawn (design 20/21, batch A): the tool executes child turns through the
-	// same TurnLoop and persists dynamic entities under the workspace data dir.
-	// Agents must declare Spawn in tools.builtin to see it; everyone else is
-	// unaffected. Batch B wires the async task runner and session writer below
-	// so wait=false spawns run as durable SpawnChild tasks; batch C wires the
-	// shared entity locks for Team DAG insertions.
+	// same TurnLoop and persists cross-session agent state under the workspace
+	// data dir. Agents must declare Spawn in tools.builtin to see it; everyone
+	// else is unaffected. Batch B wires the async task runner and session
+	// writer below so wait=false spawns run as durable SpawnChild tasks;
+	// batch C wires the shared entity locks for Team DAG insertions.
 	spawnTool := agent.NewSpawnTool(
 		turnLoop,
 		definitions.Agents,
 		agentstore.NewRegistry(files),
-		state.NewStore(files, state.Limits{}),
+		stateStore,
 	)
 	spawnTool.SetEntityLocks(entityLocks)
 	toolRegistry.Register(spawnTool)
+	// State (design doc 26): the builtin tool lets an Agent CRUD its own
+	// cross-session todo state from inside the TurnLoop.
+	toolRegistry.Register(agent.NewStateTool(stateStore))
 	mediaStore := media.NewFileStore(files, media.Limits{})
 	if setter, ok := provider.(types.MediaResolverSetter); ok {
 		setter.SetMediaResolver(mediaStore)
 	}
-	teamRuntime.SetStateStore(state.NewStore(files, state.Limits{}))
+	teamRuntime.SetStateStore(stateStore)
 	skillRegistry := skill.NewSkillRegistry()
 	for _, definition := range definitions.Skills {
 		if err := skillRegistry.Register(definition); err != nil {

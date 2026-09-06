@@ -31,23 +31,16 @@ type runState struct {
 	groups map[string]string
 	// specs carries the spawn identity (agent, key, item, depth) of every
 	// synthetic call.
-	specs map[string]agentstore.SpawnedCallSpec
-	// locks serializes entity turns across the team runtime and the Spawn
-	// tool's inline children (shared agentstore.EntityLocks).
-	locks  *agentstore.EntityLocks
+	specs  map[string]agentstore.SpawnedCallSpec
 	closed bool
 }
 
-func newRunState(remaining map[string]types.Call, completed map[string]bool, locks *agentstore.EntityLocks) *runState {
-	if locks == nil {
-		locks = agentstore.NewEntityLocks()
-	}
+func newRunState(remaining map[string]types.Call, completed map[string]bool) *runState {
 	return &runState{
 		remaining: remaining,
 		completed: completed,
 		groups:    make(map[string]string),
 		specs:     make(map[string]agentstore.SpawnedCallSpec),
-		locks:     locks,
 	}
 }
 
@@ -212,11 +205,9 @@ func (s *runState) producersFromLocked(callID string) []string {
 	return result
 }
 
-// tryLockEntity serializes entity turns across the team runtime and the Spawn
-// tool's inline children through the shared agentstore.EntityLocks.
-func (s *runState) tryLockEntity(agentID, key string) (func(), bool) {
-	return s.locks.TryLock(agentID, key)
-}
+// tryLockEntity is removed: same-agent instances run concurrently and their
+// shared state is protected by the short-held agent-level CRUD lock inside
+// the state Store (design doc 26 §5).
 
 // saveEntityState applies the same deterministic update the Spawn tool uses
 // for inline children (spawn.go saveEntityState): the item becomes the goal,
@@ -229,7 +220,7 @@ func saveEntityState(
 	previousStateText string,
 	result types.CallResult,
 ) error {
-	snapshot, err := states.LoadEntity(ctx, spec.AgentID, spec.Key)
+	snapshot, err := states.LoadEntity(ctx, spec.AgentID)
 	if err != nil {
 		return err
 	}
@@ -241,10 +232,11 @@ func saveEntityState(
 		snapshot.Goal = string(itemJSON)
 	}
 	if reply := strings.TrimSpace(result.Reply); reply != "" {
+		item := types.StateItem{ID: states.NextItemID(), Text: reply}
 		if strings.TrimSpace(previousStateText) == "" {
-			snapshot.Confirmed = append(snapshot.Confirmed, reply)
+			snapshot.Confirmed = append(snapshot.Confirmed, item)
 		} else {
-			snapshot.NextSteps = append(snapshot.NextSteps, reply)
+			snapshot.NextSteps = append(snapshot.NextSteps, item)
 		}
 	}
 	for _, operation := range result.WorkspaceOps {
@@ -256,5 +248,5 @@ func saveEntityState(
 			Revision: operation.Revision,
 		})
 	}
-	return states.SaveEntity(ctx, spec.AgentID, spec.Key, snapshot)
+	return states.SaveEntity(ctx, spec.AgentID, snapshot)
 }

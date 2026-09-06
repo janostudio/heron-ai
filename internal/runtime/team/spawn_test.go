@@ -31,7 +31,7 @@ func testRunState(t *testing.T) (*runState, map[string]types.Call) {
 			ID: "verifier", Type: types.CallAgent, AgentID: "verify-agent", DependsOn: []string{"fixer"},
 		},
 	}
-	state := newRunState(remaining, map[string]bool{}, nil)
+	state := newRunState(remaining, map[string]bool{})
 	return state, remaining
 }
 
@@ -74,7 +74,7 @@ func TestRunState_InsertValidations(t *testing.T) {
 
 	// A parent without output.record has no record channel for its children.
 	remaining := map[string]types.Call{"plain": {ID: "plain", Type: types.CallAgent, AgentID: "a"}}
-	bareState := newRunState(remaining, map[string]bool{}, nil)
+	bareState := newRunState(remaining, map[string]bool{})
 	err = bareState.InsertSpawnedCall(ctx, "plain", agentstore.SpawnedCallSpec{AgentID: "child-agent", Key: "k1"})
 	require.ErrorContains(t, err, "output.record")
 
@@ -131,7 +131,7 @@ func TestRunState_ExplicitGroupRegistryIgnoresSlashStaticNames(t *testing.T) {
 		},
 		"d": {ID: "d", Type: types.CallAgent, AgentID: "agent-x", DependsOn: []string{"a"}},
 	}
-	state := newRunState(remaining, map[string]bool{}, nil)
+	state := newRunState(remaining, map[string]bool{})
 	ctx := context.Background()
 
 	// Before any spawn: completing "a" satisfies both dependents.
@@ -149,7 +149,7 @@ func TestRunState_ExplicitGroupRegistryIgnoresSlashStaticNames(t *testing.T) {
 		},
 		"d": {ID: "d", Type: types.CallAgent, AgentID: "agent-x", DependsOn: []string{"a"}},
 	}
-	state = newRunState(remaining, map[string]bool{}, nil)
+	state = newRunState(remaining, map[string]bool{})
 	require.NoError(t, state.InsertSpawnedCall(ctx, "a", agentstore.SpawnedCallSpec{AgentID: "agent-y", Key: "k1", Depth: 1}))
 	state.complete("a")
 
@@ -170,7 +170,7 @@ func TestRunState_ExplicitGroupRegistryIgnoresSlashStaticNames(t *testing.T) {
 func TestSelectRecordsWithEmptyGroupRegistryKeepsLegacySemantics(t *testing.T) {
 	// Regression: with no registered group members, record selection behaves
 	// exactly like the pre-batch-C single-producer lookup.
-	state := newRunState(map[string]types.Call{}, map[string]bool{}, nil)
+	state := newRunState(map[string]types.Call{}, map[string]bool{})
 	previous := map[string]types.CallResult{
 		"research": {Records: []types.SharedRecord{{Name: "Report", RecordID: "r1", Summary: "from call"}}},
 	}
@@ -398,7 +398,7 @@ func TestRuntime_EntityStateRoutingForSyntheticCalls(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	states := state.NewStore(files, state.Limits{})
 	// Pre-existing entity state must reach the child as entity_state.
-	require.NoError(t, states.SaveEntity(context.Background(), "child-agent", "k1", types.StateSnapshot{
+	require.NoError(t, states.SaveEntity(context.Background(), "child-agent", types.StateSnapshot{
 		Goal: "keep fixing",
 	}))
 	runner := &downstreamSpawnRunner{items: []downstreamSpawnItem{{Key: "k1", Item: "fix a.go"}}}
@@ -437,11 +437,11 @@ func TestRuntime_EntityStateRoutingForSyntheticCalls(t *testing.T) {
 
 	// ...and persisted its outcome to the entity scope (previous state text
 	// exists, so the reply lands in NextSteps), never to the session scope.
-	entityState, err := states.LoadEntity(context.Background(), "child-agent", "k1")
+	entityState, err := states.LoadEntity(context.Background(), "child-agent")
 	require.NoError(t, err)
 	assert.Equal(t, "keep fixing", entityState.Goal)
 	require.Len(t, entityState.NextSteps, 1)
-	assert.Equal(t, "child outcome k1", entityState.NextSteps[0])
+	assert.Equal(t, "child outcome k1", entityState.NextSteps[0].Text)
 
 	// No session-scoped state was created for the synthetic call id.
 	childSessionState, err := states.LoadAgent(context.Background(), "fs-1", "fix-team", "fixer/k1")
@@ -563,14 +563,14 @@ func runTwoChildTeam(t *testing.T, runtime *Runtime) (types.TeamTurnResult, erro
 	})
 }
 
-func TestRuntime_EntityLockPreLockedEntityFailsSyntheticCall(t *testing.T) {
-	// The entity is already executing (for example an inline spawned child
-	// holds the shared lock): every synthetic call of that entity fails fast
-	// through the existing team failure aggregation.
+func TestRuntime_ConcurrentSameAgentSyntheticCallsBothRun(t *testing.T) {
+	// Since design doc 26 the turn lock is removed: two synthetic calls of the
+	// same agent (shared key) run concurrently and only their shared state
+	// writes serialize. Neither call fails with "already executing".
 	locks := agentstore.NewEntityLocks()
-	unlock, ok := locks.TryLock("child-agent", "shared")
+	unlock, ok := locks.TryLock("child-agent")
 	require.True(t, ok)
-	defer unlock()
+	unlock()
 
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(call.NewAgentExecutor(&busyEntityRunner{})))
@@ -581,10 +581,9 @@ func TestRuntime_EntityLockPreLockedEntityFailsSyntheticCall(t *testing.T) {
 	runtime.SetEntityLocks(locks)
 
 	result, err := runBusyEntityTeam(t, runtime)
-	require.Error(t, err)
-	assert.Contains(t, result.Error, "already executing")
-	assert.Equal(t, types.TurnFailed, result.CallResults["fixer1/shared"].Status)
-	assert.Equal(t, types.TurnFailed, result.CallResults["fixer2/shared"].Status)
+	require.NoError(t, err)
+	assert.Equal(t, types.TurnCompleted, result.CallResults["fixer1/shared"].Status)
+	assert.Equal(t, types.TurnCompleted, result.CallResults["fixer2/shared"].Status)
 }
 
 // ---------------------------------------------------------------------------
@@ -769,13 +768,9 @@ func TestRuntime_TurnLoopSpawnDownstreamEndToEnd(t *testing.T) {
 	childPrompt := model.promptFor("fixer/k1")
 	assert.Contains(t, childPrompt, "fix a.go")
 
-	entity, err := entityRegistry.Get(context.Background(), "child-agent", "k1")
-	require.NoError(t, err)
-	assert.Equal(t, "child-agent", entity.Agent)
-
-	entityState, err := states.LoadEntity(context.Background(), "child-agent", "k1")
+	entityState, err := states.LoadEntity(context.Background(), "child-agent")
 	require.NoError(t, err)
 	assert.Equal(t, `"fix a.go"`, entityState.Goal)
 	require.Len(t, entityState.Confirmed, 1)
-	assert.Equal(t, "child outcome", entityState.Confirmed[0])
+	assert.Equal(t, "child outcome", entityState.Confirmed[0].Text)
 }

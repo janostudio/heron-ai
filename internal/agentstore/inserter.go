@@ -9,7 +9,8 @@ import "context"
 type SpawnedCallSpec struct {
 	// AgentID is the target agent template.
 	AgentID string
-	// Key is the resolved entity key (created/reused via Registry.EnsureEntity).
+	// Key is the resolved instance key (a transient instance number from
+	// Registry.EnsureEntity), used only to disambiguate concurrent turns.
 	Key string
 	// Item is the task data delivered to the child as the ## Your Item block.
 	Item any

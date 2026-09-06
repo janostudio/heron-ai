@@ -1910,6 +1910,17 @@ func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema 
 			},
 			Required: []string{"handles"},
 		},
+		"State": {
+			Name: "State", Type: "object",
+			Description: "Read and update your own todo state (confirmed / open_questions / decisions / next_steps / goal). Use action=add to append a todo, action=remove to delete by id, action=update to rewrite an entry, action=list to list all entries of a field, and action=get to read one entry.",
+			Properties: map[string]types.JSONProperty{
+				"action": {Type: "string", Enum: []string{"add", "remove", "update", "list", "get"}, Description: "The state operation to perform"},
+				"field":  {Type: "string", Enum: []string{"goal", "confirmed", "open_questions", "decisions", "next_steps", "workspace", "record_ids"}, Description: "Which state field to operate on"},
+				"text":   {Type: "string", Description: "Entry content for add/update, or the new goal for action=add with field=goal"},
+				"id":     {Type: "string", Description: "Entry id for remove/update/get (workspace path or record value where applicable)"},
+			},
+			Required: []string{"action", "field"},
+		},
 	}
 
 	toolNames := append([]string(nil), agent.Tools.Builtin...)

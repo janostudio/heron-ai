@@ -158,10 +158,6 @@ func TestSpawnTool_ItemsRunOneChildPerItem(t *testing.T) {
 	var payload []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(result.Content), &payload))
 	assert.Len(t, payload, 3)
-
-	entities, listErr := fixture.registry.List(context.Background(), "parent-agent")
-	require.NoError(t, listErr)
-	assert.Len(t, entities, 3)
 }
 
 func TestSpawnTool_ItemAndItemsAreMutuallyExclusive(t *testing.T) {
@@ -348,10 +344,6 @@ func TestSpawnTool_ExplicitTargetAgent(t *testing.T) {
 	assert.Equal(t, "child-agent", calls[0].agent.Name)
 	assert.Equal(t, types.PersonaConfig{Role: "child"}, calls[0].agent.Persona)
 	assert.Equal(t, "child-agent", calls[0].req.AgentID)
-
-	entities, listErr := fixture.registry.List(context.Background(), "child-agent")
-	require.NoError(t, listErr)
-	require.Len(t, entities, 1)
 }
 
 func TestSpawnTool_ReusesEntityByKey(t *testing.T) {
@@ -362,10 +354,11 @@ func TestSpawnTool_ReusesEntityByKey(t *testing.T) {
 	_, err = fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "b", "key": "role-a"})
 	require.NoError(t, err)
 
-	entities, listErr := fixture.registry.List(context.Background(), "parent-agent")
-	require.NoError(t, listErr)
-	require.Len(t, entities, 1)
-	assert.Equal(t, "role-a", entities[0].Key)
+	// Both runs used the same explicit instance key.
+	calls := fixture.runner.recorded()
+	require.Len(t, calls, 2)
+	assert.Contains(t, calls[0].req.CallID, "call-1/role-a")
+	assert.Contains(t, calls[1].req.CallID, "call-1/role-a")
 }
 
 func TestSpawnTool_EntityStatePersistsAcrossSpawns(t *testing.T) {
@@ -384,13 +377,14 @@ func TestSpawnTool_EntityStatePersistsAcrossSpawns(t *testing.T) {
 	require.NotNil(t, block, "entity_state block missing on reuse")
 	assert.Contains(t, block.Text, "child reply for "+calls[0].req.CallID)
 
-	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent", "role-a")
+	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
 	assert.Equal(t, `"first"`, snapshot.Goal)
-	assert.Contains(t, snapshot.Confirmed, "child reply for "+calls[0].req.CallID)
+	require.Len(t, snapshot.Confirmed, 1)
+	assert.Equal(t, "child reply for "+calls[0].req.CallID, snapshot.Confirmed[0].Text)
 }
 
-func TestSpawnTool_EntityStateIsolatedBetweenEntities(t *testing.T) {
+func TestSpawnTool_EntityStateSharedAcrossInstances(t *testing.T) {
 	fixture := newSpawnFixture(t)
 
 	_, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "a", "key": "one"})
@@ -398,10 +392,11 @@ func TestSpawnTool_EntityStateIsolatedBetweenEntities(t *testing.T) {
 	_, err = fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "b", "key": "two"})
 	require.NoError(t, err)
 
+	// State is now one workbench per agent (design doc 26): the second
+	// instance with a different key observes the first instance's state.
 	calls := fixture.runner.recorded()
-	for _, call := range calls {
-		assert.Nil(t, contextBlock(call.req.ContextBlocks, "entity_state"))
-	}
+	require.Len(t, calls, 2)
+	assert.NotNil(t, contextBlock(calls[1].req.ContextBlocks, "entity_state"))
 }
 
 func TestSpawnTool_ChildFailureReportedPerChild(t *testing.T) {
@@ -445,7 +440,7 @@ func TestSpawnTool_FailedChildSkipsStateWrite(t *testing.T) {
 	_, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "a", "key": "k"})
 	require.NoError(t, err)
 
-	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent", "k")
+	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
 	assert.Empty(t, snapshot.Confirmed)
 	assert.Empty(t, snapshot.NextSteps)
@@ -612,12 +607,7 @@ func TestTurnLoop_SpawnDeclaredExecutesInline(t *testing.T) {
 	assert.Contains(t, calls[0].req.CallID, "call-1/role-a")
 	assert.NotNil(t, contextBlock(calls[0].req.ContextBlocks, "fanout_item"))
 
-	entities, listErr := fixture.registry.List(context.Background(), "parent-agent")
-	require.NoError(t, listErr)
-	require.Len(t, entities, 1)
-	assert.Equal(t, "role-a", entities[0].Key)
-
-	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent", "role-a")
+	snapshot, loadErr := fixture.states.LoadEntity(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
 	assert.NotEmpty(t, snapshot.Confirmed)
 }
@@ -656,7 +646,4 @@ func TestTurnLoop_SpawnUndeclaredIsFiltered(t *testing.T) {
 	for _, schema := range model.exposedTools() {
 		assert.NotEqual(t, "Spawn", schema.Name)
 	}
-	entities, listErr := fixture.registry.List(context.Background(), "parent-agent")
-	require.NoError(t, listErr)
-	assert.Empty(t, entities)
 }
