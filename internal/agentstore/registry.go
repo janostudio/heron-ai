@@ -13,6 +13,7 @@ import (
 	"hash/fnv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/storage"
@@ -38,7 +39,8 @@ type Instance struct {
 // Registry produces instance keys for concurrent Agent instances. It no
 // longer reads or writes an identity file.
 type Registry struct {
-	mu sync.Mutex
+	mu  sync.Mutex
+	seq atomic.Uint64
 }
 
 // Option configures a Registry. Retained for API compatibility; the former
@@ -84,9 +86,11 @@ func (r *Registry) NextInstanceKey(ctx context.Context, agentID, key string) (*I
 
 // generateKey produces a fresh instance key under the registry lock. Instance
 // keys need not be durable, but must be unique within the process lifetime so
-// concurrent turns of the same agent stay distinguishable.
+// concurrent turns of the same agent stay distinguishable. A monotonic atomic
+// counter guarantees uniqueness, unlike time.Now().UnixNano() which can return
+// the same value on consecutive calls.
 func (r *Registry) generateKey() string {
-	return fmt.Sprintf("e-%d", time.Now().UnixNano())
+	return fmt.Sprintf("e-%d", r.seq.Add(1))
 }
 
 // SanitizeKey applies the key rules: keep [A-Za-z0-9._-], replace anything
