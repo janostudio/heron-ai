@@ -68,8 +68,10 @@ func (s *Store) withAgentLock(agentID string, fn func() error) error {
 	return fn()
 }
 
-// Add appends a todo entry to the given field, generating a fresh id.
-func (s *Store) Add(ctx context.Context, agentID string, field StateField, text string) error {
+// Add appends a todo entry to the given field, generating a fresh id. agentID
+// scopes the shared whiteboard; actor is the "agent(instance)" attribution
+// recorded as AddedBy (it may be empty for non-instance callers).
+func (s *Store) Add(ctx context.Context, agentID string, field StateField, text string, actor string) error {
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
@@ -90,7 +92,7 @@ func (s *Store) Add(ctx context.Context, agentID string, field StateField, text 
 			return err
 		}
 		target, _ := fieldItems(&snapshot, field)
-		*target = append(*target, types.StateItem{ID: newItemID(), Text: text})
+		*target = append(*target, types.StateItem{ID: newItemID(), Text: text, AddedBy: actor})
 		return s.SaveAgentState(ctx, agentID, snapshot)
 	})
 }
@@ -169,8 +171,9 @@ func (s *Store) Remove(ctx context.Context, agentID string, field StateField, id
 	})
 }
 
-// Update rewrites the text of one item identified by id.
-func (s *Store) Update(ctx context.Context, agentID string, field StateField, id, text string) error {
+// Update rewrites the text of one item identified by id and records actor as
+// HandledBy. agentID scopes the shared whiteboard; actor is the attribution.
+func (s *Store) Update(ctx context.Context, agentID string, field StateField, id, text string, actor string) error {
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
@@ -186,6 +189,7 @@ func (s *Store) Update(ctx context.Context, agentID string, field StateField, id
 		for i := range *items {
 			if (*items)[i].ID == id {
 				(*items)[i].Text = text
+				(*items)[i].HandledBy = actor
 				return s.SaveAgentState(ctx, agentID, snapshot)
 			}
 		}

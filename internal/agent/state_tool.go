@@ -68,6 +68,7 @@ func (t *StateTool) Execute(ctx context.Context, params map[string]any) (*types.
 	if agentID == "" {
 		return &types.ToolResult{Success: false, Error: "state tool is only available inside an Agent execution context"}, nil
 	}
+	actor := currentActor(ctx)
 
 	action, _ := params["action"].(string)
 	fieldStr, _ := params["field"].(string)
@@ -84,7 +85,7 @@ func (t *StateTool) Execute(ctx context.Context, params map[string]any) (*types.
 			}
 			return &types.ToolResult{Success: true, Content: "goal set"}, nil
 		}
-		if err := t.states.Add(ctx, agentID, field, text); err != nil {
+		if err := t.states.Add(ctx, agentID, field, text, actor); err != nil {
 			return &types.ToolResult{Success: false, Error: err.Error()}, nil
 		}
 		return &types.ToolResult{Success: true, Content: "added"}, nil
@@ -96,7 +97,7 @@ func (t *StateTool) Execute(ctx context.Context, params map[string]any) (*types.
 		return &types.ToolResult{Success: true, Content: "removed"}, nil
 
 	case "update":
-		if err := t.states.Update(ctx, agentID, field, id, text); err != nil {
+		if err := t.states.Update(ctx, agentID, field, id, text, actor); err != nil {
 			return &types.ToolResult{Success: false, Error: err.Error()}, nil
 		}
 		return &types.ToolResult{Success: true, Content: "updated"}, nil
@@ -139,4 +140,23 @@ func currentAgentID(ctx context.Context) string {
 		return identity.req.AgentID
 	}
 	return identity.agent.Name
+}
+
+// currentActor resolves the full "agent(instance)" identifier used to
+// attribute shared-whiteboard entries. When the context carries an instance
+// key (a spawned child), it returns "agent(instance)"; otherwise it falls
+// back to the bare agent id.
+func currentActor(ctx context.Context) string {
+	identity := spawnIdentityFromContext(ctx)
+	if identity == nil {
+		return ""
+	}
+	agentID := identity.req.AgentID
+	if agentID == "" {
+		agentID = identity.agent.Name
+	}
+	if identity.instanceKey == "" {
+		return agentID
+	}
+	return fmt.Sprintf("%s(%s)", agentID, identity.instanceKey)
 }

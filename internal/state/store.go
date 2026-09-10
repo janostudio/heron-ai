@@ -332,7 +332,9 @@ func encode(snapshot types.StateSnapshot) ([]byte, error) {
 }
 
 // writeList renders a StateItem todo list as markdown bullets "id: text". The
-// id is preserved so the CRUD tools can reference entries precisely.
+// id is preserved so the CRUD tools can reference entries precisely. AddedBy
+// and HandledBy are rendered only when non-empty so the whiteboard stays
+// traceable without cluttering ordinary entries.
 func writeList(builder *strings.Builder, items []types.StateItem) {
 	for _, item := range items {
 		if item.ID != "" {
@@ -343,6 +345,21 @@ func writeList(builder *strings.Builder, items []types.StateItem) {
 			builder.WriteString("- ")
 		}
 		builder.WriteString(item.Text)
+		if item.AddedBy != "" || item.HandledBy != "" {
+			builder.WriteString(" [")
+			if item.AddedBy != "" {
+				builder.WriteString("added_by=")
+				builder.WriteString(item.AddedBy)
+			}
+			if item.AddedBy != "" && item.HandledBy != "" {
+				builder.WriteString(", ")
+			}
+			if item.HandledBy != "" {
+				builder.WriteString("handled_by=")
+				builder.WriteString(item.HandledBy)
+			}
+			builder.WriteString("]")
+		}
 		builder.WriteByte('\n')
 	}
 }

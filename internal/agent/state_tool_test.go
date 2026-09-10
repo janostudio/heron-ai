@@ -17,6 +17,11 @@ func stateToolContext(agentID string) context.Context {
 	return withSpawnIdentity(context.Background(), types.AgentConfig{Name: agentID}, types.AgentRequest{AgentID: agentID})
 }
 
+func stateToolInstanceContext(agentID, instanceKey string) context.Context {
+	ctx := withSpawnIdentity(context.Background(), types.AgentConfig{Name: agentID}, types.AgentRequest{AgentID: agentID})
+	return withSpawnInstanceKey(ctx, instanceKey)
+}
+
 func TestStateToolCRUD(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	store := state.NewStore(files, state.Limits{})
@@ -100,4 +105,52 @@ func TestStateToolIsolatedPerAgent(t *testing.T) {
 	var items []types.StateItem
 	require.NoError(t, json.Unmarshal([]byte(res.Content), &items))
 	assert.Empty(t, items, "agent-b must not see agent-a's state")
+}
+
+func TestStateToolRecordsAttribution(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := state.NewStore(files, state.Limits{})
+	tool := NewStateTool(store)
+
+	// Two instances of the same agent share one whiteboard but attribute
+	// their writes to distinct instance identifiers.
+	_, err := tool.Execute(stateToolInstanceContext("role-actor", "e-1"), map[string]any{"action": "add", "field": "next_steps", "text": "review draft"})
+	require.NoError(t, err)
+
+	res, err := tool.Execute(stateToolInstanceContext("role-actor", "e-1"), map[string]any{"action": "list", "field": "next_steps"})
+	require.NoError(t, err)
+	var items []types.StateItem
+	require.NoError(t, json.Unmarshal([]byte(res.Content), &items))
+	require.Len(t, items, 1)
+	assert.Equal(t, "role-actor(e-1)", items[0].AddedBy)
+	assert.Empty(t, items[0].HandledBy)
+
+	// A different instance updates the same shared entry; HandledBy records
+	// the second instance while AddedBy stays with the first.
+	_, err = tool.Execute(stateToolInstanceContext("role-actor", "e-2"), map[string]any{"action": "update", "field": "next_steps", "id": items[0].ID, "text": "reviewed"})
+	require.NoError(t, err)
+
+	res, err = tool.Execute(stateToolInstanceContext("role-actor", "e-2"), map[string]any{"action": "list", "field": "next_steps"})
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal([]byte(res.Content), &items))
+	require.Len(t, items, 1)
+	assert.Equal(t, "reviewed", items[0].Text)
+	assert.Equal(t, "role-actor(e-1)", items[0].AddedBy)
+	assert.Equal(t, "role-actor(e-2)", items[0].HandledBy)
+}
+
+func TestStateToolNoInstanceKeyFallsBackToBareAgent(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := state.NewStore(files, state.Limits{})
+	tool := NewStateTool(store)
+
+	_, err := tool.Execute(stateToolContext("agent-a"), map[string]any{"action": "add", "field": "confirmed", "text": "bare"})
+	require.NoError(t, err)
+
+	res, err := tool.Execute(stateToolContext("agent-a"), map[string]any{"action": "list", "field": "confirmed"})
+	require.NoError(t, err)
+	var items []types.StateItem
+	require.NoError(t, json.Unmarshal([]byte(res.Content), &items))
+	require.Len(t, items, 1)
+	assert.Equal(t, "agent-a", items[0].AddedBy)
 }

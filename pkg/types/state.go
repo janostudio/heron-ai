@@ -32,16 +32,23 @@ type StateWorkspaceRef struct {
 }
 
 // StateItem is one todo entry in a state list. The ID is engine-generated and
-// unique within the list; Text is the entry content.
+// unique within the list; Text is the entry content. AddedBy and HandledBy
+// record the actor (as "agent(instance)" identifiers) who created and last
+// updated the entry, so a shared per-agent todo whiteboard stays traceable
+// while every concurrent instance may still read or mutate any entry.
 type StateItem struct {
-	ID   string `yaml:"id" json:"id"`
-	Text string `yaml:"text" json:"text"`
+	ID        string `yaml:"id" json:"id"`
+	Text      string `yaml:"text" json:"text"`
+	AddedBy   string `yaml:"added_by,omitempty" json:"added_by,omitempty"`
+	HandledBy string `yaml:"handled_by,omitempty" json:"handled_by,omitempty"`
 }
 
-// StateSnapshot is the fixed-format short-term work snapshot stored as
-// state.md. It is intentionally bounded and does not replace the session
-// timeline or SharedRecord evidence chain. The list fields are todo lists of
-// StateItem (id + text), not plain strings.
+// StateSnapshot is the fixed-format shared todo whiteboard stored as state.md.
+// Every instance of an agent reads and writes the same snapshot, so entries
+// carry AddedBy/HandledBy attribution. It is intentionally bounded and does
+// not replace the session timeline or SharedRecord evidence chain. The list
+// fields are todo lists of StateItem (id + text + attribution), not plain
+// strings.
 type StateSnapshot struct {
 	Scope         StateScope          `yaml:"scope" json:"scope"`
 	SessionID     string              `yaml:"session_id" json:"session_id"`

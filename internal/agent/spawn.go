@@ -34,14 +34,32 @@ const (
 // spawnIdentity carries the currently executing AgentTurn into its Tool calls
 // so Spawn can resolve its parent without widening the Tool interface.
 type spawnIdentity struct {
-	agent types.AgentConfig
-	req   types.AgentRequest
+	agent       types.AgentConfig
+	req         types.AgentRequest
+	instanceKey string
 }
 
 type spawnIdentityKey struct{}
 
 func withSpawnIdentity(ctx context.Context, agent types.AgentConfig, req types.AgentRequest) context.Context {
 	return context.WithValue(ctx, spawnIdentityKey{}, &spawnIdentity{agent: agent, req: req})
+}
+
+// withSpawnInstanceKey decorates a spawn identity with the instance key of
+// the current spawned child, so downstream tool calls (notably the state
+// tool) can attribute entries to a specific "agent(instance)" actor. It
+// copies the existing identity (never mutating the shared pointer carried in
+// the parent context) so concurrent siblings each get their own instance key.
+// If the context carries no spawn identity, a fresh one is created carrying
+// only the instance key.
+func withSpawnInstanceKey(ctx context.Context, instanceKey string) context.Context {
+	identity := spawnIdentityFromContext(ctx)
+	if identity == nil {
+		return context.WithValue(ctx, spawnIdentityKey{}, &spawnIdentity{instanceKey: instanceKey})
+	}
+	copied := *identity
+	copied.instanceKey = instanceKey
+	return context.WithValue(ctx, spawnIdentityKey{}, &copied)
 }
 
 func spawnIdentityFromContext(ctx context.Context) *spawnIdentity {
@@ -426,6 +444,10 @@ func (t *SpawnTool) runChild(
 	if err != nil {
 		return &spawnOutcome{Key: key, Error: err.Error()}
 	}
+
+	// Attribute subsequent tool calls (state CRUD) to this specific instance
+	// so the shared whiteboard can record who added/handled each entry.
+	childCtx = withSpawnInstanceKey(childCtx, instance.Key)
 
 	itemJSON, err := json.Marshal(item)
 	if err != nil {
