@@ -9,8 +9,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/heron-ai/heron-engine/internal/workspace"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
+
+// newTestWorkspace builds a local workspace rooted at dir for tool tests.
+func newTestWorkspace(t *testing.T, dir string) workspace.Workspace {
+	t.Helper()
+	ws, err := workspace.NewLocal(dir)
+	require.NoError(t, err)
+	return ws
+}
 
 // mockTool implements types.Tool for testing
 type mockTool struct {
@@ -232,7 +241,7 @@ func TestReadTool(t *testing.T) {
 	err := os.WriteFile(filename, []byte("hello world"), 0644)
 	require.NoError(t, err)
 
-	tool := NewReadTool(dir)
+	tool := NewReadTool(newTestWorkspace(t, dir))
 	result, err := tool.Execute(context.Background(), map[string]any{"file": "test.txt"})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -253,7 +262,7 @@ func TestReadTool(t *testing.T) {
 func TestReadToolSupportsLineRangeByteLimitAndRevision(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "fixture.txt"), []byte("one\ntwo\nthree\nfour\n"), 0644))
-	tool := NewReadTool(dir)
+	tool := NewReadTool(newTestWorkspace(t, dir))
 
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"file":       "fixture.txt",
@@ -280,7 +289,7 @@ func TestReadToolSupportsLineRangeByteLimitAndRevision(t *testing.T) {
 
 func TestWriteTool(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewWriteTool(dir)
+	tool := NewWriteTool(newTestWorkspace(t, dir))
 
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"file":    "subdir/output.txt",
@@ -302,10 +311,10 @@ func TestWriteTool(t *testing.T) {
 
 func TestReadWriteQueryWorkflowOnProjectFixture(t *testing.T) {
 	dir := copyDirectoryForTest(t, filepath.Join("..", "..", "examples", "simple-qa", "project"))
-	readTool := NewReadTool(dir)
-	writeTool := NewWriteTool(dir)
-	grepTool := NewGrepTool(dir)
-	globTool := NewGlobTool(dir)
+	readTool := NewReadTool(newTestWorkspace(t, dir))
+	writeTool := NewWriteTool(newTestWorkspace(t, dir))
+	grepTool := NewGrepTool(newTestWorkspace(t, dir))
+	globTool := NewGlobTool(newTestWorkspace(t, dir))
 
 	config, err := readTool.Execute(context.Background(), map[string]any{"file": "src/config.js"})
 	require.NoError(t, err)
@@ -388,9 +397,9 @@ func copyDirectoryForTest(t *testing.T, source string) string {
 func TestWriteToolEditWithRevisionAndMetadata(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("const port = 3000;\n"), 0644))
-	tool := NewWriteTool(dir)
+	tool := NewWriteTool(newTestWorkspace(t, dir))
 
-	readTool := NewReadTool(dir)
+	readTool := NewReadTool(newTestWorkspace(t, dir))
 	read, err := readTool.Execute(context.Background(), map[string]any{"file": "app.js"})
 	require.NoError(t, err)
 	require.True(t, read.Success)
@@ -417,7 +426,7 @@ func TestWriteToolEditWithRevisionAndMetadata(t *testing.T) {
 func TestWriteToolEditRejectsStaleOrAmbiguousTarget(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "app.js"), []byte("x\nx\n"), 0644))
-	tool := NewWriteTool(dir)
+	tool := NewWriteTool(newTestWorkspace(t, dir))
 
 	stale, err := tool.Execute(context.Background(), map[string]any{
 		"file":          "app.js",
@@ -430,7 +439,7 @@ func TestWriteToolEditRejectsStaleOrAmbiguousTarget(t *testing.T) {
 	require.False(t, stale.Success)
 	require.Contains(t, stale.Error, "revision")
 
-	readTool := NewReadTool(dir)
+	readTool := NewReadTool(newTestWorkspace(t, dir))
 	read, err := readTool.Execute(context.Background(), map[string]any{"file": "app.js"})
 	require.NoError(t, err)
 	revision := read.Metadata["revision"].(string)
@@ -452,7 +461,7 @@ func TestGrepTool(t *testing.T) {
 	err := os.WriteFile(filepath.Join(dir, "src", "test.go"), []byte("hello world\nfoo bar\nhello again\n"), 0644)
 	require.NoError(t, err)
 
-	tool := NewGrepTool(dir)
+	tool := NewGrepTool(newTestWorkspace(t, dir))
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"pattern": "hello",
 		"path":    ".",
@@ -478,7 +487,7 @@ func TestGlobTool(t *testing.T) {
 	err = os.WriteFile(filepath.Join(dir, "c.txt"), []byte("text"), 0644)
 	require.NoError(t, err)
 
-	tool := NewGlobTool(dir)
+	tool := NewGlobTool(newTestWorkspace(t, dir))
 	result, err := tool.Execute(context.Background(), map[string]any{"pattern": "*.go"})
 	require.NoError(t, err)
 	assert.True(t, result.Success)
@@ -494,7 +503,7 @@ func TestGlobTool(t *testing.T) {
 
 func TestBashToolSuccessFailureTimeoutAndOutputLimit(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewBashTool(dir)
+	tool := NewBashTool(newTestWorkspace(t, dir))
 
 	success, err := tool.Execute(context.Background(), map[string]any{"command": "printf 'hello'"})
 	require.NoError(t, err)
@@ -529,7 +538,7 @@ func TestBashToolSuccessFailureTimeoutAndOutputLimit(t *testing.T) {
 
 func TestBashToolUsesWorkspaceAndStdin(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewBashTool(dir)
+	tool := NewBashTool(newTestWorkspace(t, dir))
 
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"command": "pwd",
@@ -549,7 +558,7 @@ func TestBashToolUsesWorkspaceAndStdin(t *testing.T) {
 
 func TestBashToolContextCancellation(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewBashTool(dir)
+	tool := NewBashTool(newTestWorkspace(t, dir))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

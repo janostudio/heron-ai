@@ -186,7 +186,7 @@ func TestCommandExecutorType(t *testing.T) {
 
 func newWorkspaceExecutor(t *testing.T) *CommandExecutor {
 	t.Helper()
-	service, err := workspace.New(t.TempDir())
+	service, err := workspace.NewLocal(t.TempDir())
 	require.NoError(t, err)
 	return NewCommandExecutor(service)
 }

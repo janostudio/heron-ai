@@ -15,6 +15,7 @@ type AgentConfig struct {
 	Structured *StructuredOutput `yaml:"structured_output,omitempty" json:"structured_output,omitempty"`
 	HITL       *HITLConfig       `yaml:"hitl,omitempty" json:"hitl,omitempty"`
 	Hooks      []HookConfig      `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+	Workspace  *WorkspaceConfig  `yaml:"workspace,omitempty" json:"workspace,omitempty"`
 	Body       string            `yaml:"-" json:"body"`
 }
 

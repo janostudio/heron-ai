@@ -130,7 +130,7 @@ func TestWebFetchToolRedirectsAreValidatedAndLimited(t *testing.T) {
 
 func TestCodeNavToolRunsConfiguredHelper(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewCodeNavTool(dir, "echo")
+	tool := NewCodeNavTool(newTestWorkspace(t, dir), "echo")
 	// printf receives the CodeNav arguments; this verifies process wiring and
 	// workspace path validation without requiring a language server in CI.
 	result, err := tool.Execute(context.Background(), map[string]any{
@@ -144,7 +144,7 @@ func TestCodeNavToolRunsConfiguredHelper(t *testing.T) {
 
 func TestCodeNavToolRejectsOutsideWorkspaceAndHelperFailure(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewCodeNavTool(dir, "false")
+	tool := NewCodeNavTool(newTestWorkspace(t, dir), "false")
 	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "definition",
 		"file":      "../outside.go",
@@ -153,7 +153,7 @@ func TestCodeNavToolRejectsOutsideWorkspaceAndHelperFailure(t *testing.T) {
 	require.False(t, result.Success)
 	require.Contains(t, result.Error, "workspace")
 
-	tool = NewCodeNavTool(dir, "false")
+	tool = NewCodeNavTool(newTestWorkspace(t, dir), "false")
 	result, err = tool.Execute(context.Background(), map[string]any{
 		"operation": "symbols",
 	})

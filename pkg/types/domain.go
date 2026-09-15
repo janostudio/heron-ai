@@ -11,6 +11,7 @@ type Flow struct {
 	ID          string                     `yaml:"id" json:"id"`
 	EntryTeamID string                     `yaml:"entry" json:"entry"`
 	Teams       map[string]FlowTeamBinding `yaml:"teams" json:"teams"`
+	Workspace   *WorkspaceConfig           `yaml:"workspace,omitempty" json:"workspace,omitempty"`
 }
 
 // Normalize fills Flow-local Team names from their map keys. The config
@@ -40,13 +41,14 @@ type FlowTeamBinding struct {
 // Team is the V1 Team definition. A Team directly coordinates Calls. Each
 // Call targets an Agent, Shell Command, or Webhook.
 type Team struct {
-	ID      string          `yaml:"id" json:"id"`
-	Calls   map[string]Call `yaml:"calls,omitempty" json:"calls,omitempty"`
-	Inputs  InputSpec       `yaml:"inputs,omitempty" json:"inputs,omitempty"`
-	Output  OutputSpec      `yaml:"output,omitempty" json:"output,omitempty"`
-	Outputs OutputSpec      `yaml:"outputs,omitempty" json:"outputs,omitempty"`
-	State   StateConfig     `yaml:"state,omitempty" json:"state,omitempty"`
-	Goal    string          `yaml:"goal,omitempty" json:"goal,omitempty"`
+	ID        string           `yaml:"id" json:"id"`
+	Calls     map[string]Call  `yaml:"calls,omitempty" json:"calls,omitempty"`
+	Inputs    InputSpec        `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	Output    OutputSpec       `yaml:"output,omitempty" json:"output,omitempty"`
+	Outputs   OutputSpec       `yaml:"outputs,omitempty" json:"outputs,omitempty"`
+	State     StateConfig      `yaml:"state,omitempty" json:"state,omitempty"`
+	Goal      string           `yaml:"goal,omitempty" json:"goal,omitempty"`
+	Workspace *WorkspaceConfig `yaml:"workspace,omitempty" json:"workspace,omitempty"`
 }
 
 // StateConfig is the small core-facing configuration slot for the optional

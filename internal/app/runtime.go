@@ -50,19 +50,19 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 		ctx = context.Background()
 	}
 
-	workspaceService, err := workspace.New(workspaceRoot)
+	workspaceService, err := workspace.NewLocal(workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
 	toolRegistry := tool.NewToolRegistry()
-	toolRegistry.Register(tool.NewReadTool(workspaceRoot))
-	toolRegistry.Register(tool.NewWriteTool(workspaceRoot))
-	toolRegistry.Register(tool.NewBashTool(workspaceRoot))
-	toolRegistry.Register(tool.NewGrepTool(workspaceRoot))
-	toolRegistry.Register(tool.NewGlobTool(workspaceRoot))
+	toolRegistry.Register(tool.NewReadTool(workspaceService))
+	toolRegistry.Register(tool.NewWriteTool(workspaceService))
+	toolRegistry.Register(tool.NewBashTool(workspaceService))
+	toolRegistry.Register(tool.NewGrepTool(workspaceService))
+	toolRegistry.Register(tool.NewGlobTool(workspaceService))
 	toolRegistry.Register(tool.NewWebSearchTool(http.DefaultClient, tool.WebSearchConfig{}))
 	toolRegistry.Register(tool.NewWebFetchTool(http.DefaultClient, tool.WebFetchConfig{}))
-	toolRegistry.Register(tool.NewCodeNavTool(workspaceRoot, "codels"))
+	toolRegistry.Register(tool.NewCodeNavTool(workspaceService, "codels"))
 	toolRegistry.Register(tool.NewAskUserQuestionTool())
 	toolRegistry.Register(tool.NewTodoWriteTool())
 	toolRegistry.Register(tool.NewTodoReadTool())

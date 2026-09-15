@@ -13,11 +13,10 @@ import (
 
 // ReadTool reads file contents
 type ReadTool struct {
-	workspace *workspace.Service
+	workspace workspace.Workspace
 }
 
-func NewReadTool(baseDir string) *ReadTool {
-	ws, _ := workspace.New(baseDir)
+func NewReadTool(ws workspace.Workspace) *ReadTool {
 	return &ReadTool{workspace: ws}
 }
 func (t *ReadTool) Name() string        { return "Read" }
@@ -82,11 +81,10 @@ func (t *ReadTool) Execute(ctx context.Context, params map[string]any) (*types.T
 
 // WriteTool writes file contents
 type WriteTool struct {
-	workspace *workspace.Service
+	workspace workspace.Workspace
 }
 
-func NewWriteTool(baseDir string) *WriteTool {
-	ws, _ := workspace.New(baseDir)
+func NewWriteTool(ws workspace.Workspace) *WriteTool {
 	return &WriteTool{workspace: ws}
 }
 func (t *WriteTool) Name() string        { return "Write" }
@@ -147,11 +145,10 @@ func (t *WriteTool) Execute(ctx context.Context, params map[string]any) (*types.
 // intentionally synchronous in V1; long-running execution can later be
 // lifted into the Agent Task runtime without changing the Agent-facing name.
 type BashTool struct {
-	workspace *workspace.Service
+	workspace workspace.Workspace
 }
 
-func NewBashTool(baseDir string) *BashTool {
-	ws, _ := workspace.New(baseDir)
+func NewBashTool(ws workspace.Workspace) *BashTool {
 	return &BashTool{workspace: ws}
 }
 
@@ -282,11 +279,10 @@ func boolParam(params map[string]any, key string) bool {
 
 // GrepTool searches file contents
 type GrepTool struct {
-	workspace *workspace.Service
+	workspace workspace.Workspace
 }
 
-func NewGrepTool(baseDir string) *GrepTool {
-	ws, _ := workspace.New(baseDir)
+func NewGrepTool(ws workspace.Workspace) *GrepTool {
 	return &GrepTool{workspace: ws}
 }
 func (t *GrepTool) Name() string        { return "Grep" }
@@ -344,11 +340,10 @@ func (t *GrepTool) Execute(ctx context.Context, params map[string]any) (*types.T
 
 // GlobTool matches file patterns
 type GlobTool struct {
-	workspace *workspace.Service
+	workspace workspace.Workspace
 }
 
-func NewGlobTool(baseDir string) *GlobTool {
-	ws, _ := workspace.New(baseDir)
+func NewGlobTool(ws workspace.Workspace) *GlobTool {
 	return &GlobTool{workspace: ws}
 }
 func (t *GlobTool) Name() string        { return "Glob" }

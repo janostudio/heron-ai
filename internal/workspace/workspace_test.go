@@ -14,7 +14,7 @@ import (
 
 func TestServiceReadWriteAndRevision(t *testing.T) {
 	root := t.TempDir()
-	service, err := New(root)
+	service, err := NewLocal(root)
 	require.NoError(t, err)
 
 	write, err := service.Write(context.Background(), WriteRequest{
@@ -41,7 +41,7 @@ func TestServiceReadWriteAndRevision(t *testing.T) {
 }
 
 func TestServiceRejectsPathOutsideWorkspace(t *testing.T) {
-	service, err := New(t.TempDir())
+	service, err := NewLocal(t.TempDir())
 	require.NoError(t, err)
 
 	_, err = service.Read(context.Background(), ReadRequest{Path: "../outside.txt"})
@@ -55,7 +55,7 @@ func TestServiceRejectsSymlinkOutsideWorkspace(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0644))
 	require.NoError(t, os.Symlink(outside, filepath.Join(root, "linked")))
 
-	service, err := New(root)
+	service, err := NewLocal(root)
 	require.NoError(t, err)
 	_, err = service.Read(context.Background(), ReadRequest{Path: "linked/secret.txt"})
 	require.Error(t, err)
@@ -63,7 +63,7 @@ func TestServiceRejectsSymlinkOutsideWorkspace(t *testing.T) {
 }
 
 func TestServiceRunRecordsTestOperation(t *testing.T) {
-	service, err := New(t.TempDir())
+	service, err := NewLocal(t.TempDir())
 	require.NoError(t, err)
 
 	result, err := service.Run(context.Background(), CommandRequest{
@@ -76,7 +76,7 @@ func TestServiceRunRecordsTestOperation(t *testing.T) {
 }
 
 func TestServiceReadLineRangeAndTruncation(t *testing.T) {
-	service, err := New(t.TempDir())
+	service, err := NewLocal(t.TempDir())
 	require.NoError(t, err)
 	_, err = service.Write(context.Background(), WriteRequest{
 		Path:    "lines.txt",
@@ -105,7 +105,7 @@ func TestServiceReadLineRangeAndTruncation(t *testing.T) {
 }
 
 func TestServiceWriteEditModesAndErrors(t *testing.T) {
-	service, err := New(t.TempDir())
+	service, err := NewLocal(t.TempDir())
 	require.NoError(t, err)
 
 	created, err := service.Write(context.Background(), WriteRequest{
@@ -138,7 +138,7 @@ func TestServiceWriteEditModesAndErrors(t *testing.T) {
 
 func TestServiceWritePreservesExistingPermissions(t *testing.T) {
 	root := t.TempDir()
-	service, err := New(root)
+	service, err := NewLocal(root)
 	require.NoError(t, err)
 	path := filepath.Join(root, "script.sh")
 	require.NoError(t, os.WriteFile(path, []byte("echo old\n"), 0755))
@@ -154,7 +154,7 @@ func TestServiceWritePreservesExistingPermissions(t *testing.T) {
 
 func TestServiceSearchRecursiveAndSkipsExcludedAndBinary(t *testing.T) {
 	root := t.TempDir()
-	service, err := New(root)
+	service, err := NewLocal(root)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "src"), 0755))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "node_modules", "pkg"), 0755))
@@ -173,7 +173,7 @@ func TestServiceSearchRecursiveAndSkipsExcludedAndBinary(t *testing.T) {
 
 func TestServiceGlobRecursiveAndContextCancel(t *testing.T) {
 	root := t.TempDir()
-	service, err := New(root)
+	service, err := NewLocal(root)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "src"), 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "src", "a.go"), []byte("x"), 0644))
@@ -190,7 +190,7 @@ func TestServiceGlobRecursiveAndContextCancel(t *testing.T) {
 
 func TestServiceSearchRegexCaseAndLimits(t *testing.T) {
 	root := t.TempDir()
-	service, err := New(root)
+	service, err := NewLocal(root)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("Needle one\nneedle two\nother\n"), 0644))
 

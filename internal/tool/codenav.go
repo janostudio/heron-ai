@@ -18,12 +18,11 @@ import (
 // configured, while CodeNav gives typed definition/reference/diagnostic
 // lookup to agents working in a language-aware workspace.
 type CodeNavTool struct {
-	workspace *workspace.Service
+	workspace workspace.Workspace
 	command   string
 }
 
-func NewCodeNavTool(baseDir, command string) *CodeNavTool {
-	ws, _ := workspace.New(baseDir)
+func NewCodeNavTool(ws workspace.Workspace, command string) *CodeNavTool {
 	if strings.TrimSpace(command) == "" {
 		command = "codels"
 	}
@@ -31,8 +30,8 @@ func NewCodeNavTool(baseDir, command string) *CodeNavTool {
 }
 
 // NewCodeNavToolWithWorkspace uses the default codels helper command.
-func NewCodeNavToolWithWorkspace(baseDir string) *CodeNavTool {
-	return NewCodeNavTool(baseDir, "")
+func NewCodeNavToolWithWorkspace(ws workspace.Workspace) *CodeNavTool {
+	return NewCodeNavTool(ws, "")
 }
 
 func (t *CodeNavTool) Name() string { return "CodeNav" }

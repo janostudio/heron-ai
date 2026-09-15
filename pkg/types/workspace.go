@@ -20,3 +20,20 @@ type WorkspaceOperation struct {
 	StartedAt    time.Time `json:"started_at"`
 	FinishedAt   time.Time `json:"finished_at"`
 }
+
+// WorkspaceConfig declares the execution backend for a Flow/Team/Agent. It is
+// resolved by three-level inheritance (agent -> team -> flow -> default local).
+type WorkspaceConfig struct {
+	Type string     `yaml:"type" json:"type"` // local | ssh | docker
+	SSH  *SSHConfig `yaml:"ssh,omitempty" json:"ssh,omitempty"`
+}
+
+// SSHConfig holds connection parameters for a remote SSH workspace.
+type SSHConfig struct {
+	Host     string `yaml:"host" json:"host"`
+	Port     int    `yaml:"port" json:"port"`
+	User     string `yaml:"user" json:"user"`
+	KeyPath  string `yaml:"key_path,omitempty" json:"key_path,omitempty"`
+	Password string `yaml:"password,omitempty" json:"password,omitempty"`
+	Root     string `yaml:"root,omitempty" json:"root,omitempty"` // 缺省 /root/workspace
+}

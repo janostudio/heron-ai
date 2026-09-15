@@ -37,11 +37,15 @@ const (
 	DefaultGlobMaxResults   = 10_000
 )
 
-type Service struct {
+// localWorkspace is the concrete local-filesystem backend. It implements the
+// Workspace interface. The private resolve / ensureResolvedWithinWorkspace
+// helpers stay on this type (not on the interface) since only the local
+// backend needs them.
+type localWorkspace struct {
 	root string
 }
 
-func New(root string) (*Service, error) {
+func NewLocal(root string) (Workspace, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("workspace root is required")
 	}
@@ -56,16 +60,16 @@ func New(root string) (*Service, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace root is not a directory")
 	}
-	return &Service{root: filepath.Clean(absolute)}, nil
+	return &localWorkspace{root: filepath.Clean(absolute)}, nil
 }
 
-func (s *Service) Root() string {
+func (s *localWorkspace) Root() string {
 	return s.root
 }
 
 // ResolvePathForTool validates and returns the workspace-relative path for
 // optional Tools that need to pass a path to an external helper.
-func (s *Service) ResolvePathForTool(path string) (string, string, error) {
+func (s *localWorkspace) ResolvePathForTool(path string) (string, string, error) {
 	return s.resolve(path)
 }
 
@@ -94,7 +98,7 @@ type ReadResult struct {
 	Operation  types.WorkspaceOperation
 }
 
-func (s *Service) Read(ctx context.Context, req ReadRequest) (ReadResult, error) {
+func (s *localWorkspace) Read(ctx context.Context, req ReadRequest) (ReadResult, error) {
 	start := time.Now().UTC()
 	fullPath, relative, err := s.resolve(req.Path)
 	if err != nil {
@@ -163,7 +167,7 @@ type WriteResult struct {
 	Operation    types.WorkspaceOperation
 }
 
-func (s *Service) Write(ctx context.Context, req WriteRequest) (WriteResult, error) {
+func (s *localWorkspace) Write(ctx context.Context, req WriteRequest) (WriteResult, error) {
 	start := time.Now().UTC()
 	fullPath, relative, err := s.resolve(req.Path)
 	if err != nil {
@@ -278,7 +282,7 @@ type CommandResult struct {
 	Operation types.WorkspaceOperation
 }
 
-func (s *Service) Run(ctx context.Context, req CommandRequest) (CommandResult, error) {
+func (s *localWorkspace) Run(ctx context.Context, req CommandRequest) (CommandResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -347,7 +351,7 @@ func (s *Service) Run(ctx context.Context, req CommandRequest) (CommandResult, e
 	return result, err
 }
 
-func (s *Service) Glob(pattern string) ([]string, error) {
+func (s *localWorkspace) Glob(pattern string) ([]string, error) {
 	return s.GlobWithOptions(context.Background(), GlobRequest{Pattern: pattern})
 }
 
@@ -358,7 +362,7 @@ type GlobRequest struct {
 	IncludeDirs bool
 }
 
-func (s *Service) GlobWithOptions(ctx context.Context, req GlobRequest) ([]string, error) {
+func (s *localWorkspace) GlobWithOptions(ctx context.Context, req GlobRequest) ([]string, error) {
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
@@ -438,7 +442,7 @@ type SearchResult struct {
 	Operation types.WorkspaceOperation
 }
 
-func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResult, error) {
+func (s *localWorkspace) Search(ctx context.Context, req SearchRequest) (SearchResult, error) {
 	if strings.TrimSpace(req.Pattern) == "" {
 		return SearchResult{}, errors.New("search pattern is required")
 	}
@@ -568,7 +572,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (SearchResult, 
 	return result, nil
 }
 
-func (s *Service) resolve(path string) (string, string, error) {
+func (s *localWorkspace) resolve(path string) (string, string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", "", errors.New("workspace path is required")
 	}
@@ -591,7 +595,7 @@ func (s *Service) resolve(path string) (string, string, error) {
 	return clean, filepath.ToSlash(relative), nil
 }
 
-func (s *Service) ensureResolvedWithinWorkspace(path string) error {
+func (s *localWorkspace) ensureResolvedWithinWorkspace(path string) error {
 	root, err := filepath.EvalSymlinks(s.root)
 	if err != nil {
 		return err

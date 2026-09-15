@@ -11,11 +11,11 @@ import (
 )
 
 type CommandExecutor struct {
-	workspace *workspace.Service
+	workspace workspace.Workspace
 }
 
-func NewCommandExecutor(workspaces ...*workspace.Service) *CommandExecutor {
-	var service *workspace.Service
+func NewCommandExecutor(workspaces ...workspace.Workspace) *CommandExecutor {
+	var service workspace.Workspace
 	if len(workspaces) > 0 {
 		service = workspaces[0]
 	}
