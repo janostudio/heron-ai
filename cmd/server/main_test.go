@@ -229,3 +229,104 @@ func withChdir(t *testing.T, dir string) {
 		require.NoError(t, os.Chdir(old))
 	})
 }
+
+// setupMinimalProject creates a temp dir with a minimal flow/team/agent config
+// plus models.json, so buildProvider can run without a real project.
+func setupMinimalProject(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents", "flows"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents", "teams"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents", "agents"), 0o755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "flows", "default.yml"), []byte(`
+id: test-flow
+entry: default
+teams:
+  default:
+    team: default-team
+    coordinator: true
+    inputs:
+      user_message: true
+`), 0o644))
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "teams", "default.yml"), []byte(`
+id: default-team
+calls:
+  assistant:
+    type: agent
+    agent: default-assistant
+    output:
+      record: Reply
+`), 0o644))
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "agents", "default-assistant.md"), []byte(`---
+name: default-assistant
+persona:
+  role: assistant
+  goal: answer
+model:
+  provider: openai
+  model: gpt-4o-mini
+---
+You answer.
+`), 0o644))
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "models.json"), []byte(`{
+  "model": "gpt-4o",
+  "models": [
+    {"name": "gpt-4o", "provider": "openai", "api_key": "sk-default", "base_url": "https://api.openai.com/v1"},
+    {"name": "claude-sonnet", "provider": "anthropic", "api_key": "sk-claude", "base_url": "https://api.anthropic.com"}
+  ]
+}`), 0o644))
+
+	return root
+}
+
+// TestBuildProviderModelOverride verifies --model override wins over the
+// models.json "model" field.
+func TestBuildProviderModelOverride(t *testing.T) {
+	root := setupMinimalProject(t)
+	withChdir(t, root)
+
+	_, provider, err := buildProvider(context.Background(), ".agents/flows/default.yml", "claude-sonnet")
+	require.NoError(t, err)
+	require.NotNil(t, provider)
+	require.Equal(t, "claude-sonnet", provider.DefaultModel())
+}
+
+// TestBuildProviderNoModelOverrideUsesConfig verifies that without --model the
+// models.json "model" field is used.
+func TestBuildProviderNoModelOverrideUsesConfig(t *testing.T) {
+	root := setupMinimalProject(t)
+	withChdir(t, root)
+
+	_, provider, err := buildProvider(context.Background(), ".agents/flows/default.yml", "")
+	require.NoError(t, err)
+	require.NotNil(t, provider)
+	require.Equal(t, "gpt-4o", provider.DefaultModel())
+}
+
+func TestApplyMaxRounds(t *testing.T) {
+	t.Run("positive overrides", func(t *testing.T) {
+		limits := types.RuntimeLimits{MaxAgentRounds: 200}
+		applyMaxRounds(&limits, 5)
+		require.Equal(t, 5, limits.MaxAgentRounds)
+	})
+
+	t.Run("zero keeps config", func(t *testing.T) {
+		limits := types.RuntimeLimits{MaxAgentRounds: 200}
+		applyMaxRounds(&limits, 0)
+		require.Equal(t, 200, limits.MaxAgentRounds)
+	})
+
+	t.Run("negative keeps config", func(t *testing.T) {
+		limits := types.RuntimeLimits{MaxAgentRounds: 200}
+		applyMaxRounds(&limits, -1)
+		require.Equal(t, 200, limits.MaxAgentRounds)
+	})
+
+	t.Run("nil limits is noop", func(t *testing.T) {
+		applyMaxRounds(nil, 5)
+	})
+}

@@ -739,14 +739,20 @@ func buildCurrentRuntime(ctx context.Context, flowPath string, o cliOverrides) (
 	if err != nil {
 		return nil, "", err
 	}
-	if o.maxRounds > 0 {
-		definitions.Limits.MaxAgentRounds = o.maxRounds
-	}
+	applyMaxRounds(&definitions.Limits, o.maxRounds)
 	bundle, err := app.BuildRuntime(ctx, definitions, provider, ".", o.logLevel)
 	if err != nil {
 		return nil, "", err
 	}
 	return bundle, provider.DefaultModel(), nil
+}
+
+// applyMaxRounds overrides MaxAgentRounds when maxRounds is positive.
+func applyMaxRounds(limits *types.RuntimeLimits, maxRounds int) {
+	if limits == nil || maxRounds <= 0 {
+		return
+	}
+	limits.MaxAgentRounds = maxRounds
 }
 
 // buildProvider loads flow definitions and constructs the model provider
