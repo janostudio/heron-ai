@@ -10,4 +10,5 @@ type Definitions struct {
 	Rules     map[string]RuleItem
 	Limits    RuntimeLimits
 	Knowledge KnowledgeConfig
+	Workspace *WorkspaceConfig
 }

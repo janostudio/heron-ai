@@ -50,7 +50,16 @@ func BuildRuntime(ctx context.Context, definitions *types.Definitions, provider 
 		ctx = context.Background()
 	}
 
-	workspaceService, err := workspace.NewLocal(workspaceRoot)
+	// The workspace tool backend follows the resolved runtime workspace config
+	// (agent > team > flow, default local). Engine state (storage/logging)
+	// below stays on the local workspaceRoot regardless.
+	var workspaceService workspace.Workspace
+	var err error
+	if definitions.Workspace != nil && definitions.Workspace.Type != "" && definitions.Workspace.Type != "local" {
+		workspaceService, err = workspace.New(*definitions.Workspace, workspaceRoot)
+	} else {
+		workspaceService, err = workspace.NewLocal(workspaceRoot)
+	}
 	if err != nil {
 		return nil, err
 	}

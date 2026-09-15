@@ -417,3 +417,63 @@ func TestLoadLoggingSettings_MissingFileReturnsZero(t *testing.T) {
 	require.Equal(t, "", cfg.Dir)
 	require.Equal(t, 0, cfg.RetentionDays)
 }
+
+func TestResolveWorkspace(t *testing.T) {
+	ssh := func(tag string) *types.WorkspaceConfig {
+		return &types.WorkspaceConfig{Type: "ssh", SSH: &types.SSHConfig{Host: tag}}
+	}
+	agent := func(ws *types.WorkspaceConfig) types.AgentConfig {
+		return types.AgentConfig{Name: "a", Workspace: ws}
+	}
+	team := func(ws *types.WorkspaceConfig) types.Team {
+		return types.Team{ID: "t", Workspace: ws}
+	}
+
+	t.Run("agent wins over team and flow", func(t *testing.T) {
+		got := resolveWorkspace(
+			types.Flow{Workspace: ssh("flow")},
+			map[string]types.Team{"t": team(ssh("team"))},
+			map[string]types.AgentConfig{"a": agent(ssh("agent"))},
+		)
+		require.NotNil(t, got)
+		require.Equal(t, "agent", got.SSH.Host)
+	})
+
+	t.Run("team wins over flow", func(t *testing.T) {
+		got := resolveWorkspace(
+			types.Flow{Workspace: ssh("flow")},
+			map[string]types.Team{"t": team(ssh("team"))},
+			map[string]types.AgentConfig{"a": agent(nil)},
+		)
+		require.NotNil(t, got)
+		require.Equal(t, "team", got.SSH.Host)
+	})
+
+	t.Run("flow used when lower levels empty", func(t *testing.T) {
+		got := resolveWorkspace(
+			types.Flow{Workspace: ssh("flow")},
+			map[string]types.Team{"t": team(nil)},
+			map[string]types.AgentConfig{"a": agent(nil)},
+		)
+		require.NotNil(t, got)
+		require.Equal(t, "flow", got.SSH.Host)
+	})
+
+	t.Run("nil when nothing configured", func(t *testing.T) {
+		got := resolveWorkspace(
+			types.Flow{},
+			map[string]types.Team{"t": team(nil)},
+			map[string]types.AgentConfig{"a": agent(nil)},
+		)
+		require.Nil(t, got)
+	})
+
+	t.Run("empty type treated as unset", func(t *testing.T) {
+		got := resolveWorkspace(
+			types.Flow{},
+			map[string]types.Team{"t": team(&types.WorkspaceConfig{})},
+			map[string]types.AgentConfig{"a": agent(nil)},
+		)
+		require.Nil(t, got)
+	})
+}

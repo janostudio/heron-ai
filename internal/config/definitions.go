@@ -91,7 +91,32 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 		Rules:     rules,
 		Limits:    l.LoadRuntimeLimits(),
 		Knowledge: l.LoadKnowledgeSettings(),
+		Workspace: resolveWorkspace(flow, teams, agents),
 	}, nil
+}
+
+// resolveWorkspace resolves the runtime's single execution backend from
+// three-level inheritance: agent > team > flow, falling back to local (nil)
+// when nothing is configured.
+func resolveWorkspace(flow types.Flow, teams map[string]types.Team, agents map[string]types.AgentConfig) *types.WorkspaceConfig {
+	// 1. First non-empty agent-level workspace.
+	for _, agent := range agents {
+		if agent.Workspace != nil && agent.Workspace.Type != "" {
+			return agent.Workspace
+		}
+	}
+	// 2. First non-empty team-level workspace.
+	for _, team := range teams {
+		if team.Workspace != nil && team.Workspace.Type != "" {
+			return team.Workspace
+		}
+	}
+	// 3. Flow-level workspace.
+	if flow.Workspace != nil && flow.Workspace.Type != "" {
+		return flow.Workspace
+	}
+	// 4. Default local.
+	return nil
 }
 
 func (l *ConfigLoader) configRootForFlow(flowPath string) string {
