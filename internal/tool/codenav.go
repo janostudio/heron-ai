@@ -59,6 +59,9 @@ func (t *CodeNavTool) Execute(ctx context.Context, params map[string]any) (*type
 	if t.workspace == nil {
 		return &types.ToolResult{Success: false, Error: "workspace is not configured"}, nil
 	}
+	if t.workspace.IsRemote() {
+		return &types.ToolResult{Success: false, Error: "CodeNav is not supported on remote workspaces; use Grep/Glob instead"}, nil
+	}
 	operation := stringParam(params, "operation")
 	if operation == "" {
 		return &types.ToolResult{Success: false, Error: "operation parameter is required"}, nil

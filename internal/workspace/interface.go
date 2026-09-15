@@ -21,18 +21,23 @@ type Workspace interface {
 	Glob(pattern string) ([]string, error)
 	GlobWithOptions(ctx context.Context, req GlobRequest) ([]string, error)
 	Search(ctx context.Context, req SearchRequest) (SearchResult, error)
+	// IsRemote reports whether this backend executes on a remote host (e.g.
+	// SSH). Tools that rely on a local index/helper (CodeNav/codels) can use
+	// this to degrade gracefully.
+	IsRemote() bool
 }
 
 // New constructs a Workspace from a configuration. It is the unified entry
-// point for building the execution backend. This iteration implements only the
-// local branch; the ssh branch returns a "not implemented" error and is wired
-// up in the next step.
+// point for building the execution backend.
 func New(cfg types.WorkspaceConfig, localRoot string) (Workspace, error) {
 	switch cfg.Type {
 	case "local", "":
 		return NewLocal(localRoot)
 	case "ssh":
-		return nil, fmt.Errorf("workspace type %q is not implemented yet", cfg.Type)
+		if cfg.SSH == nil {
+			return nil, fmt.Errorf("workspace type %q requires an ssh config", cfg.Type)
+		}
+		return newSSHWorkspace(*cfg.SSH)
 	default:
 		return nil, fmt.Errorf("unsupported workspace type %q", cfg.Type)
 	}

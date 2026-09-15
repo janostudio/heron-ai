@@ -67,6 +67,8 @@ func (s *localWorkspace) Root() string {
 	return s.root
 }
 
+func (s *localWorkspace) IsRemote() bool { return false }
+
 // ResolvePathForTool validates and returns the workspace-relative path for
 // optional Tools that need to pass a path to an external helper.
 func (s *localWorkspace) ResolvePathForTool(path string) (string, string, error) {
