@@ -36,4 +36,6 @@ type SSHConfig struct {
 	KeyPath  string `yaml:"key_path,omitempty" json:"key_path,omitempty"`
 	Password string `yaml:"password,omitempty" json:"password,omitempty"`
 	Root     string `yaml:"root,omitempty" json:"root,omitempty"` // 缺省 /root/workspace
+	// Insecure 显式跳过 host key 校验，仅内网/测试环境。默认 false 会走 known_hosts 校验。
+	Insecure bool `yaml:"insecure,omitempty" json:"insecure,omitempty"`
 }

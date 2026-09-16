@@ -12,11 +12,13 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -29,8 +31,9 @@ const defaultRemoteRoot = "/root/workspace"
 // WorkspaceOperation audit fact (path + revision) so the session.jsonl audit
 // chain is not broken by remoteness.
 type sshWorkspace struct {
-	root   string
-	client *ssh.Client
+	root     string
+	client   *ssh.Client
+	sftpPool sync.Pool
 }
 
 // newSSHWorkspace establishes an SSH connection (with an optional SFTP
@@ -60,10 +63,15 @@ func newSSHWorkspace(cfg types.SSHConfig) (Workspace, error) {
 		return nil, err
 	}
 
+	hostKeyCallback, err := sshHostKeyCallback(cfg.Insecure)
+	if err != nil {
+		return nil, err
+	}
+
 	clientConfig := &ssh.ClientConfig{
 		User:            user,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // no known_hosts management in this iteration
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         15 * time.Second,
 	}
 	addr := fmt.Sprintf("%s:%d", cfg.Host, port)
@@ -132,9 +140,52 @@ func (s *sshWorkspace) resolve(p string) (string, string, error) {
 	return clean, relative, nil
 }
 
-// sftpSession opens a fresh SFTP client session. Callers must close it.
-func (s *sshWorkspace) sftpSession() (*sftp.Client, error) {
+// sshHostKeyCallback builds the host key verification callback. When insecure
+// is true it skips verification entirely (the old behavior, suitable only for
+// intranet/test environments). Otherwise it verifies against ~/.ssh/known_hosts
+// via the knownhosts package; a missing or unparseable file yields an explicit
+// error prompting the user to either configure known_hosts or set insecure: true.
+func sshHostKeyCallback(insecure bool) (ssh.HostKeyCallback, error) {
+	if insecure {
+		return ssh.InsecureIgnoreHostKey(), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home dir for known_hosts: %w", err)
+	}
+	knownHostsPath := path.Join(home, ".ssh", "known_hosts")
+	if _, err := os.Stat(knownHostsPath); err != nil {
+		return nil, fmt.Errorf(
+			"ssh host key verification: %w; configure %s or set insecure: true to skip verification",
+			err, knownHostsPath)
+	}
+	cb, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"ssh host key verification: parse %s: %w; fix the file or set insecure: true to skip verification",
+			knownHostsPath, err)
+	}
+	return cb, nil
+}
+
+// acquireSFTP returns an SFTP client, either a pooled idle one or a newly
+// opened one. The returned client must be returned via releaseSFTP (or closed
+// directly if the operation errored).
+func (s *sshWorkspace) acquireSFTP() (*sftp.Client, error) {
+	if c, ok := s.sftpPool.Get().(*sftp.Client); ok {
+		return c, nil
+	}
 	return sftp.NewClient(s.client)
+}
+
+// releaseSFTP returns an idle SFTP client to the pool for reuse. It must only
+// be called with a healthy client (the operation completed without error); a
+// client in an errored state should be closed directly instead.
+func (s *sshWorkspace) releaseSFTP(c *sftp.Client) {
+	if c == nil {
+		return
+	}
+	s.sftpPool.Put(c)
 }
 
 func (s *sshWorkspace) Read(ctx context.Context, req ReadRequest) (ReadResult, error) {
@@ -146,11 +197,11 @@ func (s *sshWorkspace) Read(ctx context.Context, req ReadRequest) (ReadResult, e
 	if err != nil {
 		return ReadResult{}, err
 	}
-	client, err := s.sftpSession()
+	client, err := s.acquireSFTP()
 	if err != nil {
 		return ReadResult{}, fmt.Errorf("open sftp session: %w", err)
 	}
-	defer client.Close()
+	defer s.releaseSFTP(client)
 	data, err := sftpReadAll(client, abs)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -211,11 +262,11 @@ func (s *sshWorkspace) Write(ctx context.Context, req WriteRequest) (WriteResult
 		return WriteResult{}, fmt.Errorf("unsupported write mode %q", mode)
 	}
 
-	client, err := s.sftpSession()
+	client, err := s.acquireSFTP()
 	if err != nil {
 		return WriteResult{}, fmt.Errorf("open sftp session: %w", err)
 	}
-	defer client.Close()
+	defer s.releaseSFTP(client)
 
 	current, readErr := sftpReadAll(client, abs)
 	exists := readErr == nil
@@ -400,11 +451,11 @@ func (s *sshWorkspace) GlobWithOptions(ctx context.Context, req GlobRequest) ([]
 	if err != nil {
 		return nil, err
 	}
-	client, err := s.sftpSession()
+	client, err := s.acquireSFTP()
 	if err != nil {
 		return nil, fmt.Errorf("open sftp session: %w", err)
 	}
-	defer client.Close()
+	defer s.releaseSFTP(client)
 
 	maxResults := req.MaxResults
 	if maxResults <= 0 {

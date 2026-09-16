@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -116,6 +117,63 @@ func TestShellQuote(t *testing.T) {
 	for _, tc := range tests {
 		require.Equal(t, tc.want, shellQuote(tc.in))
 	}
+}
+
+func TestSSHHostKeyCallback(t *testing.T) {
+	t.Run("insecure", func(t *testing.T) {
+		cb, err := sshHostKeyCallback(true)
+		require.NoError(t, err)
+		require.NotNil(t, cb)
+	})
+
+	t.Run("default requires known_hosts", func(t *testing.T) {
+		// Redirect HOME to a temp dir with no known_hosts to exercise the
+		// missing-file error path deterministically.
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		cb, err := sshHostKeyCallback(false)
+		require.Error(t, err)
+		require.Nil(t, cb)
+		require.Contains(t, err.Error(), "known_hosts")
+		require.Contains(t, err.Error(), "insecure: true")
+	})
+
+	t.Run("unparseable known_hosts errors", func(t *testing.T) {
+		home := t.TempDir()
+		sshDir := filepath.Join(home, ".ssh")
+		require.NoError(t, os.MkdirAll(sshDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(sshDir, "known_hosts"), []byte("not a valid known_hosts line"), 0o600))
+		t.Setenv("HOME", home)
+
+		cb, err := sshHostKeyCallback(false)
+		require.Error(t, err)
+		require.Nil(t, cb)
+		require.Contains(t, err.Error(), "known_hosts")
+	})
+
+	t.Run("valid known_hosts returns callback", func(t *testing.T) {
+		home := t.TempDir()
+		sshDir := filepath.Join(home, ".ssh")
+		require.NoError(t, os.MkdirAll(sshDir, 0o755))
+		// A well-formed known_hosts entry: hostname + key type + base64 key.
+		require.NoError(t, os.WriteFile(filepath.Join(sshDir, "known_hosts"),
+			[]byte("example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGMPotq4nrcEOrM6Z9ZgQ9YCpn6iNfsS8yZepOHOq4eI test\n"), 0o600))
+		t.Setenv("HOME", home)
+
+		cb, err := sshHostKeyCallback(false)
+		require.NoError(t, err)
+		require.NotNil(t, cb)
+	})
+}
+
+func TestSFTPPoolReleaseNil(t *testing.T) {
+	// releaseSFTP with a nil client must not panic and must not poison the pool.
+	s := &sshWorkspace{}
+	s.releaseSFTP(nil)
+
+	// A nil Get should return nil (nothing pooled).
+	got := s.sftpPool.Get()
+	require.Nil(t, got)
 }
 
 func TestExpandHome(t *testing.T) {
