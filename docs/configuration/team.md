@@ -82,6 +82,7 @@ command:
 | `calls` | object | Team 内的 Agent、Command、Webhook 配置 |
 | `output` | object | Team 对外发布的 SharedRecord |
 | `state` | object | 可选 Team State 配置 |
+| `workspace` | object | 执行后端（local / 远程 SSH），见 [workspace](./workspace.md) |
 
 ### Call
 

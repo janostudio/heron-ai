@@ -19,8 +19,14 @@ heron --serve --port 8080
 # Resume a waiting FlowSession
 heron --prompt "Continue..." --session <flow_session_id> --flow .agents/flows/default.yml
 
-# Summarize a session's SharedRecords into proposed Knowledge
-heron summary <flow_session_id> --flow .agents/flows/default.yml
+# Knowledge: learn one session (incremental)
+heron knowledge <flow_session_id> --flow .agents/flows/default.yml
+
+# Knowledge: learn all unlearned sessions (incremental)
+heron knowledge --flow .agents/flows/default.yml
+
+# Knowledge: archive stale knowledge (default 15-day window)
+heron knowledge gc --flow .agents/flows/default.yml
 
 # Version
 heron --version
@@ -124,6 +130,27 @@ Rules:
   reused as a permanent chat thread ID;
 - `session.jsonl` and `evidence.jsonl` remain internal storage formats and
   are not sent directly over stdout.
+
+## Knowledge Commands
+
+Knowledge 是"跨会话固化知识"（区别于 state 的"待办"）。生产 = 从 session 事件提炼，消费 = agent 检索注入。详见 `docs/generic-engine/24-knowledge-trigger-design.md`。
+
+```bash
+# 学一个会话（增量：只学上次之后的新事件）
+heron knowledge <flow_session_id> --flow .agents/flows/default.yml
+
+# 学所有未学过的会话（增量，逐个处理）
+heron knowledge --flow .agents/flows/default.yml
+
+# 归档过期知识（默认 15 天窗口：过期 且 0 命中的知识降级 archived）
+heron knowledge gc [--window 15] --flow .agents/flows/default.yml
+```
+
+语义：
+
+- **学习**：从 session 事件流提炼 SharedRecord → LLM 总结成知识条目 → 按事件来源层（flow/team/agent）落到 `.agents/knowledge/<层>/<id>.md`。
+- **增量**：记录每个 session 学到哪个 seq（`.agents/knowledge/learn-progress.jsonl`），续聊后只学新增部分。
+- **gc**：归档不是删除。知识降级为 `archived`，文件保留；命中数据（`.agents/knowledge/stats.jsonl`）保留，供后续分析。
 
 ## Runtime Data
 

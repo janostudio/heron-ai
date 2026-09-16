@@ -174,7 +174,7 @@ The content above belongs in:
 | `mcp` | array | MCP server tool names |
 
 Built-in tools: `Read`, `Write`, `Grep`, `Glob`, `Bash`, `WebSearch`,
-`WebFetch`, `CodeNav`, `AskUserQuestion`, `TodoWrite`, `TodoRead`
+`WebFetch`, `CodeNav`, `AskUserQuestion`, `TodoWrite`, `TodoRead`, `State`
 
 ### loop
 
@@ -256,6 +256,27 @@ stricter.
 ### handoffs
 
 List of agent names this agent can delegate tasks to.
+
+## State Tool
+
+`State` 是 agent 的"跨会话待办白板"（区别于 knowledge 的固化知识）。agent 在 TurnLoop 里增删改查自己的待办，做完一件事就划掉。同一 agent 的多个并发实例共享一份 state。
+
+在 `tools.builtin` 声明 `State` 后，agent 可调用：
+
+```text
+State(action="add",    field=<field>, text=<内容>)        → 追加条目（id 自动生成）
+State(action="remove", field=<field>, id=<条目id>)         → 删除条目
+State(action="update", field=<field>, id=<条目id>, text=)  → 更新条目内容
+State(action="list",   field=<field>)                     → 列出某字段全部条目
+State(action="get",    field=<field>, id=<条目id>)         → 读单条目
+```
+
+- `field` 取值：`goal` / `confirmed` / `open_questions` / `decisions` / `next_steps` / `workspace` / `record_ids`。
+- agent 只能操作**自己的** state，无法越权访问其他 agent。
+- 每条目记录 `added_by`（谁加的）和 `handled_by`（谁处理的），格式 `agent名(实例号)`，如 `role-actor(e-1)`——共享白板可追溯，但所有实例都能处理任意条目。
+- 跨会话持久，落盘 `agents/<agentID>/state/state.md`。
+
+详见 `docs/generic-engine/26-state-redesign.md`。
 
 ## Private Knowledge
 

@@ -41,6 +41,7 @@ teams:
 | `id` | string | Flow identifier |
 | `entry` | string | Flow-local name of the entry Team |
 | `teams` | map | Team bindings, keyed by Flow-local Team name |
+| `workspace` | object | Execution backend (local / remote SSH), 见 [workspace](./workspace.md) |
 
 ### Team binding
 

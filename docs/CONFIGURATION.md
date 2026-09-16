@@ -37,3 +37,4 @@ heron
 | [Skill](./configuration/skill.md) | No | Packaged tool + prompt combinations |
 | [Knowledge](./configuration/knowledge.md) | No | Searchable knowledge base entries |
 | [Rules](./configuration/rules.md) | No | Soft/hard constraints and guardrails |
+| [Workspace](./configuration/workspace.md) | No | Execution backend (local / remote SSH) |
