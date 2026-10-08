@@ -9,6 +9,12 @@ import (
 // Call. It contains the call responsibility and the
 // collaboration context visible to the Agent. The business payload remains
 // inside SharedRecord.Data.
+//
+// No wire contract: this is an input struct, passed in-process from the call
+// executor to TurnLoop.Run. Nothing serializes it and nothing embeds it, so
+// these field names are free to change. If it ever starts being persisted,
+// it becomes part of the published contract and needs the same treatment as
+// CallResult below.
 type AgentRequest struct {
 	FlowSessionID      string
 	TeamID             string
@@ -74,6 +80,11 @@ type ContextBlock struct {
 }
 
 // CallRequest is the normalized input passed to one Team call executor.
+//
+// No wire contract: same as AgentRequest, this is an in-process input
+// struct. Only selected fields are copied into event payloads, never the
+// struct as a whole, so these field names are free to change. If it ever
+// starts being persisted, it needs the same treatment as CallResult below.
 type CallRequest struct {
 	FlowSession        FlowSession
 	FlowTurn           FlowTurn
@@ -242,6 +253,28 @@ type StartFlowRequest struct {
 
 // FlowTurnResult contains the user-visible result of one FlowTurn and the
 // TeamTurns it caused.
+//
+// Two different wire surfaces, and it is important not to confuse them:
+//
+//   - Not part of the event stream contract. Unlike CallResult and
+//     TeamTurnResult, this struct is never written to flow.jsonl / team.jsonl.
+//     The flow layer emits its own payload fields, so these names carry no
+//     jsonl compatibility obligation.
+//   - But it IS an HTTP response contract. internal/view/handler.go encodes
+//     it directly with json.NewEncoder in the start / handle / resume /
+//     status / approval / recovery endpoints, so clients of the HTTP view
+//     API do see these PascalCase names. Renaming a field is a breaking
+//     change for those HTTP clients even though it is harmless for jsonl.
+//
+// Forward-looking hazard: FlowTurnResult currently has no Usage field. Flow
+// level token usage is computed on the consumer side by summing
+// TeamTurnResult.Usage, which does not include consumption from spawned
+// child tasks. If a future change makes the flow layer aggregate usage from
+// the event stream instead and puts it here, this struct stops being
+// jsonl-invisible and its field names become part of the published event
+// contract. At that point it needs the same treatment as CallResult: explicit
+// json tags plus tests pinning the field set, before the change ships — not
+// after.
 type FlowTurnResult struct {
 	Session          FlowSession
 	Turn             FlowTurn
