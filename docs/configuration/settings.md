@@ -49,6 +49,20 @@ Log files are named by date (`YYYY-MM-DD.log`) and split with a sequence suffix
 (`YYYY-MM-DD.1.log`) once they exceed `max_file_size`. Files older than
 `retention_days` are removed on rotation.
 
+### observability (removed)
+
+The `observability` section was removed together with the `internal/observability`
+package. Neither of its fields had a reader: `event_bus_size` fed the deleted
+event bus, and `observability.retention_days` was never consumed. A leftover
+`observability` section in an existing settings.json is ignored.
+
+Watch out for the two same-named `retention_days` fields:
+
+- `logging.retention_days` — **still live**, controls log file retention (see above).
+- `observability.retention_days` — removed, no longer has any effect.
+
+There is currently no configuration for run-data retention.
+
 ### paths
 
 | Field | Type | Default | Description |
