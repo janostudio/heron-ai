@@ -27,10 +27,6 @@
     "max_file_size": "50MB",
     "max_backups": 5
   },
-  "observability": {
-    "retention_days": 30,
-    "event_bus_size": 256
-  },
   "paths": {
     "data": ".agents/data/"
   }

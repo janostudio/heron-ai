@@ -12,11 +12,10 @@ type EngineConfig struct {
 }
 
 type SettingsConfig struct {
-	Logging       LoggingConfig       `json:"logging"`
-	Observability ObservabilityConfig `json:"observability"`
-	Paths         PathsConfig         `json:"paths"`
-	Agent         AgentSettingsConfig `json:"agent"`
-	Knowledge     KnowledgeConfig     `json:"knowledge,omitempty"`
+	Logging   LoggingConfig       `json:"logging"`
+	Paths     PathsConfig         `json:"paths"`
+	Agent     AgentSettingsConfig `json:"agent"`
+	Knowledge KnowledgeConfig     `json:"knowledge,omitempty"`
 }
 
 // KnowledgeConfig 配置知识自动学习相关能力。
@@ -32,11 +31,6 @@ type LoggingConfig struct {
 	MaxFileSize   string `json:"max_file_size"`
 	MaxBackups    int    `json:"max_backups"`
 	RetentionDays int    `json:"retention_days"`
-}
-
-type ObservabilityConfig struct {
-	RetentionDays int `json:"retention_days"`
-	EventBusSize  int `json:"event_bus_size"`
 }
 
 type PathsConfig struct {

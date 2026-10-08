@@ -21,13 +21,6 @@
     "level": "info",
     "output": "stdout"
   },
-  "observability": {
-    "retentionDays": 30,
-    "eventBus": {
-      "bufferSize": 256,
-      "enablePersistence": false
-    }
-  },
   "paths": {
     "data": ".agents/data/"
   }
