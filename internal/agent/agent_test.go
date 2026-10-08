@@ -513,11 +513,17 @@ type mockModelProvider struct {
 	attempts   int
 	err        error
 	lastConfig types.ModelConfig
+	// lastTools records the tool list the loop advertised on the most recent
+	// call. The Bash gate's end-to-end test asserts on it: the schema list is
+	// built by buildToolSchemas, and a test that only checks that function
+	// proves nothing about what the model was actually handed.
+	lastTools []types.JSONSchema
 }
 
 func (m *mockModelProvider) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
 	m.attempts++
 	m.lastConfig = config
+	m.lastTools = tools
 	if m.err != nil {
 		err := m.err
 		m.err = nil
@@ -1302,6 +1308,104 @@ func TestTurnLoop_Run_GuardrailBlocksInput(t *testing.T) {
 	result, err := loop.Run(context.Background(), agent, types.AgentRequest{ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "this is blocked"}}})
 	require.NoError(t, err)
 	assert.Contains(t, result.Error, "input blocked")
+}
+
+func TestTurnLoop_Run_GuardrailBlocksResumedInput(t *testing.T) {
+	// A resumed turn starts at checkpoint.NextRound, not 0. The resumed user
+	// text is ordinary user input, so the input guardrail has to run for it
+	// as well.
+	model := &mockModelProvider{
+		responses: []types.ChatResponse{{
+			Text: "ask",
+			ToolCalls: []types.ToolCall{{
+				ID:        "ask-1",
+				Name:      "AskUserQuestion",
+				Arguments: map[string]any{"question": "Continue?"},
+			}},
+		}, {
+			Text: "resumed answer",
+		}},
+	}
+	store := &memoryCheckpointStore{}
+	tools := &recordingToolExecutor{
+		result: &types.ToolResult{
+			Success:      true,
+			Content:      `{"question":"Continue?"}`,
+			PendingInput: &types.AgentPendingInput{Question: "Continue?"},
+		},
+	}
+	guardrail := NewGuardrailChecker(
+		[]types.GuardrailRule{{Type: "contains", Pattern: "blocked", Message: "input blocked"}},
+		nil,
+	)
+	loop := NewTurnLoop(
+		model, tools, guardrail, NewRouteParser(), nil, NewHookExecutor(),
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
+	)
+	loop.SetCheckpointStore(store)
+	agent := types.AgentConfig{
+		Tools: types.ToolConfig{Builtin: []string{"AskUserQuestion"}},
+		Loop:  types.LoopConfig{MaxRounds: 3},
+	}
+
+	first, err := loop.Run(context.Background(), agent, types.AgentRequest{
+		AgentID: "assistant", AgentTurnID: "turn-guard-resume",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, first.Checkpoint)
+	require.Equal(t, types.TurnWaitingInput, first.Status)
+	// Guards the premise of this test: the resumed execution does not start
+	// at round 0, so a `round == 0` check would never fire.
+	require.Positive(t, first.Checkpoint.NextRound)
+
+	second, err := loop.Run(context.Background(), agent, types.AgentRequest{
+		AgentID:            "assistant",
+		AgentTurnID:        "turn-guard-resume",
+		ContextBlocks:      []types.ContextBlock{{Kind: "input", Text: "this is blocked"}},
+		ResumeCheckpointID: first.Checkpoint.ID,
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.TurnFailed, second.Status)
+	assert.Contains(t, second.Error, "input blocked")
+	assert.Equal(t, 1, model.callCount)
+}
+
+func TestTurnLoop_Run_GuardrailBlocksOutputAtLoopLimit(t *testing.T) {
+	// Exhausting max_rounds ends the turn with the last model text as the
+	// reply. That text never went through the no-tool_calls branch, so it
+	// must be checked by the output guardrail here.
+	model := &mockModelProvider{
+		responses: []types.ChatResponse{
+			{Text: "round 1", ToolCalls: []types.ToolCall{{ID: "1", Name: "Read", Arguments: map[string]any{"file": "a.txt"}}}, Usage: types.TokenUsage{TotalTokens: 10}},
+			{Text: "here is the secret", ToolCalls: []types.ToolCall{{ID: "2", Name: "Read", Arguments: map[string]any{"file": "b.txt"}}}, Usage: types.TokenUsage{TotalTokens: 10}},
+		},
+	}
+	guardrail := NewGuardrailChecker(
+		nil,
+		[]types.GuardrailRule{{Type: "contains", Pattern: "secret", Message: "no secrets in output"}},
+	)
+	loop := NewTurnLoop(
+		model,
+		&mockToolExecutor{},
+		guardrail,
+		NewRouteParser(),
+		NewHITLGate(5*time.Minute),
+		NewHookExecutor(),
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hello"}}},
+	)
+
+	agent := types.AgentConfig{
+		Tools: types.ToolConfig{Builtin: []string{"Read"}},
+		Loop:  types.LoopConfig{MaxRounds: 5},
+	}
+
+	result, err := loop.Run(context.Background(), agent, types.AgentRequest{
+		ContextBlocks:  []types.ContextBlock{{Kind: "input", Text: "hello"}},
+		MaxAgentRounds: 2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.TurnFailed, result.Status)
+	assert.Contains(t, result.Error, "no secrets in output")
 }
 
 func TestTurnLoop_Run_ToolCallLoop(t *testing.T) {

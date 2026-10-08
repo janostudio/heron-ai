@@ -457,7 +457,11 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			return nil, err
 		default:
 		}
-		if round == 0 && t.guardrail != nil {
+		// The input text is fixed for the whole execution, so it is checked
+		// once, on the first round this execution runs. A resumed turn starts
+		// at checkpoint.NextRound: its input is fresh user text and must be
+		// checked too, which a literal `round == 0` would skip.
+		if round == startRound && t.guardrail != nil {
 			if guardErr := t.guardrail.CheckInput(inputText); guardErr != nil {
 				logging.Warn("guardrail blocked input", map[string]any{
 					"call_id":  req.CallID,
@@ -907,6 +911,24 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 					errors.New("agent stuck: "+stuckReason), nil,
 					loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
 			}
+		}
+	}
+
+	// Reaching the round limit ends the turn with the last model text as the
+	// reply. That text came from a Tool round and never went through the
+	// no-tool_calls branch above, so check it here before it becomes an
+	// Agent answer.
+	if t.guardrail != nil {
+		if guardErr := t.guardrail.CheckOutput(lastText); guardErr != nil {
+			logging.Warn("guardrail blocked output", map[string]any{
+				"call_id":  req.CallID,
+				"agent_id": req.AgentID,
+				"team_id":  req.TeamID,
+				"round":    maxRounds,
+				"error":    guardErr.Error(),
+			})
+			t.emitErrorHook(ctx, agent, req, maxRounds, guardErr)
+			return &types.AgentResult{Status: types.TurnFailed, Reply: lastText, Error: guardErr.Error(), Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls, Next: &types.Route{Action: types.NextCoordinate, Reason: guardErr.Error()}}, nil
 		}
 	}
 
