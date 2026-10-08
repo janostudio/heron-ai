@@ -318,6 +318,36 @@ agent.jsonl 记录 agent 内部行为（增量事件，非完整 prompt 快照�
 两者分工，不冲突：checkpoint 存的是"等待哪个工具/审批"这种异步指针（事件流难以表达），
 回放存的是"消息序列"（事件流擅长）。checkpoint 不能删，但回放弥补了它"完成态丢上下文"的缺陷。
 
+### 6.4 事件 payload 的字段命名契约
+
+三层 jsonl 是外部系统消费运行数据（尤其是 token 消耗）的唯一事实源，字段名属于**已发布
+契约**，改动等于破坏性变更。当前契约是**混合命名**，这是有意为之，不是笔误：
+
+| 层次 | 命名风格 | 例子 |
+|---|---|---|
+| payload **容器**结构体（无 json tag） | Go 字段名大驼峰 | `call_result.Requests`、`call_result.CallTurnID`、`team_result.CallResults` |
+| 嵌套的**叶子**类型（有 json tag） | snake_case | `Usage.prompt_tokens`、`Requests[].message_count`、`Records[].record_id` |
+
+所以一条真实的 `agent_turn.completed` 长这样（两层风格并存）：
+
+```json
+{"type":"agent_turn.completed","payload":{"call_result":{
+  "Status":"completed",
+  "CallTurnID":"tt_5eb9655c3700b924:answer",
+  "Usage":{"prompt_tokens":2195,"completion_tokens":81,"total_tokens":2276},
+  "Requests":[{"round":0,"message_count":2,"usage":{"prompt_tokens":2195}}]
+}}}
+```
+
+约束：
+
+- **不要为了让风格统一而把容器字段改成 snake_case。** `encoding/json` 只在"仅大小写不同"
+  时做不敏感匹配；`CallTurnID` 与 `call_turn_id` 差了下划线，读入旧数据时会**静默丢弃**
+  （`err == nil`，字段变零值），历史会话的续聊/恢复会悄悄失效。
+- 叶子类型的 snake_case 是安全的（加了 tag 也不影响旧数据读取），但也不要改。
+- `pkg/types/execution.go` 的 `CallResult` 上有显式 json tag 把这套名字固定下来，
+  `pkg/types/execution_json_test.go` 会用测试锁死字段名集合。改 tag 会直接测试失败。
+
 ## 7. 相关文件索引
 
 | 文件 | 职责 |

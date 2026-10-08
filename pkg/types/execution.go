@@ -90,23 +90,42 @@ type CallRequest struct {
 
 // CallResult is the normalized result returned by an Agent, Command, or
 // Webhook executor.
+//
+// Wire contract: CallResult is persisted verbatim as the `call_result`
+// payload of `agent_turn.completed` / `command_turn.completed` /
+// `webhook_turn.completed` events in team.jsonl, and nested inside the
+// `team_result` payload's `CallResults` map. That event stream is the fact
+// source external consumers read token usage from, so the JSON names below
+// are a published contract, not an accident of Go naming.
+//
+// They deliberately stay in Go field name form (PascalCase). Two reasons:
+//   - Every session jsonl already on disk uses these names. Renaming them
+//     would split the stream into two dialects that external parsers must
+//     both handle.
+//   - encoding/json only falls back to case-insensitive matching. Names
+//     that differ by more than case (`CallTurnID` vs `call_turn_id`) are
+//     silently dropped on read, with no error.
+//
+// Do not "clean up" these tags into snake_case without a migration. The
+// nested leaf types (TokenUsage, ModelRequestStats, SharedRecord) do use
+// snake_case; that mixed shape is intentional and load-bearing.
 type CallResult struct {
-	Status          TurnStatus
-	Reply           string
-	CallTurnID      string
-	AgentID         string
-	Records         []SharedRecord
-	Next            *Route
-	Usage           TokenUsage
-	Requests        []ModelRequestStats
-	WorkspaceOps    []WorkspaceOperation
-	ToolCalls       int
-	Error           string
-	CheckpointID    string
-	Checkpoint      *AgentCheckpoint
-	TaskID          string
-	PendingApproval *AgentPendingApproval
-	Approval        *HITLResponse
+	Status          TurnStatus            `json:"Status"`
+	Reply           string                `json:"Reply"`
+	CallTurnID      string                `json:"CallTurnID"`
+	AgentID         string                `json:"AgentID"`
+	Records         []SharedRecord        `json:"Records"`
+	Next            *Route                `json:"Next"`
+	Usage           TokenUsage            `json:"Usage"`
+	Requests        []ModelRequestStats   `json:"Requests"`
+	WorkspaceOps    []WorkspaceOperation  `json:"WorkspaceOps"`
+	ToolCalls       int                   `json:"ToolCalls"`
+	Error           string                `json:"Error"`
+	CheckpointID    string                `json:"CheckpointID"`
+	Checkpoint      *AgentCheckpoint      `json:"Checkpoint"`
+	TaskID          string                `json:"TaskID"`
+	PendingApproval *AgentPendingApproval `json:"PendingApproval"`
+	Approval        *HITLResponse         `json:"Approval"`
 }
 
 // ModelRequestStats is a privacy-preserving summary of one request sent to a
