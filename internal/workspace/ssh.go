@@ -747,33 +747,94 @@ func parseInt(s string) (int, error) {
 	return n, nil
 }
 
+// sftpFile is the subset of *sftp.File used by the remote read/write helpers.
+// It exists so those helpers can be driven by a fake whose Close fails: on the
+// write path a failing Close can mean the server never flushed the data, and
+// the caller must not be told the write succeeded.
+type sftpFile interface {
+	io.Reader
+	io.Writer
+	io.Closer
+}
+
+// sftpFileOpener opens remote files. *sftp.Client is adapted to it by
+// sftpClientOpener.
+type sftpFileOpener interface {
+	openRead(name string) (sftpFile, error)
+	openWrite(name string) (sftpFile, error)
+}
+
+type sftpClientOpener struct{ client *sftp.Client }
+
+func (o sftpClientOpener) openRead(name string) (sftpFile, error) {
+	f, err := o.client.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+func (o sftpClientOpener) openWrite(name string) (sftpFile, error) {
+	f, err := o.client.Create(name)
+	if err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
 // sftpReadAll reads the full contents of a remote file, translating the SFTP
 // "file does not exist" error into os.ErrNotExist for callers that rely on
 // os.IsNotExist.
 func sftpReadAll(client *sftp.Client, name string) ([]byte, error) {
-	f, err := client.Open(name)
+	return readAllRemote(sftpClientOpener{client: client}, name)
+}
+
+func readAllRemote(o sftpFileOpener, name string) ([]byte, error) {
+	f, err := o.openRead(name)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, os.ErrNotExist
 		}
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	// Close is always attempted (no defer-ignore), but its error is only
+	// reported when the read also failed. After a successful ReadAll the bytes
+	// are already in memory, so a Close failure is server-side cleanup noise,
+	// and reporting it would fail reads that actually succeeded. When the read
+	// failed, the Close error usually explains why (dead transport, revoked
+	// handle), so it is joined. On the single-error paths the original error is
+	// returned unwrapped because callers match on it (os.IsNotExist, errors.Is).
 	data, err := io.ReadAll(f)
-	if err != nil {
+	cerr := f.Close()
+	switch {
+	case err == nil:
+		return data, nil
+	case cerr == nil:
 		return nil, err
+	default:
+		return nil, errors.Join(err, cerr)
 	}
-	return data, nil
 }
 
+// sftpWriteAll writes data to a remote file, truncating an existing one.
 func sftpWriteAll(client *sftp.Client, name string, data []byte) error {
-	f, err := client.Create(name)
+	return writeAllRemote(sftpClientOpener{client: client}, name, data)
+}
+
+func writeAllRemote(o sftpFileOpener, name string, data []byte) error {
+	f, err := o.openWrite(name)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }()
-	_, err = io.Copy(f, bytes.NewReader(data))
-	return err
+	_, werr := io.Copy(f, bytes.NewReader(data))
+	// On the write path Close is part of the write, not cleanup: the server may
+	// not have flushed/committed the data until Close returns, so its error must
+	// reach the caller. A nil here would report success for a write that may
+	// never have landed. Happy path: both nil, so the returned error is nil.
+	if cerr := f.Close(); cerr != nil {
+		return errors.Join(werr, cerr)
+	}
+	return werr
 }
 
 // expandHome expands a leading "~" to the current user's home directory.
