@@ -24,11 +24,15 @@ type Runtime struct {
 	teams       types.TeamRuntime
 	sessions    storage.SessionWriter
 	evidence    storage.EvidenceStore
-	workspace   string
-	limits      types.RuntimeLimits
-	tasks       types.ToolTaskStore
-	media       types.MediaStore
-	resumeMu    sync.Mutex
+	// workspace is not forwarded to Team/Call any more: workspace resolution
+	// happens once at config load (agent → team → flow inheritance), so a
+	// per-turn root would only shadow it. Kept because NewRuntime's signature
+	// is shared with callers outside this package.
+	workspace string
+	limits    types.RuntimeLimits
+	tasks     types.ToolTaskStore
+	media     types.MediaStore
+	resumeMu  sync.Mutex
 }
 
 func NewRuntime(
@@ -997,7 +1001,6 @@ func (r *Runtime) executeTeamTurn(
 		Input:              teamInput(input, binding.Inputs),
 		ContextBlocks:      blocks,
 		Records:            selectFlowRecordsForBinding(records, binding),
-		WorkspaceRoot:      r.workspace,
 		Limits:             r.limits,
 		ResumeCallID:       current.resumeCallID,
 		ResumeCheckpointID: current.resumeCheckpointID,

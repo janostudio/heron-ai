@@ -61,7 +61,7 @@ type StateConfig struct {
 }
 
 func (o OutputSpec) IsZero() bool {
-	return o.From == "" && o.Record == "" && len(o.Records) == 0 && !o.Publish
+	return o.From == "" && o.Record == "" && len(o.Records) == 0
 }
 
 // Normalize fills Call IDs from the Team call map keys. The config loader

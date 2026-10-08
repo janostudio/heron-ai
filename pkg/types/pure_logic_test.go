@@ -444,7 +444,6 @@ func TestOutputSpecIsZero(t *testing.T) {
 		{"from set", OutputSpec{From: "x"}, false},
 		{"record set", OutputSpec{Record: "x"}, false},
 		{"records set", OutputSpec{Records: []OutputBinding{{From: "a", Record: "b"}}}, false},
-		{"publish set", OutputSpec{Publish: true}, false},
 		{"scope only", OutputSpec{Scope: "flow"}, true},
 	}
 

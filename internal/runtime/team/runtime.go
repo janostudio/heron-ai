@@ -348,7 +348,6 @@ func (r *Runtime) runBatch(
 				RecoveryOf:         req.TeamTurn.RecoveryOf,
 				ResumeCheckpointID: req.ResumeCheckpointID,
 				ResumeTaskID:       req.ResumeTaskID,
-				WorkspaceRoot:      req.WorkspaceRoot,
 				Limits:             req.Limits,
 			}
 			if isSpawned {

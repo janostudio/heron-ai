@@ -104,7 +104,6 @@ type CallRequest struct {
 	ResumeTaskID       string
 	ResumeApprovalID   string
 	ResumeApproval     *HITLResponse
-	WorkspaceRoot      string
 	Limits             RuntimeLimits
 }
 
@@ -188,7 +187,6 @@ type TeamTurnRequest struct {
 	Input                string
 	ContextBlocks        []ContextBlock
 	Records              []SharedRecord
-	WorkspaceRoot        string
 	Limits               RuntimeLimits
 	ResumeCallID         string
 	ResumeCheckpointID   string

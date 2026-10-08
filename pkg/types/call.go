@@ -62,7 +62,6 @@ const (
 type InputSpec struct {
 	UserMessage     bool           `yaml:"user_message,omitempty" json:"user_message,omitempty"`
 	TeamUserMessage bool           `yaml:"team_user_message,omitempty" json:"team_user_message,omitempty"`
-	TeamState       string         `yaml:"team_state,omitempty" json:"team_state,omitempty"`
 	FlowRecords     []string       `yaml:"flow_records,omitempty" json:"flow_records,omitempty"`
 	TeamRecords     []string       `yaml:"team_records,omitempty" json:"team_records,omitempty"`
 	Records         []InputBinding `yaml:"records,omitempty" json:"records,omitempty"`
@@ -93,20 +92,11 @@ func (s *InputSpec) UnmarshalYAML(node *yaml.Node) error {
 // From is intentionally a string reference for now. The config validator will
 // resolve whether it refers to the flow, team, call, or a named producer.
 type InputBinding struct {
-	From            string     `yaml:"from,omitempty" json:"from,omitempty"`
-	Record          string     `yaml:"record,omitempty" json:"record,omitempty"`
-	As              string     `yaml:"as,omitempty" json:"as,omitempty"`
-	UserMessage     bool       `yaml:"user_message,omitempty" json:"user_message,omitempty"`
-	TeamUserMessage bool       `yaml:"team_user_message,omitempty" json:"team_user_message,omitempty"`
-	TeamState       string     `yaml:"team_state,omitempty" json:"team_state,omitempty"`
-	View            RecordView `yaml:"view,omitempty" json:"view,omitempty"`
-}
-
-// RecordView limits which parts of a SharedRecord are exposed.
-type RecordView struct {
-	Include  []string `yaml:"include,omitempty" json:"include,omitempty"`
-	MaxChars int      `yaml:"max_chars,omitempty" json:"max_chars,omitempty"`
-	Adapter  string   `yaml:"adapter,omitempty" json:"adapter,omitempty"`
+	From            string `yaml:"from,omitempty" json:"from,omitempty"`
+	Record          string `yaml:"record,omitempty" json:"record,omitempty"`
+	As              string `yaml:"as,omitempty" json:"as,omitempty"`
+	UserMessage     bool   `yaml:"user_message,omitempty" json:"user_message,omitempty"`
+	TeamUserMessage bool   `yaml:"team_user_message,omitempty" json:"team_user_message,omitempty"`
 }
 
 // OutputSpec describes which results a Call or Team publishes.
@@ -118,7 +108,6 @@ type OutputSpec struct {
 	Record  string          `yaml:"record,omitempty" json:"record,omitempty"`
 	Scope   string          `yaml:"scope,omitempty" json:"scope,omitempty"`
 	Records []OutputBinding `yaml:"records,omitempty" json:"records,omitempty"`
-	Publish bool            `yaml:"publish,omitempty" json:"publish,omitempty"`
 }
 
 // OutputBinding promotes a call result to a named SharedRecord.
