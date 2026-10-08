@@ -459,8 +459,6 @@ func TestApplyRejectsOutsideConfigRoot(t *testing.T) {
 func TestApplyRollbackOnValidationFailure(t *testing.T) {
 	f := newFixture(t)
 
-	before := snapshotTree(t, f.root)
-
 	// A team bound into the flow whose call names an agent that does not exist:
 	// the plan stages fine but the candidate tree fails validation. The only
 	// reason this is a validation failure and not a pre-flight rejection is that
@@ -475,7 +473,7 @@ calls:
 	f.reload(t)
 
 	// Re-baseline: the hand-written file is part of the "before" tree now.
-	before = snapshotTree(t, f.root)
+	before := snapshotTree(t, f.root)
 
 	_, err := f.writer(t).CreateTeam(ctx(), CreateTeamRequest{
 		Mode: ModeUpsert,

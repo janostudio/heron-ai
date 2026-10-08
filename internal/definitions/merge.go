@@ -148,7 +148,9 @@ func prepareAgentSpec(
 	existing types.AgentConfig,
 	exists bool,
 ) (map[string]any, string, error) {
-	base := map[string]any{}
+	// Declared nil, not as an empty map: every arm below assigns base (the
+	// default included), so an initial empty map would be a store nobody reads.
+	var base map[string]any
 	switch {
 	case exists:
 		// The merge baseline is the file on disk, decoded to a generic map.

@@ -164,6 +164,20 @@ func safeJoin(root, rel string) (string, error) {
 // the half-written tree still loads. A non-nil error from before aborts the
 // remaining writes so the caller's rollback path exercises the same state a
 // real failure would leave.
+//
+// Kept uncalled on purpose (so: nolint). It is the seam for a "crash between
+// the referenced and the referencing half of a commit" test, a state that
+// cannot be produced today: Writer.apply's only hook, afterStage, fires before
+// any byte is committed, so a test can only ever see zero files written. The
+// sibling Writer.applyTo (merge.go) is the live path and stays the one to call.
+//
+// KNOWN GAP — the hook does not yet do what the paragraph above says. It runs
+// after the whole loop, not between the halves, so wiring it as-is would
+// exercise "crash after everything", not "crash in the middle". Fix the hook
+// position (split the loop at the first rank >= commitRank("flows")) at the
+// same time as the test that needs it; moving it alone leaves it unverified.
+//
+//nolint:unused // test seam for a mid-commit crash test, see comment above
 func (p WritePlan) applyPlanTo(treeRoot string, before func() error) error {
 	for _, op := range p.InCommitOrder() {
 		target, err := safeJoin(treeRoot, op.Path)

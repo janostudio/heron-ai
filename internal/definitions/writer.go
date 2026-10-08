@@ -131,6 +131,15 @@ func loaderForRoot(configRoot string) *config.ConfigLoader {
 
 // newWriterWithLoader is the test seam for NewWriter: it keeps the store
 // pointing at the real tree while letting the loader be rooted elsewhere.
+//
+// Kept uncalled on purpose (so: nolint). No test swaps the loader today, and
+// one deliberately will not: TestApplyPreservesRuntimeLimitsAcrossReload can
+// only catch a mis-anchored loader by using the REAL one (see writer_test.go,
+// "only the real loader can"), so substituting here would make that guard
+// vacuous. It stays for tests that need a loader rooted somewhere else for a
+// different reason — a fixture whose config root is not on disk, say.
+//
+//nolint:unused // test seam, see comment above
 func newWriterWithLoader(store *types.DefinitionStore, loader func(string) *config.ConfigLoader) *Writer {
 	return &Writer{store: store, loader: loader}
 }
