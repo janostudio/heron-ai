@@ -32,6 +32,15 @@ type AgentRequest struct {
 }
 
 // AgentResult is the result of one Agent execution.
+//
+// No wire contract: AgentResult never reaches the event stream. It is an
+// in-process handoff from TurnLoop to its caller, and every caller copies
+// the fields it needs into CallResult (see internal/runtime/call/agent.go
+// and internal/agent/spawn.go) or into a checkpoint. Nothing marshals this
+// struct as a whole, so these field names are free to change.
+//
+// If you ever do persist it, it becomes part of the published contract and
+// needs the same treatment as CallResult below.
 type AgentResult struct {
 	Status          TurnStatus
 	Reply           string
@@ -194,16 +203,29 @@ type TeamCallResume struct {
 }
 
 // TeamTurnResult is the normalized result of one TeamTurn.
+//
+// Wire contract, same shape and same rules as CallResult: TeamTurnResult is
+// persisted verbatim as the `team_result` payload of the team waiting
+// events, and it embeds CallResult values in CallResults. The JSON names
+// below stay in Go field name form (PascalCase) because every session jsonl
+// on disk already uses them, and because encoding/json only falls back to
+// case-insensitive matching — renaming `CallResults` or `PendingToolTasks`
+// to snake_case would silently drop them on read, with no error, and break
+// resume of interrupted Team turns.
+//
+// The nested leaf types (TeamTurn, SharedRecord, PendingToolTask,
+// AgentPendingApproval, TokenUsage) do use snake_case. That mixed shape is
+// intentional and load-bearing; see docs/context-management.md §6.4.
 type TeamTurnResult struct {
-	Turn             TeamTurn
-	Reply            string
-	Records          []SharedRecord
-	CallResults      map[string]CallResult
-	PendingToolTasks []PendingToolTask
-	PendingApprovals []AgentPendingApproval
-	Usage            TokenUsage
-	Next             *Route
-	Error            string
+	Turn             TeamTurn               `json:"Turn"`
+	Reply            string                 `json:"Reply"`
+	Records          []SharedRecord         `json:"Records"`
+	CallResults      map[string]CallResult  `json:"CallResults"`
+	PendingToolTasks []PendingToolTask      `json:"PendingToolTasks"`
+	PendingApprovals []AgentPendingApproval `json:"PendingApprovals"`
+	Usage            TokenUsage             `json:"Usage"`
+	Next             *Route                 `json:"Next"`
+	Error            string                 `json:"Error"`
 }
 
 // TeamRuntime executes a TeamTurn.

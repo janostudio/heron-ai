@@ -325,8 +325,8 @@ agent.jsonl 记录 agent 内部行为（增量事件，非完整 prompt 快照�
 
 | 层次 | 命名风格 | 例子 |
 |---|---|---|
-| payload **容器**结构体（无 json tag） | Go 字段名大驼峰 | `call_result.Requests`、`call_result.CallTurnID`、`team_result.CallResults` |
-| 嵌套的**叶子**类型（有 json tag） | snake_case | `Usage.prompt_tokens`、`Requests[].message_count`、`Records[].record_id` |
+| payload **容器**结构体 | Go 字段名大驼峰 | `call_result.Requests`、`call_result.CallTurnID`、`team_result.CallResults`、`team_result.PendingToolTasks` |
+| 嵌套的**叶子**类型 | snake_case | `Usage.prompt_tokens`、`Requests[].message_count`、`Records[].record_id`、`Turn.team_id` |
 
 所以一条真实的 `agent_turn.completed` 长这样（两层风格并存）：
 
@@ -339,14 +339,29 @@ agent.jsonl 记录 agent 内部行为（增量事件，非完整 prompt 快照�
 }}}
 ```
 
+`team_turn.waiting_tool` / `waiting_approval` 的 `team_result` 同理，而且它把 `CallResult`
+再嵌一层：
+
+```json
+{"type":"team_turn.waiting_tool","payload":{"team_result":{
+  "Turn":{"id":"tt_1","team_id":"default","status":"waiting_tool"},
+  "CallResults":{"answer":{"Status":"waiting_tool","CallTurnID":"tt_1:answer","TaskID":"task_1"}},
+  "PendingToolTasks":[{"call_id":"answer","task_id":"task_1","checkpoint_id":"cp_1"}],
+  "Usage":{"prompt_tokens":2295,"completion_tokens":7,"total_tokens":2302}
+}}}
+```
+
 约束：
 
 - **不要为了让风格统一而把容器字段改成 snake_case。** `encoding/json` 只在"仅大小写不同"
   时做不敏感匹配；`CallTurnID` 与 `call_turn_id` 差了下划线，读入旧数据时会**静默丢弃**
   （`err == nil`，字段变零值），历史会话的续聊/恢复会悄悄失效。
 - 叶子类型的 snake_case 是安全的（加了 tag 也不影响旧数据读取），但也不要改。
-- `pkg/types/execution.go` 的 `CallResult` 上有显式 json tag 把这套名字固定下来，
-  `pkg/types/execution_json_test.go` 会用测试锁死字段名集合。改 tag 会直接测试失败。
+- `pkg/types/execution.go` 的 `CallResult` 和 `TeamTurnResult` 上有显式 json tag 把这套
+  名字固定下来，`pkg/types/execution_json_test.go` 会用测试锁死字段名集合。改 tag 会直接
+  测试失败。
+- `AgentResult`（同文件）**不在契约内**：它从不落盘，只是 `TurnLoop` 到调用方的进程内
+  传递结构，字段会被逐个拷进 `CallResult`。它的字段名可以自由改。
 
 ## 7. 相关文件索引
 
