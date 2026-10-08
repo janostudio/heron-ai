@@ -16,14 +16,18 @@ import (
 )
 
 type jsonRPCFlowRuntimeStub struct {
-	startCalls   int
-	handleCalls  int
-	resumeCalls  int
-	status       types.FlowSession
-	startResult  types.FlowTurnResult
-	handleResult types.FlowTurnResult
-	resumeResult types.FlowTurnResult
-	err          error
+	startCalls    int
+	handleCalls   int
+	resumeCalls   int
+	approvalCalls int
+	status        types.FlowSession
+	startResult   types.FlowTurnResult
+	handleResult  types.FlowTurnResult
+	resumeResult  types.FlowTurnResult
+	approvalRes   types.FlowTurnResult
+	approvalErr   error
+	lastDecision  types.HITLResponse
+	err           error
 }
 
 func (s *jsonRPCFlowRuntimeStub) Start(context.Context, types.StartFlowRequest) (types.FlowTurnResult, error) {
@@ -46,6 +50,43 @@ func (s *jsonRPCFlowRuntimeStub) Cancel(context.Context, string) error {
 }
 
 func (s *jsonRPCFlowRuntimeStub) Status(context.Context, string) (types.FlowSession, error) {
+	return s.status, nil
+}
+
+func (s *jsonRPCFlowRuntimeStub) ResumeApprovalWithResponse(
+	_ context.Context, _ string, decision types.HITLResponse,
+) (types.FlowTurnResult, error) {
+	s.approvalCalls++
+	s.lastDecision = decision
+	return s.approvalRes, s.approvalErr
+}
+
+// jsonRPCNoApprovalRuntimeStub is a FlowRuntime that cannot resume approvals at
+// all, so the "approve" method has to report the missing capability instead of
+// pretending the decision was applied. It deliberately does not embed
+// jsonRPCFlowRuntimeStub: embedding would promote the approval methods too and
+// the stub would silently satisfy the optional interface.
+type jsonRPCNoApprovalRuntimeStub struct {
+	status types.FlowSession
+}
+
+var _ types.FlowRuntime = (*jsonRPCNoApprovalRuntimeStub)(nil)
+
+func (s *jsonRPCNoApprovalRuntimeStub) Start(context.Context, types.StartFlowRequest) (types.FlowTurnResult, error) {
+	return types.FlowTurnResult{}, nil
+}
+
+func (s *jsonRPCNoApprovalRuntimeStub) HandleInput(context.Context, string, string) (types.FlowTurnResult, error) {
+	return types.FlowTurnResult{}, nil
+}
+
+func (s *jsonRPCNoApprovalRuntimeStub) Resume(context.Context, string, string) (types.FlowTurnResult, error) {
+	return types.FlowTurnResult{}, nil
+}
+
+func (s *jsonRPCNoApprovalRuntimeStub) Cancel(context.Context, string) error { return nil }
+
+func (s *jsonRPCNoApprovalRuntimeStub) Status(context.Context, string) (types.FlowSession, error) {
 	return s.status, nil
 }
 
@@ -431,4 +472,164 @@ func TestJSONRPCServerReturnsFlowErrorWithoutExitingConnection(t *testing.T) {
 	if stub.startCalls != 2 {
 		t.Fatalf("start calls = %d, want 2", stub.startCalls)
 	}
+}
+
+// serveOne sends a single request line and returns the decoded response.
+func serveOne(t *testing.T, runtime types.FlowRuntime, line string) jsonRPCResponse {
+	t.Helper()
+	var output bytes.Buffer
+	server := newJSONRPCServer(runtime, "test-flow", &output)
+	require.NoError(t, server.Serve(context.Background(), strings.NewReader(line+"\n")))
+
+	var response jsonRPCResponse
+	require.NoError(t, json.Unmarshal(output.Bytes(), &response))
+	return response
+}
+
+func approvalWaitingStub() *jsonRPCFlowRuntimeStub {
+	return &jsonRPCFlowRuntimeStub{
+		status:      types.FlowSession{ID: "fs-1", Status: types.SessionWaitingApproval},
+		approvalRes: testFlowTurnResult(types.SessionWaitingInput, "resumed after approval"),
+	}
+}
+
+// TestJSONRPCServerApproveResumesGate is the regression test for the JSON-RPC
+// approval deadlock: "turn" is rejected at a gate on purpose, so without an
+// "approve" method a JSON-RPC-only bridge has no way to advance the session.
+func TestJSONRPCServerApproveResumesGate(t *testing.T) {
+	stub := approvalWaitingStub()
+	response := serveOne(t, stub,
+		`{"jsonrpc":"2.0","id":1,"method":"approve","params":{"session_id":"fs-1","approval_id":"req-1","approved":true,"reason":"looks safe"}}`)
+
+	require.Nil(t, response.Error, "approve must be a supported method")
+	require.Equal(t, 1, stub.approvalCalls)
+	require.Equal(t, "req-1", stub.lastDecision.RequestID)
+	require.True(t, stub.lastDecision.Approved)
+	require.Equal(t, "looks safe", stub.lastDecision.Reason)
+	require.Equal(t, "jsonrpc", stub.lastDecision.Channel, "channel must record where the decision came from")
+	require.False(t, stub.lastDecision.DecidedAt.IsZero(), "the decision must be timestamped for audit")
+
+	result, ok := response.Result.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "fs-1", result["session_id"])
+	require.Equal(t, "resumed after approval", result["reply"])
+}
+
+// TestJSONRPCServerApproveRecordsDenial verifies an explicit denial is passed
+// through as false rather than dropped: false is a decision, not a default.
+func TestJSONRPCServerApproveRecordsDenial(t *testing.T) {
+	stub := approvalWaitingStub()
+	response := serveOne(t, stub,
+		`{"jsonrpc":"2.0","id":1,"method":"approve","params":{"session_id":"fs-1","approval_id":"req-1","approved":false,"reason":"too risky"}}`)
+
+	require.Nil(t, response.Error)
+	require.Equal(t, 1, stub.approvalCalls)
+	require.False(t, stub.lastDecision.Approved)
+	require.Equal(t, "too risky", stub.lastDecision.Reason)
+}
+
+// TestJSONRPCServerApproveRequiresExplicitDecision verifies an omitted
+// "approved" is a protocol error instead of a silent deny or approve.
+func TestJSONRPCServerApproveRequiresExplicitDecision(t *testing.T) {
+	stub := approvalWaitingStub()
+	response := serveOne(t, stub,
+		`{"jsonrpc":"2.0","id":1,"method":"approve","params":{"session_id":"fs-1","approval_id":"req-1"}}`)
+
+	require.NotNil(t, response.Error)
+	require.Equal(t, jsonRPCInvalidParams, response.Error.Code)
+	require.Equal(t, 0, stub.approvalCalls, "no decision must reach the runtime")
+}
+
+// TestJSONRPCServerApproveRequiresSessionAndApprovalID covers the remaining
+// invalid-params branches.
+func TestJSONRPCServerApproveRequiresSessionAndApprovalID(t *testing.T) {
+	cases := map[string]string{
+		"missing session_id":  `{"jsonrpc":"2.0","id":1,"method":"approve","params":{"approval_id":"req-1","approved":true}}`,
+		"missing approval_id": `{"jsonrpc":"2.0","id":1,"method":"approve","params":{"session_id":"fs-1","approved":true}}`,
+	}
+	for name, line := range cases {
+		t.Run(name, func(t *testing.T) {
+			stub := approvalWaitingStub()
+			response := serveOne(t, stub, line)
+			require.NotNil(t, response.Error)
+			require.Equal(t, jsonRPCInvalidParams, response.Error.Code)
+			require.Equal(t, 0, stub.approvalCalls)
+		})
+	}
+}
+
+// TestJSONRPCServerApproveRejectsSessionNotWaiting verifies a mistimed approve
+// is reported as a state error (-32002), not as a generic turn failure.
+func TestJSONRPCServerApproveRejectsSessionNotWaiting(t *testing.T) {
+	stub := &jsonRPCFlowRuntimeStub{
+		status:      types.FlowSession{ID: "fs-1", Status: types.SessionWaitingInput},
+		approvalRes: testFlowTurnResult(types.SessionWaitingInput, "must not run"),
+	}
+	response := serveOne(t, stub,
+		`{"jsonrpc":"2.0","id":1,"method":"approve","params":{"session_id":"fs-1","approval_id":"req-1","approved":true}}`)
+
+	require.NotNil(t, response.Error)
+	require.Equal(t, jsonRPCSessionFailed, response.Error.Code)
+	require.Equal(t, 0, stub.approvalCalls, "approve must not run against a session that is not at a gate")
+}
+
+// TestJSONRPCServerApproveReportsUnconfiguredRuntime verifies a runtime without
+// approval support says so (-32003) rather than silently accepting the decision.
+func TestJSONRPCServerApproveReportsUnconfiguredRuntime(t *testing.T) {
+	stub := &jsonRPCNoApprovalRuntimeStub{
+		status: types.FlowSession{ID: "fs-1", Status: types.SessionWaitingApproval},
+	}
+	response := serveOne(t, stub,
+		`{"jsonrpc":"2.0","id":1,"method":"approve","params":{"session_id":"fs-1","approval_id":"req-1","approved":true}}`)
+
+	require.NotNil(t, response.Error)
+	require.Equal(t, jsonRPCRuntimeFailed, response.Error.Code)
+}
+
+// TestJSONRPCTurnResultCarriesPendingApprovalID verifies the caller can learn
+// the approval_id it needs for "approve" from the turn that parked the session.
+func TestJSONRPCTurnResultCarriesPendingApprovalID(t *testing.T) {
+	stub := &jsonRPCFlowRuntimeStub{
+		startResult: testFlowTurnResult(types.SessionWaitingApproval, "needs approval"),
+	}
+	stub.startResult.PendingApprovals = []types.AgentPendingApproval{{
+		RequestID:  "req-1",
+		ToolName:   "Bash",
+		ToolCallID: "call_1",
+		Reason:     "dangerous command",
+	}}
+	response := serveOne(t, stub,
+		`{"jsonrpc":"2.0","id":1,"method":"turn","params":{"input":"run it"}}`)
+
+	require.Nil(t, response.Error)
+	result, ok := response.Result.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, string(types.SessionWaitingApproval), result["status"])
+
+	pending, ok := result["pending_approvals"].([]any)
+	require.True(t, ok, "pending_approvals must be exposed so the caller can approve")
+	require.Len(t, pending, 1)
+	require.Equal(t, "req-1", pending[0].(map[string]any)["request_id"])
+}
+
+// TestJSONRPCServerRejectsTurnWhileWaitingTool verifies a turn against a
+// session parked on async Tool tasks is a state error (-32002): a new turn
+// cannot collect those results, and starting one would orphan the tasks.
+func TestJSONRPCServerRejectsTurnWhileWaitingTool(t *testing.T) {
+	stub := &jsonRPCFlowRuntimeStub{
+		status:       types.FlowSession{ID: "fs-1", Status: types.SessionWaitingTool},
+		handleResult: testFlowTurnResult(types.SessionWaitingTool, "must not run"),
+	}
+	response := serveOne(t, stub,
+		`{"jsonrpc":"2.0","id":1,"method":"turn","params":{"session_id":"fs-1","input":"continue"}}`)
+
+	require.NotNil(t, response.Error)
+	require.Equal(t, jsonRPCSessionFailed, response.Error.Code)
+	require.Equal(t, 0, stub.handleCalls, "no new turn may start while Tool tasks are pending")
+	require.Equal(t, 0, stub.resumeCalls)
+
+	data, ok := response.Error.Data.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "fs-1", data["session_id"])
+	require.Equal(t, string(types.SessionWaitingTool), data["status"])
 }

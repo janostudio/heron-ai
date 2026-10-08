@@ -294,11 +294,17 @@ stderr 是日志通道，不属于协议内容。
 
 ## 6. JSON-RPC 请求格式
 
-第一期只定义一个方法：
+第一版定义两个方法：
 
 ```text
-turn
+turn      # 发起 / 继续一轮对话
+approve   # 响应中途审批门禁（waiting_approval）
 ```
+
+`turn` 是主方法。`approve` 只在会话停在 `waiting_approval` 时使用，用来提交审批决定
+并让会话继续执行；审批只能经 `approve` 提交，`turn` 在该状态下会被拒绝（见 §6.2
+状态表和 §8）。只有 `turn` 而没有 `approve` 会让只接 JSON-RPC 的桥接方在审批门禁处
+彻底卡死：既发不了 turn，也没有别的方法能推进。
 
 请求：
 
@@ -382,7 +388,8 @@ bundle.Flow.Resume(ctx, sessionID, input)
 |---|---|---|
 | `waiting_input` | 轮次正常结束（可续聊），或 Team 中途暂停等待用户输入 | 继续同一个 FlowSession |
 | `created` / `running` | 会话已建立或正在执行 | 调用 `HandleInput` |
-| `waiting_approval` | 中途审批门禁 | 必须先响应审批（ResumeApproval），不能直接发送普通 `turn` |
+| `waiting_approval` | 中途审批门禁 | 必须先调用 `approve` 响应审批（§6.3），不能直接发送普通 `turn` |
+| `waiting_tool` | 停在异步 Tool 任务上 | 等任务结束后 `Resume`；普通 `turn` 会被拒绝（返回 `-32002`）——新轮次不继承 pending 任务，会造孤儿 |
 | `failed` | 终态 | 修正输入后创建新 FlowSession，或使用显式 Recovery API |
 | `cancelled` | 终态 | 创建新 FlowSession |
 | `interrupted` | 存在未完成的执行 | 需要先执行 Recovery，不能直接发送普通 `turn` |
@@ -393,6 +400,73 @@ bundle.Flow.Resume(ctx, sessionID, input)
 同一个 `session_id` 当作永久聊天线程 ID 一直复用；只有会话进入
 `failed` / `cancelled` / `interrupted` 之后，才需要按业务决定使用 Recovery
 或省略 `session_id` 开启新 FlowSession。
+
+### 6.3 响应审批（`waiting_approval`）
+
+一轮 `turn` 让会话停在 `waiting_approval` 时，该轮响应的 `pending_approvals[]`
+会带上待响应的审批项，其中的 `request_id` 就是 `approve` 需要的 `approval_id`：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "session_id": "fs_123456",
+    "status": "waiting_approval",
+    "pending_approvals": [
+      {
+        "request_id": "req_abc",
+        "tool_name": "Bash",
+        "tool_call_id": "call_1",
+        "reason": "dangerous command requires approval"
+      }
+    ]
+  }
+}
+```
+
+提交决定：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "approve",
+  "params": {
+    "session_id": "fs_123456",
+    "approval_id": "req_abc",
+    "approved": true,
+    "reason": "允许执行该命令",
+    "approver": "oncall-bot"
+  }
+}
+```
+
+字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `params.session_id` | string | 是 | 停在 `waiting_approval` 的 FlowSession |
+| `params.approval_id` | string | 是 | 待响应审批的 request_id（别名 `request_id`）；必须等于当前待审批项，否则返回 `-32002` |
+| `params.approved` | bool | 是 | true 批准、false 拒绝。必须显式给出：审批是安全门禁，缺省值既不能当批准也不能当拒绝 |
+| `params.reason` | string | 否 | 批准/拒绝的理由，写入审批记录 |
+| `params.approver` / `params.approver_id` | string | 否 | 审批人标识，用于审计 |
+| `params.channel` | string | 否 | 审批来源，缺省时 Heron 填 `jsonrpc` |
+
+处理方式：
+
+```go
+bundle.Flow.ResumeApprovalWithResponse(ctx, sessionID, types.HITLResponse{
+    RequestID: approvalID,
+    Approved:  approved,
+    Reason:    reason,
+    Approver:  approver,
+    Channel:   "jsonrpc",
+})
+```
+
+成功响应与 `turn` 同构（审批决定落盘后会话继续执行完这一轮，返回 `session_id` /
+`status` / `reply` / `records` / `usage`），桥接方拿到结果后继续发 `turn` 即可。
 
 ## 7. JSON-RPC 响应格式
 
@@ -479,10 +553,11 @@ heron-connect session
 
 ### 7.3 第一版协议范围
 
-第一版只定义一个请求方法：
+第一版定义两个请求方法：
 
 ```text
 turn
+approve
 ```
 
 不增加以下 ACP 风格的方法：
@@ -498,6 +573,7 @@ session/update
 
 ```text
 turn(session_id, input) -> turn result
+approve(session_id, approval_id, approved, reason?) -> turn result
 ```
 
 调用方不需要单独调用 `session/new`。第一次 `turn` 请求没有 `session_id` 时，Heron 创建 FlowSession 并在响应中返回 ID；后续请求只有在 Session 仍可继续时才带回这个 ID。
@@ -541,17 +617,17 @@ turn(session_id, input) -> turn result
 |---|---|
 | `-32700` | 单行输入不是合法 JSON |
 | `-32600` | `jsonrpc` 不是 `2.0`、`id` 为空或非法、method 为空 |
-| `-32601` | method 不是 `turn` |
-| `-32602` | `params` 缺失、不是对象，或 `input` 为空 |
+| `-32601` | method 不是 `turn` 或 `approve` |
+| `-32602` | `params` 缺失、不是对象；`turn` 的 `input` 为空；`approve` 的 `session_id` / `approval_id` 为空或 `approved` 未给出 |
 | `-32001` | FlowTurn 执行失败（默认） |
-| `-32002` | Session 不存在，或状态不允许本次 turn（例如 `waiting_approval`：必须先响应审批） |
-| `-32003` | Runtime 配置或初始化失败 |
+| `-32002` | Session 不存在，或状态不允许本次操作：`turn` 撞上 `waiting_approval` / `waiting_tool`，或 `approve` 时会话不在 `waiting_approval` |
+| `-32003` | Runtime 配置或初始化失败；`approve` 时 Runtime 未实现审批接口 |
 | `-32004` | FlowTurn 被取消（错误链中包含 `context.Canceled`） |
 
 `waiting_approval` 状态下发送普通 `turn` 会被拒绝并返回 `-32002`，错误信息的
-`data` 中带回 `session_id` 与 `status`，调用方据此改为响应审批
-（见 §6 状态表）。这一约束是硬性的：直接把输入交给 `HandleInput`
-会绕过人机审批门禁。
+`data` 中带回 `session_id` 与 `status`（若该轮结果已知待审批项，还会带回
+`approval_id`），调用方据此改为调用 `approve`（见 §6.3）。这一约束是硬性的：
+直接把输入交给 `HandleInput` 会绕过人机审批门禁。
 
 ### 8.1 单次错误不退出进程
 

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -36,6 +37,18 @@ const (
 // first; routing the input through HandleInput would silently bypass the
 // human-in-the-loop gate (docs/CONNECT-CLI-JSONRPC.md §6).
 var errTurnBlockedByApproval = errors.New("session is waiting for approval: respond to the pending approval before sending a new turn")
+
+// errTurnBlockedByTool is returned when a plain turn targets a session parked
+// on async Tool tasks. FlowRuntime.HandleInput rejects that state too, but the
+// transport maps it here so the caller gets -32002 ("state does not allow this
+// turn") instead of a generic -32001, with the same shape as the approval case.
+var errTurnBlockedByTool = errors.New("session is waiting for a Tool: resume the pending Tool task before sending a new turn")
+
+// errApprovalNotConfigured is returned when the wired FlowRuntime cannot resume
+// approvals at all. Reporting it as a runtime failure rather than as a bad
+// request keeps "caller mistake" distinguishable from "this engine build has no
+// approval support".
+var errApprovalNotConfigured = errors.New("approval resume is not configured")
 
 // jsonRPCRequest is deliberately small. The transport is JSON-RPC 2.0, while
 // the "turn" method and its params are Heron-specific.
@@ -74,6 +87,35 @@ type jsonRPCTurnResult struct {
 	Records    []jsonRPCRecordSummary `json:"records,omitempty"`
 	Usage      types.TokenUsage       `json:"usage,omitempty"`
 	Error      string                 `json:"error,omitempty"`
+	// PendingApprovals is how a caller learns the approval_id it must pass to
+	// "approve". Without it, a JSON-RPC-only bridge parked at an approval
+	// gate has no way to advance the session.
+	PendingApprovals []jsonRPCPendingApproval `json:"pending_approvals,omitempty"`
+}
+
+type jsonRPCPendingApproval struct {
+	RequestID   string `json:"request_id"`
+	CallID      string `json:"call_id,omitempty"`
+	ToolCallID  string `json:"tool_call_id,omitempty"`
+	ToolName    string `json:"tool_name,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	RequestedAt string `json:"requested_at,omitempty"`
+}
+
+// jsonRPCApproveParams answers a pending Agent Tool approval gate.
+//
+// Approved is a pointer because a HITL gate must not treat "field absent" as
+// either answer: an omitted flag is a protocol error, not a denial.
+type jsonRPCApproveParams struct {
+	SessionID     string `json:"session_id,omitempty"`
+	FlowSessionID string `json:"flow_session_id,omitempty"`
+	ApprovalID    string `json:"approval_id,omitempty"`
+	RequestID     string `json:"request_id,omitempty"`
+	Approved      *bool  `json:"approved,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+	Approver      string `json:"approver,omitempty"`
+	ApproverID    string `json:"approver_id,omitempty"`
+	Channel       string `json:"channel,omitempty"`
 }
 
 type jsonRPCRecordSummary struct {
@@ -180,6 +222,8 @@ func (s *jsonRPCServer) handle(ctx context.Context, request jsonRPCRequest) erro
 	switch request.Method {
 	case "turn":
 		return s.handleTurn(ctx, id, request.Params)
+	case "approve":
+		return s.handleApprove(ctx, id, request.Params)
 	default:
 		return s.writeError(id, jsonRPCMethodNotFound, "method not found", map[string]any{
 			"method": request.Method,
@@ -212,7 +256,7 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 		switch {
 		case errors.Is(err, context.Canceled):
 			code = jsonRPCRequestCancelled
-		case errors.Is(err, errTurnBlockedByApproval):
+		case errors.Is(err, errTurnBlockedByApproval), errors.Is(err, errTurnBlockedByTool):
 			code = jsonRPCSessionFailed
 		case params.SessionID != "" && result.Session.ID == "":
 			code = jsonRPCSessionFailed
@@ -221,6 +265,98 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 	}
 
 	return s.writeResult(id, jsonRPCTurnResultFrom(result))
+}
+
+// handleApprove answers the pending approval of a session parked at
+// waiting_approval. It is the only JSON-RPC way out of that state: "turn" is
+// rejected there on purpose, so a transport that only speaks JSON-RPC would
+// otherwise have no method able to advance the session.
+func (s *jsonRPCServer) handleApprove(ctx context.Context, id json.RawMessage, rawParams json.RawMessage) error {
+	if len(rawParams) == 0 || string(rawParams) == "null" {
+		return s.writeError(id, jsonRPCInvalidParams, "params are required", nil)
+	}
+
+	var params jsonRPCApproveParams
+	if err := json.Unmarshal(rawParams, &params); err != nil {
+		return s.writeError(id, jsonRPCInvalidParams, "params must be an object", nil)
+	}
+	if params.SessionID == "" {
+		params.SessionID = params.FlowSessionID
+	}
+	if strings.TrimSpace(params.SessionID) == "" {
+		return s.writeError(id, jsonRPCInvalidParams, "session_id is required", nil)
+	}
+	if params.ApprovalID == "" {
+		params.ApprovalID = params.RequestID
+	}
+	if strings.TrimSpace(params.ApprovalID) == "" {
+		return s.writeError(id, jsonRPCInvalidParams, "approval_id is required", nil)
+	}
+	if params.Approved == nil {
+		// A HITL decision must be explicit. Defaulting an absent flag to
+		// false would silently deny, and to true would silently approve.
+		return s.writeError(id, jsonRPCInvalidParams, "approved is required", nil)
+	}
+
+	result, err := executeApproval(ctx, s.runtime, params)
+	if err != nil {
+		code := jsonRPCFlowTurnFailed
+		switch {
+		case errors.Is(err, context.Canceled):
+			code = jsonRPCRequestCancelled
+		case errors.Is(err, errApprovalNotConfigured):
+			code = jsonRPCRuntimeFailed
+		case errors.Is(err, errApprovalSessionNotWaiting):
+			code = jsonRPCSessionFailed
+		}
+		return s.writeError(id, code, err.Error(), turnErrorData(result, params.SessionID))
+	}
+
+	return s.writeResult(id, jsonRPCTurnResultFrom(result))
+}
+
+// errApprovalSessionNotWaiting marks "the session is not at an approval gate",
+// which is a caller/state error (-32002) rather than a turn failure (-32001).
+var errApprovalSessionNotWaiting = errors.New("session is not waiting for approval")
+
+func executeApproval(
+	ctx context.Context,
+	runtime types.FlowRuntime,
+	params jsonRPCApproveParams,
+) (types.FlowTurnResult, error) {
+	// ResumeApproval re-reads the session and rejects the wrong state anyway;
+	// this check only exists so a caller that mistimes the request gets
+	// -32002 instead of a generic -32001.
+	session, err := runtime.Status(ctx, params.SessionID)
+	if err != nil {
+		return types.FlowTurnResult{}, fmt.Errorf("%w: %v", errApprovalSessionNotWaiting, err)
+	}
+	if session.Status != types.SessionWaitingApproval {
+		return types.FlowTurnResult{Session: session}, fmt.Errorf(
+			"%w (session %s is %s)", errApprovalSessionNotWaiting, params.SessionID, session.Status,
+		)
+	}
+
+	decision := types.HITLResponse{
+		RequestID:  params.ApprovalID,
+		Approved:   *params.Approved,
+		Reason:     params.Reason,
+		Approver:   params.Approver,
+		ApproverID: params.ApproverID,
+		Channel:    params.Channel,
+		DecidedAt:  time.Now().UTC(),
+	}
+	if decision.Channel == "" {
+		decision.Channel = "jsonrpc"
+	}
+	if auditable, ok := runtime.(types.AuditableApprovalFlowRuntime); ok {
+		return auditable.ResumeApprovalWithResponse(ctx, params.SessionID, decision)
+	}
+	approval, ok := runtime.(types.ApprovalFlowRuntime)
+	if !ok {
+		return types.FlowTurnResult{}, errApprovalNotConfigured
+	}
+	return approval.ResumeApproval(ctx, params.SessionID, params.ApprovalID, *params.Approved, params.Reason)
 }
 
 func executeFlowTurn(
@@ -248,6 +384,10 @@ func executeFlowTurn(
 		// Return the session so the error response can still carry
 		// session_id/status for the caller to react to.
 		return types.FlowTurnResult{Session: session}, fmt.Errorf("%w (session %s)", errTurnBlockedByApproval, sessionID)
+	case types.SessionWaitingTool:
+		// A new turn cannot collect the pending Tool results; the session has
+		// to be resumed once those tasks are terminal.
+		return types.FlowTurnResult{Session: session}, fmt.Errorf("%w (session %s)", errTurnBlockedByTool, sessionID)
 	default:
 		return runtime.HandleInput(ctx, sessionID, input)
 	}
@@ -284,14 +424,30 @@ func jsonRPCTurnResultFrom(result types.FlowTurnResult) jsonRPCTurnResult {
 		})
 	}
 
+	pending := make([]jsonRPCPendingApproval, 0, len(result.PendingApprovals))
+	for _, item := range result.PendingApprovals {
+		summary := jsonRPCPendingApproval{
+			RequestID:  item.RequestID,
+			CallID:     item.CallID,
+			ToolCallID: item.ToolCallID,
+			ToolName:   item.ToolName,
+			Reason:     item.Reason,
+		}
+		if !item.RequestedAt.IsZero() {
+			summary.RequestedAt = item.RequestedAt.UTC().Format(time.RFC3339)
+		}
+		pending = append(pending, summary)
+	}
+
 	return jsonRPCTurnResult{
-		SessionID:  result.Session.ID,
-		FlowTurnID: result.Turn.ID,
-		Status:     result.Session.Status,
-		Reply:      result.Reply,
-		Records:    records,
-		Usage:      aggregateTeamUsage(result.TeamResults),
-		Error:      result.Error,
+		SessionID:        result.Session.ID,
+		FlowTurnID:       result.Turn.ID,
+		Status:           result.Session.Status,
+		Reply:            result.Reply,
+		Records:          records,
+		Usage:            aggregateTeamUsage(result.TeamResults),
+		Error:            result.Error,
+		PendingApprovals: pending,
 	}
 }
 
@@ -310,6 +466,12 @@ func turnErrorData(result types.FlowTurnResult, requestedSessionID string) map[s
 	}
 	if result.Session.Status != "" {
 		data["status"] = result.Session.Status
+	}
+	// Only present when the runtime handed back the pending gate together with
+	// the rejection; otherwise the caller reads it from the turn result that
+	// parked the session (docs/CONNECT-CLI-JSONRPC.md §6.3).
+	if len(result.PendingApprovals) > 0 && result.PendingApprovals[0].RequestID != "" {
+		data["approval_id"] = result.PendingApprovals[0].RequestID
 	}
 	return data
 }
