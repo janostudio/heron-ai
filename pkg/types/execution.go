@@ -266,24 +266,28 @@ type StartFlowRequest struct {
 //     API do see these PascalCase names. Renaming a field is a breaking
 //     change for those HTTP clients even though it is harmless for jsonl.
 //
+// The json tags below therefore freeze the HTTP response shape. They match
+// the current Go field names exactly, so the bytes on the wire are
+// unchanged; they exist to make the contract explicit rather than an
+// accident of Go naming.
+//
 // Forward-looking hazard: FlowTurnResult currently has no Usage field. Flow
 // level token usage is computed on the consumer side by summing
 // TeamTurnResult.Usage, which does not include consumption from spawned
 // child tasks. If a future change makes the flow layer aggregate usage from
 // the event stream instead and puts it here, this struct stops being
 // jsonl-invisible and its field names become part of the published event
-// contract. At that point it needs the same treatment as CallResult: explicit
-// json tags plus tests pinning the field set, before the change ships — not
-// after.
+// contract too. At that point re-check the frozen set: a new Usage field
+// needs a tag before that change ships, not after.
 type FlowTurnResult struct {
-	Session          FlowSession
-	Turn             FlowTurn
-	TeamResults      []TeamTurnResult
-	PendingToolTasks []PendingToolTask
-	PendingApprovals []AgentPendingApproval
-	Records          []SharedRecord
-	Reply            string
-	Error            string
+	Session          FlowSession            `json:"Session"`
+	Turn             FlowTurn               `json:"Turn"`
+	TeamResults      []TeamTurnResult       `json:"TeamResults"`
+	PendingToolTasks []PendingToolTask      `json:"PendingToolTasks"`
+	PendingApprovals []AgentPendingApproval `json:"PendingApprovals"`
+	Records          []SharedRecord         `json:"Records"`
+	Reply            string                 `json:"Reply"`
+	Error            string                 `json:"Error"`
 }
 
 // RuntimeLimits bounds one external FlowTurn. These are safety defaults, not

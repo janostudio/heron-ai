@@ -360,8 +360,36 @@ agent.jsonl 记录 agent 内部行为（增量事件，非完整 prompt 快照�
 - `pkg/types/execution.go` 的 `CallResult` 和 `TeamTurnResult` 上有显式 json tag 把这套
   名字固定下来，`pkg/types/execution_json_test.go` 会用测试锁死字段名集合。改 tag 会直接
   测试失败。
-- `AgentResult`（同文件）**不在契约内**：它从不落盘，只是 `TurnLoop` 到调用方的进程内
-  传递结构，字段会被逐个拷进 `CallResult`。它的字段名可以自由改。
+- `AgentRequest`、`CallRequest`、`AgentResult`（同文件）**不在契约内**：都是进程内传递
+  结构，从不整体序列化（jsonl 里 grep 不到，也没有结构体嵌入它们）。字段名可以自由改。
+
+### 6.5 两种契约面：jsonl 与 HTTP 响应体
+
+**"不进 jsonl"不等于"没有 wire 契约"。** 这是最容易踩的坑，务必分清两个面：
+
+| 契约面 | 载体 | 谁消费 | 结构体 |
+|---|---|---|---|
+| 事件流 | `flow.jsonl` / `team.jsonl` / `agent.jsonl` | 外部解析器、审计、回放、恢复 | `CallResult`、`TeamTurnResult` |
+| HTTP 响应体 | `internal/view/handler.go` 各端点的 JSON 输出 | HTTP view API 客户端 | `FlowTurnResult` |
+| 无契约 | — | 仅进程内 | `AgentRequest`、`CallRequest`、`AgentResult` |
+
+`FlowTurnResult` 是唯一横跨判断容易出错的：**它不写进三层 jsonl**（flow 层事件流只写自己
+挑出的字段），所以改它对 jsonl 兼容性无害；**但它被直接编码进 HTTP 响应体**——
+`internal/view/handler.go` 有 6 处，覆盖 start / handle / resume / status / approval /
+recovery。HTTP 客户端看到的就是 `{"Session":...,"TeamResults":...,"PendingToolTasks":...}`
+这套大驼峰名字，所以它**有契约**，只是属于 HTTP 面而非事件流面。
+
+JSON-RPC 反而不受影响：`cmd/server/jsonrpc.go` 的 `jsonRPCTurnResultFrom` 会先转成独立的
+带 snake_case tag 的 `jsonRPCTurnResult`，不直接吐 `FlowTurnResult`。
+
+因此：
+
+- 改 `FlowTurnResult` 字段名前先确认 HTTP 客户端，不要因为"它不进 jsonl"就以为可以随便改。
+- 它现在也有显式 json tag 冻结（`pkg/types/execution.go`），输出字节级不变。
+- 前瞻风险：`FlowTurnResult` 目前**没有** `Usage` 字段——flow 级 token 消耗是消费端按
+  `TeamTurnResult.Usage` 加总的，且不含 spawn 子任务消耗。若将来改成 flow 层按事件流汇总
+  并落到这里，它就同时进入事件流契约面，届时必须**在该改动上线前**把新字段的 tag 和测试
+  一起补上，不能事后补。
 
 ## 7. 相关文件索引
 

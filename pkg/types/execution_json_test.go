@@ -45,6 +45,21 @@ var teamTurnResultWireFields = []string{
 	"Error",
 }
 
+// flowTurnResultWireFields is the HTTP response contract. Unlike the two
+// above, FlowTurnResult is not written to the session jsonl; it is encoded
+// straight into HTTP response bodies by internal/view/handler.go, so this
+// set is what HTTP clients see.
+var flowTurnResultWireFields = []string{
+	"Session",
+	"Turn",
+	"TeamResults",
+	"PendingToolTasks",
+	"PendingApprovals",
+	"Records",
+	"Reply",
+	"Error",
+}
+
 // assertWireFields fails if the marshaled struct does not expose exactly the
 // published field names, and returns the decoded field map for further checks.
 func assertWireFields(t *testing.T, value any, want []string) map[string]json.RawMessage {
@@ -385,4 +400,90 @@ func TestTeamTurnResultRoundTrip(t *testing.T) {
 	require.Equal(t, "task_1", callResult.TaskID)
 	require.Equal(t, original.CallResults["answer"].Usage, callResult.Usage)
 	require.Equal(t, original.CallResults["answer"].Requests, callResult.Requests)
+}
+
+func TestFlowTurnResultMarshalUsesPublishedFieldNames(t *testing.T) {
+	assertWireFields(t, FlowTurnResult{}, flowTurnResultWireFields)
+}
+
+// TestFlowTurnResultLeafTypesStaySnakeCase pins the other half: the result
+// container is PascalCase and everything nested in it (FlowSession, FlowTurn,
+// the embedded TeamTurnResult, PendingToolTask, SharedRecord) is snake_case.
+func TestFlowTurnResultLeafTypesStaySnakeCase(t *testing.T) {
+	data, err := json.Marshal(FlowTurnResult{
+		Session:     FlowSession{ID: "fs_1", FlowID: "default", Status: SessionWaitingInput},
+		Turn:        FlowTurn{ID: "ft_1", Input: "hello"},
+		TeamResults: []TeamTurnResult{{Turn: TeamTurn{ID: "tt_1", TeamID: "default"}}},
+		Records:     []SharedRecord{{RecordID: "rec_1", Name: "Answer"}},
+	})
+	require.NoError(t, err)
+
+	var decoded struct {
+		Session struct {
+			ID     string        `json:"id"`
+			FlowID string        `json:"flow_id"`
+			Status SessionStatus `json:"status"`
+		}
+		Turn struct {
+			ID    string `json:"id"`
+			Input string `json:"input"`
+		}
+		TeamResults []struct {
+			Turn struct {
+				ID     string `json:"id"`
+				TeamID string `json:"team_id"`
+			}
+		}
+		Records []struct {
+			RecordID string `json:"record_id"`
+			Name     string `json:"name"`
+		}
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+
+	require.Equal(t, "fs_1", decoded.Session.ID)
+	require.Equal(t, "default", decoded.Session.FlowID)
+	require.Equal(t, SessionWaitingInput, decoded.Session.Status)
+	require.Equal(t, "ft_1", decoded.Turn.ID)
+	require.Equal(t, "hello", decoded.Turn.Input)
+	require.Len(t, decoded.TeamResults, 1)
+	require.Equal(t, "tt_1", decoded.TeamResults[0].Turn.ID)
+	require.Equal(t, "default", decoded.TeamResults[0].Turn.TeamID)
+	require.Len(t, decoded.Records, 1)
+	require.Equal(t, "rec_1", decoded.Records[0].RecordID)
+	require.Equal(t, "Answer", decoded.Records[0].Name)
+}
+
+// TestFlowTurnResultRoundTripThroughHTTP mirrors the real consumer path:
+// internal/view/handler.go encodes FlowTurnResult into an HTTP response body
+// and clients decode it back. Nothing may be lost in that trip.
+func TestFlowTurnResultRoundTripThroughHTTP(t *testing.T) {
+	original := FlowTurnResult{
+		Session:          FlowSession{ID: "fs_1", FlowID: "default", Status: SessionWaitingTool},
+		Turn:             FlowTurn{ID: "ft_1", Input: "hello"},
+		TeamResults:      []TeamTurnResult{{Turn: TeamTurn{ID: "tt_1", TeamID: "default"}, Reply: "r"}},
+		PendingToolTasks: []PendingToolTask{{CallID: "answer", TaskID: "task_1", CheckpointID: "cp_1"}},
+		PendingApprovals: []AgentPendingApproval{{RequestID: "req_1", ToolName: "bash"}},
+		Reply:            "hi",
+		Error:            "",
+	}
+
+	data, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var decoded FlowTurnResult
+	require.NoError(t, json.Unmarshal(data, &decoded))
+
+	require.Equal(t, original.Session.ID, decoded.Session.ID)
+	require.Equal(t, original.Session.Status, decoded.Session.Status)
+	require.Equal(t, original.Turn.ID, decoded.Turn.ID)
+	require.Equal(t, original.Turn.Input, decoded.Turn.Input)
+	require.Equal(t, original.Reply, decoded.Reply)
+	require.Equal(t, original.Error, decoded.Error)
+	require.Equal(t, original.PendingToolTasks, decoded.PendingToolTasks)
+	require.Len(t, decoded.PendingApprovals, 1)
+	require.Equal(t, "req_1", decoded.PendingApprovals[0].RequestID)
+	require.Len(t, decoded.TeamResults, 1)
+	require.Equal(t, "tt_1", decoded.TeamResults[0].Turn.ID)
+	require.Equal(t, "r", decoded.TeamResults[0].Reply)
 }
