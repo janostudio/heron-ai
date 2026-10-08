@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -174,6 +175,71 @@ func TestJSONRPCServerContinuesSessionWithCorrectMethod(t *testing.T) {
 			t.Fatalf("resume=%d handle=%d", stub.resumeCalls, stub.handleCalls)
 		}
 	})
+}
+
+// A session parked at an approval gate must not accept a plain turn: routing
+// the input through HandleInput would silently bypass the human-in-the-loop
+// gate documented in CONNECT-CLI-JSONRPC.md §6.
+func TestJSONRPCServerRejectsTurnWhileWaitingApproval(t *testing.T) {
+	stub := &jsonRPCFlowRuntimeStub{
+		status:       types.FlowSession{ID: "fs-1", Status: types.SessionWaitingApproval},
+		handleResult: testFlowTurnResult(types.SessionWaitingApproval, "must not run"),
+		resumeResult: testFlowTurnResult(types.SessionWaitingApproval, "must not run"),
+	}
+	var output bytes.Buffer
+	server := newJSONRPCServer(stub, "test-flow", &output)
+
+	err := server.Serve(context.Background(), strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"turn","params":{"session_id":"fs-1","input":"continue"}}`+"\n",
+	))
+	require.NoError(t, err)
+	require.Equal(t, 0, stub.handleCalls, "HandleInput must not bypass the approval gate")
+	require.Equal(t, 0, stub.resumeCalls, "Resume must not bypass the approval gate")
+
+	var response jsonRPCResponse
+	require.NoError(t, json.Unmarshal(output.Bytes(), &response))
+	require.NotNil(t, response.Error, "turn must be rejected")
+	require.Equal(t, jsonRPCSessionFailed, response.Error.Code)
+	require.Contains(t, response.Error.Message, "approval")
+
+	data, ok := response.Error.Data.(map[string]any)
+	require.True(t, ok, "error data = %#v", response.Error.Data)
+	require.Equal(t, "fs-1", data["session_id"])
+	require.Equal(t, string(types.SessionWaitingApproval), data["status"])
+}
+
+func TestExecuteFlowTurnRejectsWaitingApprovalSession(t *testing.T) {
+	stub := &jsonRPCFlowRuntimeStub{
+		status: types.FlowSession{ID: "fs-1", Status: types.SessionWaitingApproval},
+	}
+	_, err := executeFlowTurn(context.Background(), stub, "test-flow", "fs-1", "continue")
+	require.ErrorIs(t, err, errTurnBlockedByApproval)
+	require.Equal(t, 0, stub.handleCalls)
+	require.Equal(t, 0, stub.resumeCalls)
+}
+
+func TestJSONRPCServerMapsCanceledTurnToCanceledErrorCode(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "bare context.Canceled", err: context.Canceled},
+		{name: "wrapped context.Canceled", err: fmt.Errorf("agent round aborted: %w", context.Canceled)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stub := &jsonRPCFlowRuntimeStub{err: test.err}
+			var output bytes.Buffer
+			server := newJSONRPCServer(stub, "test-flow", &output)
+			require.NoError(t, server.Serve(context.Background(), strings.NewReader(
+				`{"jsonrpc":"2.0","id":1,"method":"turn","params":{"input":"hello"}}`+"\n",
+			)))
+
+			var response jsonRPCResponse
+			require.NoError(t, json.Unmarshal(output.Bytes(), &response))
+			require.NotNil(t, response.Error)
+			require.Equal(t, jsonRPCRequestCancelled, response.Error.Code)
+		})
+	}
 }
 
 func TestJSONRPCServerIgnoresNotifications(t *testing.T) {

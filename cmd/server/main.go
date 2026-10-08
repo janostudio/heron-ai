@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -181,15 +182,25 @@ func runPrompt(flowPath, sessionID, prompt string, o cliOverrides) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Flow: %s\n", bundle.Definitions.Flow.ID)
-	fmt.Printf("Model: %s\n", modelName)
-	fmt.Printf("FlowSession: %s\n", result.Session.ID)
-	fmt.Printf("Status: %s\n", result.Session.Status)
+	writePromptResult(os.Stdout, bundle.Definitions.Flow.ID, modelName, result)
+}
+
+// writePromptResult renders the human-readable `--prompt` output. It shares
+// aggregateTeamUsage with the JSON-RPC result so both transports report the
+// same token totals.
+func writePromptResult(w io.Writer, flowID, modelName string, result types.FlowTurnResult) {
+	fmt.Fprintf(w, "Flow: %s\n", flowID)
+	fmt.Fprintf(w, "Model: %s\n", modelName)
+	fmt.Fprintf(w, "FlowSession: %s\n", result.Session.ID)
+	fmt.Fprintf(w, "Status: %s\n", result.Session.Status)
+	if usage := aggregateTeamUsage(result.TeamResults); usage.TotalTokens > 0 {
+		fmt.Fprintf(w, "Tokens: %d (prompt %d, completion %d)\n", usage.TotalTokens, usage.PromptTokens, usage.CompletionTokens)
+	}
 	if strings.TrimSpace(result.Reply) != "" {
-		fmt.Printf("\n%s\n", result.Reply)
+		fmt.Fprintf(w, "\n%s\n", result.Reply)
 	}
 	for _, record := range result.Records {
-		fmt.Printf("\n[%s] %s\n", record.Name, record.Summary)
+		fmt.Fprintf(w, "\n[%s] %s\n", record.Name, record.Summary)
 	}
 }
 

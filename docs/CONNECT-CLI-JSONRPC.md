@@ -117,6 +117,7 @@ Flow: auto_bugfix_gitignore
 Model: hy3-ioa
 FlowSession: fs_xxx
 Status: waiting_input
+Tokens: 1234 (prompt 1000, completion 234)
 
 已经完成检查。
 
@@ -533,6 +534,24 @@ turn(session_id, input) -> turn result
 | `-32002` | Session 不存在或状态不允许 |
 | `-32003` | Runtime 配置或初始化失败 |
 | `-32004` | 请求被取消 |
+
+当前实现中的触发条件：
+
+| 错误码 | 触发场景 |
+|---|---|
+| `-32700` | 单行输入不是合法 JSON |
+| `-32600` | `jsonrpc` 不是 `2.0`、`id` 为空或非法、method 为空 |
+| `-32601` | method 不是 `turn` |
+| `-32602` | `params` 缺失、不是对象，或 `input` 为空 |
+| `-32001` | FlowTurn 执行失败（默认） |
+| `-32002` | Session 不存在，或状态不允许本次 turn（例如 `waiting_approval`：必须先响应审批） |
+| `-32003` | Runtime 配置或初始化失败 |
+| `-32004` | FlowTurn 被取消（错误链中包含 `context.Canceled`） |
+
+`waiting_approval` 状态下发送普通 `turn` 会被拒绝并返回 `-32002`，错误信息的
+`data` 中带回 `session_id` 与 `status`，调用方据此改为响应审批
+（见 §6 状态表）。这一约束是硬性的：直接把输入交给 `HandleInput`
+会绕过人机审批门禁。
 
 ### 8.1 单次错误不退出进程
 

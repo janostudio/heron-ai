@@ -22,10 +22,20 @@ const (
 	jsonRPCInvalidParams  = -32602
 
 	// Application errors use the implementation-reserved range.
-	jsonRPCFlowTurnFailed = -32001
-	jsonRPCSessionFailed  = -32002
-	jsonRPCRuntimeFailed  = -32003
+	// See docs/CONNECT-CLI-JSONRPC.md §8.
+	jsonRPCFlowTurnFailed = -32001 // FlowTurn 执行失败
+	// -32002 also covers "session state does not allow this turn", e.g. a
+	// session parked at an approval gate.
+	jsonRPCSessionFailed    = -32002 // Session 不存在或状态不允许
+	jsonRPCRuntimeFailed    = -32003 // Runtime 配置或初始化失败
+	jsonRPCRequestCancelled = -32004 // 请求被取消
 )
+
+// errTurnBlockedByApproval is returned when a plain turn targets a session that
+// is parked at an approval gate. The caller must answer the pending approval
+// first; routing the input through HandleInput would silently bypass the
+// human-in-the-loop gate (docs/CONNECT-CLI-JSONRPC.md §6).
+var errTurnBlockedByApproval = errors.New("session is waiting for approval: respond to the pending approval before sending a new turn")
 
 // jsonRPCRequest is deliberately small. The transport is JSON-RPC 2.0, while
 // the "turn" method and its params are Heron-specific.
@@ -199,7 +209,12 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 	result, err := executeFlowTurn(ctx, s.runtime, s.flowID, params.SessionID, params.Input)
 	if err != nil {
 		code := jsonRPCFlowTurnFailed
-		if params.SessionID != "" && result.Session.ID == "" {
+		switch {
+		case errors.Is(err, context.Canceled):
+			code = jsonRPCRequestCancelled
+		case errors.Is(err, errTurnBlockedByApproval):
+			code = jsonRPCSessionFailed
+		case params.SessionID != "" && result.Session.ID == "":
 			code = jsonRPCSessionFailed
 		}
 		return s.writeError(id, code, err.Error(), turnErrorData(result, params.SessionID))
@@ -226,10 +241,16 @@ func executeFlowTurn(
 	if err != nil {
 		return types.FlowTurnResult{}, err
 	}
-	if session.Status == types.SessionWaitingInput {
+	switch session.Status {
+	case types.SessionWaitingInput:
 		return runtime.Resume(ctx, sessionID, input)
+	case types.SessionWaitingApproval:
+		// Return the session so the error response can still carry
+		// session_id/status for the caller to react to.
+		return types.FlowTurnResult{Session: session}, fmt.Errorf("%w (session %s)", errTurnBlockedByApproval, sessionID)
+	default:
+		return runtime.HandleInput(ctx, sessionID, input)
 	}
-	return runtime.HandleInput(ctx, sessionID, input)
 }
 
 func validJSONRPCID(raw json.RawMessage) bool {

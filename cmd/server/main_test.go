@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -216,6 +217,45 @@ func TestSessionFlowRunnerRun(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, stub.startCalls)
 		require.Equal(t, 1, stub.handleCalls)
+	})
+}
+
+func TestWritePromptResult(t *testing.T) {
+	newResult := func(usages ...types.TokenUsage) types.FlowTurnResult {
+		teamResults := make([]types.TeamTurnResult, 0, len(usages))
+		for _, usage := range usages {
+			teamResults = append(teamResults, types.TeamTurnResult{Usage: usage})
+		}
+		return types.FlowTurnResult{
+			Session:     types.FlowSession{ID: "fs-1", Status: types.SessionWaitingInput},
+			Reply:       "done",
+			Records:     []types.SharedRecord{{Name: "DiagnosisReport", Summary: "found one issue"}},
+			TeamResults: teamResults,
+		}
+	}
+
+	t.Run("reports aggregated token usage", func(t *testing.T) {
+		var buf bytes.Buffer
+		writePromptResult(&buf, "test-flow", "hy3", newResult(
+			types.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
+			types.TokenUsage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3},
+		))
+
+		out := buf.String()
+		require.Contains(t, out, "Flow: test-flow\n")
+		require.Contains(t, out, "Model: hy3\n")
+		require.Contains(t, out, "FlowSession: fs-1\n")
+		require.Contains(t, out, "Status: waiting_input\n")
+		// Same aggregation the JSON-RPC result uses: 30 + 3.
+		require.Contains(t, out, "Tokens: 33 (prompt 11, completion 22)\n")
+		require.Contains(t, out, "\ndone\n")
+		require.Contains(t, out, "[DiagnosisReport] found one issue")
+	})
+
+	t.Run("omits token line when no usage recorded", func(t *testing.T) {
+		var buf bytes.Buffer
+		writePromptResult(&buf, "test-flow", "hy3", newResult())
+		require.NotContains(t, buf.String(), "Tokens:")
 	})
 }
 
