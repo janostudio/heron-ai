@@ -161,10 +161,10 @@ func (t *SpawnTool) SetTaskRunner(runner *AsyncToolExecutor) {
 	t.tasks = runner
 }
 
-// SetSessionWriter wires the optional session.jsonl writer used to emit
-// agent-level events for spawned child turns, so child consumption
-// (agent_turn.completed → requests[]) lands in the same fact source as
-// ordinary Agent turns.
+// SetSessionWriter wires the optional per-layer session writer used to emit
+// agent-level events for spawned child turns (they land in team.jsonl), so
+// child consumption (agent_turn.completed → payload.call_result.Requests[])
+// is recorded in the same fact source as ordinary Agent turns.
 func (t *SpawnTool) SetSessionWriter(writer storage.SessionWriter) {
 	t.sessions = writer
 }
@@ -428,7 +428,7 @@ func spawnOutcomeEntry(outcome *spawnOutcome, includeReply bool) map[string]any 
 // and persists the agent state afterwards. The child context carries the
 // spawn depth (and inherits the record collector) for nested spawning. Child
 // turns emit agent-level session events so their consumption lands in the
-// same session.jsonl fact source as ordinary agent turns.
+// same team.jsonl fact source as ordinary agent turns.
 func (t *SpawnTool) runChild(
 	ctx context.Context,
 	agentID string,
