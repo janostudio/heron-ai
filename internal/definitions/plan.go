@@ -162,24 +162,28 @@ func safeJoin(root, rel string) (string, error) {
 // teams) have landed and before the first REFERENCING file (the flow) is
 // touched; tests use it to simulate a crash between the two halves and assert
 // the half-written tree still loads. A non-nil error from before aborts the
-// remaining writes so the caller's rollback path exercises the same state a
-// real failure would leave.
+// remaining writes and nothing repairs what already landed, so the tree is left
+// in exactly the state a real mid-commit crash would leave behind.
 //
-// Kept uncalled on purpose (so: nolint). It is the seam for a "crash between
-// the referenced and the referencing half of a commit" test, a state that
-// cannot be produced today: Writer.apply's only hook, afterStage, fires before
-// any byte is committed, so a test can only ever see zero files written. The
-// sibling Writer.applyTo (merge.go) is the live path and stays the one to call.
+// Only the tests call it; production goes through Writer.applyTo, which is the
+// same loop without the hook. It is the seam for a "crash between the
+// referenced and the referencing half of a commit" test, a state nothing else
+// can produce: Writer.apply's only hook, afterStage, fires before any byte is
+// committed, so a test can only ever see zero files written.
 //
-// KNOWN GAP — the hook does not yet do what the paragraph above says. It runs
-// after the whole loop, not between the halves, so wiring it as-is would
-// exercise "crash after everything", not "crash in the middle". Fix the hook
-// position (split the loop at the first rank >= commitRank("flows")) at the
-// same time as the test that needs it; moving it alone leaves it unverified.
-//
-//nolint:unused // test seam for a mid-commit crash test, see comment above
+// A plan with no referencing file has no boundary to stop at, so before never
+// runs for one — a create_agent plan, say, writes the agent and returns. Callers
+// that need an unconditional hook want afterStage instead.
 func (p WritePlan) applyPlanTo(treeRoot string, before func() error) error {
+	fired := false
 	for _, op := range p.InCommitOrder() {
+		if before != nil && !fired && commitRank(op.Path) >= commitRank("flows") {
+			fired = true
+			if err := before(); err != nil {
+				return err
+			}
+		}
+
 		target, err := safeJoin(treeRoot, op.Path)
 		if err != nil {
 			return err
@@ -193,11 +197,6 @@ func (p WritePlan) applyPlanTo(treeRoot string, before func() error) error {
 
 		if err := writeFileAtomic(target, op.Data); err != nil {
 			return fmt.Errorf("write %s: %w", op.Path, err)
-		}
-	}
-	if before != nil {
-		if err := before(); err != nil {
-			return err
 		}
 	}
 	return nil
