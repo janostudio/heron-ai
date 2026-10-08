@@ -137,6 +137,20 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 		session.Status == types.SessionWaitingApproval {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is already %s", session.ID, session.Status)
 	}
+	// waiting_tool is rejected for the same reason waiting_approval is: this
+	// entry point starts a brand-new FlowTurn from the Flow entry team and
+	// never consults pendingTeamResume, so a turn started here has no way to
+	// collect the async Tool results the session is parked on. The pending
+	// tasks keep running, their completions wake a session that is no longer
+	// in waiting_tool (the wake-up is then dropped), and every attempt stacks
+	// another open turn on top. Resume is the path that resumes pending Tool
+	// tasks; use it instead.
+	if session.Status == types.SessionWaitingTool {
+		return types.FlowTurnResult{}, fmt.Errorf(
+			"flow session %q is waiting for a Tool: resume the pending Tool task instead of starting a new turn",
+			session.ID,
+		)
+	}
 	if interrupted, err := r.RecoveryStatus(ctx, sessionID); err == nil && len(interrupted.Interrupted) > 0 {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q has unfinished execution; use recovery status first", sessionID)
 	}

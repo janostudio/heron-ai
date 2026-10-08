@@ -225,12 +225,14 @@ func TestRuntimeTeamWaitingInputStatusSuspendsSession(t *testing.T) {
 
 type aggregateResumeTeamRuntime struct {
 	mu      sync.Mutex
+	runs    int
 	resumes int
 	lastReq types.TeamTurnRequest
 }
 
 func (r *aggregateResumeTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
 	r.mu.Lock()
+	r.runs++
 	r.lastReq = req
 	if len(req.ResumeCalls) > 0 {
 		r.resumes++
@@ -648,4 +650,37 @@ func TestRuntimeRecoveryRetryRunsContainingTeamAndMarksRecoveryComplete(t *testi
 func appendTestEvent(writer storage.SessionWriter, sessionID string, event storage.SessionEvent) error {
 	_, err := writer.Append(context.Background(), sessionID, storage.LayerFlow, event)
 	return err
+}
+
+// TestRuntimeHandleInputRejectsWaitingTool is the guard for a session parked on
+// an async Tool task. A fresh turn started through HandleInput never consults
+// pendingTeamResume, so it would run a new turn while the pending task keeps
+// running; when that task finally completes, no one consumes its result and the
+// wake-up is dropped. Resume is the only path that collects pending Tool
+// results, so waiting_tool is rejected here like waiting_approval.
+func TestRuntimeHandleInputRejectsWaitingTool(t *testing.T) {
+	ctx := context.Background()
+	files := storage.NewFileStore(t.TempDir())
+	sessions := storage.NewJSONLSessionWriter(files)
+	tasks := agent.NewFileToolTaskStore(files)
+	require.NoError(t, tasks.Save(ctx, types.ToolTask{
+		ID: "task-a", Status: types.ToolTaskRunning, UpdatedAt: time.Now().UTC(),
+	}))
+	teamRuntime := &aggregateResumeTeamRuntime{}
+	runtime := newTestRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil)
+	runtime.SetTaskStore(tasks)
+
+	first, err := runtime.Start(ctx, types.StartFlowRequest{FlowID: "aggregate"})
+	require.NoError(t, err)
+	require.Equal(t, types.SessionWaitingTool, first.Session.Status)
+	runsBefore := teamRuntime.runs
+
+	_, err = runtime.HandleInput(ctx, first.Session.ID, "forget the tool, do something else")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "waiting for a Tool")
+	require.Equal(t, runsBefore, teamRuntime.runs, "no new turn must run while a Tool task is pending")
+
+	status, err := runtime.Status(ctx, first.Session.ID)
+	require.NoError(t, err)
+	require.Equal(t, types.SessionWaitingTool, status.Status, "the session must stay resumable")
 }
