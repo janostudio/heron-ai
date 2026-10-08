@@ -305,7 +305,7 @@ func newDownstreamRuntime(t *testing.T, runner agent.AgentRunner, files storage.
 	}
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(call.NewAgentExecutor(runner)))
-	runtime := NewRuntime(registry, map[string]types.AgentConfig{
+	runtime := newTestRuntime(registry, map[string]types.AgentConfig{
 		"fix-agent":    {Name: "fix-agent"},
 		"child-agent":  {Name: "child-agent"},
 		"verify-agent": {Name: "verify-agent"},
@@ -505,7 +505,7 @@ func TestRuntime_InstanceLockSharedAcrossParents(t *testing.T) {
 	// pre-locked test below and by the agentstore.AgentStateLocks unit tests.)
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(call.NewAgentExecutor(&distinctKeysRunner{})))
-	runtime := NewRuntime(registry, map[string]types.AgentConfig{
+	runtime := newTestRuntime(registry, map[string]types.AgentConfig{
 		"fix-agent":   {Name: "fix-agent"},
 		"child-agent": {Name: "child-agent"},
 	})
@@ -575,7 +575,7 @@ func TestRuntime_ConcurrentSameAgentSyntheticCallsBothRun(t *testing.T) {
 
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(call.NewAgentExecutor(&busyInstanceRunner{})))
-	runtime := NewRuntime(registry, map[string]types.AgentConfig{
+	runtime := newTestRuntime(registry, map[string]types.AgentConfig{
 		"fix-agent":   {Name: "fix-agent"},
 		"child-agent": {Name: "child-agent"},
 	})
@@ -716,13 +716,13 @@ func TestRuntime_TurnLoopSpawnDownstreamEndToEnd(t *testing.T) {
 	instanceRegistry := agentstore.NewRegistry(files)
 	states := state.NewStore(files, state.Limits{})
 	agentStateLocks := agentstore.NewAgentStateLocks()
-	spawnTool := agent.NewSpawnTool(turnLoop, agents, instanceRegistry, states)
+	spawnTool := agent.NewSpawnTool(turnLoop, newTestDefinitionStore(agents), instanceRegistry, states)
 	spawnTool.SetAgentStateLocks(agentStateLocks)
 	toolRegistry.Register(spawnTool)
 
 	executors := call.NewRegistry()
 	require.NoError(t, executors.Register(call.NewAgentExecutor(turnLoop)))
-	runtime := NewRuntime(executors, agents)
+	runtime := newTestRuntime(executors, agents)
 	runtime.SetStateStore(states)
 	runtime.SetAgentStateLocks(agentStateLocks)
 

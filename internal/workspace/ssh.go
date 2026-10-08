@@ -122,6 +122,19 @@ func (s *sshWorkspace) ResolvePathForTool(p string) (string, string, error) {
 	return s.resolve(p)
 }
 
+// ResolvePathForToolRestricted applies the caller's path restriction. See the
+// local backend for why this exists as a separate method.
+func (s *sshWorkspace) ResolvePathForToolRestricted(p string, restrict Restriction) (string, string, error) {
+	absolute, relative, err := s.resolve(p)
+	if err != nil {
+		return "", "", err
+	}
+	if !restrict.permits(relative) {
+		return "", "", fmt.Errorf("%w: %s", ErrFileNotFound, relative)
+	}
+	return absolute, relative, nil
+}
+
 // resolve returns (absolute remote path, workspace-relative path, error).
 // Relative paths are joined against the remote root; absolute paths must still
 // fall inside root. Traversal outside the root is rejected.
@@ -197,6 +210,11 @@ func (s *sshWorkspace) Read(ctx context.Context, req ReadRequest) (ReadResult, e
 	if err != nil {
 		return ReadResult{}, err
 	}
+	// Denied before the SFTP read, on the resolved relative path. See
+	// localWorkspace.Read and restrict.go.
+	if !req.Restrict.permits(relative) {
+		return ReadResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, relative)
+	}
 	client, err := s.acquireSFTP()
 	if err != nil {
 		return ReadResult{}, fmt.Errorf("open sftp session: %w", err)
@@ -250,6 +268,14 @@ func (s *sshWorkspace) Write(ctx context.Context, req WriteRequest) (WriteResult
 	abs, relative, err := s.resolve(req.Path)
 	if err != nil {
 		return WriteResult{}, err
+	}
+	// Denied before the SFTP session is opened, on the resolved relative
+	// path, exactly as localWorkspace.Write does — the two backends must not
+	// disagree about who may write where, or the restriction would hold only
+	// for workspaces configured as "local". See the local backend for why
+	// the denial is an error rather than a silent no-op.
+	if !req.Restrict.permits(relative) {
+		return WriteResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, relative)
 	}
 
 	mode := strings.TrimSpace(req.Mode)
@@ -482,6 +508,12 @@ func (s *sshWorkspace) GlobWithOptions(ctx context.Context, req GlobRequest) ([]
 				if isDefaultExcludedDir(relative) {
 					continue
 				}
+				// Same prune-then-filter shape as the local backend: a
+				// denied directory is not descended into, and a denied path
+				// never reaches the match list. See restrict.go.
+				if !req.Restrict.permits(relative) {
+					continue
+				}
 				if req.IncludeDirs && matcher.MatchString(relative) {
 					matches = append(matches, relative)
 					if len(matches) >= maxResults {
@@ -491,6 +523,9 @@ func (s *sshWorkspace) GlobWithOptions(ctx context.Context, req GlobRequest) ([]
 				if err := walk(rel); err != nil {
 					return err
 				}
+				continue
+			}
+			if !req.Restrict.permits(relative) {
 				continue
 			}
 			if matcher.MatchString(relative) {
@@ -587,6 +622,27 @@ func (s *sshWorkspace) Search(ctx context.Context, req SearchRequest) (SearchRes
 	if maxFileBytes > 0 {
 		grepArgs = append(grepArgs, fmt.Sprintf("--max-filesize=%d", maxFileBytes))
 	}
+	// Steer the remote grep away from denied trees. This is an optimization,
+	// not the guarantee: --exclude-dir is a GNU extension, its pattern
+	// matching differs between greps, and a remote toolchain the engine does
+	// not control may simply ignore it. The authoritative check is the
+	// per-match filter below, which runs on results this process parses and
+	// cannot be skipped by the remote side.
+	//
+	// A directory that a Denied entry covers but an Allowed entry re-admits
+	// must NOT be excluded, or the hint would contradict the filter and hide
+	// a tree the caller is entitled to. Checked against Allowed with the
+	// path itself, which is the same test permits uses.
+	for _, denied := range req.Restrict.Denied {
+		base := cleanRelative(denied)
+		if base == "" {
+			continue
+		}
+		if matchesAnyPrefix(base, req.Restrict.Allowed) {
+			continue
+		}
+		grepArgs = append(grepArgs, "--exclude-dir", path.Base(base))
+	}
 	grepArgs = append(grepArgs, "--", req.Pattern, ".")
 
 	args := make([]string, 0, len(grepArgs)+2)
@@ -619,6 +675,13 @@ func (s *sshWorkspace) Search(ctx context.Context, req SearchRequest) (SearchRes
 		}
 		rel, lineNo, content, ok := parseGrepLine(line)
 		if !ok {
+			continue
+		}
+		// The authoritative denial, applied to every match the remote grep
+		// returned. Grep output paths are relative to the remote cwd, which
+		// is the workspace root (see grepCmd), so they compare directly
+		// against the deny list.
+		if !req.Restrict.permits(rel) {
 			continue
 		}
 		result.Matches = append(result.Matches, SearchMatch{Path: rel, Line: lineNo, Content: content})
@@ -727,7 +790,7 @@ func expandHome(p string) string {
 }
 
 // shellQuote wraps a string in single quotes for use inside a POSIX shell
-// command. Embedded single quotes are escaped with the "'\''" idiom.
+// command. Embedded single quotes are escaped with the "'\”" idiom.
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"

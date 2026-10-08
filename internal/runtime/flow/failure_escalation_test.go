@@ -92,7 +92,7 @@ func TestRuntimeEscalatesTeamFailureToCoordinatorWithoutReplayingFailedTeam(t *t
 	sessions := storage.NewJSONLSessionWriter(files)
 	evidence := storage.NewJSONLEvidenceStore(files)
 	teamRuntime := &failureAggregationTeamRuntime{}
-	runtime := NewRuntime(
+	runtime := newTestRuntime(
 		failureAggregationDefinitions(),
 		teamRuntime,
 		sessions,

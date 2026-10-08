@@ -75,6 +75,30 @@ func (s *localWorkspace) ResolvePathForTool(path string) (string, string, error)
 	return s.resolve(path)
 }
 
+// ResolvePathForToolRestricted is ResolvePathForTool with the caller's path
+// restriction applied.
+//
+// It exists because resolving a path and being allowed to use it are two
+// different questions, and a helper that answers only the first hands a
+// restricted path straight to an external command. CodeNav does exactly that:
+// it resolves the file and then passes the workspace root to a language server
+// that will happily read anything under it.
+//
+// The path is normalized the same way the read paths normalize theirs, so a
+// restriction cannot be defeated by spelling.
+func (s *localWorkspace) ResolvePathForToolRestricted(path string, restrict Restriction) (string, string, error) {
+	full, relative, err := s.resolve(path)
+	if err != nil {
+		return "", "", err
+	}
+	if !restrict.permits(relative) {
+		// Same shape as Read: report absence rather than refusal, so the
+		// caller cannot use this to probe which paths exist.
+		return "", "", fmt.Errorf("%w: %s", ErrFileNotFound, relative)
+	}
+	return full, relative, nil
+}
+
 // NewOperationID returns a unique operation identifier for external Tools
 // that publish WorkspaceOperation audit facts.
 func NewOperationID() string {
@@ -87,6 +111,10 @@ type ReadRequest struct {
 	LineStart int
 	LineEnd   int
 	MaxBytes  int
+	// Restrict is the caller's path restriction. See restrict.go: the walk
+	// checks it per returned path, and Read checks the resolved path before
+	// opening the file.
+	Restrict Restriction
 }
 
 type ReadResult struct {
@@ -105,6 +133,18 @@ func (s *localWorkspace) Read(ctx context.Context, req ReadRequest) (ReadResult,
 	fullPath, relative, err := s.resolve(req.Path)
 	if err != nil {
 		return ReadResult{}, err
+	}
+	// The denial is checked on the *resolved* relative path, after symlink
+	// resolution, not on req.Path. A request naming "link/private.md" where
+	// "link" points into a denied directory must be denied too, and only the
+	// resolved form can see that. Reading the file first and filtering the
+	// result would already have opened it.
+	if !req.Restrict.permits(relative) {
+		// ErrFileNotFound, not a distinct "denied" error: a separate error
+		// would confirm that the file exists and is off limits, which is
+		// exactly the fact the restriction exists to withhold. The read
+		// reports what a caller without access can see.
+		return ReadResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, relative)
 	}
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
@@ -159,6 +199,11 @@ type WriteRequest struct {
 	Mode         string
 	OldText      string
 	NewText      string
+	// Restrict is the caller's path restriction. See restrict.go. It is
+	// checked on the resolved path before anything is read or written, and
+	// it covers every mode — see localWorkspace.Write for why the check
+	// cannot be attached to one mode without leaving the others open.
+	Restrict Restriction
 }
 
 type WriteResult struct {
@@ -174,6 +219,29 @@ func (s *localWorkspace) Write(ctx context.Context, req WriteRequest) (WriteResu
 	fullPath, relative, err := s.resolve(req.Path)
 	if err != nil {
 		return WriteResult{}, err
+	}
+	// Same resolved-path check as Read, same position: before the file is
+	// touched. It deliberately runs before the mode switch, so create,
+	// replace and edit are all covered by this one call — a check placed
+	// inside one branch is a check the other branches do not have.
+	//
+	// # Why a denied write is refused loudly, not silently skipped
+	//
+	// The read side reports denial as absence, so that a caller cannot use
+	// the error to learn that a file exists. That reasoning does not carry
+	// over to writes, because the two failures look different to the one
+	// party who matters — the model. A denied read returns nothing, which
+	// reads as "no results" and prompts another attempt. A denied write that
+	// returned success would report a file as changed when nothing on disk
+	// moved, and the model would build its next steps on a file that does
+	// not exist. There is also nothing left to hide here: the caller already
+	// named the path, so refusing it discloses nothing it did not supply.
+	//
+	// ErrFileNotFound is reused rather than a new sentinel, so a caller that
+	// branches on "no such file" keeps working without a new case, and so
+	// the read and write sides of the restriction stay one concept.
+	if !req.Restrict.permits(relative) {
+		return WriteResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, relative)
 	}
 	if err := contextErr(ctx); err != nil {
 		return WriteResult{}, err
@@ -362,6 +430,8 @@ type GlobRequest struct {
 	Pattern     string
 	MaxResults  int
 	IncludeDirs bool
+	// Restrict is the caller's path restriction. See restrict.go.
+	Restrict Restriction
 }
 
 func (s *localWorkspace) GlobWithOptions(ctx context.Context, req GlobRequest) ([]string, error) {
@@ -402,6 +472,19 @@ func (s *localWorkspace) GlobWithOptions(ctx context.Context, req GlobRequest) (
 		if entry.IsDir() && isDefaultExcludedDir(relative) {
 			return filepath.SkipDir
 		}
+		// Prune a denied directory instead of merely dropping its matches:
+		// walking into it would still read every entry's name, and a walk
+		// that visits a tree it will never return cannot be distinguished
+		// from one that never saw it — the cheap correct thing is to not
+		// descend at all. permits covers files too, so this one check
+		// handles both; a directory that is allowed back (a caller's own
+		// private tree, see Restriction) is not pruned.
+		if !req.Restrict.permits(relative) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if entry.IsDir() && !req.IncludeDirs {
 			return nil
 		}
@@ -430,6 +513,11 @@ type SearchRequest struct {
 	MaxResults   int
 	MaxChars     int
 	MaxFileBytes int
+	// Restrict is the caller's path restriction. See restrict.go. It applies
+	// to every file the walk would return, not only to Path: searching from
+	// the workspace root must not surface a restricted file further down the
+	// tree.
+	Restrict Restriction
 }
 
 type SearchMatch struct {
@@ -502,6 +590,17 @@ func (s *localWorkspace) Search(ctx context.Context, req SearchRequest) (SearchR
 			if isDefaultExcludedDir(relative) {
 				return filepath.SkipDir
 			}
+			// Prune a denied directory so its files are never opened. The
+			// same check covers files below, but a directory prefix denial
+			// has to be caught here — otherwise every file inside it is
+			// read from disk before being discarded, which is both wasteful
+			// and one refactor away from returning what it just read.
+			if !req.Restrict.permits(relative) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !req.Restrict.permits(relative) {
 			return nil
 		}
 		if req.Include != "" {

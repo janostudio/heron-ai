@@ -386,6 +386,12 @@ func learnOneSessionWithFiles(
 	}
 
 	store := knowledge.NewMarkdownStore(files, filepath.Join(".agents", "knowledge"))
+	// Owners known for this batch of sources, which is what lets a distilled
+	// private scope become a path the loader accepts. The summarizer is told
+	// them so it can copy one into the frontmatter; this map is the fallback
+	// for when it does not, so the entry is downgraded to flow rather than
+	// written with a private scope that names nobody.
+	owners := sourceOwners(sources)
 	saved := 0
 	for _, md := range docs {
 		entry, parseErr := parseKnowledgeMarkdown(md, sessionID, "")
@@ -393,6 +399,7 @@ func learnOneSessionWithFiles(
 			fmt.Fprintf(os.Stderr, "Warning: skip unparsable knowledge: %v\n", parseErr)
 			continue
 		}
+		entry = withKnowledgeOwner(entry, owners["agent"], owners["team"])
 		// Dedup: skip if an active entry already matches by keyword.
 		if dup, dupErr := store.FindDuplicate(ctx, entry); dupErr == nil && dup != nil {
 			fmt.Printf("Knowledge already exists (matches %q), skipped.\n", dup.ID)
@@ -440,6 +447,15 @@ func eventLayer(eventType string) string {
 // fragments for the layered summarizer. SharedRecord payloads are rendered as
 // "[name] summary"; other events fall back to their type as a lightweight
 // signal.
+// eventsToLayeredSources tags each event with its layer and, when the event
+// carries one, the owner the layer's private scope should name.
+//
+// The owner comes from the event header rather than being derived from the
+// layer word: "agent"/"team" say *what kind* of privacy is claimed, and the
+// path that will enforce it needs the name. An event without a TeamID yields
+// no owner, and the distilled entry is then downgraded to flow by
+// withKnowledgeOwner instead of being written as a private entry that names
+// nobody.
 func eventsToLayeredSources(events []storage.SessionEvent) []knowledge.LayeredSource {
 	var sources []knowledge.LayeredSource
 	for _, event := range events {
@@ -448,9 +464,25 @@ func eventsToLayeredSources(events []storage.SessionEvent) []knowledge.LayeredSo
 		if text == "" {
 			continue
 		}
-		sources = append(sources, knowledge.LayeredSource{Layer: layer, Text: text})
+		sources = append(sources, knowledge.LayeredSource{
+			Layer: layer,
+			Text:  text,
+			Owner: eventOwner(event, layer),
+		})
 	}
 	return sources
+}
+
+// eventOwner extracts the owner name a layer's private entries should carry.
+// Only the team id is available on the event header; the agent identity lives
+// in the session's call context, which the header does not reproduce, so an
+// agent-layer source yields no owner and its entry falls back to flow rather
+// than being attributed to a guessed agent.
+func eventOwner(event storage.SessionEvent, layer string) string {
+	if layer != "team" {
+		return ""
+	}
+	return strings.TrimSpace(event.TeamID)
 }
 
 // eventSourceText renders a single session event as a text fragment suitable
@@ -576,6 +608,13 @@ func runKnowledgeCLI(args []string) {
 // normalizeScope maps a scope string onto the canonical flow|team|agent set.
 // Legacy values ("all" -> flow, "agents" -> agent) are tolerated so old
 // frontmatter keeps loading correctly.
+//
+// This only chooses the *spelling* of the scope. It does not decide who owns a
+// private entry, because a bare "agent"/"team" names nobody — and an entry that
+// claims privacy without naming an owner is now rejected at load rather than
+// silently indexed and reachable by no one. The caller pairs this with an owner
+// (withKnowledgeOwner) before writing, so what lands on disk is a scope a path
+// can enforce.
 func normalizeScope(scope string) string {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
 	case "team", "agent":
@@ -589,38 +628,111 @@ func normalizeScope(scope string) string {
 	}
 }
 
-func knowledgeStore() (*knowledge.MarkdownStore, *knowledge.StatsRecorder) {
-	files := storage.NewFileStore(".")
-	root := filepath.Join(".agents", "knowledge")
-	return knowledge.NewMarkdownStore(files, root), knowledge.NewStatsRecorder(files, root)
+// withKnowledgeOwner fills in the owner list a private scope requires, or
+// downgrades the scope to flow when no owner is known.
+//
+// The learn path distills a session into knowledge and its summarizer emits a
+// scope word ("agent", "team", "flow") with no owner attached — the owner is a
+// property of *where the rule came from*, which is the session's agent and
+// team, not something the model can be expected to invent. Without this the
+// entry would be written with scope.type: agent and an empty scope.agents,
+// which the loader rejects (private to nobody is unreachable), so every
+// distilled agent-scoped rule would turn into a startup failure.
+//
+// Downgrading to flow when there is no owner is the honest fallback: the
+// entry's text is still useful, and "visible to everyone" is a claim the layout
+// can enforce, whereas a private scope naming nobody is not.
+func withKnowledgeOwner(entry types.KnowledgeEntry, agentID, teamID string) types.KnowledgeEntry {
+	switch entry.Scope.Type {
+	case "agent":
+		entry.Scope.Agents = nonEmptyStrings(append(entry.Scope.Agents, agentID))
+		if len(entry.Scope.Agents) == 0 {
+			entry.Scope = types.Scope{Type: "flow"}
+		}
+	case "team":
+		entry.Scope.Teams = nonEmptyStrings(append(entry.Scope.Teams, teamID))
+		if len(entry.Scope.Teams) == 0 {
+			entry.Scope = types.Scope{Type: "flow"}
+		}
+	}
+	return entry
 }
 
+// nonEmptyStrings drops blank entries so appending an unknown owner cannot
+// produce a list that is non-empty but names nobody.
+func nonEmptyStrings(values []string) []string {
+	var result []string
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+// sourceOwners collects the first owner named per layer, which is the value a
+// distilled entry of that layer should be attributed to. Layers with no owner
+// are absent from the result, not present with an empty string, so callers can
+// tell "unknown" from "known to be empty".
+func sourceOwners(sources []knowledge.LayeredSource) map[string]string {
+	owners := make(map[string]string)
+	for _, src := range sources {
+		layer := strings.TrimSpace(src.Layer)
+		owner := strings.TrimSpace(src.Owner)
+		if layer == "" || owner == "" {
+			continue
+		}
+		if _, seen := owners[layer]; !seen {
+			owners[layer] = owner
+		}
+	}
+	return owners
+}
+
+func knowledgeStore() *knowledge.MarkdownStore {
+	files := storage.NewFileStore(".")
+	root := filepath.Join(".agents", "knowledge")
+	return knowledge.NewMarkdownStore(files, root)
+}
+
+// runKnowledgeGCCLI archives stale knowledge.
+//
+// # What GC can and cannot still decide
+//
+// It used to archive on two signals: an explicit ExpiresAt, and "older than the
+// window AND never hit". The second is gone. Hits were recorded by the
+// knowledge injector as it matched entries per query; with retrieval moved to
+// agentic search there is no injector to observe a hit, and nothing else in the
+// engine sees the model read a knowledge file — Grep and Read are generic tools
+// with no idea that a path happens to be knowledge. Rather than keep consulting
+// a stats file that would be empty forever (and so silently archive every entry
+// old enough to qualify, reporting "zero hits" as if it were a fact), GC now
+// decides on ExpiresAt alone.
+//
+// The consequence is deliberate and worth stating plainly: age by itself no
+// longer archives anything. An entry with no ExpiresAt is kept indefinitely.
+// That is the conservative direction — the alternative is deleting knowledge
+// the model may be relying on, on the strength of a signal that stopped being
+// collected.
 func runKnowledgeGCCLI(args []string) {
 	fs := flag.NewFlagSet("knowledge gc", flag.ExitOnError)
-	windowDays := fs.Int("window", 15, "GC window in days (default: 15)")
 	_ = fs.Parse(args)
 
-	store, stats := knowledgeStore()
+	store := knowledgeStore()
 	entries, err := store.LoadAll(context.Background())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	hitCounts, err := stats.HitCounts()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	now := time.Now().UTC()
-	window := time.Duration(*windowDays) * 24 * time.Hour
 
 	archived := 0
 	for _, e := range entries {
 		if e.Status != "active" {
 			continue
 		}
-		if shouldArchive(e, hitCounts[knowledge.StatsKey(e)], now, window) {
+		if shouldArchive(e, now) {
 			if err := store.Archive(context.Background(), e.ID); err != nil {
 				fmt.Fprintf(os.Stderr, "Error archiving %q: %v\n", e.ID, err)
 				os.Exit(1)
@@ -633,29 +745,21 @@ func runKnowledgeGCCLI(args []string) {
 }
 
 // shouldArchive decides whether an active entry should be archived during GC.
-func shouldArchive(e types.KnowledgeEntry, hitCount int, now time.Time, window time.Duration) bool {
-	// Condition 1: explicit ExpiresAt already passed.
-	if e.ExpiresAt != "" {
-		if t, err := time.Parse(time.RFC3339, e.ExpiresAt); err == nil {
-			return now.After(t)
-		}
-	}
-
-	// Condition 2: implicit expiry (CreatedAt+window) or zero hits within the
-	// window. Only applies when no explicit ExpiresAt governs the entry.
-	if e.CreatedAt == "" {
+//
+// Only an explicit ExpiresAt is consulted; see runKnowledgeGCCLI for why the
+// "stale by age and never used" rule was removed rather than left reading an
+// empty stats file.
+func shouldArchive(e types.KnowledgeEntry, now time.Time) bool {
+	if e.ExpiresAt == "" {
 		return false
 	}
-	t, err := time.Parse(time.RFC3339, e.CreatedAt)
+	t, err := time.Parse(time.RFC3339, e.ExpiresAt)
 	if err != nil {
+		// An unparsable ExpiresAt is treated as "no expiry" rather than as an
+		// immediate one: a typo in a timestamp must not delete the entry.
 		return false
 	}
-	age := now.Sub(t)
-	if age > window {
-		// Expired by age alone, or zero hits within the window.
-		return hitCount == 0
-	}
-	return false
+	return now.After(t)
 }
 
 func firstLineOf(content string) string {
@@ -751,7 +855,16 @@ func buildCurrentRuntime(ctx context.Context, flowPath string, o cliOverrides) (
 		return nil, "", err
 	}
 	applyMaxRounds(&definitions.Limits, o.maxRounds)
-	bundle, err := app.BuildRuntime(ctx, definitions, provider, ".", o.logLevel)
+	// The store freezes the absolute config root and flow path so a later
+	// reload re-reads the same files regardless of cwd. Everything the runtime
+	// does today is cwd-relative; resolving here, once, is what makes the
+	// reload path independent of the process's working directory.
+	absFlow, err := filepath.Abs(flowPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve flow path %q: %w", flowPath, err)
+	}
+	store := types.NewDefinitionStore(definitions, config.ConfigRootForFlow(absFlow), absFlow)
+	bundle, err := app.BuildRuntime(ctx, store, provider, ".", o.logLevel)
 	if err != nil {
 		return nil, "", err
 	}
@@ -770,6 +883,12 @@ func applyMaxRounds(limits *types.RuntimeLimits, maxRounds int) {
 // router. It is shared by the interactive/HTTP runtimes and the summary CLI so
 // provider construction stays in one place. modelOverride, when non-empty,
 // replaces the default model selected by models.json's "model" field.
+//
+// The startup loader stays cwd-relative on purpose. Its base also feeds the
+// legacy settings reads (models.json, settings.json, logging) that have always
+// resolved against the process cwd, so switching it to an absolute base would
+// silently change which files the engine starts from. The reload path, built
+// separately in BuildRuntime, is the one that needs an absolute root.
 func buildProvider(ctx context.Context, flowPath, modelOverride string) (*types.Definitions, *model.ProviderRouter, error) {
 	loader := config.NewConfigLoader(".")
 	definitions, err := loader.LoadDefinitions(ctx, config.DefinitionsLoadRequest{

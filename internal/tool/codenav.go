@@ -71,7 +71,11 @@ func (t *CodeNavTool) Execute(ctx context.Context, params map[string]any) (*type
 		return &types.ToolResult{Success: false, Error: "file parameter is required for this operation"}, nil
 	}
 	if file != "" {
-		if _, _, err := t.workspace.ResolvePathForTool(file); err != nil {
+		// Restricted resolve, not the plain one: the path is about to be
+		// handed to an external helper that reads the filesystem on its own,
+		// so checking only that it is inside the workspace would let a
+		// caller point the helper at another agent's private knowledge.
+		if _, _, err := t.workspace.ResolvePathForToolRestricted(file, ToolPathRestriction(ctx)); err != nil {
 			return &types.ToolResult{Success: false, Error: err.Error()}, nil
 		}
 	}

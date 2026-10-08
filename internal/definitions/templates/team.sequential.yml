@@ -1,0 +1,25 @@
+# 单调用 Team 骨架：一个 Agent 直接完成整件任务。
+# 调用方会覆盖 id，并把 calls 中的 agent 指向真实存在的 Agent 定义。
+id: generic_sequential
+goal: 用单个 Agent 完成用户交给的任务。
+
+state:
+  enabled: true
+  max_items: 20
+  max_chars: 4000
+  inject_summary: true
+
+calls:
+  # 调用 map 的 key 就是 call ID（Team.Normalize 会回填），必须与业务语义一致。
+  respond:
+    type: agent
+    agent: generic
+    responsibility: 理解用户诉求并给出完整答复。
+    inputs:
+      user_message: true
+    output:
+      record: Answer
+
+output:
+  from: respond
+  record: Answer

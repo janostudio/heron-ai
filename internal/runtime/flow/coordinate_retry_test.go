@@ -41,7 +41,7 @@ func (coordinateRetryTeamRuntime) Run(_ context.Context, req types.TeamTurnReque
 func TestRuntimeStopsRepeatedCoordinateAfterConfiguredRetryLimit(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	sessions := storage.NewJSONLSessionWriter(files)
-	runtime := NewRuntime(
+	runtime := newTestRuntime(
 		coordinateRetryDefinitions(),
 		coordinateRetryTeamRuntime{},
 		sessions,
@@ -80,7 +80,7 @@ func (repeatedActivationTeamRuntime) Run(_ context.Context, req types.TeamTurnRe
 func TestRuntimeStopsRepeatedActivationAfterConfiguredRetryLimit(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	sessions := storage.NewJSONLSessionWriter(files)
-	runtime := NewRuntime(
+	runtime := newTestRuntime(
 		coordinateRetryDefinitions(),
 		repeatedActivationTeamRuntime{},
 		sessions,

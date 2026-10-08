@@ -71,33 +71,47 @@ Some content.`
 	}
 }
 
+// TestShouldArchive pins the GC rule that survived the move to agentic search.
+//
+// GC used to have a second rule — "older than the window AND never hit" — and
+// the hit half of it is gone: hits were recorded by the knowledge injector per
+// query, and there is no injector any more. Rather than consult a stats file
+// that would be empty forever (which would archive every sufficiently old
+// entry while reporting "zero hits" as if it were a measurement), GC now
+// decides on ExpiresAt alone. The tests that asserted the age/hit rules are
+// deleted; the ones below assert the remaining rule and, importantly, the
+// non-archiving cases that used to be covered by "has hits".
 func TestShouldArchive(t *testing.T) {
 	now := time.Now().UTC()
-	window := 15 * 24 * time.Hour
 
 	old := now.Add(-16 * 24 * time.Hour).Format(time.RFC3339)
 	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
 	future := now.Add(1 * time.Hour).Format(time.RFC3339)
 
-	// Expired via CreatedAt+window, no explicit ExpiresAt.
-	if !shouldArchive(types.KnowledgeEntry{CreatedAt: old}, 0, now, window) {
-		t.Fatal("expected old entry with 0 hits to be archived")
-	}
 	// Explicit ExpiresAt in the past.
-	if !shouldArchive(types.KnowledgeEntry{CreatedAt: recent, ExpiresAt: old}, 5, now, window) {
+	if !shouldArchive(types.KnowledgeEntry{CreatedAt: recent, ExpiresAt: old}, now) {
 		t.Fatal("expected entry with past ExpiresAt to be archived")
 	}
 	// Explicit future ExpiresAt: not archived.
-	if shouldArchive(types.KnowledgeEntry{CreatedAt: old, ExpiresAt: future}, 0, now, window) {
+	if shouldArchive(types.KnowledgeEntry{CreatedAt: old, ExpiresAt: future}, now) {
 		t.Fatal("expected entry with future ExpiresAt to be kept")
 	}
-	// Recent entry: not archived.
-	if shouldArchive(types.KnowledgeEntry{CreatedAt: recent}, 0, now, window) {
+	// Age alone no longer archives: without an ExpiresAt there is no signal
+	// that says the entry is undesirable, and deleting on age would drop
+	// knowledge the model may still be reading.
+	if shouldArchive(types.KnowledgeEntry{CreatedAt: old}, now) {
+		t.Fatal("age alone must not archive an entry any more")
+	}
+	if shouldArchive(types.KnowledgeEntry{CreatedAt: recent}, now) {
 		t.Fatal("expected recent entry to be kept")
 	}
-	// Old entry but with hits: not archived (hit_count > 0).
-	if shouldArchive(types.KnowledgeEntry{CreatedAt: old}, 3, now, window) {
-		t.Fatal("expected old entry with hits to be kept")
+	// No timestamps at all: kept.
+	if shouldArchive(types.KnowledgeEntry{}, now) {
+		t.Fatal("expected an entry with no dates to be kept")
+	}
+	// An unparsable ExpiresAt is "no expiry", not "expire now": a typo in a
+	// timestamp must not delete the entry.
+	if shouldArchive(types.KnowledgeEntry{ExpiresAt: "not-a-date"}, now) {
+		t.Fatal("an unparsable ExpiresAt must not archive the entry")
 	}
 }
-

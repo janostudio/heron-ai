@@ -41,8 +41,34 @@ type spawnIdentity struct {
 
 type spawnIdentityKey struct{}
 
+// withSpawnIdentity enters one AgentTurn: it records the identity internal/agent
+// keeps to itself, and publishes the narrow caller scope (types.ToolScope) a
+// Tool in another package is allowed to see.
+//
+// The two travel by separate keys on purpose. The scope must be readable by
+// internal/tool, which cannot name an unexported key in this package, while
+// the identity must stay unexported — it holds the agent's whole config and
+// the request's turn coordinates, and exporting it would make this package's
+// internals public API. They are written together, here, so a turn cannot come
+// up with one and not the other: the scope is derived from the same args that
+// build the identity immediately below it, which is what keeps the two from
+// drifting into disagreement about who is calling.
 func withSpawnIdentity(ctx context.Context, agent types.AgentConfig, req types.AgentRequest) context.Context {
+	ctx = types.WithToolScope(ctx, types.ToolScope{
+		AgentID: agentIDOf(agent, req),
+		TeamID:  req.TeamID,
+	})
 	return context.WithValue(ctx, spawnIdentityKey{}, &spawnIdentity{agent: agent, req: req})
+}
+
+// agentIDOf resolves the agent id the way currentAgentID does: the request's
+// AgentID wins when set, because a spawned child runs under the target agent's
+// definition but must be attributed to the agent id the request names.
+func agentIDOf(agent types.AgentConfig, req types.AgentRequest) string {
+	if req.AgentID != "" {
+		return req.AgentID
+	}
+	return agent.Name
 }
 
 // withSpawnInstanceKey decorates a spawn identity with the instance key of
@@ -92,8 +118,12 @@ var spawnTurnSeq atomic.Int64
 // registered in the tool registry and is only usable by Agents that declare
 // it in tools.builtin.
 type SpawnTool struct {
-	runner      AgentRunner
-	agents      map[string]types.AgentConfig
+	runner AgentRunner
+	// definitions is the store rather than an agent map: Spawn resolves its
+	// target by id, and an Agent may create definitions mid-conversation, so
+	// each Execute takes one snapshot and treats it as the tree in force for
+	// that whole call.
+	definitions *types.DefinitionStore
 	registry    *agentstore.Registry
 	states      *state.Store
 	tasks       *AsyncToolExecutor
@@ -126,18 +156,18 @@ func WithSpawnMaxDepth(max int) SpawnOption {
 
 // NewSpawnTool creates the Spawn tool. runner is the Agent execution path used
 // for child turns (typically the same TurnLoop that executes the parent);
-// agents resolves agent definitions by id; registry and states persist
-// dynamic entities and their state.
+// definitions resolves agent ids to their current definitions; registry and
+// states persist dynamic entities and their state.
 func NewSpawnTool(
 	runner AgentRunner,
-	agents map[string]types.AgentConfig,
+	definitions *types.DefinitionStore,
 	registry *agentstore.Registry,
 	states *state.Store,
 	options ...SpawnOption,
 ) *SpawnTool {
 	spawn := &SpawnTool{
 		runner:      runner,
-		agents:      agents,
+		definitions: definitions,
 		registry:    registry,
 		states:      states,
 		maxChildren: defaultSpawnMaxChildren,
@@ -154,6 +184,20 @@ func NewSpawnTool(
 // their shared state is protected by the agent-level CRUD lock inside the
 // state Store.
 func (t *SpawnTool) SetAgentStateLocks(locks *agentstore.AgentStateLocks) {}
+
+// agentDefinitions returns the agent definitions published right now. Callers
+// take it once per tool call and use the result for every lookup in that call,
+// so one call cannot resolve two targets against two different generations. A
+// nil store or a nil tree yields a nil map, which reads as "no agent defined".
+func (t *SpawnTool) agentDefinitions() map[string]types.AgentConfig {
+	if t == nil {
+		return nil
+	}
+	if snapshot := t.definitions.Snapshot(); snapshot != nil {
+		return snapshot.Agents
+	}
+	return nil
+}
 
 // SetTaskRunner wires the durable async task executor used by wait=false
 // spawns. It must be set before asynchronous Spawn can run.
@@ -277,6 +321,12 @@ func (t *SpawnTool) Execute(ctx context.Context, params map[string]any) (*types.
 		return spawnError("Spawn key is only valid with a single item; items spawn one instance per item"), nil
 	}
 
+	// One Execute resolves against one definitions tree. Taken once, here, so
+	// the target lookup and every child turn this call starts agree on the
+	// same generation even if a new definition is published while the children
+	// run.
+	agents := t.agentDefinitions()
+
 	identity := spawnIdentityFromContext(ctx)
 	if identity == nil {
 		return spawnError("Spawn is not available outside an Agent execution context"), nil
@@ -290,7 +340,7 @@ func (t *SpawnTool) Execute(ctx context.Context, params map[string]any) (*types.
 	if targetAgentID == "" {
 		targetAgentID = identity.agent.Name
 	}
-	targetDef, defined := t.agents[targetAgentID]
+	targetDef, defined := agents[targetAgentID]
 	if !defined {
 		return spawnError(fmt.Sprintf("Spawn agent %q is not defined", targetAgentID)), nil
 	}
@@ -790,7 +840,10 @@ func (t *SpawnTool) executeChildTask(ctx context.Context, args map[string]any) (
 	parentRaw, _ := args["parent"].(map[string]any)
 	parent := spawnParentFromArguments(parentRaw)
 
-	def, defined := t.agents[agentID]
+	// A durable SpawnChild task resumes after a process restart: resolve the
+	// target from the definitions published now, not from whatever tree the
+	// task was enqueued under.
+	def, defined := t.agentDefinitions()[agentID]
 	if !defined {
 		return spawnError(fmt.Sprintf("Spawn agent %q is not defined", agentID)), nil
 	}

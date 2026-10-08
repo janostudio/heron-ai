@@ -59,6 +59,9 @@ func (t *ReadTool) Execute(ctx context.Context, params map[string]any) (*types.T
 		LineStart: intParam(params, "line_start"),
 		LineEnd:   intParam(params, "line_end"),
 		MaxBytes:  intParam(params, "max_bytes"),
+		// Knowledge visibility is decided once, from the caller in ctx, so
+		// all three file tools cannot disagree. See knowledge_scope.go.
+		Restrict: ToolPathRestriction(ctx),
 	})
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
@@ -123,6 +126,12 @@ func (t *WriteTool) Execute(ctx context.Context, params map[string]any) (*types.
 		BaseRevision: baseRevision,
 		OldText:      oldText,
 		NewText:      newText,
+		// Write carries the same restriction as the read side, from the
+		// same helper. Without it the deny list is bypassable by writing
+		// into a restricted tree and reading the result back, and an agent
+		// could plant a file in another agent's private knowledge that its
+		// owner would then read as its own. See path_scope.go.
+		Restrict: ToolPathRestriction(ctx),
 	})
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
@@ -319,6 +328,10 @@ func (t *GrepTool) Execute(ctx context.Context, params map[string]any) (*types.T
 		IgnoreCase: boolParam(params, "ignore_case"),
 		MaxResults: intParam(params, "max_results"),
 		MaxChars:   intParam(params, "max_chars"),
+		// The restriction follows the caller, not the search path: a search
+		// rooted at the workspace root must not surface a private knowledge
+		// file several levels down. See knowledge_scope.go.
+		Restrict: ToolPathRestriction(ctx),
 	})
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
@@ -371,6 +384,10 @@ func (t *GlobTool) Execute(ctx context.Context, params map[string]any) (*types.T
 		Pattern:     pattern,
 		MaxResults:  intParam(params, "max_results"),
 		IncludeDirs: boolParam(params, "include_dirs"),
+		// Glob walks from the workspace root, so without this a pattern as
+		// broad as **/*.md would list other agents' private knowledge
+		// filenames even though their contents are restricted.
+		Restrict: ToolPathRestriction(ctx),
 	})
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil

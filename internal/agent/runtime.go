@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/definitions"
 	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -34,6 +35,12 @@ type TurnLoop struct {
 	toolPolicy     ToolPolicy
 	contextPolicy  ContextPolicy
 	sessionWriter  storage.SessionWriter
+	// files is the workspace file store the knowledge trees live in. It is
+	// needed by the Bash gate (bash_gate.go), which asks whether the agent has
+	// a private knowledge tree before letting it run a shell. Optional: a
+	// TurnLoop without it grants Bash as before, which keeps every test that
+	// builds a loop for an unrelated concern compiling and behaving.
+	files storage.FileStore
 }
 
 // ModelContextSizer is an optional provider capability. The Agent package
@@ -99,6 +106,18 @@ func (t *TurnLoop) SetSessionWriter(writer storage.SessionWriter) {
 
 func (t *TurnLoop) SetTaskRunner(runner *AsyncToolExecutor) {
 	t.taskRunner = runner
+}
+
+// SetFileStore wires the workspace file store used by the Bash gate
+// (bash_gate.go) to decide whether an agent has private knowledge.
+//
+// A setter rather than a NewTurnLoop parameter because it is build-time state
+// only one caller in the tree has (internal/app, which owns the workspace
+// root), and because the loop is constructed in ~30 test call sites for
+// concerns that have nothing to do with knowledge. Those loops leave it nil
+// and keep their previous Bash behaviour.
+func (t *TurnLoop) SetFileStore(files storage.FileStore) {
+	t.files = files
 }
 
 func (t *TurnLoop) SetToolPolicy(policy ToolPolicy) {
@@ -199,7 +218,19 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 	if agent.Budget.MaxModelRounds > 0 && maxRounds > agent.Budget.MaxModelRounds {
 		maxRounds = agent.Budget.MaxModelRounds
 	}
-	toolSchemas := t.buildToolSchemas(agent)
+	// Bash is withheld from an agent that has private knowledge (bash_gate.go).
+	// Resolved once here, at the top of the turn, and then used by BOTH
+	// enforcement points: the schema list below (so the model is never told
+	// about the tool) and the policy layer (so a call that arrives anyway is
+	// refused). Computed once because the answer is a directory walk, not a
+	// per-token cost, and because two independent computations could disagree
+	// within one turn if the tree changed mid-turn.
+	withheldTools, gateErr := t.withheldTools(ctx, agent, req)
+	if gateErr != nil {
+		t.emitErrorHook(ctx, agent, req, 0, gateErr)
+		return nil, gateErr
+	}
+	toolSchemas := t.buildToolSchemasFiltered(ctx, agent, withheldTools)
 	var compactor Compactor
 	if strings.EqualFold(agent.Context.Compactor, "mechanical") {
 		compactor = mechanicalCompactor{}
@@ -1420,6 +1451,31 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 }
 
 func (t *TurnLoop) toolDecision(ctx context.Context, agent types.AgentConfig, req types.AgentRequest, call types.ToolCall) (ToolDecision, string, error) {
+	// The knowledge gate (bash_gate.go) is checked here, before the policy, and
+	// deliberately not in executeToolCalls' allowlist.
+	//
+	// executeToolCalls is NOT the only path from a model's ToolCall to an
+	// executed Tool. There are three, and the other two are easy to miss
+	// because they do not touch the allowlist at all:
+	//
+	//	executeToolCalls  ~1265  the ordinary batch path
+	//	the async path    ~760   selectAsyncTool -> toolDecision -> taskRunner
+	//	approval resume   ~330   checkpoint.PendingApproval -> toolDecision -> Execute
+	//
+	// The async path dispatches through the durable task runner and the resume
+	// path re-runs a call that was stored before the gate existed — a checkpoint
+	// written by an older build, or by an agent whose tree gained an entry
+	// between the approval being requested and granted. Putting the gate only in
+	// the allowlist would leave both open, and the resume path in particular
+	// would execute a Bash command that the schema layer had already stopped
+	// advertising.
+	//
+	// toolDecision is the one place all three already consult, so gating here
+	// covers the paths by construction rather than by three call sites agreeing
+	// to remember.
+	if decision, reason, denied := t.knowledgeGateDecision(ctx, agent, req, call); denied {
+		return decision, reason, nil
+	}
 	decision, reason, err := t.toolPolicy.Check(ctx, ToolPolicyRequest{
 		Agent: agent, Call: call, FlowID: req.FlowSessionID, TeamID: req.TeamID, CallID: req.CallID,
 	})
@@ -1814,8 +1870,43 @@ func stringFromMap(object map[string]any, key string) string {
 }
 
 func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema {
+	return t.buildToolSchemasFiltered(context.Background(), agent, nil)
+}
+
+// buildToolSchemasFiltered is buildToolSchemas with the withheld-tool set
+// subtracted, so a tool the policy layer will refuse is never advertised to the
+// model in the first place.
+//
+// The distinction matters and is the reason this is not simply a policy check.
+// A tool that is advertised and then refused at call time costs the model a
+// wasted round trip and, worse, teaches it that the refusal is unreliable: it
+// sees Bash in its schema, calls it, gets a refusal, and has no way to tell
+// "this agent may not use Bash" from "that particular command was rejected".
+// Removing it from the schema makes the capability genuinely absent, which is
+// what the design says it is — an agent with private knowledge does not get
+// Bash, full stop.
+//
+// withheld is a set rather than a predicate so this function stays free of
+// context and I/O: the caller computes the set once per turn (it is a directory
+// walk, not a per-token cost) and both enforcement points read the same answer.
+// A nil set withholds nothing, which is what keeps the ~30 test call sites that
+// use the public buildToolSchemas unaffected.
+func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.AgentConfig, withheld map[string]string) []types.JSONSchema {
 	var schemas []types.JSONSchema
 
+	// builtinSchemas is what makes a builtin tool VISIBLE to the model; the
+	// tool registry (internal/app) is what makes it EXECUTABLE. Registering a
+	// tool there and forgetting it here has no symptom at all — the loop below
+	// skips an unknown name silently, the model never learns the tool exists,
+	// and every test that only exercises the executor still passes.
+	//
+	// So: an entry here is a DUPLICATE of the tool's own Parameters(), and the
+	// two must stay in sync. Parameters() is the source of truth; copy its
+	// descriptions verbatim rather than paraphrasing them, because the
+	// descriptions carry the semantics (when the effect lands, what this action
+	// does NOT do) that make the model call the tool correctly. A thin
+	// description degrades the model's behaviour invisibly.
+	// TestBuildToolSchemasIncludesDefine guards the Define entry.
 	builtinSchemas := map[string]types.JSONSchema{
 		"Read": {
 			Name: "Read", Type: "object",
@@ -1943,6 +2034,44 @@ func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema 
 			},
 			Required: []string{"action", "field"},
 		},
+		// ReadKnowledge used to live here: a tool that fetched one knowledge
+		// entry by id from the in-memory index. It is gone with the index —
+		// knowledge is read with Read/Grep/Glob at a path, and the pointer
+		// block in internal/knowledge/pointer.go tells the model where those
+		// paths are. See docs/configuration/knowledge.md.
+		// Mirrors (*DefineTool).Parameters() in define_tool.go. The schema is
+		// restated rather than derived because Parameters() builds a generic
+		// map[string]any while this map is typed; the guard test asserts the
+		// two agree on the parts that matter (names, required set, enums).
+		"Define": {
+			Name: "Define", Type: "object",
+			Description: "Create or update this engine's Agent and Team definitions from a spec. " +
+				"The definitions are written, validated and published immediately, but they take effect on the NEXT turn — " +
+				"nothing already scheduled in the current turn can be retargeted to them. " +
+				"action=create_agent writes one agent definition only: it is NOT added to any team and NOT bound into the flow, " +
+				"so an agent created this way is valid but never scheduled until a create_team call references it. " +
+				"action=create_team writes one team definition, creates any agent its calls reference but the tree does not have, " +
+				"and binds the team into the flow when spec.bind is present. " +
+				"mode=create fails if the target already exists; mode=upsert merges the spec into the existing definition " +
+				"(nested objects merge by key; lists such as tools.builtin, skills, knowledge and rules are replaced wholesale; " +
+				"body is replaced wholesale; omitted fields are preserved).",
+			Properties: map[string]types.JSONProperty{
+				"action": {Type: "string", Enum: []string{"create_agent", "create_team"}, Description: "What to define: create_agent writes one agent definition, create_team writes one team definition (plus the agents its calls need, plus its flow binding)"},
+				"mode":   {Type: "string", Enum: []string{"create", "upsert"}, Description: "create (default) fails if the name already exists; upsert merges the spec into the existing definition, preserving omitted fields"},
+				"template": {Type: "string", Description: "Optional built-in template to start from. Valid names: " +
+					strings.Join(definitions.TemplateNames(), ", ") +
+					". Omit for the built-in default shape."},
+				"spec": {Type: "object", Description: "The definition content. " +
+					"create_agent: name (required), persona.role/persona.goal/persona.backstory, model, " +
+					"tools.builtin (list), skills (list), knowledge (list), rules (list), loop, hitl, body (the system prompt markdown). " +
+					"create_team: id (required), goal, state, output, " +
+					"calls (map of callName -> {type, agent, responsibility, depends_on, output}), " +
+					"agent_specs (map of agentID -> agent spec, for agents created alongside the team), " +
+					"bind ({key, coordinator, can_activate, depends_on, inputs, on_proceed}) to wire the team into the current flow. " +
+					"name and id are interchangeable."},
+			},
+			Required: []string{"action", "spec"},
+		},
 	}
 
 	toolNames := append([]string(nil), agent.Tools.Builtin...)
@@ -1953,6 +2082,13 @@ func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema 
 			continue
 		}
 		seen[toolName] = struct{}{}
+		// A withheld tool is skipped exactly like an unknown one: the model is
+		// told nothing about it. The reason it was withheld is not added to the
+		// schema — a schema has no place to carry it and the model cannot act
+		// on it; the policy layer reports it if the model asks anyway.
+		if _, hidden := withheld[toolName]; hidden {
+			continue
+		}
 		if schema, ok := builtinSchemas[toolName]; ok {
 			schemas = append(schemas, schema)
 		}

@@ -24,22 +24,26 @@ import (
 // first implementation small: dependencies are all-of, calls without
 // dependencies run in parallel, and Team output is promoted explicitly.
 type Runtime struct {
-	executors  *call.Registry
-	agents     map[string]types.AgentConfig
-	states     *state.Store
-	knowledge  *knowledge.KnowledgeInjector
-	skills     *skill.SkillInjector
-	rules      map[string]types.RuleItem
-	ruleLoader func(ctx context.Context, path string) (string, error)
-	sessions   storage.SessionWriter
+	executors *call.Registry
+	// definitions is the store, not the agent map: an Agent may create new
+	// definitions mid-conversation, and Run resolves agent ids from a
+	// snapshot taken at the top of the Run so a change lands on the next
+	// TeamTurn without a restart. Holding the map itself would pin this
+	// Runtime to the tree that existed at build time.
+	definitions *types.DefinitionStore
+	states      *state.Store
+	knowledge   *knowledge.KnowledgePointer
+	skills      *skill.SkillInjector
+	rules       map[string]types.RuleItem
+	ruleLoader  func(ctx context.Context, path string) (string, error)
+	sessions    storage.SessionWriter
 }
 
-func NewRuntime(executors *call.Registry, agentDefinitions ...map[string]types.AgentConfig) *Runtime {
-	agents := make(map[string]types.AgentConfig)
-	if len(agentDefinitions) > 0 && agentDefinitions[0] != nil {
-		agents = agentDefinitions[0]
-	}
-	return &Runtime{executors: executors, agents: agents}
+// NewRuntime builds a Team runtime over a defining store. The store may be
+// nil, in which case every Run sees no agent definitions and agent calls fail
+// with the usual "agent definition %q not found".
+func NewRuntime(executors *call.Registry, definitions *types.DefinitionStore) *Runtime {
+	return &Runtime{executors: executors, definitions: definitions}
 }
 
 // SetStateStore wires the optional Team/Agent state extension without
@@ -48,11 +52,16 @@ func (r *Runtime) SetStateStore(store *state.Store) {
 	r.states = store
 }
 
-// SetKnowledgeInjector wires the optional long-term Knowledge extension.
-// Knowledge is queried at the call boundary; the Team scheduler does not
-// otherwise depend on its storage format.
-func (r *Runtime) SetKnowledgeInjector(injector *knowledge.KnowledgeInjector) {
-	r.knowledge = injector
+// SetKnowledgePointer wires the optional long-term Knowledge extension.
+//
+// It is a *pointer*, not an injector: knowledge is found by the agent with
+// Grep/Glob/Read against the paths this names, so what the Team scheduler
+// contributes is a fixed block of locations and a directive to search them —
+// never per-entry content. See internal/knowledge/pointer.go for why that is
+// the whole prompt-time surface, and internal/tool/path_scope.go for what
+// makes the named locations safe to hand out.
+func (r *Runtime) SetKnowledgePointer(pointer *knowledge.KnowledgePointer) {
+	r.knowledge = pointer
 }
 
 // SetSkillInjector wires the optional reusable prompt/tool bundle extension.
@@ -98,6 +107,16 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		result.Error = err.Error()
 		result.Next = &types.Route{Action: types.NextFail, Reason: result.Error}
 		return result, err
+	}
+
+	// One TeamTurn resolves against exactly one definitions tree. The
+	// snapshot is taken here, before runBatch dispatches the call goroutines,
+	// and the local map is the only thing those goroutines read. Taking it
+	// inside the goroutine would both race with a concurrent Swap and let a
+	// single batch resolve calls against two different generations.
+	var agents map[string]types.AgentConfig
+	if snapshot := r.definitions.Snapshot(); snapshot != nil {
+		agents = snapshot.Agents
 	}
 
 	var teamState types.StateSnapshot
@@ -191,7 +210,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 		}
 		teamCalls += len(ready)
 
-		batchResults, err := r.runBatch(ctx, states, req, state, ready, result.CallResults)
+		batchResults, err := r.runBatch(ctx, states, req, state, ready, result.CallResults, agents)
 		if err != nil {
 			for _, name := range sortedCallResultNames(batchResults) {
 				callResult := batchResults[name]
@@ -321,6 +340,10 @@ func (r *Runtime) runBatch(
 	state *runState,
 	ready map[string]types.Call,
 	previous map[string]types.CallResult,
+	// agents is the Run's already-snapshotted agent definitions. Passed in
+	// rather than read from r.definitions so every goroutine below resolves
+	// against the same tree the Run started with.
+	agents map[string]types.AgentConfig,
 ) (map[string]types.CallResult, error) {
 	results := make(map[string]types.CallResult, len(ready))
 	var wg sync.WaitGroup
@@ -412,7 +435,7 @@ func (r *Runtime) runBatch(
 				})
 			}
 			if configured.Type == types.CallAgent {
-				agent, ok := r.agents[configured.AgentID]
+				agent, ok := agents[configured.AgentID]
 				if !ok {
 					callResult := types.CallResult{
 						Status: types.TurnFailed,
@@ -427,28 +450,52 @@ func (r *Runtime) runBatch(
 					return
 				}
 				if r.knowledge != nil {
-					query := strings.TrimSpace(configured.Responsibility + "\n" + req.Input)
-					if query != "" {
-						knowledgeText, knowledgeErr := r.knowledge.InjectWithAllowlist(
-							ctx,
-							query,
-							configured.AgentID,
-							req.Team.ID,
-							agent.Knowledge,
-						)
-						if knowledgeErr != nil {
-							mu.Lock()
-							if firstErr == nil {
-								firstErr = knowledgeErr
-							}
-							results[name] = types.CallResult{Status: types.TurnFailed, Error: knowledgeErr.Error()}
-							mu.Unlock()
-							return
-						}
+					// A fixed pointer block, not a retrieval result: it names the
+					// knowledge directories this caller may grep and says so. It
+					// therefore does not depend on the query, which is why it is
+					// `stable` and `Placement: system` — see below.
+					//
+					// The agent id has to be the one the path filter will use for
+					// this call, not the definition's name. For an ordinary call
+					// the two are the same; for a synthetic spawned call they are
+					// not — the child runs under the target agent's definition but
+					// under its own request id — and naming the definition's tree
+					// would advertise a directory the filter denies to the actual
+					// caller. Same reasoning as internal/agent/bash_gate.go.
+					agentID := configured.AgentID
+					if isSpawned {
+						agentID = spec.AgentID
+					}
+					if text := r.knowledge.Text(ctx, agentID, req.Team.ID); text != "" {
 						callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
-							Kind: "knowledge", Text: knowledgeText,
-							Source: "knowledge", Stability: "semi_stable", Priority: 90,
-							Compressible: true,
+							Kind: "knowledge", Text: text,
+							Source: "knowledge", Placement: "system",
+							// `stable`, not `semi_stable` as before. Stability is a
+							// promise about how the block varies, and the promise
+							// changed when retrieval did:
+							//
+							//   semi_stable was correct for the old block because
+							//   its text was rebuilt from each turn's query — same
+							//   shape, different content, so it could not be part of
+							//   a cached prefix.
+							//
+							//   This block is a function of the agent's *identity*
+							//   alone (which directories it owns), so for a given
+							//   agent it is byte-identical across turns. Promoting it
+							//   to `stable` puts it in the same class as the skill
+							//   listing and the rules block — content that can sit in
+							//   a prompt-cache prefix instead of being re-sent at
+							//   full price every turn.
+							//
+							// It DOES change when the agent gains its first private
+							// entry, which is a configuration event, not a per-turn
+							// one; a cache epoch is the right granularity for it.
+							Stability: "stable", Priority: 90,
+							// Not compressible: it is small, fixed and load-bearing
+							// (the model must know where to look before it looks).
+							// Compacting it away would silently disable knowledge
+							// lookup for the rest of the session.
+							Compressible: false,
 						})
 					}
 				}
@@ -460,7 +507,16 @@ func (r *Runtime) runBatch(
 							Placement: "system", Stability: "stable", Priority: 80,
 						})
 					}
-					agent.Tools.Builtin = appendUnique(agent.Tools.Builtin, tools...)
+					// agent is a struct copy, but Tools.Builtin shares its
+					// backing array with the published definition tree.
+					// appendUnique may write through the slice's spare
+					// capacity, which would mutate a tree other concurrent
+					// turns are still reading — copy before appending so the
+					// skill tools land only on this call's local copy.
+					agent.Tools.Builtin = appendUnique(
+						append([]string(nil), agent.Tools.Builtin...),
+						tools...,
+					)
 				}
 				if text := r.renderRulesWithLoader(ctx, r.rules, agent.Rules, configured.AgentID, req.Team.ID, configured.Responsibility+"\n"+req.Input); text != "" {
 					callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{

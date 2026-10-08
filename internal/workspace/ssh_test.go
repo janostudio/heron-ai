@@ -12,11 +12,11 @@ func TestSSHResolvePath(t *testing.T) {
 	w := &sshWorkspace{root: "/root/workspace"}
 
 	tests := []struct {
-		name       string
-		input      string
-		wantAbs    string
-		wantRel    string
-		wantErr    bool
+		name    string
+		input   string
+		wantAbs string
+		wantRel string
+		wantErr bool
 	}{
 		{"relative simple", "src/main.go", "/root/workspace/src/main.go", "src/main.go", false},
 		{"relative nested", "a/b/c.txt", "/root/workspace/a/b/c.txt", "a/b/c.txt", false},

@@ -25,7 +25,13 @@ import (
 // inherits agent → team → flow. A root threaded down per turn from here
 // could only shadow that resolution, so nothing in the runtime takes one.
 type Runtime struct {
-	definitions *types.Definitions
+	// definitions is the defining store rather than a bare tree: a turn must
+	// resolve against the definitions in force when that turn started, and a
+	// new tree may be published between turns (an Agent creating definitions
+	// mid-conversation). Each turn entry point takes one Snapshot and threads
+	// it down; holding a *types.Definitions here would pin the runtime to the
+	// tree that existed at build time.
+	definitions *types.DefinitionStore
 	teams       types.TeamRuntime
 	sessions    storage.SessionWriter
 	evidence    storage.EvidenceStore
@@ -36,7 +42,7 @@ type Runtime struct {
 }
 
 func NewRuntime(
-	definitions *types.Definitions,
+	definitions *types.DefinitionStore,
 	teamRuntime types.TeamRuntime,
 	sessionWriter storage.SessionWriter,
 	evidenceStore storage.EvidenceStore,
@@ -92,8 +98,10 @@ func (r *Runtime) Start(ctx context.Context, req types.StartFlowRequest) (types.
 	if err := r.validateDependencies(req.FlowID); err != nil {
 		return types.FlowTurnResult{}, err
 	}
+	// One FlowTurn resolves against one definitions tree (see Runtime.definitions).
+	defs := r.definitions.Snapshot()
 	if strings.TrimSpace(req.FlowID) == "" {
-		req.FlowID = r.definitions.Flow.ID
+		req.FlowID = defs.Flow.ID
 	}
 	blocks, err := r.persistContextBlocks(ctx, req.ContextBlocks)
 	if err != nil {
@@ -221,7 +229,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 				TaskID:       pendingTask.TaskID,
 			}
 		}
-		return r.runTurnWithActivationsAndContext(ctx, session, input, persistedBlocks, []activation{{
+		return r.runTurnWithActivationsAndContext(ctx, r.definitions.Snapshot(), session, input, persistedBlocks, []activation{{
 			teamID:        pendingTeam.TeamID,
 			callerTeam:    pendingTeam.CallerTeam,
 			force:         true,
@@ -233,7 +241,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 	if !ok {
 		return r.runTurnWithContext(ctx, session, input, persistedBlocks)
 	}
-	return r.runTurnWithActivationsAndContext(ctx, session, input, persistedBlocks, []activation{{
+	return r.runTurnWithActivationsAndContext(ctx, r.definitions.Snapshot(), session, input, persistedBlocks, []activation{{
 		teamID:             pending.TeamID,
 		callerTeam:         pending.CallerTeam,
 		force:              true,
@@ -431,8 +439,11 @@ func (r *Runtime) Recover(ctx context.Context, sessionID string, req types.Recov
 		if target.TeamID == "" {
 			return types.FlowTurnResult{}, fmt.Errorf("interrupted %s cannot coordinate because no Team was recorded", target.Kind)
 		}
-		result, runErr := r.runTurnWithActivations(ctx, status.Session, recoveryInput(req, target), []activation{{
-			teamID:     coordinatorID(r.definitions.Flow),
+		// Snapshot once here so the coordinator this activation names and the
+		// tree the turn resolves against come from the same generation.
+		defs := r.definitions.Snapshot()
+		result, runErr := r.runTurnWithActivationsAndContext(ctx, defs, status.Session, recoveryInput(req, target), nil, []activation{{
+			teamID:     coordinatorID(defs.Flow),
 			callerTeam: target.CallerTeam,
 			force:      true,
 			attempt:    target.Attempt + 1,
@@ -494,9 +505,15 @@ func (r *Runtime) Status(ctx context.Context, sessionID string) (types.FlowSessi
 	return status.Session, nil
 }
 
+// runTurnWithContext starts a turn under the definitions currently published.
+// Every other turn entry point funnels through
+// runTurnWithActivationsAndContext, which is where the snapshot is taken, so
+// the tree is read exactly once per turn and every routing decision inside
+// that turn comes from the same generation.
 func (r *Runtime) runTurnWithContext(ctx context.Context, session types.FlowSession, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
-	return r.runTurnWithActivationsAndContext(ctx, session, input, blocks, []activation{
-		{teamID: r.definitions.Flow.EntryTeamID},
+	defs := r.definitions.Snapshot()
+	return r.runTurnWithActivationsAndContext(ctx, defs, session, input, blocks, []activation{
+		{teamID: defs.Flow.EntryTeamID},
 	})
 }
 
@@ -506,11 +523,17 @@ func (r *Runtime) runTurnWithActivations(
 	input string,
 	initial []activation,
 ) (types.FlowTurnResult, error) {
-	return r.runTurnWithActivationsAndContext(ctx, session, input, nil, initial)
+	return r.runTurnWithActivationsAndContext(ctx, r.definitions.Snapshot(), session, input, nil, initial)
 }
 
+// runTurnWithActivationsAndContext executes one FlowTurn against defs. defs is
+// the single snapshot for the whole turn: the activation queue, the routing
+// decisions and the team/agent resolution all read it, and nothing in the turn
+// re-reads the store. A Swap that lands mid-turn therefore takes effect on the
+// next turn, not on this one.
 func (r *Runtime) runTurnWithActivationsAndContext(
 	ctx context.Context,
+	defs *types.Definitions,
 	session types.FlowSession,
 	input string,
 	blocks []types.ContextBlock,
@@ -609,7 +632,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 			return r.finishTurn(ctx, result, types.SessionFailed, err)
 		}
 
-		ready, blocked := takeReadyActivations(queue, completedTeams, failedTeams, r.definitions.Flow)
+		ready, blocked := takeReadyActivations(queue, completedTeams, failedTeams, defs.Flow)
 		ready, deferred := limitActivations(ready, r.limits.WithDefaults().MaxParallelTeams)
 		queue = append(deferred, blocked...)
 		if len(ready) == 0 {
@@ -650,6 +673,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				defer wg.Done()
 				execution, executionErr := r.executeTeamTurn(
 					ctx,
+					defs,
 					session,
 					turn,
 					current,
@@ -717,7 +741,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		batchRoutes := make(map[string]struct{})
 		enqueueBatchRoute := func(next activation) {
 			key := next.teamID + "\x00" + next.callerTeam
-			if next.teamID == coordinatorID(r.definitions.Flow) {
+			if next.teamID == coordinatorID(defs.Flow) {
 				// The coordinator is the single aggregation point for this
 				// batch. A failed Team and a successful sibling may both
 				// route there; they must produce one coordinator activation,
@@ -746,11 +770,11 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 			case types.NextProceed:
 				targets := fixedTargets(execution.binding)
 				if len(targets) == 0 {
-					if execution.activation.teamID == coordinatorID(r.definitions.Flow) {
+					if execution.activation.teamID == coordinatorID(defs.Flow) {
 						hasWaitInput = true
 						continue
 					}
-					targets = []string{coordinatorID(r.definitions.Flow)}
+					targets = []string{coordinatorID(defs.Flow)}
 				}
 				for _, target := range targets {
 					enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
@@ -760,7 +784,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 					routeFailure = fmt.Errorf("team %q cannot activate other teams", execution.activation.teamID)
 					continue
 				}
-				if err := validateActivation(execution.binding, r.definitions.Flow, next.Teams); err != nil {
+				if err := validateActivation(execution.binding, defs.Flow, next.Teams); err != nil {
 					routeFailure = err
 					continue
 				}
@@ -783,7 +807,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 					target = execution.activation.callerTeam
 				}
 				if target == "" {
-					target = coordinatorID(r.definitions.Flow)
+					target = coordinatorID(defs.Flow)
 				}
 				enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
 			case types.NextCoordinate:
@@ -798,7 +822,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 					continue
 				}
 				coordinateRetries[sourceTeam]++
-				enqueueBatchRoute(activation{teamID: coordinatorID(r.definitions.Flow), callerTeam: execution.activation.teamID})
+				enqueueBatchRoute(activation{teamID: coordinatorID(defs.Flow), callerTeam: execution.activation.teamID})
 			case types.NextWaitTool:
 				hasWaitTool = true
 			case types.NextWaitApproval:
@@ -939,8 +963,14 @@ func limitActivations(items []activation, max int) ([]activation, []activation) 
 	return items[:max], items[max:]
 }
 
+// executeTeamTurn resolves one activation to a Team and runs it. defs is the
+// turn's snapshot: it supplies both the flow binding and the Team definition,
+// so the routing that put this activation on the queue and the Team it now
+// runs are guaranteed to come from the same generation. This runs inside the
+// turn's parallel batch, so it must not re-read the store.
 func (r *Runtime) executeTeamTurn(
 	ctx context.Context,
+	defs *types.Definitions,
 	session types.FlowSession,
 	flowTurn types.FlowTurn,
 	current activation,
@@ -950,13 +980,13 @@ func (r *Runtime) executeTeamTurn(
 ) (teamExecution, error) {
 	execution := teamExecution{activation: current}
 
-	binding, ok := r.definitions.Flow.Teams[current.teamID]
+	binding, ok := defs.Flow.Teams[current.teamID]
 	if !ok {
 		return execution, fmt.Errorf("team %q is not configured in flow", current.teamID)
 	}
 	execution.binding = binding
 
-	team, ok := r.definitions.Teams[binding.TeamID]
+	team, ok := defs.Teams[binding.TeamID]
 	if !ok {
 		return execution, fmt.Errorf("team definition %q not found", binding.TeamID)
 	}
@@ -1055,7 +1085,7 @@ func (r *Runtime) executeTeamTurn(
 		if teamResult.Error == "" {
 			teamResult.Error = reason
 		}
-		if current.teamID == coordinatorID(r.definitions.Flow) {
+		if current.teamID == coordinatorID(defs.Flow) {
 			teamResult.Next = &types.Route{Action: types.NextFail, Reason: reason}
 		} else {
 			teamResult.Next = &types.Route{Action: types.NextCoordinate, Reason: reason}
@@ -1766,14 +1796,19 @@ func (r *Runtime) appendRecoveryCompleted(
 	})
 }
 
+// validateDependencies checks the store's currently published tree. This is a
+// startup/validation path rather than a turn path, so it takes its own
+// snapshot instead of threading a turn's defs in: a caller asking "is the flow
+// loaded" wants the answer for the definitions in force right now.
 func (r *Runtime) validateDependencies(flowID string) error {
-	if r.definitions == nil {
+	defs := r.definitions.Snapshot()
+	if defs == nil {
 		return errors.New("definitions are nil")
 	}
-	if flowID != "" && flowID != r.definitions.Flow.ID {
+	if flowID != "" && flowID != defs.Flow.ID {
 		return fmt.Errorf("flow %q is not loaded", flowID)
 	}
-	return r.definitions.Flow.ValidateWithTeams(r.definitions.Teams)
+	return defs.Flow.ValidateWithTeams(defs.Teams)
 }
 
 func dependenciesCompleted(dependencies []string, completed map[string]bool) bool {

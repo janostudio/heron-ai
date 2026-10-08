@@ -78,7 +78,7 @@ func TestRuntimeRunsIndependentCallsInParallelAndUsesDependencies(t *testing.T) 
 	executor := newFakeCallExecutor(types.CallCommand)
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(executor))
-	runtime := NewRuntime(registry)
+	runtime := newTestRuntime(registry, nil)
 
 	req := types.TeamTurnRequest{
 		FlowSession: types.FlowSession{ID: "fs-1"},
@@ -193,7 +193,7 @@ func TestRuntimeReturnsCoordinateWhenCallFails(t *testing.T) {
 	executor := &failingCallExecutor{}
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(executor))
-	runtime := NewRuntime(registry)
+	runtime := newTestRuntime(registry, nil)
 
 	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
 		Team: types.Team{
@@ -218,7 +218,7 @@ func TestRuntimeLimitsCallsPerTeamTurnNotAcrossFlow(t *testing.T) {
 	executor := newFakeCallExecutor(types.CallCommand)
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(executor))
-	runtime := NewRuntime(registry)
+	runtime := newTestRuntime(registry, nil)
 
 	result, err := runtime.Run(context.Background(), types.TeamTurnRequest{
 		Team: types.Team{
@@ -299,7 +299,7 @@ func TestRuntimeAggregatesParallelWaitingToolCalls(t *testing.T) {
 	executor := &waitingCallExecutor{}
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(executor))
-	runtime := NewRuntime(registry, map[string]types.AgentConfig{
+	runtime := newTestRuntime(registry, map[string]types.AgentConfig{
 		"agent-a": {},
 		"agent-b": {},
 	})
@@ -330,7 +330,7 @@ func TestRuntimeAggregateResumeSkipsCompletedSiblingCall(t *testing.T) {
 	executor := &waitingCallExecutor{}
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(executor))
-	runtime := NewRuntime(registry, map[string]types.AgentConfig{
+	runtime := newTestRuntime(registry, map[string]types.AgentConfig{
 		"agent-a": {},
 		"agent-b": {},
 	})
@@ -426,7 +426,7 @@ func TestRuntimeDeliversSpawnRecordsToDownstreamCall(t *testing.T) {
 	runner := &spawnPublishingRunner{}
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(call.NewAgentExecutor(runner)))
-	runtime := NewRuntime(registry, map[string]types.AgentConfig{
+	runtime := newTestRuntime(registry, map[string]types.AgentConfig{
 		"fix-agent":    {Name: "fix-agent"},
 		"verify-agent": {Name: "verify-agent"},
 	})

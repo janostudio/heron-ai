@@ -133,7 +133,23 @@ keywords: [ ... ]
 
 ## 4. 落地路径
 
-### Phase 1：激活 knowledge-query（P0）
+> **⚠️ 部分过时（2026-09）**：本文写于 knowledge 走「预索引 + 逐条注入」的时期。
+> 该模型已被推翻 —— 现在 knowledge 采用 agentic search：prompt 里只放一个固定
+> 的指路块（目录位置 + "用 Grep/Glob/Read 检索"），检索由模型自己发起。
+>
+> 过时的具体落点：
+> - `internal/knowledge/injector.go`、`formatEntries`、`InjectWithAllowlist`、
+>   `KnowledgeIndex`、`KnowledgeUsageInstruction` **均已删除**。
+> - `KnowledgeExtractor` 亦已删除（它只往索引里 `Add`）。
+> - 因此 **Phase 1 已无对象可改**。
+>
+> Phase 2（Knowledge Summarizer 提示词 + 调用骨架）**仍然有效** ——
+> `internal/knowledge/summarizer.go` 已存在且在用（learn 路径），与检索模型无关。
+>
+> 现行设计见 `docs/skill-progressive-disclosure.md` §3.4（决策沿革）
+> 与 `docs/configuration/knowledge.md`（现行配置说明）。
+
+### Phase 1：激活 knowledge-query（P0）—— ⚠️ 已过时，见上方说明
 - 改 `internal/knowledge/injector.go` 的 `formatEntries`：在 `## Knowledge Context` 之后、知识条目之前，追加 `knowledge-query` 使用指令（指令常量可放 `internal/prompt/builtin.go` 导出，或 knowledge 包内定义；推荐后者保持 knowledge 自包含）。
 - 替换 `internal/prompt/builtin.go` 的死代码 `knowledgeQueryTemplate` 常量文本为增强版（若指令放 knowledge 包，则同步删除或改由 knowledge 包引用）。
 - 测试：新增断言「`InjectWithAllowlist` 命中知识时，输出含 `## Knowledge Usage` 指令 + 知识条目；未命中（空）时不含指令」。

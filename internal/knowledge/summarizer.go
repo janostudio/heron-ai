@@ -109,7 +109,15 @@ keywords: [ ... ]
 <precedence, supersedes, or open caveats>`
 
 // layeredSummarizerUserTemplate formats layer-tagged candidate sources.
-const layeredSummarizerUserTemplate = `Distill the following candidate sources into one or more Knowledge entries. Each source is prefixed with its layer.
+//
+// The owner hint is a separate placeholder from the sources because it is a
+// different kind of input: the sources are material to distill, the owners are
+// facts the model must copy verbatim into scope.agents / scope.teams rather
+// than infer. Conflating them would invite the model to treat a name as
+// something it may paraphrase.
+const layeredSummarizerUserTemplate = `Distill the following candidate sources into one or more Knowledge entries. Each source is prefixed with its layer.%s
+
+When a private scope is warranted, use exactly the owner name given above for that layer; never invent one. If no owner is given for a layer, scope the entry to flow instead.
 
 <candidate_sources>
 %s
@@ -124,6 +132,16 @@ const layeredSeparator = "---KNOWLEDGE---"
 type LayeredSource struct {
 	Layer string // flow | team | agent
 	Text  string
+	// Owner is the agent or team the source came from, empty when the caller
+	// cannot determine it.
+	//
+	// It exists because the distilled document's scope is a word ("agent",
+	// "team") while the path that will hold it needs a *name*: an entry that
+	// claims to be private and names nobody is unreachable, and load now
+	// rejects it rather than indexing it into obscurity. The layer tag alone
+	// cannot supply the name — the caller is the only one that knows which
+	// agent and team the session ran.
+	Owner string
 }
 
 // KnowledgeSummarizer 用 LLM 把候选来源总结成固定格式 Knowledge 条目。
@@ -178,18 +196,34 @@ func (s *KnowledgeSummarizer) SummarizeLayered(ctx context.Context, sources []La
 	}
 
 	var b strings.Builder
+	owners := make(map[string]string, 3)
 	for _, src := range sources {
 		layer := strings.TrimSpace(src.Layer)
 		if layer == "" {
 			layer = "flow"
 		}
 		fmt.Fprintf(&b, "[layer: %s]\n%s\n\n", layer, strings.TrimSpace(src.Text))
+		if owner := strings.TrimSpace(src.Owner); owner != "" {
+			owners[layer] = owner
+		}
 	}
 	material := strings.TrimSpace(b.String())
 
+	// The owner is supplied to the model as a fact rather than left to it: the
+	// model's job is to distill text, and asking it to also invent a valid
+	// agent or team name would make the entry's visibility depend on a
+	// plausible-looking string. Unknown owners are simply absent from the
+	// hint, and the caller's post-processing handles the resulting bare scope.
+	ownerHint := ""
+	for _, layer := range []string{"agent", "team"} {
+		if owner := owners[layer]; owner != "" {
+			ownerHint += fmt.Sprintf("\n- %s-layer facts come from %s %q", layer, layer, owner)
+		}
+	}
+
 	messages := []types.Message{
 		{Role: "system", Content: layeredSummarizerSystemPrompt},
-		{Role: "user", Content: fmt.Sprintf(layeredSummarizerUserTemplate, material)},
+		{Role: "user", Content: fmt.Sprintf(layeredSummarizerUserTemplate, ownerHint, material)},
 	}
 
 	resp, err := s.model.Chat(ctx, messages, nil, s.config)

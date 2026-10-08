@@ -1,0 +1,49 @@
+# 扇出 Team 骨架：多个 Agent 并行处理，最后一个调用汇合结果。
+# 没有任何 depends_on 的调用互为并行；依赖方必须等待其依赖全部完成。
+id: generic_fanout
+goal: 并行处理同一份输入，再汇合为一份结果。
+
+state:
+  enabled: true
+  max_items: 20
+  max_chars: 4000
+  inject_summary: true
+
+calls:
+  # 第一路：与 second 并行，互不依赖。
+  first:
+    type: agent
+    agent: generic
+    responsibility: 从第一个角度分析输入，产出一份独立结论。
+    inputs:
+      user_message: true
+    output:
+      record: FirstResult
+
+  # 第二路：同样不依赖 first，因此与 first 并行执行。
+  second:
+    type: agent
+    agent: generic
+    responsibility: 从第二个角度分析输入，产出一份独立结论。
+    inputs:
+      user_message: true
+    output:
+      record: SecondResult
+
+  # 汇合：depends_on 必须引用存在的 call ID，且不能自依赖。
+  merge:
+    type: agent
+    agent: generic
+    depends_on: [first, second]
+    responsibility: 综合前两路结论，给出一致、无冲突的最终结果。
+    inputs:
+      - from: first
+        record: FirstResult
+      - from: second
+        record: SecondResult
+    output:
+      record: MergedResult
+
+output:
+  from: merge
+  record: MergedResult

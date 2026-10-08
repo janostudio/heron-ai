@@ -1,409 +1,106 @@
 package knowledge
 
 import (
-	"context"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-func TestKnowledgeIndex_SearchEmpty(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	results, err := idx.Search(context.Background(), "anything")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if results != nil {
-		t.Fatalf("expected nil, got %v", results)
-	}
-}
+// This file used to test KnowledgeIndex (Add/Search/SearchWithScope/List/
+// Count) and KnowledgeExtractor. All of it is gone: retrieval moved to
+// agentic search (design doc skill-progressive-disclosure §3.4), so there is
+// no in-memory index to search, and the extractor only ever fed that index.
+//
+// What remains is the one survivor: the write path's dedup still calls
+// entryMatches, so the matching rule it encodes is still live behaviour.
+// Everything else about knowledge is tested through the store (store_test.go),
+// the scope validation (store_scope_validation_test.go) and the pointer block
+// (pointer_test.go).
+//
+// The tests deleted from this file, and why:
+//
+//	TestKnowledgeIndex_SearchEmpty                      — index deleted
+//	TestKnowledgeIndex_AddAndSearch                     — index deleted
+//	TestKnowledgeIndex_SearchWithScope_AllScope         — index deleted
+//	TestKnowledgeIndex_SearchWithScope_TeamScopeMatch   — index deleted
+//	TestKnowledgeIndex_SearchWithScope_TeamScopeNoMatch — index deleted
+//	TestKnowledgeIndex_SearchWithScope_AgentScope       — index deleted
+//	TestKnowledgeIndex_KeywordMatchingInContent         — index deleted
+//	TestKnowledgeIndex_KeywordMatchingInKeys            — index deleted
+//	TestKnowledgeIndex_SearchMatchesTermsInsideLongRuntimeQuery — index deleted;
+//	    the "long runtime query" shape was the injector's input, which no longer
+//	    exists
+//	TestKnowledgeIndex_List                             — index deleted
+//	TestKnowledgeIndex_Count                            — index deleted
+//	TestKnowledgeExtractor_ExtractHighImportance        — extractor deleted
+//	TestKnowledgeExtractor_ExtractSkipsLowImportance    — extractor deleted
+//	TestKnowledgeExtractor_ExtractAddsToIndex           — extractor deleted
+//	TestKnowledgeInjector_InjectReturnsFormattedText    — injector deleted
+//	TestKnowledgeInjector_InjectNoMatchesReturnsEmpty   — injector deleted
+//	TestKnowledgeInjector_FormatEntriesIncludesUsageInstruction — injector deleted
+//	TestKnowledgeInjector_InjectWithAllowlistNoMatchOmitsUsageInstruction — injector deleted
+//	TestKnowledgeInjector_InjectAllWithScopeFiltering   — injector deleted
 
-func TestKnowledgeIndex_AddAndSearch(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "Go is a programming language",
-		Keys:    []string{"go", "programming", "language"},
-		Scope:   types.Scope{Type: "flow"},
+// TestEntryMatchesUsesMetadataOnly pins the rule FindDuplicate depends on.
+//
+// The distinction that matters is which fields a stored entry is matched
+// against. The stored side is loaded body-less, so its Content is empty
+// whether or not the file has a body; a query built from body text therefore
+// matches nothing, which is the documented and accepted limitation of the
+// write-path dedup (see FindDuplicate). Asserting it here rather than only
+// through FindDuplicate pins the rule independently of the store.
+func TestEntryMatchesUsesMetadataOnly(t *testing.T) {
+	entry := types.KnowledgeEntry{
+		ID:      "payment-idempotency",
+		Title:   "Payment Idempotency",
+		Summary: "Retry requests must reuse the key.",
+		Keys:    []string{"payment", "retry", "idempotency"},
+	}
+
+	t.Run("matches id, title, summary and keys", func(t *testing.T) {
+		for _, query := range []string{"payment-idempotency", "Payment Idempotency", "reuse the key", "idempotency"} {
+			require.True(t, entryMatches(entry, query), "query %q should match the entry's metadata", query)
+		}
 	})
 
-	results, err := idx.Search(context.Background(), "go")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-	if results[0].ID != "1" {
-		t.Fatalf("expected ID '1', got '%s'", results[0].ID)
-	}
-}
-
-func TestKnowledgeIndex_SearchWithScope_AllScope(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "test content",
-		Keys:    []string{"test"},
-		Scope:   types.Scope{Type: "flow"},
+	t.Run("phrase match is case-insensitive and trimmed", func(t *testing.T) {
+		require.True(t, entryMatches(entry, "  PAYMENT IDEMPOTENCY  "))
 	})
 
-	results, err := idx.SearchWithScope(context.Background(), "test", "agent1", "team1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-}
-
-func TestKnowledgeIndex_SearchWithScope_TeamScopeMatch(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "team specific content",
-		Keys:    []string{"team"},
-		Scope: types.Scope{
-			Type:  "team",
-			Teams: []string{"team1", "team2"},
-		},
+	t.Run("a term inside a longer query still matches", func(t *testing.T) {
+		require.True(t, entryMatches(entry,
+			"Review the payment path. Check that retry reuses the key and that tests pass."))
 	})
 
-	results, err := idx.SearchWithScope(context.Background(), "team", "agent1", "team1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-}
-
-func TestKnowledgeIndex_SearchWithScope_TeamScopeNoMatch(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "team specific content",
-		Keys:    []string{"team"},
-		Scope: types.Scope{
-			Type:  "team",
-			Teams: []string{"team1", "team2"},
-		},
+	t.Run("no overlap is a non-match", func(t *testing.T) {
+		require.False(t, entryMatches(entry, "kubernetes"))
 	})
 
-	results, err := idx.SearchWithScope(context.Background(), "team", "agent1", "team3")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 0 {
-		t.Fatalf("expected 0 results, got %d", len(results))
-	}
-}
-
-func TestKnowledgeIndex_SearchWithScope_AgentScope(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "agent specific content",
-		Keys:    []string{"agent"},
-		Scope: types.Scope{
-			Type:   "agent",
-			Agents: []string{"agent1"},
-		},
+	t.Run("empty and blank queries never match", func(t *testing.T) {
+		for _, query := range []string{"", "   ", "\t\n"} {
+			require.False(t, entryMatches(entry, query), "blank query %q must not match", query)
+		}
 	})
 
-	results, err := idx.SearchWithScope(context.Background(), "agent", "agent1", "team1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-}
-
-func TestKnowledgeIndex_KeywordMatchingInContent(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "Heron AI is a multi-agent framework",
-		Keys:    []string{},
-		Scope:   types.Scope{Type: "flow"},
+	t.Run("the body does not participate", func(t *testing.T) {
+		// The stored entry has no Content (that is what Load returns), so a
+		// term that exists only in the file's body cannot match. This is the
+		// dedup's known blind spot, not a bug to fix here.
+		require.False(t, entryMatches(entry, "zarquon"))
 	})
-
-	results, err := idx.Search(context.Background(), "heron")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
 }
 
-func TestKnowledgeIndex_KeywordMatchingInKeys(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "some content",
-		Keys:    []string{"heron", "ai", "framework"},
-		Scope:   types.Scope{Type: "flow"},
-	})
+// TestKnowledgeTermsDropsNoise pins the tokenization the term fallback uses.
+//
+// Case is preserved here and applied by entryMatches, which lowercases the
+// query once before splitting; this function only decides where the boundaries
+// are and which fragments are worth keeping.
+func TestKnowledgeTermsDropsNoise(t *testing.T) {
+	got := knowledgeTerms("Check the payment-service, retry. x")
+	require.Equal(t, []string{"Check", "the", "payment-service", "retry"}, got,
+		"single-character terms are dropped and duplicates are collapsed")
 
-	results, err := idx.Search(context.Background(), "heron")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
-	}
-}
-
-func TestKnowledgeIndex_SearchMatchesTermsInsideLongRuntimeQuery(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "qa-guide",
-		Content: "The project service must be tested after a revision-aware write.",
-		Keys:    []string{"project", "service", "test"},
-		Scope:   types.Scope{Type: "flow"},
-	})
-
-	results, err := idx.Search(context.Background(), "回答用户的问题。\n请检查 project service 并运行 test")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(results) != 1 || results[0].ID != "qa-guide" {
-		t.Fatalf("expected qa-guide, got %#v", results)
-	}
-}
-
-func TestKnowledgeIndex_List(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{ID: "1", Content: "first", Scope: types.Scope{Type: "flow"}})
-	idx.Add(types.KnowledgeEntry{ID: "2", Content: "second", Scope: types.Scope{Type: "flow"}})
-
-	results := idx.List()
-	if len(results) != 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
-	}
-}
-
-func TestKnowledgeIndex_Count(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	if idx.Count() != 0 {
-		t.Fatalf("expected 0, got %d", idx.Count())
-	}
-
-	idx.Add(types.KnowledgeEntry{ID: "1", Content: "test", Scope: types.Scope{Type: "flow"}})
-	if idx.Count() != 1 {
-		t.Fatalf("expected 1, got %d", idx.Count())
-	}
-}
-
-func TestKnowledgeExtractor_ExtractHighImportance(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	extractor := NewKnowledgeExtractor(idx)
-
-	states := []types.StateObservation{
-		{
-			Content:    "The API rate limit is 100 requests per minute",
-			Importance: "high",
-			Source:     "agent1",
-			Round:      1,
-		},
-	}
-
-	entries, err := extractor.Extract(context.Background(), states)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
-	}
-	if entries[0].Source != "agent1" {
-		t.Fatalf("expected source 'agent1', got '%s'", entries[0].Source)
-	}
-	if !strings.Contains(entries[0].ID, "agent1") {
-		t.Fatalf("expected ID to contain 'agent1', got '%s'", entries[0].ID)
-	}
-}
-
-func TestKnowledgeExtractor_ExtractSkipsLowImportance(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	extractor := NewKnowledgeExtractor(idx)
-
-	states := []types.StateObservation{
-		{
-			Content:    "low importance state",
-			Importance: "low",
-			Source:     "agent1",
-			Round:      1,
-		},
-		{
-			Content:    "medium importance state",
-			Importance: "medium",
-			Source:     "agent1",
-			Round:      2,
-		},
-	}
-
-	entries, err := extractor.Extract(context.Background(), states)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("expected 0 entries, got %d", len(entries))
-	}
-}
-
-func TestKnowledgeExtractor_ExtractAddsToIndex(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	extractor := NewKnowledgeExtractor(idx)
-
-	states := []types.StateObservation{
-		{
-			Content:    "Critical security vulnerability found",
-			Importance: "critical",
-			Source:     "agent1",
-			Round:      1,
-		},
-	}
-
-	_, err := extractor.Extract(context.Background(), states)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if idx.Count() != 1 {
-		t.Fatalf("expected 1 entry in index, got %d", idx.Count())
-	}
-}
-
-func TestKnowledgeInjector_InjectReturnsFormattedText(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "Important knowledge",
-		Keys:    []string{"important", "knowledge"},
-		Scope:   types.Scope{Type: "flow"},
-	})
-
-	injector := NewKnowledgeInjector(idx)
-	result, err := injector.Inject(context.Background(), "important", "agent1", "team1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result == "" {
-		t.Fatal("expected non-empty result")
-	}
-	if !strings.Contains(result, "## Knowledge Context") {
-		t.Fatal("expected result to contain '## Knowledge Context'")
-	}
-	if !strings.Contains(result, "Important knowledge") {
-		t.Fatal("expected result to contain 'Important knowledge'")
-	}
-}
-
-func TestKnowledgeInjector_InjectNoMatchesReturnsEmpty(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "Important knowledge",
-		Keys:    []string{"important"},
-		Scope:   types.Scope{Type: "flow"},
-	})
-
-	injector := NewKnowledgeInjector(idx)
-	result, err := injector.Inject(context.Background(), "nonexistent", "agent1", "team1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != "" {
-		t.Fatalf("expected empty result, got '%s'", result)
-	}
-}
-
-func TestKnowledgeInjector_FormatEntriesIncludesUsageInstruction(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	injector := NewKnowledgeInjector(idx)
-
-	entries := []types.KnowledgeEntry{
-		{ID: "1", Content: "First entry"},
-		{ID: "2", Content: "Second entry"},
-	}
-
-	result := injector.formatEntries(entries)
-
-	if !strings.Contains(result, "## Knowledge Context") {
-		t.Fatal("expected result to contain '## Knowledge Context'")
-	}
-	if !strings.Contains(result, "## Knowledge Usage") {
-		t.Fatal("expected result to contain '## Knowledge Usage'")
-	}
-	if !strings.Contains(result, "- First entry") {
-		t.Fatal("expected result to contain '- First entry'")
-	}
-	if !strings.Contains(result, "- Second entry") {
-		t.Fatal("expected result to contain '- Second entry'")
-	}
-}
-
-func TestKnowledgeInjector_InjectWithAllowlistNoMatchOmitsUsageInstruction(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "Important knowledge",
-		Keys:    []string{"important"},
-		Scope:   types.Scope{Type: "flow"},
-	})
-
-	injector := NewKnowledgeInjector(idx)
-	result, err := injector.InjectWithAllowlist(context.Background(), "nonexistent", "agent1", "team1", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != "" {
-		t.Fatalf("expected empty result, got '%s'", result)
-	}
-	if strings.Contains(result, "## Knowledge Usage") {
-		t.Fatal("expected no '## Knowledge Usage' when no entries match")
-	}
-}
-
-func TestKnowledgeInjector_InjectAllWithScopeFiltering(t *testing.T) {
-	idx := NewKnowledgeIndex()
-	idx.Add(types.KnowledgeEntry{
-		ID:      "1",
-		Content: "Global knowledge",
-		Scope:   types.Scope{Type: "flow"},
-	})
-	idx.Add(types.KnowledgeEntry{
-		ID:      "2",
-		Content: "Team specific knowledge",
-		Scope: types.Scope{
-			Type:  "team",
-			Teams: []string{"team1"},
-		},
-	})
-	idx.Add(types.KnowledgeEntry{
-		ID:      "3",
-		Content: "Agent specific knowledge",
-		Scope: types.Scope{
-			Type:   "agent",
-			Agents: []string{"agent2"},
-		},
-	})
-
-	injector := NewKnowledgeInjector(idx)
-	result, err := injector.InjectAll(context.Background(), "agent1", "team1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(result, "Global knowledge") {
-		t.Fatal("expected result to contain 'Global knowledge'")
-	}
-	if !strings.Contains(result, "Team specific knowledge") {
-		t.Fatal("expected result to contain 'Team specific knowledge'")
-	}
-	if strings.Contains(result, "Agent specific knowledge") {
-		t.Fatal("expected result NOT to contain 'Agent specific knowledge'")
-	}
+	require.Empty(t, knowledgeTerms("a b , ."))
 }

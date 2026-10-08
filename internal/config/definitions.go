@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -119,6 +120,36 @@ func resolveWorkspace(flow types.Flow, teams map[string]types.Team, agents map[s
 	return nil
 }
 
+// ConfigRootForFlow derives the config root from a flow file path: the
+// directory holding the flow, unless that directory is a "flows" subdirectory
+// with a sibling teams/ or agents/ directory, in which case the shared root
+// above it is the config root.
+//
+// This mirrors ConfigLoader.configRootForFlow and exists so callers outside
+// this package — the definition store, which is built before any loader exists
+// — derive the root the same way instead of growing a second, drifting
+// implementation. It stats the candidates directly, so a caller that only knows
+// the flow path gets the same answer as a configured loader.
+func ConfigRootForFlow(flowPath string) string {
+	configRoot := filepath.Dir(flowPath)
+	if filepath.Base(configRoot) != "flows" {
+		return configRoot
+	}
+
+	parent := filepath.Dir(configRoot)
+	if dirExists(filepath.Join(parent, "teams")) ||
+		dirExists(filepath.Join(parent, "agents")) {
+		return parent
+	}
+	return configRoot
+}
+
+// configRootForFlow keeps the method form for callers that hold a loader. It
+// shares the shape with ConfigRootForFlow but not the existence check: the
+// loader asks its FileStore, which resolves paths against the loader's own base
+// directory, whereas the package-level helper can only stat the filesystem.
+// Keeping the two in step matters — the definition store derives a root from
+// the flow path alone and must land on the same directory a loader would.
 func (l *ConfigLoader) configRootForFlow(flowPath string) string {
 	configRoot := filepath.Dir(flowPath)
 	if filepath.Base(configRoot) != "flows" {
@@ -131,6 +162,11 @@ func (l *ConfigLoader) configRootForFlow(flowPath string) string {
 		return parent
 	}
 	return configRoot
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func (l *ConfigLoader) loadDefinitionFlow(path string) (types.Flow, error) {

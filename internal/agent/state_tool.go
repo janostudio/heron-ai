@@ -131,15 +131,18 @@ func (t *StateTool) jsonResult(value any) (*types.ToolResult, error) {
 
 // currentAgentID resolves the executing agent id from the context. It reuses
 // the spawn identity carried by the TurnLoop (see withSpawnIdentity).
+//
+// It reads the identity rather than the published scope on purpose: this
+// package owns both, and the identity is the one that also carries instance
+// keys and the agent definition. The scope exists so other packages can see
+// the same caller; the precedence rule for "request id first, definition name
+// second" lives in agentIDOf so the scope cannot disagree with this function.
 func currentAgentID(ctx context.Context) string {
 	identity := spawnIdentityFromContext(ctx)
 	if identity == nil {
 		return ""
 	}
-	if identity.req.AgentID != "" {
-		return identity.req.AgentID
-	}
-	return identity.agent.Name
+	return agentIDOf(identity.agent, identity.req)
 }
 
 // currentActor resolves the full "agent(instance)" identifier used to
@@ -151,10 +154,7 @@ func currentActor(ctx context.Context) string {
 	if identity == nil {
 		return ""
 	}
-	agentID := identity.req.AgentID
-	if agentID == "" {
-		agentID = identity.agent.Name
-	}
+	agentID := agentIDOf(identity.agent, identity.req)
 	if identity.instanceKey == "" {
 		return agentID
 	}

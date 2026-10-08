@@ -90,8 +90,12 @@ frontmatter 分组：
 ### tools
 | 字段 | 含义 |
 |---|---|
-| `builtin` | 内置工具：Read/Write/Edit/Grep/Glob/Bash/WebSearch/WebFetch/CodeNav/AskUserQuestion/TodoWrite/TodoRead |
+| `builtin` | 内置工具：Read/Write/Edit/Grep/Glob/Bash/WebSearch/WebFetch/CodeNav/AskUserQuestion/TodoWrite/TodoRead/Spawn/Collect/State/Define |
 | `custom` / `mcp` | 自定义 / MCP 工具 |
+
+> `Spawn`、`Collect`、`State`、`Define` 都是**按需开启**的工具：不写进
+> `builtin` 就既不会提供给模型，调用也会被允许清单拦下。`Define` 的语义
+> 见 `define.md`。
 
 ### loop
 | 字段 | 含义 |

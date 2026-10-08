@@ -25,6 +25,7 @@ scripts:
 | `references/fields.md` | **每个配置字段的含义**（Flow/Team/Call/Agent/record/rules） |
 | `references/organization.md` | 目录组织、三层编排、设计优势 |
 | `references/operations.md` | 下载/使用/启动/关闭的详细命令 |
+| `references/define.md` | **Define 工具**：让 Agent 在对话中自建 Agent/Team 定义 |
 | `references/debug.md` | **排查与诊断**：三层 jsonl / 执行日志 / 证据链的读取与 jq 查询 |
 
 读取方式：用 `Read` 打开 `references/<name>.md`（本 skill 目录下）。
@@ -37,6 +38,9 @@ scripts:
 4. record 靠 `output.record` + 下游 `inputs` 的 `{from, record}` 按名精确匹配，
    名称是自由字符串、无校验，拼写必须一致。
 5. `models.json` 含 api_key，永不提交。
+6. 想让 Agent 在对话中自建 Agent/Team，需在其 `AGENT.md` 里声明
+   `tools.builtin: [..., Define]`；未声明则该工具对模型不可见。
+   详见 `references/define.md`。
 
 ## 脚本
 

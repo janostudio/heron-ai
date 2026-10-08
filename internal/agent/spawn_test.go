@@ -70,7 +70,7 @@ func newSpawnFixture(t *testing.T, options ...SpawnOption) *spawnFixture {
 			"child-agent":  {Name: "child-agent", Persona: types.PersonaConfig{Role: "child"}},
 		},
 	}
-	fixture.spawn = NewSpawnTool(fixture.runner, fixture.agents, fixture.registry, fixture.states, options...)
+	fixture.spawn = NewSpawnTool(fixture.runner, fixture.store(), fixture.registry, fixture.states, options...)
 	fixture.parent = types.AgentRequest{
 		FlowSessionID:  "fs-1",
 		TeamID:         "team-1",
@@ -82,6 +82,13 @@ func newSpawnFixture(t *testing.T, options ...SpawnOption) *spawnFixture {
 		MaxAgentRounds: 12,
 	}
 	return fixture
+}
+
+// store wraps the fixture's agent map in the store the tool now takes. The
+// wrapper lives in test code so production keeps no compatibility shim for the
+// old map-taking constructor.
+func (f *spawnFixture) store() *types.DefinitionStore {
+	return types.NewDefinitionStore(&types.Definitions{Agents: f.agents}, "", "")
 }
 
 func (f *spawnFixture) ctx() context.Context {
@@ -465,7 +472,7 @@ func TestSpawnTool_NestedDownstreamRecordCollectorPropagates(t *testing.T) {
 		// complete without further nesting.
 		if spawnDepthFromContext(call.ctx) == 2 {
 			assert.Same(t, collector, agentstore.RecordCollectorFromContext(call.ctx))
-			nested := NewSpawnTool(fixture.runner, fixture.agents, fixture.registry, fixture.states)
+			nested := NewSpawnTool(fixture.runner, fixture.store(), fixture.registry, fixture.states)
 			nestedResult, nestedErr := nested.Execute(call.ctx, map[string]any{
 				"item": "nested", "deliver": "downstream",
 			})

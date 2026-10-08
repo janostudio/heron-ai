@@ -15,6 +15,16 @@ import (
 type Workspace interface {
 	Root() string
 	ResolvePathForTool(path string) (string, string, error)
+	// ResolvePathForToolRestricted is ResolvePathForTool with a path
+	// restriction applied. Tools that hand a path to an external helper (an
+	// indexer, a language server) must use this overload: the helper reads
+	// the filesystem itself, so validating only that the path is inside the
+	// workspace says nothing about whether the caller may see it.
+	//
+	// It is a separate method rather than a parameter on
+	// ResolvePathForTool so the existing signature stays intact for callers
+	// with no restriction to express.
+	ResolvePathForToolRestricted(path string, restrict Restriction) (string, string, error)
 	Read(ctx context.Context, req ReadRequest) (ReadResult, error)
 	Write(ctx context.Context, req WriteRequest) (WriteResult, error)
 	Run(ctx context.Context, req CommandRequest) (CommandResult, error)
