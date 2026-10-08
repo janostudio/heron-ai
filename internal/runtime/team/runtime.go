@@ -290,7 +290,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 
 	result.Records = selectTeamRecords(req.Team, result.CallResults, allRecords, state)
 	result.Reply = strings.Join(allReply, "\n\n")
-	result.Next = resolveNext(req.Team, result.CallResults)
+	result.Next = resolveNext(result.CallResults)
 	result.Turn.Status = types.TurnCompleted
 	result.Turn.RecordIDs = recordIDs(result.Records)
 	if states != nil && req.Team.State.Enabled {
@@ -590,6 +590,16 @@ func (r *Runtime) runBatch(
 	return results, nil
 }
 
+// addUsage folds one call's token usage into the TeamTurn aggregate.
+//
+// TeamTurnResult.Usage is that aggregate: the sum of every
+// CallResults[].Usage of the same TeamTurn, including synthetic spawn
+// children, which the Run loop executes as ordinary calls of the turn. It is
+// therefore NOT an independent measurement and must not be added to
+// CallResults[].Usage — a consumer reads the team layer or the call layer,
+// never both. The one usage a TeamTurn does not contain is the usage of a
+// call that resumes in a later TeamTurn (an async tool task or an approval);
+// that belongs to the turn that finishes it.
 func addUsage(total *types.TokenUsage, usage types.TokenUsage) {
 	if total == nil {
 		return
@@ -731,6 +741,12 @@ func (r *Runtime) appendCallCompleted(ctx context.Context, req types.CallRequest
 			CallID:        req.Call.ID,
 			CallTurnID:    req.CallTurnID,
 			CallType:      req.Call.Type,
+			// Attempt/RecoveryOf identify which execution of this call the
+			// event belongs to. Without them a retried call emits completed
+			// events indistinguishable from a different call's, and any
+			// consumer summing usage over the event stream double counts.
+			Attempt:    req.Attempt,
+			RecoveryOf: req.RecoveryOf,
 		},
 		Payload: spawnEventPayload(map[string]any{"call_result": result}, spawn),
 	}); err != nil {
@@ -1277,19 +1293,56 @@ func applyOutputScope(record *types.SharedRecord, scope string) {
 	}
 }
 
-func resolveNext(team types.Team, results map[string]types.CallResult) *types.Route {
-	names := make([]string, 0, len(results))
-	for name := range results {
-		names = append(names, name)
+// routeActionPriority ranks route actions by how strongly they must win the
+// team-level arbitration when several calls of one TeamTurn return different
+// non-proceed routes. Lower wins.
+//
+// Team.Calls is an unordered map, so the configuration carries no declaration
+// order to arbitrate by. Ranking by severity is what makes the choice
+// deterministic and independent of how the calls happen to be named: a
+// terminal failure outranks an escalation to the coordinator, which outranks
+// a blocking wait, which outranks the two onward routing actions.
+func routeActionPriority(action types.NextAction) int {
+	switch action {
+	case types.NextFail:
+		return 0
+	case types.NextCoordinate:
+		return 1
+	case types.NextWaitApproval:
+		return 2
+	case types.NextWaitTool:
+		return 3
+	case types.NextActivate:
+		return 4
+	case types.NextReturn:
+		return 5
+	default:
+		return 6
 	}
-	sort.Strings(names)
-	for _, name := range names {
+}
+
+// resolveNext collapses the per-call routes of one TeamTurn into the single
+// Team route. Severity decides; the name-ordered walk only breaks ties
+// between two equally severe routes, so renaming a call cannot change which
+// route the Team takes.
+func resolveNext(results map[string]types.CallResult) *types.Route {
+	var best *types.Route
+	var bestPriority int
+	for _, name := range sortedCallResultNames(results) {
 		result := results[name]
-		if result.Next != nil && result.Next.Action != types.NextProceed {
-			return result.Next
+		if result.Next == nil || result.Next.Action == types.NextProceed {
+			continue
+		}
+		priority := routeActionPriority(result.Next.Action)
+		if best == nil || priority < bestPriority {
+			best = result.Next
+			bestPriority = priority
 		}
 	}
-	return &types.Route{Action: types.NextProceed}
+	if best == nil {
+		return &types.Route{Action: types.NextProceed}
+	}
+	return best
 }
 
 func deduplicateRecords(records []types.SharedRecord) []types.SharedRecord {
