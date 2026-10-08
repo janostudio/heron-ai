@@ -533,6 +533,14 @@ func (t *SpawnTool) runChild(
 // distinguished by CallID "<parent-call>/<key>" and a payload.spawn block
 // carrying the instance agent/key. Emission is skipped when no session writer
 // is wired or the parent has no flow session to write into.
+//
+// This event — not the parent's CallResult — is where a child's consumption is
+// recorded. A child is its own agent turn, so its tokens are published under
+// its own CallID and the parent's CallResult.Usage keeps covering only the
+// parent's own model rounds. Do not "fix" this by summing child usage into the
+// parent: the child's event already carries it, so the event stream (the
+// declared fact source) would count it twice, and a wait=false child may not
+// even have finished by the time the parent's result is sealed.
 func (t *SpawnTool) emitChildEvent(
 	ctx context.Context,
 	eventType string,

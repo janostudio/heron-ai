@@ -20,14 +20,22 @@ import (
 type fakeSessionWriter struct {
 	mu     sync.Mutex
 	events []storage.SessionEvent
+	layers []storage.EventLayer
 }
 
 func (w *fakeSessionWriter) Append(ctx context.Context, sessionID string, layer storage.EventLayer, event storage.SessionEvent) (storage.SessionEvent, error) {
 	w.mu.Lock()
 	w.events = append(w.events, event)
+	w.layers = append(w.layers, layer)
 	w.mu.Unlock()
 	event.Seq = int64(len(w.events))
 	return event, nil
+}
+
+func (w *fakeSessionWriter) layersRecorded() []storage.EventLayer {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]storage.EventLayer(nil), w.layers...)
 }
 
 func (w *fakeSessionWriter) Replay(ctx context.Context, sessionID string) (*storage.SessionReplay, error) {
@@ -382,6 +390,93 @@ func TestSpawnTool_AsyncChildEmitsSessionEvents(t *testing.T) {
 	}
 	assert.True(t, started, "child started event missing")
 	assert.True(t, completed, "child completed event missing")
+}
+
+// TestSpawnTool_ChildUsageIsOwnAgentTurn locks the consumption model for
+// spawned children: a child's tokens are published as the child's own
+// agent_turn.completed event (payload.call_result.Usage / .Requests) under a
+// child-owned CallID, and are never folded into the parent's CallResult.
+//
+// This is deliberate, not a leak. The declared fact source for consumption is
+// the event stream (team.jsonl: agent_turn.completed →
+// payload.call_result.Requests[]); the parent CallResult.Usage covers only the
+// parent's own model rounds (runtime.go accumulates resp.Usage). Folding child
+// usage into the parent would double count it there, and is impossible for
+// wait=false anyway: an async child may finish after the parent's CallResult
+// has been sealed, or after a process restart.
+//
+// wait=true and wait=false must behave identically, so neither path can drift
+// into "only one of them reports consumption".
+func TestSpawnTool_ChildUsageIsOwnAgentTurn(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		wait bool
+	}{
+		{"sync", true},
+		{"async", false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newAsyncSpawnFixture(t)
+			writer := &fakeSessionWriter{}
+			fixture.spawn.SetSessionWriter(writer)
+			fixture.runner.result = func(call spawnRunnerCall) (*types.AgentResult, error) {
+				return &types.AgentResult{
+					Status: types.TurnCompleted,
+					Reply:  "child reply",
+					Usage:  types.TokenUsage{PromptTokens: 7, CompletionTokens: 4, TotalTokens: 11},
+					Requests: []types.ModelRequestStats{{
+						Round: 0, MessageCount: 2, EstimatedPromptTokens: 7,
+						Usage: types.TokenUsage{PromptTokens: 7, CompletionTokens: 4, TotalTokens: 11},
+					}},
+				}, nil
+			}
+
+			result, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{
+				"item": "a", "key": "k1", "wait": testCase.wait,
+			})
+			require.NoError(t, err)
+			require.True(t, result.Success)
+			if !testCase.wait {
+				handles := fixture.spawnHandles(t, result)
+				fixture.waitForTask(t, handles[0]["task_id"].(string))
+			}
+
+			require.Eventually(t, func() bool {
+				for _, event := range writer.recorded() {
+					if event.Type == types.EventAgentTurnCompleted {
+						return true
+					}
+				}
+				return false
+			}, 5*time.Second, 20*time.Millisecond, "child completed event was not emitted")
+
+			// Exactly one started + one completed: a child is counted once,
+			// by nobody but itself.
+			events := writer.recorded()
+			require.Len(t, events, 2)
+			assert.Equal(t, types.EventAgentTurnStarted, events[0].Type)
+			assert.Equal(t, types.EventAgentTurnCompleted, events[1].Type)
+			// Same layer ordinary agent turns are persisted to, so an
+			// event-stream consumer picks children up without special casing.
+			layers := writer.layersRecorded()
+			require.Len(t, layers, 2)
+			assert.Equal(t, storage.LayerTeam, layers[0])
+			assert.Equal(t, storage.LayerTeam, layers[1])
+
+			completed := events[1]
+			// Child-owned call id: "<parent-call>/<key>", never the parent's.
+			assert.Equal(t, "call-1/k1", completed.CallID)
+			assert.NotEqual(t, fixture.parent.CallID, completed.CallID)
+			assert.Equal(t, "fs-1", completed.FlowSessionID)
+			assert.Equal(t, "team-1", completed.TeamID)
+
+			callResult, _ := completed.Payload["call_result"].(types.CallResult)
+			require.NotNil(t, callResult, "payload.call_result missing")
+			assert.Equal(t, 11, callResult.Usage.TotalTokens)
+			require.Len(t, callResult.Requests, 1)
+			assert.Equal(t, 11, callResult.Requests[0].Usage.TotalTokens)
+		})
+	}
 }
 
 func TestSpawnTool_SyncChildEmitsSessionEvents(t *testing.T) {
