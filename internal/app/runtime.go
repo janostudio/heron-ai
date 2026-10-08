@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/adrg/frontmatter"
-
 	"github.com/heron-ai/heron-engine/internal/agent"
 	"github.com/heron-ai/heron-engine/internal/agentstore"
 	"github.com/heron-ai/heron-engine/internal/config"
@@ -191,17 +189,11 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	}
 	teamRuntime.SetSkillInjector(skill.NewSkillInjector(skillRegistry))
 	teamRuntime.SetRuleDefinitions(definitions.Rules)
+	// 规则正文的解析只在 config 包里有一份定义（config.LoadRuleBody）；
+	// 这个闭包只负责把它接到 files 这个 workspace FileStore 上。ctx 未使用
+	// 是因为签名由 team runtime 规定，而读取是同步的本地 IO。
 	teamRuntime.SetRuleLoader(func(ctx context.Context, path string) (string, error) {
-		data, err := files.Read(path)
-		if err != nil {
-			return "", err
-		}
-		var meta types.RuleItem
-		body, err := frontmatter.Parse(strings.NewReader(string(data)), &meta)
-		if err != nil {
-			return "", err
-		}
-		return string(body), nil
+		return config.LoadRuleBody(files, path)
 	})
 	// Knowledge is validated per location, then handed to the Team runtime as
 	// a pointer rather than an index.
