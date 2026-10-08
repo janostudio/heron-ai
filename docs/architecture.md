@@ -37,8 +37,7 @@ heron-ai/
 │   ├── config/          # Config loader (flows/teams/agents)
 │   ├── storage/         # File store, run state persistence
 │   ├── state/           # Short-term session state snapshots
-│   ├── logging/         # Rotating execution log
-│   ├── observability/   # Logger, event bus, metrics
+│   ├── logging/         # Rotating execution log（事实源之一：轮转 JSONL）
 │   ├── view/            # TUI (bubbletea), HTTP handler, SSE
 │   ├── eval/            # Evaluation engine
 │   ├── mcp/             # MCP adapter
