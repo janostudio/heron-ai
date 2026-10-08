@@ -102,7 +102,7 @@ func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
 	evidenceStore := storage.NewJSONLEvidenceStore(fileStore)
-	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, evidenceStore, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, evidenceStore)
 
 	result, err := runtime.Start(context.Background(), types.StartFlowRequest{
 		FlowID: "code-fix",
@@ -137,7 +137,7 @@ func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
 func TestRuntimeSessionStaysResumableAcrossTurns(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
 
 	first, err := runtime.Start(context.Background(), types.StartFlowRequest{
 		FlowID: "code-fix",
@@ -160,7 +160,7 @@ func TestRuntimeSessionStaysResumableAcrossTurns(t *testing.T) {
 func TestRuntimeResumeRejectsCancelledSession(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
 
 	result, err := runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "code-fix"})
 	require.NoError(t, err)
@@ -211,7 +211,7 @@ func (waitingInputTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest)
 func TestRuntimeTeamWaitingInputStatusSuspendsSession(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), waitingInputTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), waitingInputTeamRuntime{}, sessionWriter, nil)
 
 	result, err := runtime.Start(context.Background(), types.StartFlowRequest{
 		FlowID: "code-fix", Input: "needs a question answered",
@@ -303,7 +303,7 @@ func TestRuntimeResumeAggregatesMultipleToolTasks(t *testing.T) {
 		}))
 	}
 	teamRuntime := &aggregateResumeTeamRuntime{}
-	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil, t.TempDir())
+	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil)
 	runtime.SetTaskStore(tasks)
 
 	first, err := runtime.Start(context.Background(), types.StartFlowRequest{
@@ -333,7 +333,7 @@ func TestRuntimeResumeWaitsUntilAllToolTasksAreTerminal(t *testing.T) {
 		ID: "task-b", Status: types.ToolTaskRunning, UpdatedAt: now,
 	}))
 	teamRuntime := &aggregateResumeTeamRuntime{}
-	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil, t.TempDir())
+	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil)
 	runtime.SetTaskStore(tasks)
 
 	first, err := runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "aggregate"})
@@ -401,7 +401,7 @@ func TestRuntimeResumeApprovalResumesWaitingAgentCall(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	sessions := storage.NewJSONLSessionWriter(files)
 	teamRuntime := &approvalTeamRuntime{}
-	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil, t.TempDir())
+	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil)
 
 	first, err := runtime.Start(context.Background(), types.StartFlowRequest{
 		FlowID: "aggregate", Input: "run dangerous tool",
@@ -423,7 +423,7 @@ func TestRuntimeResumeApprovalPreservesAuditingFields(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	sessions := storage.NewJSONLSessionWriter(files)
 	teamRuntime := &approvalTeamRuntime{}
-	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil, t.TempDir())
+	runtime := NewRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil)
 
 	first, err := runtime.Start(context.Background(), types.StartFlowRequest{
 		FlowID: "aggregate", Input: "run dangerous tool",
@@ -457,7 +457,7 @@ func TestRuntimeResumeApprovalPreservesAuditingFields(t *testing.T) {
 func TestRuntimeResumeApprovalRejectsUnknownApproval(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	sessions := storage.NewJSONLSessionWriter(files)
-	runtime := NewRuntime(aggregateResumeDefinitions(), &approvalTeamRuntime{}, sessions, nil, t.TempDir())
+	runtime := NewRuntime(aggregateResumeDefinitions(), &approvalTeamRuntime{}, sessions, nil)
 
 	first, err := runtime.Start(context.Background(), types.StartFlowRequest{
 		FlowID: "aggregate", Input: "run dangerous tool",
@@ -470,7 +470,7 @@ func TestRuntimeResumeApprovalRejectsUnknownApproval(t *testing.T) {
 func TestRuntimeRecoveryStatusFindsInterruptedCall(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
 
 	sessionID := "fs-interrupted"
 	now := time.Now().UTC()
@@ -523,7 +523,7 @@ func TestRuntimeRecoveryStatusFindsInterruptedCall(t *testing.T) {
 func TestRuntimeBlocksNormalInputUntilInterruptedExecutionIsRecovered(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
 
 	sessionID := "fs-interrupted-input"
 	now := time.Now().UTC()
@@ -560,7 +560,7 @@ func TestRuntimeBlocksNormalInputUntilInterruptedExecutionIsRecovered(t *testing
 func TestRuntimeRecoveryRetryRequiresExplicitSideEffectPermission(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
 
 	sessionID := "fs-retry-policy"
 	now := time.Now().UTC()
@@ -600,7 +600,7 @@ func TestRuntimeRecoveryRetryRequiresExplicitSideEffectPermission(t *testing.T) 
 func TestRuntimeRecoveryRetryRunsContainingTeamAndMarksRecoveryComplete(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
-	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil, t.TempDir())
+	runtime := NewRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
 
 	sessionID := "fs-retry"
 	now := time.Now().UTC()

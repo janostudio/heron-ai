@@ -97,7 +97,6 @@ func TestRuntimeEscalatesTeamFailureToCoordinatorWithoutReplayingFailedTeam(t *t
 		teamRuntime,
 		sessions,
 		evidence,
-		t.TempDir(),
 	)
 
 	result, err := runtime.Start(context.Background(), types.StartFlowRequest{

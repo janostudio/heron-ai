@@ -19,20 +19,20 @@ import (
 
 // Runtime owns FlowSession and FlowTurn lifecycle for the new Flow/Team
 // runtime. It does not know about Stage or Task.
+//
+// It carries no workspace root: every Agent's workspace is resolved once at
+// config load by resolveWorkspace (internal/config/definitions.go), which
+// inherits agent → team → flow. A root threaded down per turn from here
+// could only shadow that resolution, so nothing in the runtime takes one.
 type Runtime struct {
 	definitions *types.Definitions
 	teams       types.TeamRuntime
 	sessions    storage.SessionWriter
 	evidence    storage.EvidenceStore
-	// workspace is not forwarded to Team/Call any more: workspace resolution
-	// happens once at config load (agent → team → flow inheritance), so a
-	// per-turn root would only shadow it. Kept because NewRuntime's signature
-	// is shared with callers outside this package.
-	workspace string
-	limits    types.RuntimeLimits
-	tasks     types.ToolTaskStore
-	media     types.MediaStore
-	resumeMu  sync.Mutex
+	limits      types.RuntimeLimits
+	tasks       types.ToolTaskStore
+	media       types.MediaStore
+	resumeMu    sync.Mutex
 }
 
 func NewRuntime(
@@ -40,14 +40,12 @@ func NewRuntime(
 	teamRuntime types.TeamRuntime,
 	sessionWriter storage.SessionWriter,
 	evidenceStore storage.EvidenceStore,
-	workspaceRoot string,
 ) *Runtime {
 	return &Runtime{
 		definitions: definitions,
 		teams:       teamRuntime,
 		sessions:    sessionWriter,
 		evidence:    evidenceStore,
-		workspace:   workspaceRoot,
 		limits:      types.RuntimeLimits{}.WithDefaults(),
 	}
 }

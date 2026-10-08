@@ -46,7 +46,6 @@ func TestRuntimeStopsRepeatedCoordinateAfterConfiguredRetryLimit(t *testing.T) {
 		coordinateRetryTeamRuntime{},
 		sessions,
 		nil,
-		t.TempDir(),
 	)
 	runtime.SetLimits(types.RuntimeLimits{
 		MaxTeamTurns:         10,
@@ -86,7 +85,6 @@ func TestRuntimeStopsRepeatedActivationAfterConfiguredRetryLimit(t *testing.T) {
 		repeatedActivationTeamRuntime{},
 		sessions,
 		nil,
-		t.TempDir(),
 	)
 	runtime.SetLimits(types.RuntimeLimits{
 		MaxTeamTurns:         10,

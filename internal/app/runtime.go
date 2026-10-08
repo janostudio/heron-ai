@@ -276,7 +276,6 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 		teamRuntime,
 		sessionWriter,
 		evidenceStore,
-		workspaceRoot,
 	)
 	flowRuntime.SetLimits(definitions.Limits)
 	flowRuntime.SetTaskStore(taskStore)
