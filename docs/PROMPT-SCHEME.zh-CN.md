@@ -153,11 +153,10 @@ keywords: [ ... ]
 ```go
 // pkg/types/config.go
 type SettingsConfig struct {
-    Logging       LoggingConfig       `json:"logging"`
-    Observability ObservabilityConfig `json:"observability"`
-    Paths         PathsConfig         `json:"paths"`
-    Agent         AgentSettingsConfig `json:"agent"`
-    Knowledge     KnowledgeConfig     `json:"knowledge,omitempty"`
+    Logging   LoggingConfig       `json:"logging"`
+    Paths     PathsConfig         `json:"paths"`
+    Agent     AgentSettingsConfig `json:"agent"`
+    Knowledge KnowledgeConfig     `json:"knowledge,omitempty"`
 }
 
 type KnowledgeConfig struct {

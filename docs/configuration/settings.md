@@ -14,10 +14,6 @@ Engine behavior configuration. Optional - defaults are used if not present.
     "max_backups": 5,
     "retention_days": 7
   },
-  "observability": {
-    "retention_days": 30,
-    "event_bus_size": 256
-  },
   "paths": {
     "data": ".agents/data/"
   },
@@ -52,13 +48,6 @@ Engine behavior configuration. Optional - defaults are used if not present.
 Log files are named by date (`YYYY-MM-DD.log`) and split with a sequence suffix
 (`YYYY-MM-DD.1.log`) once they exceed `max_file_size`. Files older than
 `retention_days` are removed on rotation.
-
-### observability
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `retention_days` | integer | `30` | Days to keep run data before cleanup |
-| `event_bus_size` | integer | `256` | Event bus channel buffer size |
 
 ### paths
 
