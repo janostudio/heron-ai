@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -182,26 +183,36 @@ func runPrompt(flowPath, sessionID, prompt string, o cliOverrides) {
 		os.Exit(1)
 	}
 
-	writePromptResult(os.Stdout, bundle.Definitions.Flow.ID, modelName, result)
+	if err := writePromptResult(os.Stdout, bundle.Definitions.Flow.ID, modelName, result); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing result: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // writePromptResult renders the human-readable `--prompt` output. It shares
 // aggregateTeamUsage with the JSON-RPC result so both transports report the
 // same token totals.
-func writePromptResult(w io.Writer, flowID, modelName string, result types.FlowTurnResult) {
-	fmt.Fprintf(w, "Flow: %s\n", flowID)
-	fmt.Fprintf(w, "Model: %s\n", modelName)
-	fmt.Fprintf(w, "FlowSession: %s\n", result.Session.ID)
-	fmt.Fprintf(w, "Status: %s\n", result.Session.Status)
+func writePromptResult(w io.Writer, flowID, modelName string, result types.FlowTurnResult) error {
+	var errs []error
+	printf := func(format string, args ...any) {
+		if _, err := fmt.Fprintf(w, format, args...); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	printf("Flow: %s\n", flowID)
+	printf("Model: %s\n", modelName)
+	printf("FlowSession: %s\n", result.Session.ID)
+	printf("Status: %s\n", result.Session.Status)
 	if usage := aggregateTeamUsage(result.TeamResults); usage.TotalTokens > 0 {
-		fmt.Fprintf(w, "Tokens: %d (prompt %d, completion %d)\n", usage.TotalTokens, usage.PromptTokens, usage.CompletionTokens)
+		printf("Tokens: %d (prompt %d, completion %d)\n", usage.TotalTokens, usage.PromptTokens, usage.CompletionTokens)
 	}
 	if strings.TrimSpace(result.Reply) != "" {
-		fmt.Fprintf(w, "\n%s\n", result.Reply)
+		printf("\n%s\n", result.Reply)
 	}
 	for _, record := range result.Records {
-		fmt.Fprintf(w, "\n[%s] %s\n", record.Name, record.Summary)
+		printf("\n[%s] %s\n", record.Name, record.Summary)
 	}
+	return errors.Join(errs...)
 }
 
 // extractSharedRecords collects every SharedRecord published to a session's

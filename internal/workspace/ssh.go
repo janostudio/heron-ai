@@ -374,7 +374,7 @@ func (s *sshWorkspace) Run(ctx context.Context, req CommandRequest) (CommandResu
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("new ssh session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	shell := req.Shell
 	if shell == "" {
@@ -597,7 +597,7 @@ func (s *sshWorkspace) Search(ctx context.Context, req SearchRequest) (SearchRes
 	if err != nil {
 		return SearchResult{}, fmt.Errorf("new ssh session: %w", err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 
 	var out limitedBuffer
 	out.limit = maxChars
@@ -758,7 +758,7 @@ func sftpReadAll(client *sftp.Client, name string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(f)
 	if err != nil {
 		return nil, err
@@ -771,7 +771,7 @@ func sftpWriteAll(client *sftp.Client, name string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, err = io.Copy(f, bytes.NewReader(data))
 	return err
 }

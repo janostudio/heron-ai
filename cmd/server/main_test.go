@@ -236,10 +236,10 @@ func TestWritePromptResult(t *testing.T) {
 
 	t.Run("reports aggregated token usage", func(t *testing.T) {
 		var buf bytes.Buffer
-		writePromptResult(&buf, "test-flow", "hy3", newResult(
+		require.NoError(t, writePromptResult(&buf, "test-flow", "hy3", newResult(
 			types.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
 			types.TokenUsage{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3},
-		))
+		)))
 
 		out := buf.String()
 		require.Contains(t, out, "Flow: test-flow\n")
@@ -254,7 +254,7 @@ func TestWritePromptResult(t *testing.T) {
 
 	t.Run("omits token line when no usage recorded", func(t *testing.T) {
 		var buf bytes.Buffer
-		writePromptResult(&buf, "test-flow", "hy3", newResult())
+		require.NoError(t, writePromptResult(&buf, "test-flow", "hy3", newResult()))
 		require.NotContains(t, buf.String(), "Tokens:")
 	})
 }

@@ -56,7 +56,7 @@ func TestStreamJSONClientDo(t *testing.T) {
 	t.Run("200 ok", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"ok":true}`))
+			_, _ = w.Write([]byte(`{"ok":true}`))
 		}))
 		defer server.Close()
 
@@ -72,7 +72,7 @@ func TestStreamJSONClientDo(t *testing.T) {
 	t.Run("non-2xx with body", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("boom"))
+			_, _ = w.Write([]byte("boom"))
 		}))
 		defer server.Close()
 
@@ -100,7 +100,7 @@ func TestStreamJSONClientDo(t *testing.T) {
 	t.Run("read error", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Length", "100")
-			w.Write([]byte("short"))
+			_, _ = w.Write([]byte("short"))
 		}))
 		defer server.Close()
 
@@ -120,8 +120,8 @@ func TestStreamJSONClientPost(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.String()
 		gotBody = make([]byte, r.ContentLength)
-		r.Body.Read(gotBody)
-		w.Write([]byte(`{"ok":true}`))
+		_, _ = r.Body.Read(gotBody)
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer server.Close()
 
@@ -137,7 +137,7 @@ func TestStreamJSONClientGet(t *testing.T) {
 	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.String()
-		w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer server.Close()
 
@@ -152,7 +152,7 @@ func TestStreamJSONClientServeApprovalUsesEscapedSessionID(t *testing.T) {
 	var gotPath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.RequestURI()
-		w.Write([]byte(`{"session":{"id":"fs/1","status":"waiting_input"},"reply":"ok"}`))
+		_, _ = w.Write([]byte(`{"session":{"id":"fs/1","status":"waiting_input"},"reply":"ok"}`))
 	}))
 	defer server.Close()
 

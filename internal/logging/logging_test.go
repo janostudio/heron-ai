@@ -286,7 +286,7 @@ func TestGlobalSingleton(t *testing.T) {
 
 	baseDir := t.TempDir()
 	l := NewRotatingLogger(baseDir, Config{})
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	SetDefault(l)
 	Info("global info", map[string]any{"k": "v"})
