@@ -49,7 +49,14 @@ func (e *CommandExecutor) Execute(ctx context.Context, req types.CallRequest) (t
 	}
 
 	command := req.Call.Command.Command
-	args := req.Call.Command.Args
+	args, err := resolveCommandArgs(req)
+	if err != nil {
+		return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
+	}
+	env, err := commandEnv(req)
+	if err != nil {
+		return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
+	}
 	execCtx, cancel, err := withTimeout(ctx, req.Call.Timeout, req.Call.Command.Timeout)
 	if err != nil {
 		return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
@@ -60,7 +67,7 @@ func (e *CommandExecutor) Execute(ctx context.Context, req types.CallRequest) (t
 		TurnID:  callTurnID(req),
 		Command: command,
 		Args:    args,
-		Env:     commandEnv(req),
+		Env:     env,
 		Stdin:   req.Input,
 	})
 	output := execution.Stdout

@@ -47,9 +47,96 @@ func TestResolveTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, resolveTemplate(tt.input, req))
+			got, err := resolveTemplate(tt.input, req)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestResolveTemplateRecords(t *testing.T) {
+	req := templateRequest()
+	req.Records = []types.SharedRecord{
+		{Name: "WorktreeTarget", RecordID: "rec-1", Summary: "genie",
+			Data: map[string]any{"repo": "genie", "branch": "feat/134", "count": float64(3)}},
+	}
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"summary shorthand", "${records.WorktreeTarget}", "genie"},
+		{"explicit summary", "${records.WorktreeTarget.Summary}", "genie"},
+		{"data string", "${records.WorktreeTarget.Data.repo}", "genie"},
+		{"data branch", "${records.WorktreeTarget.Data.branch}", "feat/134"},
+		{"data number", "${records.WorktreeTarget.Data.count}", "3"},
+		{"record id", "${records.WorktreeTarget.RecordID}", "rec-1"},
+		{"mixed with identity", "${records.WorktreeTarget.Data.repo}/${call_id}", "genie/answer"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveTemplate(tt.input, req)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestResolveTemplateRecordsMissingIsError(t *testing.T) {
+	req := templateRequest()
+	req.Records = []types.SharedRecord{
+		{Name: "WorktreeTarget", Data: map[string]any{"repo": "genie"}},
+	}
+
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"unknown record", "${records.Nope.Data.x}"},
+		{"unknown data field", "${records.WorktreeTarget.Data.missing}"},
+		{"unknown fixed field", "${records.WorktreeTarget.Nope}"},
+		{"malformed deep", "${records.WorktreeTarget.Data.a.b}"},
+		{"unterminated", "${records.WorktreeTarget.Data.x"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := resolveTemplate(tc.input, req)
+			assert.Error(t, err, "a missing record reference must fail, not expand to empty")
+		})
+	}
+}
+
+func TestResolveTemplateRecordsLastWins(t *testing.T) {
+	req := templateRequest()
+	req.Records = []types.SharedRecord{
+		{Name: "R", Summary: "old"},
+		{Name: "R", Summary: "new"},
+	}
+	got, err := resolveTemplate("${records.R}", req)
+	assert.NoError(t, err)
+	assert.Equal(t, "new", got)
+}
+
+func TestResolveCommandArgs(t *testing.T) {
+	req := templateRequest()
+	req.Records = []types.SharedRecord{
+		{Name: "Target", Data: map[string]any{"repo": "genie"}},
+	}
+	req.Call.Command = &types.CommandSpec{
+		Args: []string{"acquire", "${records.Target.Data.repo}", "${call_id}"},
+	}
+	args, err := resolveCommandArgs(req)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"acquire", "genie", "answer"}, args)
+}
+
+func TestResolveCommandArgsEmpty(t *testing.T) {
+	req := templateRequest()
+	req.Call.Command = &types.CommandSpec{}
+	args, err := resolveCommandArgs(req)
+	assert.NoError(t, err)
+	assert.Nil(t, args)
 }
 
 func TestCommandEnv(t *testing.T) {
@@ -61,7 +148,8 @@ func TestCommandEnv(t *testing.T) {
 		},
 	}
 
-	env := commandEnv(req)
+	env, err := commandEnv(req)
+	assert.NoError(t, err)
 
 	// env is os.Environ() + our entries appended, so the custom entries are at
 	// the tail. Find the exact "KEY=VALUE" strings we injected.
@@ -83,13 +171,23 @@ func TestCommandEnv(t *testing.T) {
 	}
 }
 
+func TestCommandEnvRecordMissingFails(t *testing.T) {
+	req := templateRequest()
+	req.Call.Command = &types.CommandSpec{
+		Env: map[string]string{"AUTO_REPO": "${records.Target.Data.repo}"},
+	}
+	_, err := commandEnv(req)
+	assert.Error(t, err, "an unresolvable record in env must fail the call, not send an empty var")
+}
+
 func TestCommandEnvIdempotencyKey(t *testing.T) {
 	req := templateRequest()
 	req.Call.Command = &types.CommandSpec{
 		IdempotencyKey: "key-${call_id}",
 	}
 
-	env := commandEnv(req)
+	env, err := commandEnv(req)
+	assert.NoError(t, err)
 
 	var found bool
 	for _, entry := range env {
@@ -104,7 +202,8 @@ func TestCommandEnvRespectsOsEnviron(t *testing.T) {
 	req := templateRequest()
 	req.Call.Command = &types.CommandSpec{Env: map[string]string{}}
 
-	env := commandEnv(req)
+	env, err := commandEnv(req)
+	assert.NoError(t, err)
 
 	// commandEnv always appends os.Environ() first.
 	assert.GreaterOrEqual(t, len(env), len(os.Environ()))

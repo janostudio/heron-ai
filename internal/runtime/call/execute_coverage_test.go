@@ -217,6 +217,53 @@ func TestCommandExecutorSuccess(t *testing.T) {
 	assert.Equal(t, 0, result.WorkspaceOps[0].ExitCode)
 }
 
+// TestCommandExecutorResolvesRecordTemplates is the end-to-end regression for
+// docs/issues/ISSUE-command-call-no-params: a command call must be able to read
+// a SharedRecord field into its env and args, so an upstream record can carry
+// the user's choice (e.g. which repo) into the deterministic command.
+func TestCommandExecutorResolvesRecordTemplates(t *testing.T) {
+	exec := newWorkspaceExecutor(t)
+
+	req := commandRequest("printf '%s' \"$AUTO_REPO\"")
+	req.Call.Command.Env = map[string]string{"AUTO_REPO": "${records.WorktreeTarget.Data.repo}"}
+	req.Records = []types.SharedRecord{
+		{Name: "WorktreeTarget", Data: map[string]any{"repo": "genie"}},
+	}
+
+	result, err := exec.Execute(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, types.TurnCompleted, result.Status)
+	assert.Equal(t, "genie", result.Reply)
+}
+
+func TestCommandExecutorArgTemplateResolves(t *testing.T) {
+	exec := newWorkspaceExecutor(t)
+
+	// With Args present the command runs directly (not via a shell), so the
+	// command is the binary and the template is one argv element.
+	req := commandRequest("printf", "%s", "${records.WorktreeTarget.Data.repo}")
+	req.Records = []types.SharedRecord{
+		{Name: "WorktreeTarget", Data: map[string]any{"repo": "genie"}},
+	}
+
+	result, err := exec.Execute(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, types.TurnCompleted, result.Status)
+	assert.Equal(t, "genie", result.Reply)
+}
+
+func TestCommandExecutorMissingRecordFails(t *testing.T) {
+	exec := newWorkspaceExecutor(t)
+
+	req := commandRequest("echo should-not-run")
+	req.Call.Command.Env = map[string]string{"AUTO_REPO": "${records.Target.Data.repo}"}
+
+	result, err := exec.Execute(context.Background(), req)
+	require.Error(t, err, "an unresolvable record reference must fail the call")
+	assert.Equal(t, types.TurnFailed, result.Status)
+	assert.Contains(t, result.Error, "Target")
+}
+
 func TestCommandExecutorNonZeroExit(t *testing.T) {
 	exec := newWorkspaceExecutor(t)
 

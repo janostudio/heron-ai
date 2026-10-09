@@ -56,7 +56,7 @@ func NewAnthropicProviderWithProfile(apiKey, baseURL, modelName string, profile 
 		profile.APIKey = apiKey
 	}
 	return &AnthropicProvider{
-		client:    http.DefaultClient,
+		client:    defaultModelClient,
 		apiKey:    apiKey,
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		modelName: modelName,

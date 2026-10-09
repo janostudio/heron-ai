@@ -10,17 +10,21 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/adrg/frontmatter"
 	"github.com/heron-ai/heron-engine/internal/app"
 	"github.com/heron-ai/heron-engine/internal/config"
 	"github.com/heron-ai/heron-engine/internal/knowledge"
 	"github.com/heron-ai/heron-engine/internal/model"
+	"github.com/heron-ai/heron-engine/internal/sessionlist"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/internal/view"
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -46,11 +50,26 @@ func main() {
 	serverURL := flag.String("server", "", "HTTP Heron server URL for stream-json client mode")
 	port := flag.String("port", "", "HTTP server port (default: 8080)")
 	serve := flag.Bool("serve", false, "Start HTTP server mode")
+	listFlag := flag.Bool("list", false, "List sessions; pick one interactively to resume it")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
+	flag.Usage = usage
 	flag.Parse()
 
 	if *versionFlag {
 		fmt.Printf("Heron AI v%s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+		return
+	}
+
+	// --list is a metadata command: it must run before any Flow config is
+	// resolved, so it works in a directory without .agents/ and never reports a
+	// missing flow. It is mutually exclusive with the session/prompt modes,
+	// which are the two ways to run a turn.
+	if *listFlag {
+		if *sessionID != "" || *prompt != "" {
+			fmt.Fprintln(os.Stderr, "Error: --list cannot be combined with --session or --prompt")
+			os.Exit(1)
+		}
+		runList(*flow, *modelOverride, *logLevel, *maxRounds)
 		return
 	}
 
@@ -801,6 +820,49 @@ func firstLineOf(content string) string {
 }
 
 func runTUI(flowPath string, o cliOverrides) {
+	runTUIWithSession(flowPath, o, "")
+}
+
+// historyTurns projects sessionlist's reconstructed turns into the view
+// package's display model, preserving each reply's team/agent identity.
+func historyTurns(turns []sessionlist.Turn) []view.HistoryTurn {
+	out := make([]view.HistoryTurn, 0, len(turns))
+	for _, t := range turns {
+		msgs := make([]view.HistoryMessage, 0, len(t.Messages))
+		for _, m := range t.Messages {
+			msgs = append(msgs, view.HistoryMessage{
+				TeamID:  m.TeamID,
+				CallID:  m.CallID,
+				AgentID: m.AgentID,
+				Reply:   m.Reply,
+				Ops:     historyOps(m.Ops),
+			})
+		}
+		out = append(out, view.HistoryTurn{Input: t.Input, Messages: msgs, Usage: t.Usage})
+	}
+	return out
+}
+
+func historyOps(ops []sessionlist.Operation) []view.OpOutput {
+	if len(ops) == 0 {
+		return nil
+	}
+	out := make([]view.OpOutput, 0, len(ops))
+	for _, op := range ops {
+		out = append(out, view.OpOutput{
+			Kind:     op.Kind,
+			Subject:  op.Subject,
+			ExitCode: op.ExitCode,
+			Failed:   op.Failed,
+		})
+	}
+	return out
+}
+
+// runTUIWithSession is runTUI with an optional session to resume. A non-empty
+// sessionID seeds the runner, so the first input continues that FlowSession
+// instead of starting a new one (the --list → pick → resume path).
+func runTUIWithSession(flowPath string, o cliOverrides, sessionID string) {
 	ctx := context.Background()
 	bundle, modelName, err := buildCurrentRuntime(ctx, flowPath, o)
 	if err != nil {
@@ -808,7 +870,7 @@ func runTUI(flowPath string, o cliOverrides) {
 		os.Exit(1)
 	}
 
-	runner := &sessionFlowRunner{runtime: bundle.Flow}
+	runner := &sessionFlowRunner{runtime: bundle.Flow, sessionID: sessionID}
 	model := view.NewTUIModel(
 		bundle.Definitions.Flow.ID,
 		modelName,
@@ -816,13 +878,138 @@ func runTUI(flowPath string, o cliOverrides) {
 		len(bundle.Definitions.Flow.Teams),
 		runner,
 	)
-	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
+	model.SetSessionID(sessionID)
+	// Load persisted input history so ↑/↓ reach earlier inputs across restarts,
+	// not just the ones typed in this process.
+	model.LoadHistory()
+	// Resuming an existing session: show its prior turns. The model's *context*
+	// is already replayed by the engine, but the TUI display starts blank, so
+	// without this the user sees an empty screen for a conversation the model
+	// remembers. Failures here are non-fatal — the session still resumes.
+	if sessionID != "" {
+		if turns, err := sessionlist.History(storage.NewFileStore("."), filepath.Join(sessionlist.SessionsDir, sessionID)); err == nil {
+			model.SeedHistory(historyTurns(turns))
+		}
+	}
+	// Mouse tracking is enabled so the wheel scrolls the transcript. That also
+	// hands drag events to us instead of the terminal, so native drag-select is
+	// off by default — the standard TUI trade-off (opencode, Claude Code, Gemini
+	// CLI all do this). The escape hatch is Shift+drag (Option on some
+	// terminals).
+	if _, err := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 		shutdownAndExit(bundle, 1)
+	}
+	// The exit hint inside View() is drawn on the alternate screen, which is
+	// torn down on quit, so the user never sees it. Print it to the real
+	// terminal after the program returns. runner.sessionID is authoritative:
+	// it holds the id whether the session was resumed or created this run.
+	if id := runner.sessionID; id != "" {
+		fmt.Printf("Goodbye!  Resume with: heron --session %s\n", id)
 	}
 	if err := bundle.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: error shutting down runtime: %v\n", err)
 	}
+}
+
+// runList implements `heron --list`.
+//
+// Behaviour splits on whether the terminal is interactive:
+//   - stdout AND stdin are a tty: show a full-screen picker and, on selection,
+//     resume that session in the TUI.
+//   - otherwise (a pipe, redirect, or CI): print a plain-text list so
+//     `heron --list | grep …` works and never blocks on a full-screen UI.
+func runList(flowPath, modelOverride, logLevel string, maxRounds int) {
+	sessions, err := sessionlist.List(storage.NewFileStore("."), sessionlist.SessionsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading sessions: %v\n", err)
+		os.Exit(1)
+	}
+	if len(sessions) == 0 {
+		fmt.Println("暂无会话")
+		return
+	}
+
+	interactive := term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd())
+	if !interactive {
+		if err := view.RenderSessionsText(os.Stdout, sessions); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing session list: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	picker := view.NewSessionPicker(sessions)
+	// Read the selection off the model Run returns: bubbletea owns the model it
+	// runs, so relying on the pointer passed in can miss the final state.
+	finalModel, err := tea.NewProgram(picker).Run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Session picker error: %v\n", err)
+		os.Exit(1)
+	}
+	chosen := ""
+	if m, ok := finalModel.(*view.SessionPicker); ok {
+		chosen = m.Chosen()
+	}
+	if chosen == "" {
+		return // user cancelled
+	}
+
+	overrides := cliOverrides{model: modelOverride, logLevel: logLevel, maxRounds: maxRounds}
+	resolved := resolveFlowPath(flowPath)
+	if resolved == "" {
+		fmt.Fprintln(os.Stderr, "Error: a new-format Flow config is required to resume a session")
+		fmt.Fprintln(os.Stderr, "Use --flow .agents/flows/default.yml")
+		os.Exit(1)
+	}
+	runTUIWithSession(resolved, overrides, chosen)
+}
+
+// usage prints the flag help with GNU-style double dashes. Go's flag package
+// renders `-name` and accepts both `-name` and `--name` on input; the stored
+// name never carries a dash, so the prefix is added here for display only.
+// Overriding Usage changes presentation, not parsing, so single-dash callers
+// keep working.
+func usage() {
+	printUsage(flag.CommandLine)
+}
+
+// printUsage is usage() against an explicit FlagSet, so the formatting is
+// testable without the process-global CommandLine.
+func printUsage(fs *flag.FlagSet) {
+	out := fs.Output()
+	fmt.Fprintf(out, "Usage: %s [options]\n\n", filepath.Base(os.Args[0]))
+	fmt.Fprintln(out, "Options:")
+	fs.VisitAll(func(f *flag.Flag) {
+		name := "--" + f.Name
+		if label := flagTypeLabel(f); label != "" {
+			name += " " + label
+		}
+		fmt.Fprintf(out, "  %s\n        %s\n", name, f.Usage)
+	})
+}
+
+// flagTypeLabel returns the placeholder shown after a flag name ("" for
+// booleans). Go's flag package exposes the concrete pointer type through
+// Value; reflect names it "string"/"int"/"bool". Anything unrecognised falls
+// back to "value", which is harmless for display.
+func flagTypeLabel(f *flag.Flag) string {
+	if boolFlag, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && boolFlag.IsBoolFlag() {
+		return ""
+	}
+	t := reflect.TypeOf(f.Value)
+	if t == nil || t.Kind() != reflect.Pointer {
+		return "value"
+	}
+	switch t.Elem().Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Int, reflect.Int64:
+		return "int"
+	case reflect.Bool:
+		return ""
+	}
+	return "value"
 }
 
 type sessionFlowRunner struct {
@@ -844,20 +1031,93 @@ func (r *sessionFlowRunner) Run(ctx context.Context, input string) (*view.FlowRe
 		return nil, err
 	}
 	r.sessionID = result.Session.ID
+	return r.projectTurn(result)
+}
 
+// projectTurn maps a FlowTurnResult onto the view's display model, shared by
+// Run and Recover.
+func (r *sessionFlowRunner) projectTurn(result types.FlowTurnResult) (*view.FlowResult, error) {
 	outputs := make([]view.TeamOutput, 0, len(result.TeamResults))
 	for _, teamResult := range result.TeamResults {
 		outputs = append(outputs, view.TeamOutput{
-			TeamID:  teamResult.Turn.TeamID,
-			Reply:   teamResult.Reply,
-			Records: teamResult.Records,
+			TeamID:   teamResult.Turn.TeamID,
+			Reply:    teamResult.Reply,
+			Records:  teamResult.Records,
+			Duration: teamTurnDuration(teamResult.Turn),
+			Calls:    callOutputs(teamResult),
 		})
 	}
 	return &view.FlowResult{
-		Teams:  outputs,
-		Status: result.Session.Status,
-		Usage:  aggregateTeamUsage(result.TeamResults),
+		Teams:     outputs,
+		Status:    result.Session.Status,
+		Usage:     aggregateTeamUsage(result.TeamResults),
+		SessionID: result.Session.ID,
 	}, nil
+}
+
+// teamTurnDuration returns how long a TeamTurn took, or 0 if it has not
+// finished (FinishedAt is a pointer so a running turn is distinguishable).
+func teamTurnDuration(turn types.TeamTurn) time.Duration {
+	if turn.FinishedAt == nil {
+		return 0
+	}
+	return turn.FinishedAt.Sub(turn.StartedAt)
+}
+
+// callOutputs projects a TeamTurn's calls into display order: sorted by call
+// name. CallResults is a map, so without an explicit order the UI would shuffle
+// between runs; the call name is the map key and is stable across replay.
+func callOutputs(teamResult types.TeamTurnResult) []view.CallOutput {
+	if len(teamResult.CallResults) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(teamResult.CallResults))
+	for name := range teamResult.CallResults {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]view.CallOutput, 0, len(names))
+	for _, name := range names {
+		call := teamResult.CallResults[name]
+		reply := strings.TrimSpace(call.Reply)
+		// A call with nothing to show (no reply and no operations) would render
+		// an empty header, so drop it.
+		if reply == "" && len(call.WorkspaceOps) == 0 {
+			continue
+		}
+		out = append(out, view.CallOutput{
+			CallID:  name,
+			AgentID: call.AgentID,
+			Reply:   call.Reply,
+			Ops:     opOutputs(call.WorkspaceOps),
+		})
+	}
+	return out
+}
+
+// opOutputs projects workspace operations into one-line display entries.
+func opOutputs(ops []types.WorkspaceOperation) []view.OpOutput {
+	if len(ops) == 0 {
+		return nil
+	}
+	out := make([]view.OpOutput, 0, len(ops))
+	for _, op := range ops {
+		subject := strings.TrimSpace(op.Command)
+		if subject == "" {
+			subject = strings.TrimSpace(op.Path)
+		}
+		if subject == "" {
+			subject = strings.TrimSpace(op.Summary)
+		}
+		out = append(out, view.OpOutput{
+			Kind:     op.Kind,
+			Subject:  subject,
+			ExitCode: op.ExitCode,
+			Failed:   op.ExitCode != 0,
+		})
+	}
+	return out
 }
 
 func aggregateTeamUsage(results []types.TeamTurnResult) types.TokenUsage {

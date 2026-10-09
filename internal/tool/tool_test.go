@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -583,4 +584,26 @@ func TestTodoReadTool(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.Success)
 	assert.Equal(t, "No todos", result.Content)
+}
+
+// A Bash call with no timeout_ms must still get a deadline. Before this, an
+// omitted timeout meant "no timeout at all": a command that never exits blocks
+// the AgentTurn forever and leaves the session stuck in "running" with no
+// completion or failure event (ISSUE-bash-timeout-grandchild-hang,
+// ISSUE-tui-no-recovery-entry-deadlock).
+func TestCommandContextAlwaysHasDeadline(t *testing.T) {
+	ctx, cancel := commandContext(context.Background(), 0)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok, "an omitted timeout must still produce a deadline")
+	assert.Equal(t, DefaultBashTimeout, time.Until(deadline).Round(time.Second))
+}
+
+// An explicit timeout_ms is respected.
+func TestCommandContextHonorsExplicitTimeout(t *testing.T) {
+	ctx, cancel := commandContext(context.Background(), 50)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.LessOrEqual(t, time.Until(deadline), 50*time.Millisecond)
 }

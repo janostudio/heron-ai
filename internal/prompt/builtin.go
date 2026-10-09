@@ -305,5 +305,13 @@ func structuredOutputContract(schema *types.StructuredOutput) string {
 		"Do not return YAML.\n" +
 		"The first character must be { and the last character must be }.\n" +
 		"If a field is unavailable, use an empty string, empty array, false, or null according to its type.\n" +
+		// Without this line the model writes every prose field as one long
+		// line: constrained to output only JSON, it plays safe and omits
+		// newlines inside strings entirely, so multi-point replies arrive as a
+		// single unreadable paragraph (ISSUE-structured-output-forces-single-line).
+		// Newlines inside a JSON string are legal and encouraged for
+		// readability; say so explicitly, because the other rules here are all
+		// prohibitions and the model generalizes them into "no formatting".
+		"Inside string fields, use `\\n` to separate points, steps, or paragraphs — newlines in string values are valid JSON and make long replies readable; do not collapse everything onto one line.\n" +
 		"The runtime will reject prose, Markdown, YAML, and empty responses."
 }

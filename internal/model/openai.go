@@ -50,7 +50,7 @@ func NewOpenAIProviderWithProfile(apiKey, baseURL, modelName string, profile typ
 		profile.APIKey = apiKey
 	}
 	return &OpenAIProvider{
-		client:    http.DefaultClient,
+		client:    defaultModelClient,
 		apiKey:    apiKey,
 		baseURL:   strings.TrimRight(baseURL, "/"),
 		modelName: modelName,

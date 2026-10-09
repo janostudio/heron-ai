@@ -2,11 +2,14 @@ package view
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -169,6 +172,99 @@ func TestTUIModel_View_Quitting(t *testing.T) {
 	assert.Equal(t, "Goodbye!\n", view)
 }
 
+func TestTUIModel_View_QuittingWithSessionID(t *testing.T) {
+	runner := &mockFlowRunner{}
+	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
+	model.sessionID = "fs_7a3e3c95f9b3fbf9"
+	model.quitting = true
+
+	view := model.View()
+	assert.Contains(t, view, "Goodbye!")
+	assert.Contains(t, view, "heron --session fs_7a3e3c95f9b3fbf9")
+}
+
+// TestTUIModel_SetSessionIDDrivesExitHint covers the heron --list → pick →
+// resume path: the TUI is launched straight into an existing session with no
+// flowResultMsg, so SetSessionID must be what makes the exit hint show the id.
+func TestTUIModel_SetSessionIDDrivesExitHint(t *testing.T) {
+	runner := &mockFlowRunner{}
+	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
+	model.SetSessionID("fs_resumed")
+	model.quitting = true
+
+	assert.Contains(t, model.View(), "heron --session fs_resumed")
+}
+
+func TestTUIModel_SeedHistoryShowsPriorTurns(t *testing.T) {
+	runner := &mockFlowRunner{}
+	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
+	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	model.SeedHistory([]HistoryTurn{
+		{Input: "hello", Messages: []HistoryMessage{{TeamID: "default", AgentID: "assistant", Reply: "Hi there."}}},
+		{Input: "bye", Messages: []HistoryMessage{{TeamID: "default", AgentID: "assistant", Reply: "Bye."}}},
+	})
+
+	out := stripANSI(model.viewport.View())
+	assert.Contains(t, out, "hello")
+	assert.Contains(t, out, "Hi there.")
+	assert.Contains(t, out, "bye")
+	assert.Contains(t, out, "Bye.")
+	assert.False(t, model.IsShowWelcome(), "history replaces the welcome banner")
+	assert.Equal(t, 2, model.roundNum)
+}
+
+func TestTUIModel_SeedHistoryEmptyIsNoOp(t *testing.T) {
+	runner := &mockFlowRunner{}
+	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
+	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	model.SeedHistory(nil)
+	assert.True(t, model.IsShowWelcome(), "empty history keeps the welcome banner")
+}
+
+// SeedHistory must restore the session's cumulative token spend, so a resumed
+// header does not read "Tokens: 0" (ISSUE-tui-resume-tokens-zero).
+func TestTUIModel_SeedHistoryRestoresUsage(t *testing.T) {
+	runner := &mockFlowRunner{}
+	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
+	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	model.SeedHistory([]HistoryTurn{
+		{Input: "q1", Messages: []HistoryMessage{{Reply: "a1"}}, Usage: types.TokenUsage{PromptTokens: 100, CompletionTokens: 20, TotalTokens: 120}},
+		{Input: "q2", Messages: []HistoryMessage{{Reply: "a2"}}, Usage: types.TokenUsage{PromptTokens: 200, CompletionTokens: 30, TotalTokens: 230}},
+	})
+
+	usage := model.GetTotalUsage()
+	assert.Equal(t, 300, usage.PromptTokens)
+	assert.Equal(t, 50, usage.CompletionTokens)
+	assert.Equal(t, 350, usage.TotalTokens)
+}
+
+// SeedHistory may run before the first WindowSizeMsg (resume path); the first
+// size event must render the seeded history, not the welcome banner.
+func TestTUIModel_SeedHistoryBeforeResize(t *testing.T) {
+	runner := &mockFlowRunner{}
+	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
+	model.SetSessionID("fs_x")
+	model.SeedHistory([]HistoryTurn{{Input: "earlier question", Messages: []HistoryMessage{{Reply: "earlier answer"}}}})
+
+	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	out := stripANSI(model.viewport.View())
+	assert.Contains(t, out, "earlier question")
+	assert.Contains(t, out, "earlier answer")
+	assert.NotContains(t, out, "Heron", "welcome banner must not overwrite seeded history")
+}
+
+// stripANSI removes terminal escape sequences so a test can assert on the
+// visible text. Markdown rendering wraps words in their own ANSI segments, so
+// a plain substring check on the raw string can miss "Hi there." split across
+// escape codes.
+func stripANSI(s string) string {
+	return ansi.Strip(s)
+}
+
 func TestTUIModel_View_NotReady(t *testing.T) {
 	runner := &mockFlowRunner{}
 	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
@@ -176,6 +272,30 @@ func TestTUIModel_View_NotReady(t *testing.T) {
 
 	view := model.View()
 	assert.Contains(t, view, "Initializing")
+}
+
+// TestTUIModel_ResizeRewrapsMessages guards against the TUI long-text
+// truncation: viewport.SetContent wraps to the width in effect when it runs,
+// so a resize that only updates viewport.Width leaves the previously wrapped
+// (wider) lines in place and the narrower viewport clips them, dropping the
+// tail of long messages. A resize must re-wrap the existing content.
+func TestTUIModel_ResizeRewrapsMessages(t *testing.T) {
+	runner := &mockFlowRunner{}
+	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
+
+	longCN := "先确认当前分支，然后需要切换到 feat/134 分支之后再重新构建整个项目并跑一遍完整的测试套件确认没有回归问题然后提交代码"
+
+	// Wide terminal first, then add a long message, then shrink.
+	model.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	model.addMessage(DisplayMessage{Role: RoleAssistant, Content: longCN})
+	model.Update(tea.WindowSizeMsg{Width: 30, Height: 30})
+
+	// The text is wrapped across several lines now, so assert on the
+	// de-spaced, de-newlined content: first and last words must both survive
+	// (a clipped line would lose the tail).
+	got := strings.Join(strings.Fields(model.viewport.View()), "")
+	assert.Contains(t, got, "先确认当前分支", "message head must remain")
+	assert.Contains(t, got, "提交代码", "message tail must remain (not clipped)")
 }
 
 func TestTUIModel_View_Ready(t *testing.T) {
@@ -217,9 +337,9 @@ func TestTUIModel_InputHistory(t *testing.T) {
 	// Input should be in history
 	assert.Contains(t, model.history, "first message")
 
-	// Up arrow should restore history
+	// Ctrl+P restores history (arrow keys scroll the transcript instead).
 	model.textarea.SetValue("")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
 	model = updated.(*TUIModel)
 	assert.Equal(t, "first message", model.textarea.Value())
 }
@@ -628,6 +748,7 @@ func TestIsShowWelcome(t *testing.T) {
 }
 
 func TestGetHistory(t *testing.T) {
+	isolateHistory(t)
 	runner := &mockFlowRunner{}
 	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
 
@@ -1005,6 +1126,7 @@ func TestSelfTest_Messages_ClearThenAdd(t *testing.T) {
 // --- History Tests ---
 
 func TestSelfTest_History_EmptyInitial(t *testing.T) {
+	isolateHistory(t)
 	runner := &mockFlowRunner{}
 	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
 
@@ -1014,6 +1136,7 @@ func TestSelfTest_History_EmptyInitial(t *testing.T) {
 }
 
 func TestSelfTest_History_Accumulates(t *testing.T) {
+	isolateHistory(t)
 	runner := &mockFlowRunner{}
 	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
 	model.ready = true
@@ -1043,6 +1166,7 @@ func TestSelfTest_History_Accumulates(t *testing.T) {
 }
 
 func TestSelfTest_History_Navigation(t *testing.T) {
+	isolateHistory(t)
 	runner := &mockFlowRunner{}
 	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
 	model.ready = true
@@ -1058,19 +1182,19 @@ func TestSelfTest_History_Navigation(t *testing.T) {
 	model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model.running = false
 
-	// Navigate up
-	model.Update(tea.KeyMsg{Type: tea.KeyUp})
-	assert.Equal(t, "msg2", model.textarea.Value(), "Up should show last message")
+	// Navigate up (Ctrl+P; arrow keys now scroll the transcript)
+	model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	assert.Equal(t, "msg2", model.textarea.Value(), "Ctrl+P should show last message")
 
-	model.Update(tea.KeyMsg{Type: tea.KeyUp})
-	assert.Equal(t, "msg1", model.textarea.Value(), "Up again should show first message")
+	model.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	assert.Equal(t, "msg1", model.textarea.Value(), "Ctrl+P again should show first message")
 
 	// Navigate down
-	model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	assert.Equal(t, "msg2", model.textarea.Value(), "Down should go forward")
+	model.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	assert.Equal(t, "msg2", model.textarea.Value(), "Ctrl+N should go forward")
 
-	model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	assert.Equal(t, "", model.textarea.Value(), "Down past latest should clear")
+	model.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	assert.Equal(t, "", model.textarea.Value(), "Ctrl+N past latest should clear")
 }
 
 // --- Running State Tests ---
@@ -1110,6 +1234,7 @@ func TestSelfTest_Running_Transitions(t *testing.T) {
 }
 
 func TestSelfTest_Running_PreventsDoubleSend(t *testing.T) {
+	isolateHistory(t)
 	runner := &mockFlowRunner{}
 	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
 	model.ready = true
@@ -1203,6 +1328,35 @@ func TestSelfTest_Usage_Accumulates(t *testing.T) {
 	assert.Equal(t, 225, usage.TotalTokens, "should accumulate: 150+75")
 }
 
+func TestTUIModel_FlowResultRecordsSessionID(t *testing.T) {
+	runner := &mockFlowRunner{}
+	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
+
+	updated, _ := model.Update(flowResultMsg{
+		result: &FlowResult{
+			Teams:     []TeamOutput{{TeamID: "t1", Reply: "ok"}},
+			SessionID: "fs_abc123",
+		},
+	})
+	model = updated.(*TUIModel)
+
+	assert.Equal(t, "fs_abc123", model.sessionID)
+}
+
+// A flowResultMsg with a nil result and nil error must not panic; the runner
+// contract is broken, so surface it instead of dereferencing nil.
+func TestTUIModel_FlowResultNilIsHandled(t *testing.T) {
+	runner := &mockFlowRunner{}
+	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
+
+	require.NotPanics(t, func() {
+		updated, _ := model.Update(flowResultMsg{result: nil, err: nil})
+		model = updated.(*TUIModel)
+	})
+	out := stripANSI(model.viewport.View())
+	assert.Contains(t, out, "no result")
+}
+
 // --- Full Flow Integration Tests ---
 
 func TestSelfTest_FullFlow_UserToAssistant(t *testing.T) {
@@ -1244,6 +1398,7 @@ func TestSelfTest_FullFlow_UserToAssistant(t *testing.T) {
 }
 
 func TestSelfTest_FullFlow_MultipleRounds(t *testing.T) {
+	isolateHistory(t)
 	runner := &mockFlowRunner{}
 	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
 	model.ready = true
@@ -1386,9 +1541,9 @@ func TestSelfTest_View_HeaderAndStatusBar(t *testing.T) {
 	assert.Contains(t, view, "Heron AI", "should show app name in header")
 	assert.Contains(t, view, "my-flow", "should show flow name")
 	assert.Contains(t, view, "deepseek-chat", "should show model name")
-	assert.Contains(t, view, "Ctrl+C: quit", "should show quit hint")
-	// Status bar contains "/help:" and "commands" separately due to right-alignment
-	assert.Contains(t, view, "/help:", "should show help shortcut")
+	assert.Contains(t, view, "Ctrl+C", "should show quit hint")
+	assert.Contains(t, view, "history", "should show history hint")
+	assert.Contains(t, view, "/help", "should show help shortcut")
 }
 
 func TestSelfTest_View_SpinnerWhenRunning(t *testing.T) {
@@ -1481,11 +1636,17 @@ func TestSelfTest_AvailableCommands(t *testing.T) {
 
 // Test that model is properly initialized with correct values
 func TestSelfTest_NewModel_Initialization(t *testing.T) {
+	// Point history at a file this test owns so a prior test's persisted
+	// entries cannot leak in.
+	t.Setenv("HERON_TUI_HISTORY_FILE", filepath.Join(t.TempDir(), "history"))
+
 	runner := &mockFlowRunner{}
 	model := NewTUIModel("flow1", "model1", 3, 2, runner)
 
 	// Verify all public methods return correct initial values
 	assert.Empty(t, model.GetMessages())
+	// History starts empty on a fresh install; it is loaded from the persisted
+	// file, which here is empty.
 	assert.Empty(t, model.GetHistory())
 	assert.False(t, model.IsRunning())
 	assert.False(t, model.IsSlashMode())

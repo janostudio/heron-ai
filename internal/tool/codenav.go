@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/heron-ai/heron-engine/internal/workspace"
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -97,6 +98,13 @@ func (t *CodeNavTool) Execute(ctx context.Context, params map[string]any) (*type
 	}
 	cmd := exec.CommandContext(ctx, t.command, args...)
 	cmd.Dir = t.workspace.Root()
+	// Own process group + a group kill on cancel: the helper may fork, and a
+	// forked child holding the captured stdout would keep CombinedOutput
+	// blocked past the deadline (the same trap fixed for Bash in
+	// ISSUE-bash-timeout-grandchild-hang).
+	workspace.SetProcessGroup(cmd)
+	cmd.Cancel = func() error { return workspace.KillProcessGroup(cmd) }
+	cmd.WaitDelay = 2 * time.Second
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctx.Err() != nil {

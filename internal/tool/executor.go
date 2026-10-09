@@ -3,9 +3,23 @@ package tool
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
+
+// DefaultToolTimeout bounds every builtin tool call that arrives without a
+// deadline.
+//
+// A tool that never returns never lets its AgentTurn finish, so no
+// completion/failure event is written and the session is left stuck in
+// "running" forever (see ISSUE-bash-timeout-grandchild-hang,
+// ISSUE-tui-no-recovery-entry-deadlock). Rather than rely on each tool to
+// remember a timeout, the executor — the single entry point for every tool
+// call — guarantees one. A tool with its own shorter deadline (Bash's
+// timeout_ms, MCP's DefaultCallTimeout) still fires first; this is the outer
+// backstop.
+const DefaultToolTimeout = 15 * time.Minute
 
 // MCPToolDispatcher is the slice of the MCP adapter the executor needs.
 //
@@ -80,12 +94,33 @@ func (e *ToolExecutor) Execute(ctx context.Context, name string, args map[string
 		}, nil
 	}
 
+	// Guarantee a deadline so a hung tool cannot strand the AgentTurn. A tool
+	// with its own (shorter) timeout still fires first; ctx without a deadline
+	// is the only case corrected here.
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultToolTimeout)
+		defer cancel()
+	}
+
 	result, err := t.Execute(ctx, args)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return &types.ToolResult{
+				Success: false,
+				Error:   fmt.Sprintf("tool %q timed out after %s", name, DefaultToolTimeout),
+			}, nil
+		}
 		return &types.ToolResult{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
+	}
+	// A tool that returns a result rather than an error can still have hit the
+	// backstop; surface it instead of a success that hides a timeout.
+	if ctx.Err() == context.DeadlineExceeded && result.Success {
+		result.Success = false
+		result.Error = fmt.Sprintf("tool %q timed out after %s", name, DefaultToolTimeout)
 	}
 
 	return result, nil

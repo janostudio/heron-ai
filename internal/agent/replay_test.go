@@ -146,6 +146,31 @@ func TestReplayAgentContextFeedback(t *testing.T) {
 	assert.Equal(t, "## Completion Feedback\nredo", got[1].Content)
 }
 
+func TestReplayAgentContextFeedbackWithRawText(t *testing.T) {
+	w := &fakeSessionWriter{}
+	loop := newReplayTurnLoop(w)
+
+	// A structured-output retry feedback carries the model's raw (invalid)
+	// output. Replay must restore it as an assistant message so the rebuilt
+	// context matches the in-memory context the retry used.
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventAgentFeedback, CallID: "call-1"},
+		Payload: map[string]any{
+			"content":  "The previous response was not valid JSON...",
+			"raw_text": `{"partial": "output"`,
+		},
+	})
+
+	initial := []types.Message{{Role: "user", Content: "hello"}}
+	got := loop.replayAgentContext(context.Background(), reqFor("call-1"), initial)
+
+	require.Len(t, got, 3)
+	assert.Equal(t, "assistant", got[1].Role)
+	assert.Equal(t, `{"partial": "output"`, got[1].Content)
+	assert.Equal(t, "user", got[2].Role)
+	assert.Equal(t, "The previous response was not valid JSON...", got[2].Content)
+}
+
 func TestToolResultEventFieldsExposesMetadata(t *testing.T) {
 	result := &types.ToolResult{
 		Content: "command output",

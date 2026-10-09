@@ -73,6 +73,50 @@ command:
 
 这样 Skill 可以作为一个完整目录复制到另一个 Flow 中复用。
 
+### Command 的参数与模板
+
+`command` 支持 `args`（位置参数）与 `env`（环境变量），两者的值都支持
+`${...}` 占位符。占位符分两类：
+
+**会话标识**（固定字段）：
+
+| 占位符 | 取值 |
+|---|---|
+| `${flow_session_id}` | 当前 FlowSession ID |
+| `${flow_turn_id}` | 当前 FlowTurn ID |
+| `${team_id}` / `${team_turn_id}` | 当前 Team / TeamTurn ID |
+| `${call_id}` / `${call_turn_id}` | 当前 Call / CallTurn ID |
+| `${attempt}` | 当前尝试次数 |
+| `${recovery_of}` | 被恢复的 CallTurn ID（无则为空） |
+
+**SharedRecord 字段**（把上游记录的值传进确定性命令）：
+
+| 占位符 | 取值 |
+|---|---|
+| `${records.<Name>.Summary}` | 名为 `<Name>` 的记录的 `summary` |
+| `${records.<Name>.Data.<field>}` | 该记录 `data` 里的 `<field>` |
+| `${records.<Name>}` | 简写，等价于 `.Summary` |
+| `${records.<Name>.RecordID}` / `.Name` | 记录 ID / 名称 |
+
+`<Name>` 必须是该 call 在 `inputs` 里声明为输入的记录（`flow_records` /
+`team_records` / `records`）。示例——把"目标仓库"记录的值传给占槽脚本：
+
+```yaml
+acquire_slot:
+  type: command
+  command:
+    command: "bash .agents/skills/worktree-guard/scripts/acquire.sh"
+    env:
+      AUTO_REPO: "${records.WorktreeTarget.Data.repo}"
+      HERON_FLOW_SESSION_ID: "${flow_session_id}"
+  inputs:
+    flow_records: [WorktreeTarget]
+```
+
+> **缺字段 = 报错**。若 `${records.X.Y}` 引用的记录或字段不存在，该 command call
+> 以 `failed` 结束，**不会**替换成空字符串。这是有意为之：静默传空会让命令带着
+> 错误的值继续跑（正是这个议题要消灭的失败模式）。请确保 `inputs` 声明了需要的记录。
+
 ## Fields
 
 | Field | Type | Description |

@@ -173,7 +173,7 @@ func (t *BashTool) Parameters() map[string]any {
 		"stdin":   map[string]any{"type": "string", "description": "Optional standard input"},
 		"timeout_ms": map[string]any{
 			"type":        "integer",
-			"description": "Optional timeout in milliseconds",
+			"description": "Optional timeout in milliseconds (default 600000 = 10 minutes; a command always has a deadline)",
 		},
 		"max_output_bytes": map[string]any{
 			"type":        "integer",
@@ -245,9 +245,19 @@ func toolError(err error, exitCode int, timedOut, canceled bool) string {
 	return ""
 }
 
+// DefaultBashTimeout bounds a Bash command that did not specify timeout_ms.
+//
+// A command with no deadline is the one failure mode the engine cannot recover
+// from: if the process never exits, the AgentTurn never finishes, no
+// completion/failure event is written, and the session is left stuck in
+// "running" forever (see ISSUE-bash-timeout-grandchild-hang and
+// ISSUE-tui-no-recovery-entry-deadlock). The model may override this per call
+// with timeout_ms, but it may not opt out of having a deadline at all.
+const DefaultBashTimeout = 10 * time.Minute
+
 func commandContext(ctx context.Context, timeoutMS int) (context.Context, context.CancelFunc) {
 	if timeoutMS <= 0 {
-		return context.WithCancel(ctx)
+		timeoutMS = int(DefaultBashTimeout / time.Millisecond)
 	}
 	return context.WithTimeout(ctx, durationFromMilliseconds(timeoutMS))
 }

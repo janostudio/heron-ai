@@ -150,6 +150,29 @@ Body of skill2.`), 0644)
 	assert.Contains(t, names, "skill2")
 }
 
+func TestSkillLoader_LoadAllFollowsSymlinkedSkillDir(t *testing.T) {
+	root := t.TempDir()
+	// Real skill lives outside the skills dir, reached via a symlink — the
+	// "one copy, shared by several workspaces" deployment.
+	realSkill := filepath.Join(root, "external", "linked")
+	require.NoError(t, os.MkdirAll(realSkill, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(realSkill, "SKILL.md"), []byte(`---
+name: linked
+description: A symlinked skill
+---
+Body of linked.`), 0644))
+
+	skillsDir := filepath.Join(root, "skills")
+	require.NoError(t, os.MkdirAll(skillsDir, 0755))
+	require.NoError(t, os.Symlink(realSkill, filepath.Join(skillsDir, "linked")))
+
+	loader := NewSkillLoader(".")
+	skills, err := loader.LoadAll(skillsDir)
+	require.NoError(t, err)
+	require.Len(t, skills, 1)
+	assert.Equal(t, "linked", skills[0].Name)
+}
+
 func TestSkillInjector_Inject(t *testing.T) {
 	reg := NewSkillRegistry()
 	_ = reg.Register(types.Skill{

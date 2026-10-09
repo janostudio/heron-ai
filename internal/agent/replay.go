@@ -39,6 +39,14 @@ func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentReques
 		case types.EventToolCallCompleted:
 			current = append(current, toolResultMessage(event.Payload))
 		case types.EventAgentFeedback:
+			// A feedback event may carry the model's raw output (raw_text) when
+			// the retry branch it accompanies did not emit a model_response —
+			// e.g. a structured-output validation failure. Restore the
+			// assistant message first so the rebuilt context matches the
+			// in-memory context the retry actually used.
+			if raw := payloadString(event.Payload, "raw_text"); raw != "" {
+				current = append(current, types.Message{Role: "assistant", Content: raw})
+			}
 			current = append(current, types.Message{Role: "user", Content: payloadString(event.Payload, "content")})
 		case types.EventContextCompacted:
 			current = foldCompacted(current, initialLen, payloadString(event.Payload, "summary"), payloadInt(event.Payload, "dropped_count"))

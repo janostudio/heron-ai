@@ -77,7 +77,11 @@ func (e *WebhookExecutor) Execute(ctx context.Context, req types.CallRequest) (t
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if key := strings.TrimSpace(req.Call.Webhook.IdempotencyKey); key != "" {
-		httpReq.Header.Set("Idempotency-Key", resolveTemplate(key, req))
+		expanded, err := resolveTemplate(key, req)
+		if err != nil {
+			return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
+		}
+		httpReq.Header.Set("Idempotency-Key", expanded)
 	}
 	for name, value := range req.Call.Webhook.Headers {
 		httpReq.Header.Set(name, value)

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -56,7 +57,9 @@ func (l Limits) withDefaults() Limits {
 		}
 	}
 	if l.HTTPClient == nil {
-		l.HTTPClient = http.DefaultClient
+		// http.DefaultClient has no timeout; fetching a media URL on the model
+		// request path would then hang the turn. Give it a bounded client.
+		l.HTTPClient = &http.Client{Timeout: 60 * time.Second}
 	}
 	return l
 }

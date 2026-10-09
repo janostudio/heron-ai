@@ -95,8 +95,8 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	toolRegistry.Register(tool.NewBashTool(workspaceService))
 	toolRegistry.Register(tool.NewGrepTool(workspaceService))
 	toolRegistry.Register(tool.NewGlobTool(workspaceService))
-	toolRegistry.Register(tool.NewWebSearchTool(http.DefaultClient, tool.WebSearchConfig{}))
-	toolRegistry.Register(tool.NewWebFetchTool(http.DefaultClient, tool.WebFetchConfig{}))
+	toolRegistry.Register(tool.NewWebSearchTool(newWebHTTPClient(), tool.WebSearchConfig{}))
+	toolRegistry.Register(tool.NewWebFetchTool(newWebHTTPClient(), tool.WebFetchConfig{}))
 	toolRegistry.Register(tool.NewCodeNavTool(workspaceService, "codels"))
 	toolRegistry.Register(tool.NewAskUserQuestionTool())
 	toolRegistry.Register(tool.NewTodoWriteTool())
@@ -357,6 +357,15 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 // is only the MCP servers, and it matters: a stdio MCP server is a child
 // process, and a heron run that exits without closing them leaves the servers
 // (and whatever they forked) running.
+// newWebHTTPClient returns an HTTP client with a request timeout. The default
+// http.DefaultClient has Timeout 0 (no limit), which combined with a caller
+// whose context has no deadline would let a stalled web request hang forever
+// and strand the AgentTurn. The executor's backstop already bounds tool calls;
+// this is the second, transport-level guarantee.
+func newWebHTTPClient() *http.Client {
+	return &http.Client{Timeout: 30 * time.Second}
+}
+
 func (b *RuntimeBundle) Close() error {
 	if b == nil || b.MCP == nil {
 		return nil

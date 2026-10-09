@@ -35,6 +35,13 @@ const (
 	DefaultSearchMaxResults = 500
 	DefaultCommandMaxBytes  = 64 * 1024
 	DefaultGlobMaxResults   = 10_000
+
+	// commandWaitDelay bounds how long cmd.Wait waits for the captured output
+	// pipes to close after the process (group) has been killed. Without it a
+	// grandchild that escaped the process group (setsid) and still holds the
+	// pipe could block Wait indefinitely. See setProcessGroup in
+	// exec_process_unix.go for the group mechanics.
+	commandWaitDelay = 500 * time.Millisecond
 )
 
 // localWorkspace is the concrete local-filesystem backend. It implements the
@@ -371,6 +378,20 @@ func (s *localWorkspace) Run(ctx context.Context, req CommandRequest) (CommandRe
 	} else {
 		cmd = exec.CommandContext(ctx, req.Command, req.Args...)
 	}
+	// The command runs through a shell, and the shell may fork (a pipeline
+	// like `grep ... | head`, or `sleep 30 & wait`, always forks; on Linux even
+	// a plain command through dash forks). A forked grandchild inherits the
+	// captured stdout, so the default CommandContext cancel — which kills only
+	// the shell — leaves the grandchild holding the pipe and cmd.Run blocks
+	// until it exits on its own, making timeout_ms a no-op and hanging the
+	// AgentTurn forever. Put the command in its own process group and cancel by
+	// killing the whole group.
+	setProcessGroup(cmd)
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+	// Last resort for a grandchild that left the group (setsid) and still holds
+	// the pipe: once the shell is gone, Wait gives up on the pipe rather than
+	// blocking for as long as that grandchild lives.
+	cmd.WaitDelay = commandWaitDelay
 	cmd.Dir = s.root
 	if len(req.Env) > 0 {
 		cmd.Env = req.Env

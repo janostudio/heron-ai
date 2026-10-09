@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -73,6 +74,39 @@ func TestServiceRunRecordsTestOperation(t *testing.T) {
 	require.Equal(t, "ok", result.Stdout)
 	require.Equal(t, 0, result.ExitCode)
 	require.Equal(t, "test", result.Operation.Kind)
+}
+
+// TestServiceRunTimeoutKillsGrandchildren is the regression test for
+// docs/issues/ISSUE-bash-timeout-grandchild-hang: a shell command that forks a
+// child holding the captured stdout must not keep Run blocked past its
+// context deadline.
+//
+// `bash -c 'sleep 30 & wait'` forces a fork on every platform (unlike a plain
+// `sleep 30`, which macOS's sh execs and only Linux's dash forks), so the test
+// is meaningful on macOS too. Before the fix Run blocked for the full 30s;
+// after it, the process group is killed and Run returns in well under the
+// sleep duration.
+func TestServiceRunTimeoutKillsGrandchildren(t *testing.T) {
+	service, err := NewLocal(t.TempDir())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	result, err := service.Run(ctx, CommandRequest{
+		Command: "sleep 30 & wait",
+		Shell:   "/bin/bash",
+	})
+	elapsed := time.Since(start)
+
+	// Run surfaces the exec error (the shell was killed); the timeout itself
+	// is the contract under test, and the caller derives failure from
+	// result.TimedOut rather than from err.
+	_ = err
+	require.True(t, result.TimedOut, "context deadline must be reported as a timeout")
+	require.Less(t, elapsed, 10*time.Second,
+		"Run must return once the process group is killed, not when the grandchild exits on its own")
 }
 
 func TestServiceReadLineRangeAndTruncation(t *testing.T) {

@@ -44,7 +44,11 @@ func (l *SkillLoader) LoadAll(skillsDir string) ([]types.Skill, error) {
 
 	var skills []types.Skill
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		// Follow symlinks: os.ReadDir's DirEntry does not resolve them, so a
+		// skill directory reached via a symlink reports IsDir() == false and
+		// would be skipped silently. os.Stat follows the link.
+		info, statErr := os.Stat(filepath.Join(skillsDir, entry.Name()))
+		if statErr != nil || !info.IsDir() {
 			continue
 		}
 		skill, err := l.Load(filepath.Join(skillsDir, entry.Name()))

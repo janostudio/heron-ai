@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -118,4 +120,18 @@ func TestRenderAlwaysReturnsTwoMessages(t *testing.T) {
 	if len(messages) != 2 || messages[0].Content == "" || messages[1].Content == "" {
 		t.Fatalf("messages=%#v", messages)
 	}
+}
+
+// The structured-output contract must tell the model that newlines inside
+// string fields are allowed. Without it, every rule is a prohibition and the
+// model collapses multi-point replies onto one line
+// (ISSUE-structured-output-forces-single-line).
+func TestStructuredOutputContractAllowsNewlines(t *testing.T) {
+	got := structuredOutputContract(&types.StructuredOutput{Type: "json"})
+	require.Contains(t, got, `\n`, "the contract must mention \\n so the model uses it")
+	require.Contains(t, got, "readable", "and explain why")
+}
+
+func TestStructuredOutputContractNilIsEmpty(t *testing.T) {
+	require.Empty(t, structuredOutputContract(nil))
 }

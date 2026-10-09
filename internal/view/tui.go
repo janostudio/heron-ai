@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -24,9 +25,10 @@ type FlowRunner interface {
 
 // FlowResult is the result returned by the flow runner
 type FlowResult struct {
-	Teams  []TeamOutput
-	Status types.SessionStatus
-	Usage  types.TokenUsage
+	Teams     []TeamOutput
+	Status    types.SessionStatus
+	Usage     types.TokenUsage
+	SessionID string
 }
 
 // TeamOutput is the display projection for one TeamTurn.
@@ -34,6 +36,32 @@ type TeamOutput struct {
 	TeamID  string
 	Reply   string
 	Records []types.SharedRecord
+	// Duration is how long the TeamTurn took (FinishedAt - StartedAt), shown in
+	// the status bar so a slow turn is visible.
+	Duration time.Duration
+	// Calls is the per-call breakdown, ordered as the team ran them. The TUI
+	// shows one message per call so the user can see which agent answered,
+	// rather than only the team's aggregated reply.
+	Calls []CallOutput
+}
+
+// CallOutput is one executed call inside a TeamTurn, projected for display.
+type CallOutput struct {
+	CallID  string
+	AgentID string
+	Reply   string
+	// Ops summarizes the workspace operations this call performed (commands,
+	// reads, writes). Rendered as one compact line each instead of letting raw
+	// command output flood the transcript.
+	Ops []OpOutput
+}
+
+// OpOutput is one workspace operation, projected for display.
+type OpOutput struct {
+	Kind     string
+	Subject  string
+	ExitCode int
+	Failed   bool
 }
 
 // ===== Message Types =====
@@ -49,6 +77,10 @@ const (
 	RoleUsage     MessageRole = "usage"
 )
 
+// scrollLines is how many transcript lines one arrow-key press (or one wheel
+// notch) scrolls.
+const scrollLines = 3
+
 // DisplayMessage is a message displayed in the TUI viewport
 type DisplayMessage struct {
 	Role       MessageRole
@@ -57,6 +89,14 @@ type DisplayMessage struct {
 	RoundNum   int
 	Timestamp  time.Time
 	AgentIndex int
+	// AgentName / TeamName identify who produced a RoleAgent message, shown as
+	// "team › agent". Empty for user/assistant/system messages.
+	AgentName string
+	TeamName  string
+	// Ops are the workspace operations behind a RoleAgent message, shown as a
+	// compact one-line-each summary so raw command output does not flood the
+	// transcript.
+	Ops []OpOutput
 }
 
 // ===== Slash Commands =====
@@ -100,13 +140,25 @@ var (
 	inputStyle = lipgloss.NewStyle().
 			Padding(0, 1)
 
+	// User turns read as a distinct block: a cyan ">" gutter and a dim
+	// left-accented body, so a prompt is never confused with model output.
 	userMsgStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252")).
 			Padding(0, 1)
 
+	userGutterStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")).
+			Bold(true)
+
+	// Assistant turns use a green "⏺" gutter; the body itself is rendered as
+	// Markdown (see renderMarkdown), which is the primary visual difference.
 	assistantMsgStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("255")).
 				Padding(0, 1)
+
+	assistantGutterStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("42")).
+				Bold(true)
 
 	systemMsgStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
@@ -116,6 +168,15 @@ var (
 	usageMsgStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("243")).
 			Padding(0, 1)
+
+	// Workspace-operation summary styles (the compact per-tool lines).
+	opStyleKind = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	opStyleDim  = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	opStyleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	opStyleFail = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+
+	// Round separator.
+	separatorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 
 	spinnerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("39"))
@@ -148,24 +209,32 @@ func agentStyle(index int) lipgloss.Style {
 }
 
 // ===== Welcome Banner =====
+//
+// The welcome card is drawn by lipgloss, not by hand: an earlier hard-coded
+// ASCII-art banner mis-aligned its right border because the block-drawing
+// glyphs (█ ╗ ═ …) are wider than their rune count suggests and manual space
+// counting cannot keep a frame straight. lipgloss.Border measures the real
+// display width, so the frame is correct by construction and adapts to the
+// content.
 
-const welcomeBanner = `
-╔══════════════════════════════════════════════╗
-║                                              ║
-║     ██╗  ██╗███████╗██████╗  ██████╗ ███╗  ██╗  ║
-║     ██║  ██║██╔════╝██╔══██╗██╔═══██╗████╗ ██║  ║
-║     ███████║█████╗  ██████╔╝██║   ██║██╔██╗██║  ║
-║     ██╔══██║██╔══╝  ██╔══██╗██║   ██║██║╚████║  ║
-║     ██║  ██║███████╗██║  ██║╚██████╔╝██║ ╚███║  ║
-║     ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚══╝  ║
-║                                              ║
-║       Multi-Agent Generic Engine             ║
-║                                              ║
-║   Type /help for commands   Ctrl+C to exit   ║
-║   Enter to send             Up/Down history  ║
-║                                              ║
-╚══════════════════════════════════════════════╝
-`
+var welcomeCardStyle = lipgloss.NewStyle().
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(lipgloss.Color("205")).
+	Padding(0, 2)
+
+var welcomeTitleStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(lipgloss.Color("205"))
+
+var welcomeSubtitleStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("241"))
+
+var welcomeKeyStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("39"))
+
+var welcomeHintStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("243"))
+
 
 // ===== TUIModel =====
 
@@ -188,6 +257,11 @@ type TUIModel struct {
 	historyIdx int
 	totalUsage types.TokenUsage
 	roundNum   int
+	sessionID  string
+
+	// Status-bar extras, updated as turns complete.
+	lastTeam     string
+	lastDuration time.Duration
 
 	running     bool
 	ready       bool
@@ -228,7 +302,7 @@ func NewTUIModel(flowName string, modelName string, agentCount int, teamCount in
 		spinner:     sp,
 		runner:      runner,
 		ctx:         context.Background(),
-		history:     make([]string, 0, 100),
+		history:     []string{},
 		historyIdx:  -1,
 		showWelcome: true,
 		slashCmds:   defaultCommands,
@@ -260,17 +334,54 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.textarea.SetWidth(msg.Width - 4)
 			m.ready = true
 
-			// Build welcome content
-			welcome := m.buildWelcome()
-			m.viewport.SetContent(welcome)
+			if len(m.messages) > 0 {
+				// History was seeded before the first size arrived (resume):
+				// render it at the real width instead of the welcome banner.
+				m.renderMessages()
+			} else {
+				m.viewport.SetContent(m.buildWelcome())
+			}
 			m.viewport.GotoBottom()
 		} else {
 			m.viewport.Width = msg.Width - 2
 			m.viewport.Height = contentHeight
 			m.textarea.SetWidth(msg.Width - 4)
+
+			// Re-wrap the current content at the new width. viewport.SetContent
+			// wraps to the width in effect when it is called; updating Width
+			// alone leaves previously wrapped (wider) lines in place and the
+			// narrower viewport then *clips* them, dropping the tail of long
+			// lines. Re-running the wrap is what keeps a resize (or a terminal
+			// narrower than the default 80) from truncating message text.
+			if len(m.messages) > 0 {
+				m.renderMessages()
+			} else {
+				m.viewport.SetContent(m.buildWelcome())
+			}
+			m.viewport.GotoBottom()
 		}
 
+	case tea.MouseMsg:
+		// Wheel scrolls the transcript. Drag events arrive too (mouse tracking
+		// is on so the wheel works) but are ignored: we do not implement our
+		// own selection. Users select text with Shift/Option+drag, which the
+		// terminal handles natively by bypassing the capture.
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			m.viewport.ScrollUp(scrollLines)
+			return m, nil
+		case tea.MouseWheelDown:
+			m.viewport.ScrollDown(scrollLines)
+			return m, nil
+		}
+		return m, nil
+
 	case tea.KeyMsg:
+		if tuiDebugEnabled() {
+			tuiLogf("key=%s alt=%v slashMode=%v historyLen=%d historyIdx=%d line=%d lineCount=%d value=%q",
+				msg.String(), msg.Alt, m.slashMode, len(m.history), m.historyIdx,
+				m.textarea.Line(), m.textarea.LineCount(), m.textarea.Value())
+		}
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			m.quitting = true
@@ -280,6 +391,16 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearMessages()
 			return m, nil
 
+		case tea.KeyCtrlP:
+			// Alias for ↑ (readline-style). Both recall older input.
+			m.recallHistory(1)
+			return m, nil
+
+		case tea.KeyCtrlN:
+			// Alias for ↓. Both move toward newer input.
+			m.recallHistory(-1)
+			return m, nil
+
 		case tea.KeyUp:
 			if m.slashMode {
 				if m.slashIdx > 0 {
@@ -287,10 +408,19 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.historyIdx < len(m.history)-1 {
-				m.historyIdx++
-				m.textarea.SetValue(m.history[len(m.history)-1-m.historyIdx])
+			if msg.Alt {
+				// Alt+↑ scrolls the transcript (REPL-safe: plain ↑ is history).
+				m.viewport.LineUp(scrollLines)
+				return m, nil
 			}
+			// In a multi-line input, ↑ first moves the cursor up; only once it
+			// is on the first line does it recall input history — the standard
+			// readline / PSReadLine behaviour. A single-line input is always on
+			// line 0, so ↑ recalls immediately.
+			if m.textarea.Line() > 0 {
+				break
+			}
+			m.recallHistory(1)
 			return m, nil
 
 		case tea.KeyDown:
@@ -301,13 +431,22 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.historyIdx > 0 {
-				m.historyIdx--
-				m.textarea.SetValue(m.history[len(m.history)-1-m.historyIdx])
-			} else if m.historyIdx == 0 {
-				m.historyIdx = -1
-				m.textarea.SetValue("")
+			if msg.Alt {
+				m.viewport.LineDown(scrollLines)
+				return m, nil
 			}
+			if m.textarea.Line() < m.textarea.LineCount()-1 {
+				break
+			}
+			m.recallHistory(-1)
+			return m, nil
+
+		case tea.KeyHome:
+			m.viewport.GotoTop()
+			return m, nil
+
+		case tea.KeyEnd:
+			m.viewport.GotoBottom()
 			return m, nil
 
 		case tea.KeyTab:
@@ -368,12 +507,18 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-			// Add to history
-			m.history = append(m.history, input)
+			// Add to history (persisted, so it survives a restart).
+			m.history = appendHistory(m.history, input)
 			m.historyIdx = -1
 
+			// A round is one user input (and everything it triggers), so the
+			// counter advances here, not per agent reply. One input can wake
+			// several teams; counting replies split a single input into many
+			// "rounds", which contradicted the user's model.
+			m.roundNum++
+
 			// Add user message
-			m.addMessage(DisplayMessage{Role: RoleUser, Content: input, Timestamp: time.Now()})
+			m.addMessage(DisplayMessage{Role: RoleUser, Content: input, RoundNum: m.roundNum, Timestamp: time.Now()})
 
 			m.textarea.SetValue("")
 			m.running = true
@@ -384,7 +529,14 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running = false
 		if msg.err != nil {
 			m.addMessage(DisplayMessage{Role: RoleSystem, Content: fmt.Sprintf("Error: %v", msg.err), Timestamp: time.Now()})
+		} else if msg.result == nil {
+			// A runner that returns no result and no error is a programming
+			// error; surface it instead of dereferencing nil.
+			m.addMessage(DisplayMessage{Role: RoleSystem, Content: "Error: flow runner returned no result", Timestamp: time.Now()})
 		} else {
+			if msg.result.SessionID != "" {
+				m.sessionID = msg.result.SessionID
+			}
 			m.totalUsage.PromptTokens += msg.result.Usage.PromptTokens
 			m.totalUsage.CompletionTokens += msg.result.Usage.CompletionTokens
 			m.totalUsage.ReasoningTokens += msg.result.Usage.ReasoningTokens
@@ -393,9 +545,40 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.totalUsage.PromptCacheMissTokens += msg.result.Usage.PromptCacheMissTokens
 			m.totalUsage.CacheReadInputTokens += msg.result.Usage.CacheReadInputTokens
 			m.totalUsage.CacheCreationInputTokens += msg.result.Usage.CacheCreationInputTokens
-			m.roundNum++
+			// roundNum is NOT advanced here: a round is one user input, and one
+			// input can produce several flowResultMsg (one per team that runs).
+			// It advances on submit instead.
+			// Status-bar extras: the last team to run and its wall time.
+			if n := len(msg.result.Teams); n > 0 {
+				m.lastTeam = msg.result.Teams[n-1].TeamID
+				var total time.Duration
+				for _, team := range msg.result.Teams {
+					total += team.Duration
+				}
+				m.lastDuration = total
+			}
 
 			for i, team := range msg.result.Teams {
+				if len(team.Calls) > 0 {
+					// One message per call so each reply carries its own
+					// "team › agent" identity. The team's aggregated Reply is
+					// just these joined together, so showing the parts loses
+					// nothing and gains attribution.
+					for _, call := range team.Calls {
+						m.addMessage(DisplayMessage{
+							Role:       RoleAgent,
+							CallID:     call.CallID,
+							Content:    call.Reply,
+							RoundNum:   m.roundNum,
+							Timestamp:  time.Now(),
+							AgentIndex: i,
+							AgentName:  call.AgentID,
+							TeamName:   team.TeamID,
+							Ops:        call.Ops,
+						})
+					}
+					continue
+				}
 				m.addMessage(DisplayMessage{
 					Role:       RoleAgent,
 					CallID:     team.TeamID,
@@ -403,13 +586,18 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					RoundNum:   m.roundNum,
 					Timestamp:  time.Now(),
 					AgentIndex: i,
+					TeamName:   team.TeamID,
 				})
 			}
 
 			if msg.result.Usage.TotalTokens > 0 {
+				// One round can yield several of these (one per team), so the
+				// label says "step", not "Round N" — the round number alone
+				// would repeat and misread as progress.
 				m.addMessage(DisplayMessage{
 					Role:      RoleUsage,
-					Content:   fmt.Sprintf("Round %d: %d tokens (Total: %d)", m.roundNum, msg.result.Usage.TotalTokens, m.totalUsage.TotalTokens),
+					Content:   fmt.Sprintf("Round %d · %d tokens this step (Total: %d)", m.roundNum, msg.result.Usage.TotalTokens, m.totalUsage.TotalTokens),
+					RoundNum:  m.roundNum,
 					Timestamp: time.Now(),
 				})
 			}
@@ -479,6 +667,9 @@ func (m *TUIModel) filterCommands() []slashCommand {
 // View renders the TUI
 func (m *TUIModel) View() string {
 	if m.quitting {
+		if m.sessionID != "" {
+			return fmt.Sprintf("Goodbye!  Resume with: heron --session %s\n", m.sessionID)
+		}
 		return "Goodbye!\n"
 	}
 	if !m.ready {
@@ -493,11 +684,23 @@ func (m *TUIModel) View() string {
 	content := m.viewport.View()
 
 	// Status bar
-	statusLeft := fmt.Sprintf("Model: %s | Round: %d", m.modelName, m.roundNum)
+	// Status bar: model, last team, round, elapsed, tokens on the left; key
+	// hints on the right.
+	statusLeft := fmt.Sprintf("Model: %s", m.modelName)
+	if m.lastTeam != "" {
+		statusLeft += fmt.Sprintf(" | Team: %s", m.lastTeam)
+	}
+	statusLeft += fmt.Sprintf(" | Round: %d", m.roundNum)
+	if m.lastDuration > 0 {
+		statusLeft += fmt.Sprintf(" | %s", formatDuration(m.lastDuration))
+	}
+	if m.totalUsage.TotalTokens > 0 {
+		statusLeft += fmt.Sprintf(" | %s tok", formatTokens(int64(m.totalUsage.TotalTokens)))
+	}
 	if m.running {
 		statusLeft = m.spinner.View() + " " + statusLeft
 	}
-	statusRight := "Ctrl+C: quit | /help: commands"
+	statusRight := "↑↓ history | Ctrl+C: quit"
 	statusLeftWidth := lipgloss.Width(statusLeft)
 	statusRightWidth := lipgloss.Width(statusRight)
 	middleWidth := m.width - statusLeftWidth - statusRightWidth
@@ -550,14 +753,91 @@ func (m *TUIModel) View() string {
 }
 
 func (m *TUIModel) buildWelcome() string {
-	info := fmt.Sprintf("Flow: %s | Model: %s | Agents: %d | Teams: %d\n",
-		m.flowName, m.modelName, m.agentCount, m.teamCount)
-	return welcomeBanner + "\n" + systemMsgStyle.Render(info)
+	title := welcomeTitleStyle.Render("Heron AI")
+	subtitle := welcomeSubtitleStyle.Render("Multi-Agent Generic Engine")
+
+	info := fmt.Sprintf("%s  %s  %s  %s",
+		welcomeKeyStyle.Render("Flow:")+" "+m.flowName,
+		welcomeKeyStyle.Render("Model:")+" "+m.modelName,
+		welcomeKeyStyle.Render("Agents:")+" "+fmt.Sprintf("%d", m.agentCount),
+		welcomeKeyStyle.Render("Teams:")+" "+fmt.Sprintf("%d", m.teamCount),
+	)
+
+	hints := strings.Join([]string{
+		welcomeKeyStyle.Render("/help") + welcomeHintStyle.Render(" commands") +
+			welcomeHintStyle.Render("   ") +
+			welcomeKeyStyle.Render("↑↓") + welcomeHintStyle.Render(" history") +
+			welcomeHintStyle.Render("   ") +
+			welcomeKeyStyle.Render("Enter") + welcomeHintStyle.Render(" send") +
+			welcomeHintStyle.Render("   ") +
+			welcomeKeyStyle.Render("Ctrl+C") + welcomeHintStyle.Render(" exit"),
+		welcomeHintStyle.Render("To copy text, hold Shift (⌥ on some terminals) and drag with the mouse."),
+	}, "\n")
+
+	// Constrain the card to the viewport so a narrow terminal wraps instead of
+	// clipping, and a very wide one does not sprawl.
+	cardStyle := welcomeCardStyle
+	if w := m.viewport.Width; w > 0 {
+		inner := w - cardStyle.GetHorizontalFrameSize()
+		if inner < 20 {
+			inner = 20
+		}
+		if inner > 72 {
+			inner = 72
+		}
+		cardStyle = cardStyle.Width(inner)
+	}
+
+	card := cardStyle.Render(strings.Join([]string{
+		title,
+		subtitle,
+		"",
+		info,
+		"",
+		hints,
+	}, "\n"))
+
+	// A blank line so the card sits a little below the header.
+	return "\n" + card
 }
 
 func (m *TUIModel) addMessage(msg DisplayMessage) {
 	m.messages = append(m.messages, msg)
 	m.renderMessages()
+}
+
+// recallHistory moves through the input history. dir +1 recalls an older entry
+// (↑ / Ctrl+P), dir -1 moves toward the newest (↓ / Ctrl+N, then clears).
+func (m *TUIModel) recallHistory(dir int) {
+	if len(m.history) == 0 {
+		tuiLogf("recall dir=%d -> no history", dir)
+		return
+	}
+	if m.historyIdx == -1 {
+		// Not browsing yet: start from the most recent entry.
+		if dir < 0 {
+			tuiLogf("recall dir=%d -> already newest, nothing to do", dir)
+			return
+		}
+		m.historyIdx = 0
+	} else {
+		next := m.historyIdx + dir
+		if next < 0 {
+			// Walked past the newest entry: clear the input.
+			m.historyIdx = -1
+			m.textarea.SetValue("")
+			tuiLogf("recall dir=%d -> past newest, cleared", dir)
+			return
+		}
+		if next >= len(m.history) {
+			tuiLogf("recall dir=%d -> at oldest", dir)
+			return // already at the oldest entry
+		}
+		m.historyIdx = next
+	}
+	value := m.history[len(m.history)-1-m.historyIdx]
+	m.textarea.SetValue(value)
+	tuiLogf("recall dir=%d -> idx=%d value=%q", dir, m.historyIdx, value)
 }
 
 func (m *TUIModel) clearMessages() {
@@ -568,24 +848,162 @@ func (m *TUIModel) clearMessages() {
 func (m *TUIModel) renderMessages() {
 	var lines []string
 
+	// bubbles/viewport v1.0.0 does not soft-wrap: SetContent splits on '\n'
+	// only and visibleLines() *cuts* any line wider than the viewport. A long
+	// message rendered as a single line is therefore hard-truncated at the
+	// viewport width. Give every styled line an explicit width so lipgloss
+	// wraps it to fit before it reaches the viewport.
+	width := m.viewport.Width
+	if width <= 0 {
+		width = 80
+	}
+	// Styles carry Padding(0, 1) (two columns); systemMsgStyle carries none.
+	paddedWidth := width - 2
+	if paddedWidth < 1 {
+		paddedWidth = 1
+	}
+
+	// Gutter is "> " / "⏺ " (2 columns). Body styles carry Padding(0, 1), so
+	// the body gets width minus gutter minus its own padding.
+	gutterWidth := 2
+	bodyWidth := paddedWidth - gutterWidth
+	if bodyWidth < 1 {
+		bodyWidth = 1
+	}
+
+	prevRound := 0
 	for _, msg := range m.messages {
+		// Round boundary: a light separator with the round number.
+		if msg.RoundNum > 0 && msg.RoundNum != prevRound {
+			if prevRound != 0 {
+				lines = append(lines, renderRoundSeparator(msg.RoundNum, width))
+			}
+			prevRound = msg.RoundNum
+		}
+
 		switch msg.Role {
 		case RoleUser:
-			lines = append(lines, userMsgStyle.Render("> "+msg.Content))
+			lines = append(lines, renderGutterMessage(
+				userGutterStyle.Render(">"),
+				userMsgStyle.Width(bodyWidth).Render(msg.Content),
+			))
 		case RoleAssistant:
-			lines = append(lines, assistantMsgStyle.Render(msg.Content))
+			lines = append(lines, renderGutterMessage(
+				assistantGutterStyle.Render("⏺"),
+				assistantMsgStyle.Width(bodyWidth).Render(renderMarkdown(msg.Content, bodyWidth-2)),
+			))
 		case RoleAgent:
-			header := fmt.Sprintf("[%s]", msg.CallID)
-			lines = append(lines, agentStyle(msg.AgentIndex).Render(header))
-			lines = append(lines, assistantMsgStyle.Render(msg.Content))
+			// Header identifies who spoke: "team › agent", falling back to
+			// whichever of the two is known, then to the call id.
+			header := agentHeader(msg)
+			lines = append(lines, agentStyle(msg.AgentIndex).Width(paddedWidth).Render(header))
+			// Compact one-line-per-op summary (tool calls, commands) instead of
+			// letting raw output flood the body.
+			for _, op := range msg.Ops {
+				lines = append(lines, renderOpLine(op, bodyWidth))
+			}
+			if strings.TrimSpace(msg.Content) != "" {
+				lines = append(lines, renderGutterMessage(
+					assistantGutterStyle.Render("⏺"),
+					assistantMsgStyle.Width(bodyWidth).Render(renderMarkdown(msg.Content, bodyWidth-2)),
+				))
+			}
 		case RoleSystem:
-			lines = append(lines, systemMsgStyle.Render(msg.Content))
+			lines = append(lines, systemMsgStyle.Width(width).Render(msg.Content))
 		case RoleUsage:
-			lines = append(lines, usageMsgStyle.Render(msg.Content))
+			lines = append(lines, usageMsgStyle.Width(paddedWidth).Render(msg.Content))
 		}
 	}
 
 	m.viewport.SetContent(strings.Join(lines, "\n"))
+}
+
+// formatDuration renders a turn's wall time compactly (e.g. 120ms / 1.2s / 2m03s).
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+}
+
+// renderRoundSeparator draws the light rule shown between rounds, labeled with
+// the round number so a long transcript has visible structure.
+func renderRoundSeparator(round, width int) string {
+	label := fmt.Sprintf(" Round %d ", round)
+	ruleWidth := maxInt(width-lipgloss.Width(label), 2)
+	left := ruleWidth / 2
+	right := ruleWidth - left
+	line := strings.Repeat("─", maxInt(left, 1)) + label + strings.Repeat("─", maxInt(right, 1))
+	return separatorStyle.Width(width).Render(ansi.Truncate(line, maxInt(width, 1), ""))
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// agentHeader renders the speaker label for a RoleAgent message:
+// "team › agent", degrading gracefully when only one side is known.
+func agentHeader(msg DisplayMessage) string {
+	switch {
+	case msg.TeamName != "" && msg.AgentName != "":
+		return fmt.Sprintf("%s › %s", msg.TeamName, msg.AgentName)
+	case msg.AgentName != "":
+		return msg.AgentName
+	case msg.TeamName != "":
+		return msg.TeamName
+	default:
+		return fmt.Sprintf("[%s]", msg.CallID)
+	}
+}
+
+// renderOpLine renders one workspace operation as a compact line:
+//
+//	⏺ Bash  go test ./...  ✓
+//	⏺ Bash  grep -rn foo .  ✗ exit 1
+//
+// The subject is truncated to the available width so a long command cannot
+// push the line past the viewport.
+func renderOpLine(op OpOutput, width int) string {
+	mark := opStyleOK.Render("✓")
+	if op.Failed {
+		mark = opStyleFail.Render(fmt.Sprintf("✗ exit %d", op.ExitCode))
+	}
+	kind := op.Kind
+	if kind == "" {
+		kind = "op"
+	}
+	subject := strings.TrimSpace(op.Subject)
+
+	// Budget for the subject: width minus the indent, the kind label, the two
+	// gaps, and the trailing mark.
+	fixed := 2 + lipgloss.Width(opStyleKind.Render(kind)) + 2 + lipgloss.Width(mark)
+	avail := width - fixed
+	if avail < 4 {
+		avail = 4
+	}
+	if lipgloss.Width(subject) > avail {
+		subject = ansi.Truncate(subject, avail-1, "…")
+	}
+
+	line := fmt.Sprintf("  %s %s  %s", opStyleKind.Render(kind), opStyleDim.Render(subject), mark)
+	return lipgloss.NewStyle().Width(width).Render(line)
+}
+
+// renderGutterMessage puts a fixed-width gutter in the first column and the
+// (possibly multi-line) body beside it, so continuation lines stay indented
+// under the message text rather than wrapping back under the gutter.
+func renderGutterMessage(gutter, body string) string {
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(2).Render(gutter),
+		" ",
+		body,
+	)
 }
 
 type commandResult struct {
@@ -616,10 +1034,18 @@ func (m *TUIModel) handleCommand(input string) commandResult {
   /welcome - Show full welcome banner
 
 Keyboard shortcuts:
-  Enter    - Send message
-  Up/Down  - Navigate input history
-  Ctrl+L   - Clear screen
-  Ctrl+C   - Exit`}
+  Enter        - Send message
+  Up/Down      - Previous / next input history (Ctrl+P/Ctrl+N also work)
+  Alt+Up/Down  - Scroll transcript one line
+  Home/End     - Jump to top / bottom
+  Ctrl+L       - Clear screen
+  Ctrl+C       - Exit
+
+Mouse:
+  Wheel         - Scroll transcript
+  Shift/Option  - Hold while dragging to select text, then copy as usual
+                  (the TUI captures the mouse for wheel scrolling, so a plain
+                  drag does not select)`}
 
 	case "/clear":
 		m.clearMessages()
@@ -666,6 +1092,94 @@ func (m *TUIModel) runFlow(input string) tea.Cmd {
 
 // GetMessages returns the current message list
 func (m *TUIModel) GetMessages() []DisplayMessage { return m.messages }
+
+// SetSessionID seeds the session id shown on exit. It is used when the TUI is
+// launched directly into an existing session (heron --list → pick → resume),
+// where no flowResultMsg has run yet to record the id.
+func (m *TUIModel) SetSessionID(id string) { m.sessionID = id }
+
+// LoadHistory loads persisted input history into the model. It is called by the
+// entry point (not the constructor) so that constructing a model has no
+// filesystem side effects — tests build models freely.
+func (m *TUIModel) LoadHistory() {
+	m.history = loadHistory()
+	m.historyIdx = -1
+}
+
+// HistoryTurn is one prior user input and the replies it produced, preloaded
+// into the viewport when a session is resumed so the user sees the conversation
+// the model already remembers — with each reply's team/agent identity intact.
+type HistoryTurn struct {
+	Input    string
+	Messages []HistoryMessage
+	Usage    types.TokenUsage
+}
+
+// HistoryMessage is one reply inside a HistoryTurn, carrying its origin.
+type HistoryMessage struct {
+	TeamID  string
+	CallID  string
+	AgentID string
+	Reply   string
+	Ops     []OpOutput
+}
+
+// historyMessages projects a turn's replies into RoleAgent messages carrying
+// their team/agent identity, matching how live replies are rendered.
+func historyMessages(msgs []HistoryMessage, round int) []DisplayMessage {
+	out := make([]DisplayMessage, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, DisplayMessage{
+			Role:      RoleAgent,
+			CallID:    m.CallID,
+			Content:   m.Reply,
+			RoundNum:  round,
+			Timestamp: time.Now(),
+			AgentName: m.AgentID,
+			TeamName:  m.TeamID,
+			Ops:       m.Ops,
+		})
+	}
+	return out
+}
+
+// SeedHistory replaces the welcome banner with a session's prior turns and
+// scrolls to the bottom. It is a no-op for an empty history, so a fresh session
+// keeps the welcome screen.
+func (m *TUIModel) SeedHistory(turns []HistoryTurn) {
+	if len(turns) == 0 {
+		return
+	}
+	m.showWelcome = false
+	m.messages = nil
+	for i, turn := range turns {
+		round := i + 1
+		if strings.TrimSpace(turn.Input) != "" {
+			m.messages = append(m.messages, DisplayMessage{
+				Role:      RoleUser,
+				Content:   turn.Input,
+				RoundNum:  round,
+				Timestamp: time.Now(),
+			})
+		}
+		m.messages = append(m.messages, historyMessages(turn.Messages, round)...)
+		// Restore the session's historical token spend so the header reads as a
+		// session total, not just this run.
+		m.totalUsage.PromptTokens += turn.Usage.PromptTokens
+		m.totalUsage.CompletionTokens += turn.Usage.CompletionTokens
+		m.totalUsage.ReasoningTokens += turn.Usage.ReasoningTokens
+		m.totalUsage.TotalTokens += turn.Usage.TotalTokens
+		m.totalUsage.PromptCacheHitTokens += turn.Usage.PromptCacheHitTokens
+		m.totalUsage.PromptCacheMissTokens += turn.Usage.PromptCacheMissTokens
+		m.totalUsage.CacheReadInputTokens += turn.Usage.CacheReadInputTokens
+		m.totalUsage.CacheCreationInputTokens += turn.Usage.CacheCreationInputTokens
+	}
+	m.roundNum = len(turns)
+	if m.ready {
+		m.renderMessages()
+		m.viewport.GotoBottom()
+	}
+}
 
 // GetSlashCommands returns the available slash commands
 func (m *TUIModel) GetSlashCommands() []slashCommand { return m.slashCmds }

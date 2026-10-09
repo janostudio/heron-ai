@@ -10,10 +10,16 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/heron-ai/heron-engine/internal/media"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
+
+// streamJSONHTTPClient bounds the client's requests to the local Heron server.
+// A turn can take a while, so the timeout is generous, but an unbounded request
+// (http.DefaultClient, Timeout 0) would hang forever if the server stalled.
+var streamJSONHTTPClient = &http.Client{Timeout: 30 * time.Minute}
 
 // streamJSONInput is intentionally compatible with the common CLI shape:
 // user messages use {type:"user",message:{role:"user",content:...}} and
@@ -202,7 +208,10 @@ func (c *streamJSONClient) get(path string) (json.RawMessage, error) {
 }
 
 func (c *streamJSONClient) do(req *http.Request) (json.RawMessage, error) {
-	resp, err := http.DefaultClient.Do(req)
+	// http.DefaultClient has no timeout; a stalled local server would hang the
+	// client forever. The bound is generous because a call may carry a whole
+	// flow turn, but it must exist.
+	resp, err := streamJSONHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

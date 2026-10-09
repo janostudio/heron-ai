@@ -185,6 +185,30 @@ func (t *TurnLoop) emitAgentEvent(ctx context.Context, req types.AgentRequest, r
 	_, _ = t.sessionWriter.Append(ctx, req.FlowSessionID, storage.LayerAgent, event)
 }
 
+// DefaultAgentTurnTimeout bounds one AgentTurn when the agent declares no
+// Timeout. It is generous on purpose: it exists to end a hung turn (a stalled
+// model connection, a wedged tool) so the session does not stay "running"
+// forever, not to cap ordinary long work.
+const DefaultAgentTurnTimeout = 30 * time.Minute
+
+// parseAgentTimeout parses an agent's configured Timeout. Empty means "use the
+// default"; a non-empty but invalid or non-positive value is a configuration
+// error, not a silent fallback.
+func parseAgentTimeout(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("agent timeout %q is invalid: %w", value, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("agent timeout %q must be positive", value)
+	}
+	return d, nil
+}
+
 // Run executes one AgentTurn. An Agent is request/response in V1:
 // multiple model/tool rounds are still internal to this one call and no
 // background mailbox or active-agent protocol is introduced.
@@ -226,6 +250,22 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		return nil, err
 	}
 	ctx = WithHookExecutor(ctx, turnHooks)
+
+	// Bound the whole turn in wall-clock time. Without this, a stalled model
+	// connection (or a tool the executor's own backstop cannot reach) leaves
+	// the turn — and the session — running forever. agent.Timeout overrides the
+	// default; the default is generous so it only fires on a real hang.
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		turnTimeout := DefaultAgentTurnTimeout
+		if parsed, parseErr := parseAgentTimeout(agent.Loop.Timeout); parseErr != nil {
+			return nil, parseErr
+		} else if parsed > 0 {
+			turnTimeout = parsed
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, turnTimeout)
+		defer cancel()
+	}
 
 	lastRound := 0
 	if turnHooks != nil {
@@ -675,8 +715,9 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 					return nil, addErr
 				}
 				t.emitAgentEvent(ctx, req, round, types.EventAgentFeedback, map[string]any{
-					"round":   round,
-					"content": truncatedMsg,
+					"round":    round,
+					"content":  truncatedMsg,
+					"raw_text": resp.Text,
 				})
 				lastText = resp.Text
 				continue
@@ -737,8 +778,9 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 							return nil, addErr
 						}
 						t.emitAgentEvent(ctx, req, round, types.EventAgentFeedback, map[string]any{
-							"round":   round,
-							"content": invalidMsg,
+							"round":    round,
+							"content":  invalidMsg,
+							"raw_text": resp.Text,
 						})
 						lastText = resp.Text
 						continue
