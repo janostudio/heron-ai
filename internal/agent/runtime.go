@@ -188,8 +188,19 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		t.routeParser = NewRouteParser()
 	}
 
+	// Hooks declared in agent config are per-agent, while t.hooks is the
+	// loop-wide executor, so they are merged into a per-turn executor that
+	// the hook helpers below pick up from ctx. A misdeclared hook is a
+	// configuration error and fails the turn up front rather than running
+	// the turn without the guard the author asked for.
+	turnHooks, err := t.hooks.WithCommandHooks(agent.Hooks, nil)
+	if err != nil {
+		return nil, err
+	}
+	ctx = WithHookExecutor(ctx, turnHooks)
+
 	lastRound := 0
-	if t.hooks != nil {
+	if turnHooks != nil {
 		defer func() {
 			payload := hookPayload(agent, req, lastRound, nil, nil)
 			if err != nil {
@@ -197,9 +208,11 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			} else if result != nil {
 				payload.Error = result.Error
 			}
-			_ = t.hooks.Execute(context.Background(), HookOnEnd, payload)
+			// Background, not ctx: on_end must still run when the turn's
+			// context is already done. The executor is carried explicitly.
+			_ = turnHooks.Execute(WithHookExecutor(context.Background(), turnHooks), HookOnEnd, payload)
 		}()
-		if hookErr := t.hooks.Execute(ctx, HookOnStart, hookPayload(agent, req, 0, nil, nil)); hookErr != nil {
+		if hookErr := turnHooks.Execute(ctx, HookOnStart, hookPayload(agent, req, 0, nil, nil)); hookErr != nil {
 			t.emitErrorHook(ctx, agent, req, 0, hookErr)
 			return &types.AgentResult{Status: types.TurnFailed, Reply: hookErr.Error(), Error: hookErr.Error(), Next: &types.Route{Action: types.NextFail, Reason: hookErr.Error()}}, nil
 		}
@@ -1550,30 +1563,33 @@ func (t *TurnLoop) contextConfig(agent types.AgentConfig) types.ContextConfig {
 }
 
 func (t *TurnLoop) executeHook(ctx context.Context, event string, payload types.HookPayload) error {
-	if t.hooks == nil {
+	hooks := hookExecutorFrom(ctx, t.hooks)
+	if hooks == nil {
 		return nil
 	}
-	return t.hooks.Execute(ctx, event, payload)
+	return hooks.Execute(ctx, event, payload)
 }
 
 func (t *TurnLoop) emitErrorHook(ctx context.Context, agent types.AgentConfig, req types.AgentRequest, round int, err error) {
-	if err == nil || t.hooks == nil {
+	hooks := hookExecutorFrom(ctx, t.hooks)
+	if err == nil || hooks == nil {
 		return
 	}
 	payload := hookPayload(agent, req, round, nil, nil)
 	payload.Error = err.Error()
-	_ = t.hooks.Execute(ctx, HookOnError, payload)
+	_ = hooks.Execute(ctx, HookOnError, payload)
 }
 
 func (t *TurnLoop) emitToolEndHook(ctx context.Context, agent types.AgentConfig, req types.AgentRequest, round int, call types.ToolCall, result *types.ToolResult) {
-	if t.hooks == nil {
+	hooks := hookExecutorFrom(ctx, t.hooks)
+	if hooks == nil {
 		return
 	}
 	payload := hookPayload(agent, req, round, &call, result)
 	if result != nil && result.Error != "" {
 		payload.Error = result.Error
 	}
-	_ = t.hooks.Execute(ctx, HookOnToolEnd, payload)
+	_ = hooks.Execute(ctx, HookOnToolEnd, payload)
 }
 
 func hookPayload(agent types.AgentConfig, req types.AgentRequest, round int, call *types.ToolCall, result *types.ToolResult) types.HookPayload {
