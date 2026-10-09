@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -151,6 +152,11 @@ func isKnownHookEvent(event string) bool {
 	return false
 }
 
+// hookTerminateGrace is how long a timed-out hook gets to exit on SIGTERM
+// before its process group is killed. Short on purpose: the hook has already
+// spent the budget the operator declared, and this runs inside a turn.
+const hookTerminateGrace = 500 * time.Millisecond
+
 // RunHookCommand runs one configured hook command with /bin/sh under timeout.
 // A non-zero exit and a timeout are both errors: every caller that can act on
 // an error does (on_start and on_tool_start abort the step), so a failing
@@ -159,26 +165,84 @@ func isKnownHookEvent(event string) bool {
 // The command runs on the engine host, not through the workspace backend, so
 // an agent on a remote workspace still gets host-local hooks. Hook commands
 // are operator configuration, not model-authored input.
+//
+// On timeout the command's whole process group is signalled (SIGTERM, then
+// SIGKILL), not just the shell: the shell may fork, and a surviving child
+// would keep the captured output pipe open.
 func RunHookCommand(ctx context.Context, payload types.HookPayload, command string, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = DefaultHookTimeout
 	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(runCtx, "/bin/sh", "-c", command)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Env = append(os.Environ(), hookEnv(payload)...)
-	out, err := cmd.CombinedOutput()
-	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+	// Own process group, so stopHookCommand can signal the shell and whatever
+	// it forked. A hook command is a shell command and the shell may fork; a
+	// forked child inherits the captured stdout, and killing only the shell
+	// leaves that child holding the pipe — cmd.Wait then blocks until the
+	// child exits on its own and the timeout bounds nothing.
+	setHookProcessGroup(cmd)
+	// Last resort for a child that left the group (setsid) and still holds the
+	// pipe: once the shell is gone, Wait gives up on the pipe rather than
+	// blocking for as long as that child lives.
+	cmd.WaitDelay = hookTerminateGrace
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("hook command failed to start: %w: %s", err, command)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return hookCommandResult(err, out.String(), command)
+	case <-ctx.Done():
+		stopHookCommand(cmd, done)
+		return fmt.Errorf("hook command canceled: %w: %s", ctx.Err(), command)
+	case <-timer.C:
+		stopHookCommand(cmd, done)
 		return fmt.Errorf("hook command timed out after %s: %s", timeout, command)
 	}
-	if err != nil {
-		trimmed := strings.TrimSpace(string(out))
-		if trimmed == "" {
-			return fmt.Errorf("hook command failed: %w: %s", err, command)
-		}
-		return fmt.Errorf("hook command failed: %w: %s: %s", err, command, trimmed)
+}
+
+// stopHookCommand ends a hook command and waits for the process group to be
+// gone, so a timed-out hook leaves nothing behind. Both waits are bounded:
+// WaitDelay releases the pipe if a child outside the group still holds it.
+func stopHookCommand(cmd *exec.Cmd, done <-chan error) {
+	_ = terminateHookProcess(cmd)
+	select {
+	case <-done:
+		return
+	case <-time.After(hookTerminateGrace):
 	}
-	return nil
+	_ = killHookProcess(cmd)
+	select {
+	case <-done:
+	case <-time.After(hookTerminateGrace):
+	}
+}
+
+// hookCommandResult turns a completed hook command into an error or nil.
+func hookCommandResult(err error, out, command string) error {
+	// ErrWaitDelay means the command itself exited 0 but something it spawned
+	// still holds the pipe. The hook ran; that is not a hook failure.
+	if err == nil || errors.Is(err, exec.ErrWaitDelay) {
+		return nil
+	}
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" {
+		return fmt.Errorf("hook command failed: %w: %s", err, command)
+	}
+	return fmt.Errorf("hook command failed: %w: %s: %s", err, command, trimmed)
 }
 
 // hookEnv exposes to the command the fields the payload reliably carries.

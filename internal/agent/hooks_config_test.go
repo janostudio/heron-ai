@@ -114,6 +114,27 @@ func TestWithCommandHooks_TimeoutIsAnError(t *testing.T) {
 	assert.Less(t, time.Since(start), 3*time.Second, "timeout must actually bound the command")
 }
 
+// The regression this guards: a hook command runs through /bin/sh, and sh may
+// fork the real work into a child (it does for `a & b`, and CI showed it also
+// happens for a plain command). That child inherits the captured stdout. If
+// only sh is killed on timeout, the child keeps the pipe open and Wait blocks
+// until the child exits on its own — so the timeout does not bound anything.
+// This is what passed on macOS and failed on Linux CI.
+func TestWithCommandHooks_TimeoutKillsTheWholeProcessGroup(t *testing.T) {
+	hooks, err := NewHookExecutor().WithCommandHooks([]types.HookConfig{
+		// `&` forces sh to fork: sleep is a grandchild holding stdout.
+		{Event: HookOnStart, Command: "sleep 30 & wait", Timeout: "100ms"},
+	}, nil)
+	require.NoError(t, err)
+
+	start := time.Now()
+	err = hooks.Execute(context.Background(), HookOnStart, types.HookPayload{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out")
+	assert.Less(t, time.Since(start), 5*time.Second,
+		"timeout must kill the whole process group, not wait for a surviving grandchild to release stdout")
+}
+
 func TestWithCommandHooks_KeepsAlreadyRegisteredHooks(t *testing.T) {
 	base := NewHookExecutor()
 	var programmatic bool
