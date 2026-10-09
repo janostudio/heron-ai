@@ -29,20 +29,34 @@ func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentReques
 
 	current := cloneMessages(initial)
 	initialLen := len(current)
+	// pendingCallIDs tracks the ids of the most recent assistant tool_calls, in
+	// order, so a tool result whose event predates the tool_call_id field can be
+	// paired back to its call. Without this, replayed tool messages carry no id
+	// and a strict provider rejects the request with "tool calls and tool
+	// results do not match" (ISSUE-replay-missing-tool-call-failed).
+	var pendingCallIDs []string
 	for _, event := range replay.Events {
 		if event.CallID != req.CallID {
 			continue
 		}
 		switch event.Type {
 		case types.EventAgentModelResponse:
-			current = append(current, modelResponseMessage(event.Payload))
+			msg := modelResponseMessage(event.Payload)
+			current = append(current, msg)
+			pendingCallIDs = callIDsOf(msg)
 		case types.EventToolCallCompleted, types.EventToolCallFailed:
 			// A failed tool call also produced a tool-role message in the live
 			// context, so replay must restore it too: skipping it left an
 			// assistant tool_call with no matching tool result, which a strict
-			// provider rejects with "tool calls and tool results do not match"
-			// (ISSUE-replay-missing-tool-call-failed).
-			current = append(current, toolResultMessage(event.Payload))
+			// provider rejects with "tool calls and tool results do not match".
+			msg := toolResultMessage(event.Payload)
+			if msg.ToolCallID == "" && len(pendingCallIDs) > 0 {
+				// The event predates tool_call_id recording; take the next
+				// unclaimed call id from the assistant message before it.
+				msg.ToolCallID = pendingCallIDs[0]
+			}
+			pendingCallIDs = dropFirst(pendingCallIDs, msg.ToolCallID)
+			current = append(current, msg)
 		case types.EventAgentFeedback:
 			// A feedback event may carry the model's raw output (raw_text) when
 			// the retry branch it accompanies did not emit a model_response —
@@ -127,6 +141,29 @@ func modelResponseMessage(payload map[string]any) types.Message {
 		}
 	}
 	return msg
+}
+
+// callIDsOf returns the tool_call ids of an assistant message, in order.
+func callIDsOf(msg types.Message) []string {
+	if len(msg.ToolCalls) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(msg.ToolCalls))
+	for _, tc := range msg.ToolCalls {
+		ids = append(ids, tc.ID)
+	}
+	return ids
+}
+
+// dropFirst removes the first occurrence of id from ids, so a tool result that
+// answers a specific call does not also claim the next one.
+func dropFirst(ids []string, id string) []string {
+	for i, v := range ids {
+		if v == id {
+			return append(ids[:i:i], ids[i+1:]...)
+		}
+	}
+	return ids
 }
 
 // toolResultMessage reconstructs the tool message from a tool_call.completed /

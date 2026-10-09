@@ -1,50 +1,49 @@
 # 缺陷：replay 漏掉 tool_call.failed，重复激活同一 call 时 400
 
-> 状态：**已修复已确认部分 + 已加定位日志**（2026-10-09）——根因仍待日志实证
-> 已确认的事实：400 报错真实发生；`replay.go` 确实漏处理 `tool_call.failed`
-> **未确认**：二者是否因果相关。手工构造的对照实验**未能复现**该 400（见文末）。
-> 故本文只记录事实与线索，**不宣称根因已定位**。
-> 关联：`internal/agent/replay.go:39`、`internal/agent/runtime.go:1460-1535`
+> 状态：**已定位并修复**（2026-10-09）
+> 关联：`internal/agent/replay.go`、`internal/agent/runtime.go`、`internal/model/openai.go`
 
-## 处理记录（2026-10-09）
+## 定位结论（2026-10-09）：新增日志一击命中
 
-按用户指示"**无法定位就加日志**"，做了两件事：
-
-### 1. 增加定位日志（核心，直击本文唯一突破口）
-
-`internal/model/openai.go` 失败路径（`post` 与 `postStream` 的非 2xx 分支）新增
-`logRejectedRequest`（Warn 级，写标准日志）：记录**请求的 tool 配对结构**——
-逐消息角色序列、每个 assistant 发出的 `tool_call` id、每个 `tool` 结果回的
-`tool_call_id`，并**直接算出 `unanswered_calls` / `orphaned_results` /
-`tool_pairing_ok`**。不含用户内容。示例：
+22:01 部署含诊断日志的版本后，22:03 的复现日志（`.agents/data/logs/2026-10-09.log`）
+直接给出根因：
 
 ```json
-{"level":"warn","msg":"model request rejected","status":400,"model":"m1",
- "message_count":3,
- "roles":"user → assistant(tool_calls=2:tc-1,tc-2) → tool(tc-1)",
- "tool_call_ids":"tc-1,tc-2","tool_result_ids":"tc-1",
- "unanswered_calls":"tc-2","orphaned_results":"","tool_pairing_ok":false,
- "response_body":"...tool calls and tool results do not match"}
+{"msg":"model request rejected","status":400,
+ "roles":"system → user → assistant(tool_calls=2:call_00_5IC…,call_01_DQr…)
+          → tool(<none>) → tool(<none>) → … （共 9 轮）",
+ "tool_call_ids":"call_00_5IC…,…（18 个）",
+ "tool_result_ids":",,,,,,,,,,,,,,,,,",   ← 18 个 tool 结果的 id 全空
+ "unanswered_calls":"call_00_5IC…,…（18 个）",
+ "tool_pairing_ok":false}
 ```
 
-有了它，下次 400 一发生就能知道**是哪个 tool_call 没配上结果**（或反之），
-不必再靠事后 jsonl 猜。
+**根因**：发给 provider 的请求里，**18 个 tool 结果全部没有 `tool_call_id`**，
+而 18 个 assistant tool_call 都有 id → 无法配对 → 400。
 
-### 2. 修复已确认的缺陷：replay 漏 `tool_call.failed` + 缺 `tool_call_id`
+**为什么 id 丢了**：该 `search` call 被**重复激活**（4 次），每次运行都会
+`replayAgentContext` 从 `agent.jsonl` 重建历史。历史里的 `tool_call.completed/failed`
+事件是**旧格式**（payload 只有 `round`/`tool_name`/`content|error`，**没有 `tool_call_id`**），
+replay 重建的 tool 消息因此 id 为空。
 
-- `internal/agent/replay.go`：`EventToolCallFailed` 现与 `Completed` 同样重建
-  tool 消息（原来直接跳过 → assistant 的 tool_call 落单，正是"数量不匹配"的形态）；
-  `toolResultMessage` 在 `content` 为空时回退到 `error`，并回填 `tool_call_id`。
-- `internal/agent/runtime.go`：completed / failed 两类 tool 事件的 payload 都补
-  `tool_call_id`（原来不记，replay 无从还原，注释还写着"role/content 配对足够"——
-  对严格网关不成立）。
+## 修复（2026-10-09）
 
-**注意**：这是"把已确认的协议缺陷修掉"，**不等于**宣称它就是本次 400 的根因——
-需等新日志在真实复现时给出证据。
+三层，覆盖新旧事件：
 
-测试：`replay_test.go` 的 `TestReplayAgentContextRestoresFailedToolCall` /
-`...CompletedToolCallID`；`openai_test.go` 的 `TestDiffIDs` /
-`TestLogRejectedRequestDoesNotPanic`。
+1. **replay 按顺序配对补 id**（`replay.go`）：维护"最近一条 assistant tool_calls 的
+   id 队列"，tool 结果缺 id 时按序取用。**这才让已落盘的旧历史也能修**——不依赖事件
+   是否记了 `tool_call_id`。
+2. **新事件记 `tool_call_id`**（`runtime.go`）：completed / failed 两类 tool 事件 payload
+   补该字段，未来事件天然带 id。
+3. **失败路径诊断日志**（`model/openai.go`）：`logRejectedRequest` 记录请求的 tool 配对
+   结构（角色序列 + call/result id + `unanswered_calls`/`orphaned_results`/`tool_pairing_ok`），
+   下次同类问题一眼可辨。
+
+**实测验证**：对真实会话 `fs_7a3e3c95f9b3fbf9` 的 `search` call 重新 replay
+→ `tool_calls=18, tool_results=18, with_id=18`（修复前全空）。
+
+测试：`TestReplayAgentContextPairsToolCallIDByOrder`、
+`TestReplayAgentContextRestoresFailedToolCall`、`...CompletedToolCallID`。
 
 ## 现象
 

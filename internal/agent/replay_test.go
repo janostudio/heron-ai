@@ -387,3 +387,37 @@ func TestReplayAgentContextRestoresCompletedToolCallID(t *testing.T) {
 	assert.Equal(t, "ok", got[0].Content)
 	assert.Equal(t, "tc-9", got[0].ToolCallID)
 }
+
+// A tool result whose event predates the tool_call_id field must still be
+// paired to its call, by order, so replayed requests do not reach the provider
+// with unpaired tool messages.
+func TestReplayAgentContextPairsToolCallIDByOrder(t *testing.T) {
+	w := &fakeSessionWriter{}
+	loop := newReplayTurnLoop(w)
+
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1"},
+		Payload: map[string]any{"text": "", "tool_calls": []map[string]any{
+			{"id": "call_a", "name": "Read", "arguments": map[string]any{}},
+			{"id": "call_b", "name": "Grep", "arguments": map[string]any{}},
+		}},
+	})
+	// Old-format events: no tool_call_id.
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventToolCallCompleted, CallID: "call-1"},
+		Payload:     map[string]any{"tool_name": "Read", "content": "a"},
+	})
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventToolCallFailed, CallID: "call-1"},
+		Payload:     map[string]any{"tool_name": "Grep", "error": "boom"},
+	})
+
+	got := loop.replayAgentContext(context.Background(), reqFor("call-1"), nil)
+	require.Len(t, got, 3)
+	assert.Equal(t, "tool", got[1].Role)
+	assert.Equal(t, "call_a", got[1].ToolCallID, "first result pairs to the first call")
+	assert.Equal(t, "a", got[1].Content)
+	assert.Equal(t, "tool", got[2].Role)
+	assert.Equal(t, "call_b", got[2].ToolCallID, "second result pairs to the second call")
+	assert.Equal(t, "boom", got[2].Content, "failed call's error becomes content")
+}
