@@ -28,7 +28,6 @@
 | [tui-team-duplicate-and-history-no-log](./ISSUE-tui-team-duplicate-and-history-no-log.zh-CN.md) | team 名重复展示；输入历史 Ctrl+C 重开就丢（未持久化） | **两个 bug 均已修复**（team 标记去重 + 历史落盘） |
 | [structured-output-forces-single-line](./ISSUE-structured-output-forces-single-line.zh-CN.md) | `structured_output` agent 的回复永远是单行（无分段） | **已修复**（根因更正：非 response_format，是提示缺"允许换行"；引擎 contract 已加） |
 | [replay-missing-tool-call-failed](./ISSUE-replay-missing-tool-call-failed.zh-CN.md) | 同一 call 第二次执行时 400 `tool calls and tool results do not match`；`replay.go` 漏处理 `tool_call.failed` | **未复现**（对照组均 200，因果未证实） |
-| [debug-log-level-no-observability](./ISSUE-debug-log-level-no-observability.zh-CN.md) | **`--log-level debug` 几乎无效**：全引擎仅 1 处 debug 日志；从不记录请求/响应体，协议类错误无法排查 | **未修复** |
 
 ## 状态含义
 

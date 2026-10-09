@@ -57,12 +57,65 @@ Flow → Team → Call → Agent / Command / Webhook
 | `output` | object | 本次调用发布的 SharedRecord |
 | `responsibility` | string | Agent 职责说明 |
 | `timeout` | string | 超时 |
+| `command.env` | map | （type=command）注入的环境变量，值支持 `${...}` 模板 |
+| `command.args` | []string | （type=command）位置参数，逐项支持 `${...}` 模板（见下节） |
 
 ### 调度规则
 
 - 无依赖的 call → 自动并行
 - 有依赖的 call → 依赖完成后执行
 - 依赖多个 → 读取声明的 SharedRecord 后执行
+
+### 把共享记录传进 command（`${records.*}` 模板）
+
+command call **不能读对话内容**，但可以通过 `command.env` / `command.args` 的模板
+从上游 SharedRecord 取值。这是让"确定性脚本"消费"agent 产出"的唯一通道。
+
+**语法**（`internal/runtime/call/policy.go`）：
+
+| 写法 | 取什么 |
+|---|---|
+| `${records.<Name>}` | 该 record 的 `Summary`（简写） |
+| `${records.<Name>.Summary}` | `Summary` |
+| `${records.<Name>.RecordID}` | `RecordID` |
+| `${records.<Name>.Name}` | `Name` |
+| `${records.<Name>.Data.<field>}` | `Data` 的**顶层**字段 |
+
+固定占位符同样可用：`${flow_session_id}`、`${flow_turn_id}`、`${team_id}`、
+`${team_turn_id}`、`${call_id}`、`${call_turn_id}`、`${attempt}`、`${recovery_of}`。
+
+```yaml
+acquire_slot:
+  type: command
+  command:
+    command: "bash .agents/skills/xxx/scripts/acquire.sh"
+    env:
+      HERON_FLOW_SESSION_ID: "${flow_session_id}"
+      AUTO_REPO: "${records.IssueCandidates.Data.repo}"   # ← 从上游记录取
+  inputs:
+    flow_records: [IssueCandidates]        # ← 必须声明，否则找不到该 record
+  output:
+    record: WorktreeSlot
+```
+
+**四个必须注意的点**：
+
+1. **`inputs.flow_records` 必须包含被引用的 record**，否则报
+   `record "X" not found among call inputs`。
+2. **取不存在的字段会让 call 直接失败**，不是静默传空：
+   `record "X" has no data field "y"`。这是有意设计——传空值比报错更危险。
+3. **只能取 `Data` 的顶层字段**。`${records.X.Data.a.b}` 会报
+   `too deep (expected <Name>.Data.<field>)`。若值埋在数组里（如
+   `data.parsed.candidates[0].repo`），需让上游 agent 额外输出一个顶层字段。
+4. **`Data` 里非字符串值会被字符串化**：`stringifyRecordValue` 处理
+   `string` / `bool` / 数字，其它类型走 `fmt.Sprint`——**嵌套对象会输出 Go 的 map 形式**
+   （`map[k:v]`）而非 JSON，不可直接使用。
+
+> **command 输出的 `Data` 是什么？** 视 executor 而定。以 `acquire.sh` 为例，
+> `WorktreeSlot.Data` 是 `{exit_code, passed, stderr, stdout}`——脚本的 JSON 结果在
+> `stdout` **字符串**里，**没有**展开成 `Data.abs_path` 这样的字段。引用前先确认
+> 该 record 的 `Data` 实际键，可用
+> `jq -r 'select(...).payload.record.data | keys' flow.jsonl` 查。
 
 ---
 
@@ -160,3 +213,54 @@ priority: 10
 ---
 规则正文。
 ```
+
+## 运行时事件字段（排查用）
+
+配置字段是"你写进去的"，运行时字段是"引擎吐出来的"。后者落在
+`.agents/data/sessions/<fs_id>/*.jsonl`，排查时按下列字段读取。
+事件按 run 层级分流：**`flow.jsonl`（flow + team turn 层）、`team.jsonl`（call 层）、
+`agent.jsonl`（agent 内部）**。读取方法见 `session-files.md`；串联用 `trace-ids.md`。
+
+### 每行事件共有字段
+
+| 字段 | 含义 |
+|---|---|
+| `seq` | 全局自增序号，判先后用它，不要用行号 |
+| `type` | 事件类型，如 `flow_turn.started`、`agent_turn.completed` |
+| `flow_session_id` | 所属 Flow 会话，即目录名 `fs_xxx` |
+| `flow_turn_id` / `team_turn_id` | 轮次 ID，跨三层关联用 |
+| `team_id` | **flow 局部名**（如 `default` / `diagnose`），不是 team 定义 id（`xxx_team`） |
+| `call_id` / `call_turn_id` | call 名与其轮次 ID |
+| `call_type` | `agent` / `command` / `webhook` |
+| `attempt` | 第几次尝试（重试/恢复会 +1） |
+| `created_at` | RFC3339 时间戳 |
+| `payload` | 该事件的具体内容，字段见下 |
+
+### 关键 payload 字段
+
+| 位置 | 字段 | 含义 |
+|---|---|---|
+| `flow_turn.started` | `payload.turn.input` | **本轮用户输入原文** |
+| `flow_turn.*` | `payload.turn.status` | `running` / `waiting_input` / `failed` / `cancelled` |
+| `flow_turn.*` | `payload.session.status` | 会话级状态，正常结束为 `waiting_input` |
+| `team_turn.completed` | `payload.team_result.Turn.next.action` | 路由：`proceed` / `activate` / `return` / `coordinate` / `fail` |
+| `team_turn.completed` | `payload.team_result.Turn.status` | team turn 状态 |
+| `team_turn.completed` | `payload.team_result.Reply` | 该 team 的最终文本 |
+| `team_turn.completed` | `payload.team_result.Records[]` | 该 team 发布的 record |
+| `team_turn.completed` | `payload.team_result.CallResults[]` | 各 call 的结果 |
+| `agent_turn.completed` | `payload.call_result.Status` | call 状态（非 `completed` 即要看 `Error`） |
+| `agent_turn.completed` | `payload.call_result.Requests[]` | **消耗事实源**，每个元素 = 一轮模型调用 |
+| `agent_turn.completed` | `payload.call_result.Requests[].usage` | `prompt_tokens` / `completion_tokens` |
+| `agent.model_response` | `payload.text` | **模型本轮回复原文**（不是 `content`） |
+| `agent.model_response` | `payload.round` / `tool_calls` / `finish_reason` | 第几轮 / 工具调用 / 停止原因 |
+| `tool_call.started` / `.completed` / `.failed` | `payload.tool_name` / `arguments` / `round`；`completed` 另有 `content`（结果）、`matches` 等 | 工具调用详情 |
+| `agent.feedback` | `payload.content`（+ 结构化重试时的 `payload.raw_text`） | 引擎追加的内部提示（如结构化重试）；`raw_text` 为被丢弃的模型原文 |
+| `shared_record.published` | `payload.record` | 发布的 record 全文 |
+| `evidence.jsonl` 每行 | `summary` / `basis[]` | 成品文本 / 依据的文件与行号 |
+
+> **大小写**：`payload.team_result` 下，叶子类型用小写（`Turn.next`、
+> `Turn.record_ids`、`Turn.team_id`），容器结构体用 Go 字段名大写（`Next`、
+> `Records`、`CallResults`、`Requests`、`Usage`）。这是已发布契约，不是笔误。
+>
+> **轮次**：一次模型/工具循环 = `Requests[]` 里一个元素；`agent.model_response`
+> 的 `round` 与之对应。
