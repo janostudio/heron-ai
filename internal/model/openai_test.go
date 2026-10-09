@@ -135,3 +135,25 @@ func TestConvertOpenAIResponse_ToolCallInvalidJSON(t *testing.T) {
 	require.Len(t, out.ToolCalls, 1)
 	assert.Equal(t, map[string]any{"_raw": "garbage"}, out.ToolCalls[0].Arguments)
 }
+
+// diffIDs/description helpers back the rejection log: they must surface a
+// tool_call with no result and a result with no call.
+func TestDiffIDs(t *testing.T) {
+	assert.Equal(t, []string{"b"}, diffIDs([]string{"a", "b", "c"}, []string{"a", "c"}))
+	assert.Empty(t, diffIDs([]string{"a"}, []string{"a"}))
+	assert.Empty(t, diffIDs([]string{""}, nil), "blank ids are ignored")
+}
+
+func TestLogRejectedRequestDoesNotPanic(t *testing.T) {
+	// The logger is a no-op unless wired, but the summarizer must still run
+	// over a mixed message list without panicking.
+	req := openAIRequest{Messages: []openAIMessage{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", ToolCalls: []openAIToolCall{{ID: "tc-1", Function: openAIFunctionCall{Name: "Bash"}}}},
+		{Role: "tool", ToolCallID: "tc-1"},
+		{Role: "tool", ToolCallID: ""}, // orphaned / missing id
+	}}
+	require.NotPanics(t, func() {
+		logRejectedRequest("rejected", 400, req, []byte(`{"error":{"message":"x"}}`))
+	})
+}

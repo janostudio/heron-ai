@@ -340,3 +340,50 @@ func TestToolCallEventExposesMetadataEndToEnd(t *testing.T) {
 	assert.Equal(t, "ls output", completed.Payload["stdout"])
 	assert.Equal(t, "ls output", completed.Payload["content"])
 }
+
+// A failed tool call must be restored as a tool message, so an assistant
+// tool_call is never left without a matching result — the shape a strict
+// provider rejects with "tool calls and tool results do not match"
+// (ISSUE-replay-missing-tool-call-failed).
+func TestReplayAgentContextRestoresFailedToolCall(t *testing.T) {
+	w := &fakeSessionWriter{}
+	loop := newReplayTurnLoop(w)
+
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1"},
+		Payload: map[string]any{"text": "", "tool_calls": []map[string]any{
+			{"id": "tc-1", "name": "Bash", "arguments": map[string]any{"command": "exit 1"}},
+		}},
+	})
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventToolCallFailed, CallID: "call-1"},
+		Payload:     map[string]any{"tool_name": "Bash", "tool_call_id": "tc-1", "error": "command exited with code 1"},
+	})
+
+	initial := []types.Message{{Role: "user", Content: "hi"}}
+	got := loop.replayAgentContext(context.Background(), reqFor("call-1"), initial)
+
+	require.Len(t, got, 3)
+	assert.Equal(t, "assistant", got[1].Role)
+	require.Len(t, got[1].ToolCalls, 1)
+	assert.Equal(t, "tc-1", got[1].ToolCalls[0].ID)
+	assert.Equal(t, "tool", got[2].Role)
+	assert.Equal(t, "tc-1", got[2].ToolCallID, "the tool result must answer the call by id")
+	assert.Equal(t, "command exited with code 1", got[2].Content, "error falls back to content")
+}
+
+// A completed tool call restores its tool_call_id too.
+func TestReplayAgentContextRestoresCompletedToolCallID(t *testing.T) {
+	w := &fakeSessionWriter{}
+	loop := newReplayTurnLoop(w)
+
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventToolCallCompleted, CallID: "call-1"},
+		Payload:     map[string]any{"tool_call_id": "tc-9", "content": "ok"},
+	})
+
+	got := loop.replayAgentContext(context.Background(), reqFor("call-1"), nil)
+	require.Len(t, got, 1)
+	assert.Equal(t, "ok", got[0].Content)
+	assert.Equal(t, "tc-9", got[0].ToolCallID)
+}

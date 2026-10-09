@@ -36,7 +36,12 @@ func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentReques
 		switch event.Type {
 		case types.EventAgentModelResponse:
 			current = append(current, modelResponseMessage(event.Payload))
-		case types.EventToolCallCompleted:
+		case types.EventToolCallCompleted, types.EventToolCallFailed:
+			// A failed tool call also produced a tool-role message in the live
+			// context, so replay must restore it too: skipping it left an
+			// assistant tool_call with no matching tool result, which a strict
+			// provider rejects with "tool calls and tool results do not match"
+			// (ISSUE-replay-missing-tool-call-failed).
 			current = append(current, toolResultMessage(event.Payload))
 		case types.EventAgentFeedback:
 			// A feedback event may carry the model's raw output (raw_text) when
@@ -124,14 +129,22 @@ func modelResponseMessage(payload map[string]any) types.Message {
 	return msg
 }
 
-// toolResultMessage reconstructs the tool message from a tool_call.completed
-// event payload.
+// toolResultMessage reconstructs the tool message from a tool_call.completed /
+// tool_call.failed event payload.
+//
+// A failed call's payload carries `error` where a completed one carries
+// `content`; fall back to the error so the tool message is not empty. The
+// tool_call_id is restored when the event recorded it (older events predate the
+// field), so the assistant tool_call and its result pair up by id.
 func toolResultMessage(payload map[string]any) types.Message {
+	content := payloadString(payload, "content")
+	if strings.TrimSpace(content) == "" {
+		content = payloadString(payload, "error")
+	}
 	return types.Message{
-		Role:    "tool",
-		Content: payloadString(payload, "content"),
-		// ToolCallID is not currently recorded in the event; the role/content
-		// pairing is sufficient to rebuild a usable context.
+		Role:       "tool",
+		Content:    content,
+		ToolCallID: payloadString(payload, "tool_call_id"),
 	}
 }
 

@@ -1,10 +1,50 @@
 # 缺陷：replay 漏掉 tool_call.failed，重复激活同一 call 时 400
 
-> 状态：**未复现，待补证据**（2026-10-09）
+> 状态：**已修复已确认部分 + 已加定位日志**（2026-10-09）——根因仍待日志实证
 > 已确认的事实：400 报错真实发生；`replay.go` 确实漏处理 `tool_call.failed`
 > **未确认**：二者是否因果相关。手工构造的对照实验**未能复现**该 400（见文末）。
 > 故本文只记录事实与线索，**不宣称根因已定位**。
 > 关联：`internal/agent/replay.go:39`、`internal/agent/runtime.go:1460-1535`
+
+## 处理记录（2026-10-09）
+
+按用户指示"**无法定位就加日志**"，做了两件事：
+
+### 1. 增加定位日志（核心，直击本文唯一突破口）
+
+`internal/model/openai.go` 失败路径（`post` 与 `postStream` 的非 2xx 分支）新增
+`logRejectedRequest`（Warn 级，写标准日志）：记录**请求的 tool 配对结构**——
+逐消息角色序列、每个 assistant 发出的 `tool_call` id、每个 `tool` 结果回的
+`tool_call_id`，并**直接算出 `unanswered_calls` / `orphaned_results` /
+`tool_pairing_ok`**。不含用户内容。示例：
+
+```json
+{"level":"warn","msg":"model request rejected","status":400,"model":"m1",
+ "message_count":3,
+ "roles":"user → assistant(tool_calls=2:tc-1,tc-2) → tool(tc-1)",
+ "tool_call_ids":"tc-1,tc-2","tool_result_ids":"tc-1",
+ "unanswered_calls":"tc-2","orphaned_results":"","tool_pairing_ok":false,
+ "response_body":"...tool calls and tool results do not match"}
+```
+
+有了它，下次 400 一发生就能知道**是哪个 tool_call 没配上结果**（或反之），
+不必再靠事后 jsonl 猜。
+
+### 2. 修复已确认的缺陷：replay 漏 `tool_call.failed` + 缺 `tool_call_id`
+
+- `internal/agent/replay.go`：`EventToolCallFailed` 现与 `Completed` 同样重建
+  tool 消息（原来直接跳过 → assistant 的 tool_call 落单，正是"数量不匹配"的形态）；
+  `toolResultMessage` 在 `content` 为空时回退到 `error`，并回填 `tool_call_id`。
+- `internal/agent/runtime.go`：completed / failed 两类 tool 事件的 payload 都补
+  `tool_call_id`（原来不记，replay 无从还原，注释还写着"role/content 配对足够"——
+  对严格网关不成立）。
+
+**注意**：这是"把已确认的协议缺陷修掉"，**不等于**宣称它就是本次 400 的根因——
+需等新日志在真实复现时给出证据。
+
+测试：`replay_test.go` 的 `TestReplayAgentContextRestoresFailedToolCall` /
+`...CompletedToolCallID`；`openai_test.go` 的 `TestDiffIDs` /
+`TestLogRejectedRequestDoesNotPanic`。
 
 ## 现象
 
@@ -102,19 +142,28 @@ t.emitAgentEvent(ctx, req, round, types.EventToolCallFailed, map[string]any{
 > `AddMessage`，`toolResultContent` 会回退到 `result.Error`）。
 > 问题只在 **replay 重建路径**。
 
-## 影响面（推测，未证实）
+## 影响面（故障已实测，触发原因未证实）
 
-**若**该漏处理确实是 400 的原因，则影响：任何"同一 call 被 ≥2 次执行
-且首次有工具失败"的场景都会失败。但这只是推测——对照实验未复现，见文末。
+**故障侧**（已确认）：`intake/search` 在**第 2、3、4、5 次激活时全部 400**，
+已稳定复现 4 次：
+
+| 次序 | team_turn_id | 结果 |
+|---|---|---|
+| 1 | `tt_9f079adb2daed9fa` | 成功（但槽位错、BranchSetup=skipped） |
+| 2 | `tt_0ef164c1c0edad27` | ❌ 400 |
+| 3 | `tt_f49b2e008c551d59` | ❌ 400 |
+| 4 | `tt_5949c5ab0bf75b10` | ❌ 400（debug 模式下同样失败） |
+
+**触发原因侧**（未证实）：是否因 replay 漏 `failed` 事件所致，尚未确认——
+手工构造的 8 种不匹配形态均返回 200（见文末）。
 
 ## 四个待查方向
 
 由于未能复现，以下都只是线索，需逐个排除：
 
 1. **replay 漏 `tool_call.failed`**（本文首要嫌疑）
-2. **`context.compacted` 折叠点**：replay 遇到 compacted 事件会用 summary 替换累积消息
-   （`replay.go:51`）。若折叠恰好切在 tool_calls 与 tool 结果之间，会产生孤立 tool_call。
-   本次会话启用了 context 压缩（`compaction_threshold`），**这条嫌疑同样大**。
+2. ~~**`context.compacted` 折叠点**~~ → **已排除**：实测本会话**从未压缩**
+   （`jq 'select(.type=="context.compacted")' agent.jsonl` 无结果）。
 3. **failed 事件 payload 缺 `content` / `tool_call_id`**：`replay.go:127-135` 取 `content`，
    而 failed 事件只有 `round`/`tool_name`/`error`。若 replay 补了 failed 但 content 为空，
    可能产生"空 tool 消息"这一异常形态。
@@ -123,10 +172,26 @@ t.emitAgentEvent(ctx, req, round, types.EventToolCallFailed, map[string]any{
 
 ## 需要的证据（复现所必需）
 
-- **引擎实际发出的请求体**。当前日志只记错误，不记 request body。
-  建议在 `internal/model/openai.go` 的 `post` 失败路径把 request body（脱敏后）
-  落到 debug 日志——这是定位此类问题的关键缺口。
-- 或：`--log-level debug` 重跑同一步骤，看是否已有更详细输出。
+**已试过 debug 模式，无用**。把 `.agents/settings.json` 的 `logging.level` 改为
+`debug` 后复现，新增日志**只有 token 用量**（5 条 debug 记录全是 `coordinator` 的
+`model request usage`），**`search` 一条都没有**——因为它请求直接失败，
+而失败路径不记录请求体。
+
+`internal/model/openai.go:400-411`（`postStream` 失败分支）：
+
+```go
+if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+	body, readErr := io.ReadAll(resp.Body)
+	...
+	pe := types.ClassifyProviderError(resp.StatusCode, apiErr.Error.Type, body)
+	pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
+	return nil, pe            // ← 只返回错误，不记录 req（data 变量里就有）
+}
+```
+
+请求体就在 `data` 变量里（`:368` 由 `json.Marshal(req)` 得到），**但失败时没落日志**。
+
+**这是定位本问题的唯一突破口**：需要补一段请求摘要日志。
 
 ## 修复方向
 

@@ -350,8 +350,10 @@ func (p *OpenAIProvider) post(ctx context.Context, effective types.ModelConfig, 
 		if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
 			pe := types.ClassifyProviderError(resp.StatusCode, apiErr.Error.Type, body)
 			pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
+			logRejectedRequest("model request rejected", resp.StatusCode, req, body)
 			return pe
 		}
+		logRejectedRequest("model request rejected", resp.StatusCode, req, body)
 		return types.ClassifyProviderError(resp.StatusCode, "", body)
 	}
 	if err := json.Unmarshal(body, output); err != nil {
@@ -406,8 +408,10 @@ func (p *OpenAIProvider) postStream(ctx context.Context, effective types.ModelCo
 		if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
 			pe := types.ClassifyProviderError(resp.StatusCode, apiErr.Error.Type, body)
 			pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
+			logRejectedRequest("model request rejected", resp.StatusCode, req, body)
 			return nil, pe
 		}
+		logRejectedRequest("model request rejected", resp.StatusCode, req, body)
 		return nil, types.ClassifyProviderError(resp.StatusCode, "", body)
 	}
 
@@ -683,6 +687,87 @@ func convertOpenAIResponse(resp openAIResponse) *types.ChatResponse {
 		})
 	}
 	return result
+}
+
+// logRejectedRequest records the shape of a request the provider rejected with
+// a non-2xx status. The failure path historically logged only the error, which
+// made a whole class of protocol errors undiagnosable — e.g. the 400 "tool
+// calls and tool results do not match" in ISSUE-replay-missing-tool-call-failed,
+// where the only way to see the cause is to inspect what was actually sent.
+//
+// It logs a *structural* summary, not user content: the per-message role
+// sequence, the tool_call ids each assistant emitted, and the tool_call_id each
+// tool result answered. That pinpoints a call with no result, a result with no
+// call, a duplicate id, or a misordering — all of which make a strict provider
+// reject the request. Content is deliberately excluded.
+func logRejectedRequest(msg string, status int, req openAIRequest, respBody []byte) {
+	descriptions := make([]string, 0, len(req.Messages))
+	var callIDs, answeredIDs []string
+	for _, m := range req.Messages {
+		switch {
+		case len(m.ToolCalls) > 0:
+			ids := make([]string, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				ids = append(ids, tc.ID)
+			}
+			callIDs = append(callIDs, ids...)
+			descriptions = append(descriptions, fmt.Sprintf("assistant(tool_calls=%d:%s)", len(m.ToolCalls), strings.Join(ids, ",")))
+		case m.Role == "tool":
+			answeredIDs = append(answeredIDs, m.ToolCallID)
+			descriptions = append(descriptions, fmt.Sprintf("tool(%s)", orNone(m.ToolCallID)))
+		default:
+			descriptions = append(descriptions, m.Role)
+		}
+	}
+	unanswered := diffIDs(callIDs, answeredIDs) // calls with no matching result
+	orphaned := diffIDs(answeredIDs, callIDs)   // results with no matching call
+	logging.Warn(msg, map[string]any{
+		"status":           status,
+		"model":            req.Model,
+		"message_count":    len(req.Messages),
+		"roles":            strings.Join(descriptions, " → "),
+		"tool_call_ids":    strings.Join(callIDs, ","),
+		"tool_result_ids":  strings.Join(answeredIDs, ","),
+		"unanswered_calls": strings.Join(unanswered, ","),
+		"orphaned_results": strings.Join(orphaned, ","),
+		"tool_pairing_ok":  len(unanswered) == 0 && len(orphaned) == 0,
+		"response_body":    truncateForLog(string(respBody), 500),
+	})
+}
+
+func orNone(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "<none>"
+	}
+	return s
+}
+
+// diffIDs returns the entries of want absent from have, preserving order and
+// ignoring blanks — the "missing pairing" set for the log.
+func diffIDs(want, have []string) []string {
+	haveSet := make(map[string]struct{}, len(have))
+	for _, id := range have {
+		haveSet[id] = struct{}{}
+	}
+	var missing []string
+	for _, id := range want {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		if _, ok := haveSet[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	return missing
+}
+
+// truncateForLog bounds a string for a log field.
+func truncateForLog(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func responseFormat(schema *types.StructuredOutput) map[string]any {

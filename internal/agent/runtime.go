@@ -1464,6 +1464,7 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 				fields := toolResultEventFields(result)
 				fields["round"] = round
 				fields["tool_name"] = parallelCalls[i].Name
+				fields["tool_call_id"] = parallelCalls[i].ID
 				t.emitAgentEvent(ctx, req, round, types.EventToolCallCompleted, fields)
 			} else {
 				errMsg := "tool returned nil result"
@@ -1471,9 +1472,10 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 					errMsg = result.Error
 				}
 				t.emitAgentEvent(ctx, req, round, types.EventToolCallFailed, map[string]any{
-					"round":     round,
-					"tool_name": parallelCalls[i].Name,
-					"error":     errMsg,
+					"round":        round,
+					"tool_name":    parallelCalls[i].Name,
+					"tool_call_id": parallelCalls[i].ID,
+					"error":        errMsg,
 				})
 			}
 		}
@@ -1519,12 +1521,14 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 			fields := toolResultEventFields(result)
 			fields["round"] = round
 			fields["tool_name"] = call.Name
+			fields["tool_call_id"] = call.ID
 			t.emitAgentEvent(ctx, req, round, types.EventToolCallCompleted, fields)
 		} else {
 			t.emitAgentEvent(ctx, req, round, types.EventToolCallFailed, map[string]any{
-				"round":     round,
-				"tool_name": call.Name,
-				"error":     result.Error,
+				"round":        round,
+				"tool_name":    call.Name,
+				"tool_call_id": call.ID,
+				"error":        result.Error,
 			})
 		}
 		results[i] = result
