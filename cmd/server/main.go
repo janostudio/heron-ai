@@ -165,8 +165,23 @@ func startServer(flowPath, port string, o cliOverrides) {
 	fmt.Printf("Heron AI FlowRuntime server listening on :%s\n", port)
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-		os.Exit(1)
+		shutdownAndExit(bundle, 1)
 	}
+}
+
+// shutdownAndExit closes the runtime before exiting.
+//
+// os.Exit skips deferred cleanup, and an MCP server started with
+// transport=stdio is a child process: without this close it outlives heron and
+// keeps running with no owner. Every exit path that owns a bundle goes through
+// here rather than calling os.Exit directly.
+func shutdownAndExit(bundle *app.RuntimeBundle, code int) {
+	if bundle != nil {
+		if err := bundle.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: error shutting down runtime: %v\n", err)
+		}
+	}
+	os.Exit(code)
 }
 
 func runPrompt(flowPath, sessionID, prompt string, o cliOverrides) {
@@ -180,12 +195,17 @@ func runPrompt(flowPath, sessionID, prompt string, o cliOverrides) {
 	result, err := executeFlowTurn(ctx, bundle.Flow, bundle.Definitions.Flow.ID, sessionID, prompt)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running FlowTurn: %v\n", err)
-		os.Exit(1)
+		shutdownAndExit(bundle, 1)
 	}
 
 	if err := writePromptResult(os.Stdout, bundle.Definitions.Flow.ID, modelName, result); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing result: %v\n", err)
-		os.Exit(1)
+		shutdownAndExit(bundle, 1)
+	}
+	// The successful path exits normally, so this close is what a `--prompt`
+	// run needs: one turn, then the MCP child processes are reaped.
+	if err := bundle.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: error shutting down runtime: %v\n", err)
 	}
 }
 
@@ -798,7 +818,10 @@ func runTUI(flowPath string, o cliOverrides) {
 	)
 	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
-		os.Exit(1)
+		shutdownAndExit(bundle, 1)
+	}
+	if err := bundle.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: error shutting down runtime: %v\n", err)
 	}
 }
 

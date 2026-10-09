@@ -41,6 +41,11 @@ type TurnLoop struct {
 	// TurnLoop without it grants Bash as before, which keeps every test that
 	// builds a loop for an unrelated concern compiling and behaving.
 	files storage.FileStore
+	// mcpTools supplies schemas for the tools the MCP adapter discovered at
+	// startup. Optional: without it an Agent's tools.mcp list yields no schema,
+	// which is the behaviour the engine has always had, so every test that
+	// builds a loop for an unrelated concern stays unaffected.
+	mcpTools MCPToolProvider
 }
 
 // ModelContextSizer is an optional provider capability. The Agent package
@@ -63,6 +68,20 @@ type ApprovalAwareToolExecutor interface {
 // PromptRenderer renders one Agent prompt.
 type PromptRenderer interface {
 	Render(agent types.AgentConfig, req types.AgentRequest, rctx RenderContext) ([]types.Message, error)
+}
+
+// MCPToolProvider supplies the schemas of tools discovered at runtime from MCP
+// servers.
+//
+// The agent package names the behaviour rather than importing the mcp package:
+// it needs the schemas, not the connections, and keeping the dependency
+// one-directional means the TurnLoop can be built (and tested) with a stub
+// provider and no MCP server anywhere in the process.
+//
+// Names may be tool names or server names; a server name expands to every tool
+// that server exposes.
+type MCPToolProvider interface {
+	ToolSchemas(names []string) []types.JSONSchema
 }
 
 // RenderContext holds the collaboration context visible to an Agent.
@@ -118,6 +137,15 @@ func (t *TurnLoop) SetTaskRunner(runner *AsyncToolExecutor) {
 // and keep their previous Bash behaviour.
 func (t *TurnLoop) SetFileStore(files storage.FileStore) {
 	t.files = files
+}
+
+// SetMCPTools wires the provider of MCP tool schemas.
+//
+// The same shape as SetFileStore and for the same reason: only internal/app has
+// the live MCP connections, and the ~30 test-built loops have no use for one.
+// A loop without it advertises no MCP tools, which is what it did before.
+func (t *TurnLoop) SetMCPTools(provider MCPToolProvider) {
+	t.mcpTools = provider
 }
 
 func (t *TurnLoop) SetToolPolicy(policy ToolPolicy) {
@@ -2106,6 +2134,37 @@ func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.Agent
 			continue
 		}
 		if schema, ok := builtinSchemas[toolName]; ok {
+			schemas = append(schemas, schema)
+		}
+	}
+	// MCP tools are the second half of the same visibility contract as
+	// builtinSchemas, and the reason it is stated again here: registering a
+	// server and forgetting this loop has no symptom at all. The server
+	// connects, tools/list succeeds, the executor can dispatch the tool — and
+	// the model is never told the tool exists, so it never calls it. Every
+	// test that exercises the adapter directly still passes, because the
+	// adapter is genuinely wired; only the model's view is missing.
+	//
+	// Only names the agent declares are advertised, which is what tools.mcp
+	// means: an agent that does not list a server's tools does not get them,
+	// exactly as with builtin. Withheld names are dropped for the same reason
+	// they are dropped above — a tool the policy layer will refuse has no
+	// place in the schema.
+	if t.mcpTools != nil && len(agent.Tools.MCP) > 0 {
+		for _, schema := range t.mcpTools.ToolSchemas(agent.Tools.MCP) {
+			if schema.Name == "" {
+				continue
+			}
+			if _, dup := seen[schema.Name]; dup {
+				// A builtin already claimed the name; the builtin wins because
+				// its Parameters() is the schema the executor validates
+				// against.
+				continue
+			}
+			if _, hidden := withheld[schema.Name]; hidden {
+				continue
+			}
+			seen[schema.Name] = struct{}{}
 			schemas = append(schemas, schema)
 		}
 	}

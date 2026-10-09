@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 
 	"github.com/heron-ai/heron-engine/internal/storage"
@@ -64,6 +65,28 @@ func (l *ConfigLoader) LoadKnowledgeSettings() types.KnowledgeConfig {
 		cfg = raw.Knowledge
 	}
 	return cfg
+}
+
+// LoadMCPServers 读取 .agents/settings.json 的 mcp 段。
+//
+// 与 runtime / logging / knowledge 三个段不同，这里返回 error：前三者是"缺了
+// 就用默认值"，缺了 MCP 配置本身就是默认值（空列表），而 mcp 段**存在但
+// JSON 不合法**说明配置文件被写坏了——那和"没配 MCP"是两回事，静默当成
+// 没配会让用户以为工具不可用是别的原因。
+// 文件不存在（err != nil）不算错误：没有 .agents/settings.json 是合法状态。
+func (l *ConfigLoader) LoadMCPServers() ([]types.MCPServerConfig, error) {
+	path := filepath.Join(".agents", "settings.json")
+	data, err := l.fileStore.Read(path)
+	if err != nil {
+		return nil, nil
+	}
+	var raw struct {
+		MCP []types.MCPServerConfig `json:"mcp"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return raw.MCP, nil
 }
 
 func NewConfigLoader(baseDir string) *ConfigLoader {

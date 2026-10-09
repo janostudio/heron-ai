@@ -15,6 +15,7 @@ import (
 	definitionwriter "github.com/heron-ai/heron-engine/internal/definitions"
 	"github.com/heron-ai/heron-engine/internal/knowledge"
 	"github.com/heron-ai/heron-engine/internal/logging"
+	"github.com/heron-ai/heron-engine/internal/mcp"
 	"github.com/heron-ai/heron-engine/internal/media"
 	"github.com/heron-ai/heron-engine/internal/prompt"
 	"github.com/heron-ai/heron-engine/internal/runtime/call"
@@ -49,6 +50,11 @@ type RuntimeBundle struct {
 	// It is built here rather than by the caller so the loader and the store
 	// cannot disagree about which config root they describe.
 	ReloadDefinitions types.DefinitionsReloadFunc
+
+	// MCP holds the live MCP connections. It is exposed so the caller can
+	// Close them: a stdio MCP server is a child process, and only the caller
+	// knows when the process is about to exit.
+	MCP *mcp.MCPAdapter
 }
 
 func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider types.ModelProvider, workspaceRoot string, logLevelOverride string) (*RuntimeBundle, error) {
@@ -255,6 +261,40 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	toolRegistry.Register(agent.NewCollectTool(taskRunner))
 	turnLoop.SetCheckpointStore(checkpointStore)
 	turnLoop.SetTaskRunner(taskRunner)
+	// MCP (design 04E): servers are declared in .agents/settings.json under
+	// "mcp" and connected once at startup. Three separate wirings are needed
+	// before a model can actually call one, and missing any of them is
+	// silent — the server connects, discovery succeeds, and the tool simply
+	// never appears:
+	//
+	//   1. toolExecutor.SetMCPDispatcher — makes the name EXECUTABLE.
+	//   2. turnLoop.SetMCPTools          — makes it VISIBLE in the schema.
+	//   3. the agent's own tools.mcp     — declares it USES the tool.
+	//
+	// A server that fails to connect is reported and skipped rather than
+	// aborting startup: a broken MCP server should not make the engine
+	// unusable, but it must not be silent either, so every failure is logged
+	// with the server name and the reason.
+	mcpAdapter := mcp.NewMCPAdapter(mcp.Options{})
+	mcpConfigs, mcpConfigErr := config.NewConfigLoader(workspaceRoot).LoadMCPServers()
+	switch {
+	case mcpConfigErr != nil:
+		logging.Warn("mcp: config is unreadable, no MCP tools will be available",
+			map[string]any{"error": mcpConfigErr.Error()})
+	case len(mcpConfigs) > 0:
+		if err := mcpAdapter.ConnectConfigs(ctx, mcpConfigs); err != nil {
+			logging.Warn("mcp: some servers failed to connect", map[string]any{"error": err.Error()})
+		}
+		for _, issue := range mcpAdapter.Issues() {
+			logging.Warn("mcp: "+issue, nil)
+		}
+		logging.Info("mcp: connected", map[string]any{
+			"servers": strings.Join(mcpAdapter.ListServers(), ","),
+			"tools":   len(mcpAdapter.Tools()),
+		})
+	}
+	toolExecutor.SetMCPDispatcher(mcpAdapter)
+	turnLoop.SetMCPTools(mcpAdapter)
 	if err := taskRunner.Recover(ctx); err != nil {
 		return nil, err
 	}
@@ -309,7 +349,19 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 		TaskControl:       taskRunner,
 		DefinitionStore:   store,
 		ReloadDefinitions: reloadDefinitions(store),
+		MCP:               mcpAdapter,
 	}, nil
+}
+
+// Close releases everything the bundle owns that outlives a turn. Today that
+// is only the MCP servers, and it matters: a stdio MCP server is a child
+// process, and a heron run that exits without closing them leaves the servers
+// (and whatever they forked) running.
+func (b *RuntimeBundle) Close() error {
+	if b == nil || b.MCP == nil {
+		return nil
+	}
+	return b.MCP.Close()
 }
 
 // Poll parameters for the Tool wake-up below. The first poll is immediate, so
