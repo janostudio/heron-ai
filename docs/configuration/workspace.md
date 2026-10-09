@@ -4,7 +4,7 @@ Workspace 决定 agent 操作"项目文件/命令"的执行后端。默认本地
 
 核心边界（见 `docs/generic-engine/28-remote-workspace.md`）：
 
-- **仅"执行"远程化**：Read/Write/Bash/Grep/Glob 等 workspace 工具操作远程；引擎自身状态（session.jsonl、knowledge、state、logging）始终在本地。
+- **仅"执行"远程化**：Read/Write/Bash/Grep/Glob 等 workspace 工具操作远程；引擎自身状态（`.agents/data/sessions/<id>/{flow,team,agent}.jsonl`、evidence、knowledge、state、logging）始终在本地。
 - **工具分两类**：workspace 工具（操作项目，可远程）vs 引擎工具（Todo/State/Spawn/Ask/Web，操作 agent 自身，始终本地）。
 
 ## 三级继承

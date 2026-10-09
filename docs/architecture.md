@@ -39,7 +39,7 @@ heron-ai/
 │   ├── state/           # Short-term session state snapshots
 │   ├── logging/         # Rotating execution log（事实源之一：轮转 JSONL）
 │   ├── view/            # TUI (bubbletea), HTTP handler, SSE
-│   ├── eval/            # Evaluation engine
+│   ├── eval/            # Evaluation helpers (skeleton, NOT wired into runtime)
 │   ├── mcp/             # MCP adapter
 │   └── extension/       # Extension registry
 ```
@@ -66,7 +66,10 @@ may only choose orchestration actions (`proceed` / `return` / `coordinate` /
 Each agent can be configured with:
 
 - **Persona**: Role, goal, backstory
-- **Tools**: Read, Write, Grep, Glob, TodoWrite, TodoRead
+- **Tools**: Builtin tool schemas are declared in `internal/agent/runtime.go`
+  (`builtinSchemas`) — Read, Write, Bash, WebSearch, WebFetch, CodeNav,
+  AskUserQuestion, Grep, Glob, TodoWrite, TodoRead, Spawn, Collect, State,
+  Define. An agent only gets the subset listed in its `tools.builtin`.
 - **Skills**: Packaged tool + prompt combinations
 - **Knowledge**: Searchable knowledge base
 - **Rules**: Soft/hard constraints

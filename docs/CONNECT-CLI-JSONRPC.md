@@ -22,7 +22,7 @@ stdin/stdout + JSON-RPC 2.0 + 一行一个 JSON 对象
 本方案的目标是：
 
 - 复用当前 `FlowRuntime`；
-- 复用当前 `.agents/data/sessions/<session_id>/session.jsonl`；
+- 复用当前 `.agents/data/sessions/<session_id>/{flow,team,agent}.jsonl`；
 - 复用当前 Flow / Team / Agent / Command / Webhook 编排；
 - 让 `heron-connect` 通过 CLI 子进程接入 Heron；
 - 保留当前 `--prompt` 的人工使用方式；
@@ -67,7 +67,7 @@ JSON-RPC 2.0 over JSONL/NDJSON stdin/stdout
 - JSONL/NDJSON 不是 Heron 自创的格式；
 - JSON-RPC 2.0 不是 Heron 自创的协议；
 - Heron 只定义 JSON-RPC 的业务方法和 `turn` 的参数/结果；
-- `session.jsonl` 和 `evidence.jsonl` 是 Heron 内部存储 Schema，不是 JSON-RPC 消息。
+- `flow.jsonl` / `team.jsonl` / `agent.jsonl` / `evidence.jsonl` 是 Heron 内部存储 Schema，不是 JSON-RPC 消息。
 
 同样使用 JSONL，不代表 Schema 相同。
 
@@ -93,7 +93,7 @@ Heron 与 heron-connect：
 JSON-RPC 2.0 over JSONL
 
 Heron 内部：
-SessionEvent over session.jsonl
+SessionEvent over {flow,team,agent}.jsonl
 ```
 
 这样做的原因是通信需要稳定的请求 ID、响应匹配和标准错误结构；内部存储需要完整的执行事件、顺序号和恢复信息。两者职责不同，因此使用两套 Schema。
@@ -497,7 +497,7 @@ bundle.Flow.ResumeApprovalWithResponse(ctx, sessionID, types.HITLResponse{
 |---|---|---|
 | `session_id` | string | FlowSession ID |
 | `flow_turn_id` | string | 本次 FlowTurn ID |
-| `status` | string | `waiting_input`、`waiting_approval`、`failed`、`cancelled` 等；`completed` 仅存在于旧数据回放 |
+| `status` | string | 完整枚举（`pkg/types/session.go`）：`created`、`running`、`waiting_input`、`waiting_tool`、`waiting_approval`、`interrupted`、`completed`、`failed`、`cancelled`。各状态下 `turn` 的行为见 §6.2 表格；`completed` 仅存在于旧数据回放 |
 | `reply` | string | 用户可见的最终回复 |
 | `records` | array | 可选的记录摘要 |
 | `error` | string | 可选的业务错误信息 |
@@ -545,7 +545,9 @@ heron-connect session
 完整内容继续保存在 Heron 的：
 
 ```text
-.agents/data/sessions/<session_id>/session.jsonl
+.agents/data/sessions/<session_id>/flow.jsonl
+.agents/data/sessions/<session_id>/team.jsonl
+.agents/data/sessions/<session_id>/agent.jsonl
 .agents/data/sessions/<session_id>/evidence.jsonl
 ```
 
@@ -592,11 +594,16 @@ approve(session_id, approval_id, approved, reason?) -> turn result
     "data": {
       "session_id": "fs_123456",
       "flow_turn_id": "ft_123456",
-      "retryable": false
+      "status": "failed"
     }
   }
 }
 ```
+
+`data` 由 `turnErrorData`（`cmd/server/jsonrpc.go`）填充，只可能含四个字段：
+`session_id`、`flow_turn_id`、`status`、`approval_id`，且每个字段仅在有值时出现。
+**`retryable` 当前不返回**，不要依赖它；是否可重试请从 `code` 和 `status` 判断
+（例如 `-32002` + `waiting_approval` 表示应先处理审批再重试）。
 
 建议错误码：
 
@@ -680,7 +687,7 @@ Heron 完成配置加载后进入 stdin 读取循环。
 原因：
 
 - 当前一个 FlowSession 同一时间不应执行多个 FlowTurn；
-- 避免两个请求同时修改同一个 `session.jsonl`；
+- 避免两个请求同时修改同一个会话的 `flow.jsonl` / `team.jsonl` / `agent.jsonl`；
 - 与 `heron-connect` 当前按 session 顺序处理消息的语义一致；
 - 实现简单。
 
@@ -887,8 +894,8 @@ waiting_input
 stdin/stdout JSON-RPC
     = 进程间实时通信
 
-session.jsonl
-    = 会话恢复和完整执行记录
+flow.jsonl / team.jsonl / agent.jsonl
+    = 分层事件流，会话恢复和完整执行记录
 
 evidence.jsonl
     = 跨 Team/Agent 查询的精简证据
@@ -897,14 +904,14 @@ state
     = Team/Agent 短期状态
 ```
 
-JSON-RPC 响应只返回当前 FlowTurn 的结果，不返回完整 `session.jsonl`。
+JSON-RPC 响应只返回当前 FlowTurn 的结果，不返回完整的分层事件流。
 
 恢复时：
 
 ```text
 heron-connect 保存 session_id
   → 如果 Session 仍可继续，下次发送 turn 时带回 session_id
-  → Heron 从 session.jsonl 恢复 FlowSession
+  → Heron 从 flow.jsonl / team.jsonl / agent.jsonl 恢复 FlowSession
   → 继续处理新输入
 
 轮次正常结束的会话（waiting_input）可以一直复用同一个 session_id 继续对话。
@@ -972,7 +979,7 @@ heron-connect 保存 session_id
 ```text
 JSON-RPC turn request
   → FlowRuntime.Start / HandleInput / Resume
-  → SessionEvent 写入 session.jsonl
+  → SessionEvent 按产生层级写入 flow.jsonl / team.jsonl / agent.jsonl
   → FlowTurnResult
   → JSON-RPC turn response
 ```
@@ -980,7 +987,7 @@ JSON-RPC turn request
 不是：
 
 ```text
-直接把 session.jsonl 原样返回给 heron-connect
+直接把三层 jsonl 原样返回给 heron-connect
 ```
 
 ### 12.4 evidence.jsonl 的边界
@@ -999,7 +1006,7 @@ JSON-RPC turn request
 stdin/stdout JSONL
   = 外部进程通信
 
-session.jsonl
+flow.jsonl / team.jsonl / agent.jsonl
   = 完整会话和执行恢复
 
 evidence.jsonl

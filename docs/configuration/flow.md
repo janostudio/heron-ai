@@ -2,7 +2,8 @@
 
 A flow binds Team definitions into one execution graph and identifies the
 entry Team. Flow execution state belongs to FlowSession and is persisted in
-`session.jsonl`.
+`.agents/data/sessions/<flow_session_id>/{flow,team,agent}.jsonl` (three
+per-layer event streams; `evidence.jsonl` holds Flow-scope SharedRecords).
 
 ## Structure
 

@@ -1,5 +1,27 @@
 # heron-ai 内置提示词分析
 
+> ⚠️ **本文已过时（2026-10-09 复核）。**
+>
+> 本文是一份**提案**，写于"知识靠 injector 自动注入"的旧范式下。此后知识检索改为
+> agentic search，本文的核心建议（激活 `knowledge-query`）赖以成立的载体已经不存在：
+>
+> 1. `internal/knowledge/injector.go` **已被删除**（`internal/knowledge/` 现在只有
+>    `pointer.go` / `store.go` / `summarizer.go` / `progress.go`）。知识不再是"注入到
+>    prompt 里的一段文本"，而是模型用 Read/Grep/Glob 直接读 `.agents/knowledge/` 下的
+>    文件，`internal/knowledge/pointer.go` 只负责告诉模型这些路径在哪。
+> 2. 因此 §2.2 建议的"在 `formatEntries` 产出的知识文本头部追加使用指令"**已无法实施**
+>    ——没有 `formatEntries`，也没有"知识文本"这个东西了。
+> 3. `knowledge-query` 模板（`internal/prompt/builtin.go:17,272-280`）**至今仍是死代码**，
+>    且其文本仍是旧的"搜索知识库/交叉验证"范式，与现在的 agentic search 不符。
+>    `BuildSystemPrompt`（`builtin.go:77-128`）从不引用它。
+> 4. 同理，`ReadKnowledge` 工具也已被删除（见 `internal/agent/runtime.go:2037-2041`
+>    的注释：知识改用 Read/Grep/Glob + pointer 块）。
+>
+> **结论**：§2.2、§3.1 中的 `knowledge-query（激活）`、§3.2 的 P0 项**均不再适用**。
+> 若仍想补"如何使用知识"的指令，正确的落点是 `internal/knowledge/pointer.go` 的
+> pointer 块（它在有知识时才出现，天然满足"指令与知识同生共灭"的要求）。
+> 本文其余部分（能力级 skill 的分类思路）仍有参考价值，但请按上述事实重新评估。
+
 > 目的：系统性梳理 heron-ai 引擎「应该内置哪些提示词」，区分**引擎级强制策略**与**能力级可选提示词**，并给出落地路径。
 > 参照系：CodeBuddy CLI 的提示词工程（`packages/agent-cli/product.json` 的 `prompts` 数组）。
 
@@ -28,7 +50,7 @@ CodeBuddy 是面向用户的 CLI 产品，heron-ai 是通用多 Agent 引擎。�
 | `state-management` | ✅ 已增强 | 决策+依据 |
 | `perspective-isolation` | ✅ 已增强 | 多 agent 知识边界 |
 | `output-format` | ⚠️ 简略 | 被 `structuredOutputContract` 部分覆盖 |
-| `knowledge-query` | ❌ **死代码** | 从未被 `BuildSystemPrompt` 引用 |
+| `knowledge-query` | ❌ **死代码（至今仍是）** | 从未被 `BuildSystemPrompt` 引用；文本仍是旧的"搜索知识库"范式。知识检索已改为 agentic search，`internal/knowledge/injector.go` 已删除，见文首过时说明 |
 
 ### 1.2 散落的提示词（未收敛到统一体系）
 
@@ -65,11 +87,12 @@ CodeBuddy 的 `prompts` 数组（60+ 条）可归为几类：
   - 配套逻辑：幂等锁 + 超时 + 失败重试上限（见 CodeBuddy `session-title-service.ts`）
 - **归属**：标题是"元任务"，不是 agent 的常规职责，应像压缩摘要一样作为**独立的轻量调用**（复用 `ModelProvider.Chat`，无 tools），而非注入主 agent 系统提示。
 
-#### 2.2 `knowledge-query` 激活 —— 引擎级，直接接入
+#### 2.2 `knowledge-query` 激活 —— ⚠️ 已过时，见文首说明
 
-- **现状**：`knowledgeQueryTemplate` 已是死代码，`knowledge/injector.go` 在注入知识内容，但模型没有"如何用知识"的指令。
-- **动作**：在 `BuildSystemPrompt` 中，当 `agent.Knowledge` 非空时引用 `knowledge-query` 模板（与 `tool-usage` 的 `len(agent.Tools.Builtin) > 0` 条件一致）。
-- **提示词要点**：搜索知识库获取背景、交叉验证多来源、标注不确定/冲突信息。
+- **原方案现状**：`knowledgeQueryTemplate` 已是死代码，`knowledge/injector.go` 在注入知识内容，但模型没有"如何用知识"的指令。
+- **原动作**：在 `BuildSystemPrompt` 中，当 `agent.Knowledge` 非空时引用 `knowledge-query` 模板（与 `tool-usage` 的 `len(agent.Tools.Builtin) > 0` 条件一致）。
+- **过时原因**：`internal/knowledge/injector.go` 已删除，知识不再注入 prompt，改由模型用 Read/Grep/Glob 直接读知识文件 + `internal/knowledge/pointer.go` 的 pointer 块指路。既没有"注入的知识文本"可以附加指令，模板里"搜索知识库、交叉验证"的说法也不再对应实际行为。
+- **若要重做**：落点应是 `pointer.go` 的 pointer 块（有知识才出现），而不是 `BuildSystemPrompt`。
 
 #### 2.3 `entity-spawn`（子 Agent 视角）—— 能力级，建议内置 Skill
 
@@ -128,7 +151,7 @@ CodeBuddy 的 `prompts` 数组（60+ 条）可归为几类：
 │   ├── tool-usage ✅
 │   ├── state-management ✅
 │   ├── perspective-isolation ✅
-│   ├── knowledge-query（激活）
+│   ├── knowledge-query（激活）⚠️ 已过时，见文首说明
 │   └── output-format（收紧）
 │
 ├── 有某能力的 agent 才需要 → 内置 skill（能力级）
@@ -141,7 +164,7 @@ CodeBuddy 的 `prompts` 数组（60+ 条）可归为几类：
 
 ### 3.2 落地优先级
 
-1. **P0 — 激活 `knowledge-query`**（一行接入，死代码激活，成本最低价值明确）
+1. ~~**P0 — 激活 `knowledge-query`**（一行接入，死代码激活，成本最低价值明确）~~ ⚠️ 已过时：`injector.go` 已删除，落点应改为 `internal/knowledge/pointer.go`，且模板文本需按 agentic search 重写，不再是"一行接入"
 2. **P1 — `session-title` 标题生成**（元任务，独立轻量调用，补齐续聊体验）
 3. **P1 — 内置 Skill 骨架**：`entity-spawn`、`structured-handoff`、`approval-await` 三个能力级 skill，放到 `.agents/skills/` 或引擎内置 skill 注册表
 4. **P2 — `structured-output` 措辞收紧**
@@ -160,5 +183,5 @@ heron-ai 的 skill 目前是**用户态**（`.agents/skills/<name>/SKILL.md`，e
 ## 4. 待决策事项
 
 1. **内置 Skill 存放方式**：引擎预注册（方案 A）vs 文档模板（方案 B）？
-2. **`session-title` 是否本期做**：标题生成需要独立的"元任务调用"机制（无 tools 的轻量 `Chat`），工程量比激活 knowledge-query 大。
+2. **`session-title` 是否本期做**：标题生成需要独立的"元任务调用"机制（无 tools 的轻量 `Chat`），工程量较大。（原文此处以"激活 knowledge-query"作对比基准，该基准已过时。）
 3. **`structured-handoff` 的边界**：它和现有的 `StructuredOutput` 字段、`output.record` 机制如何分工，需要读 `docs/configuration/team.md` 的 record 约定后细化。

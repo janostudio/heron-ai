@@ -71,13 +71,17 @@ heron --json-rpc --flow .agents/flows/default.yml
 | `heron --prompt <text> --flow <path>` | 非交互单次 |
 | `heron --session <id> --prompt <text>` | 续聊指定会话 |
 | `heron --json-rpc --flow <path>` | JSON-RPC 常驻 |
-| `heron --serve --port <port>` | HTTP 服务 |
+| `heron --serve --port <port> --flow <path>` | HTTP 服务（**必须带 `--flow`**，否则报 `--serve requires a new-format Flow config` 并退出） |
 | `heron --version` | 版本 |
 
 ## 目录与运行时产物
 
-- 会话落盘 `.agents/data/sessions/<fs_id>/session.jsonl`
-- evidence 落盘 `.agents/data/sessions/<fs_id>/evidence.jsonl`
+- 会话事件按产生层级落盘三份：`.agents/data/sessions/<fs_id>/flow.jsonl`（flow/team
+  编排 + `shared_record.*`）、`team.jsonl`（agent call 时间线，token 消耗在此可查）、
+  `agent.jsonl`（模型输出与工具调用）
+- evidence 落盘 `.agents/data/sessions/<fs_id>/evidence.jsonl`（Flow-scope SharedRecord，
+  有 Flow 级记录时才出现）
+- 状态快照落盘 `teams/<team_id>/state.md`、`agents/<team_id>/<call_id>/state.md`
 - 这些是运行时产物，勿提交（`.gitignore` 已忽略 `.agents/data/`）。
 
 ## 验证配置是否正确

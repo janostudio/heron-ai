@@ -6,6 +6,11 @@
 > - `docs/generic-engine/16-memory-knowledge-learning.md`（Knowledge 格式与自动学习约定）
 >
 > 范围：本次聚焦 **Knowledge 总结**（Knowledge Summarizer 提示词），去掉 session-title（非核心）。
+>
+> ⚠️ **§0 与 §2.1 已过时**：这两节按「knowledge 预索引 + 逐条注入」的旧机制陈述。
+> 该机制已被 agentic search 取代（`internal/knowledge/injector.go` 与
+> `KnowledgeExtractor` 已删除，`knowledge-query` 至今仍是死代码）。过时细节见 §4 开头
+> 的说明块。§2.2 与 Phase 2（Knowledge Summarizer）仍然有效。
 
 ## 0. 定位：提示词在引擎里的三个归属层
 
@@ -13,7 +18,7 @@
 
 | 层 | 载体 | 本次动作 |
 |---|---|---|
-| **引擎级强制策略** | `internal/prompt/builtin.go` | 激活 `knowledge-query`（教模型"如何用注入的知识"） |
+| **引擎级强制策略** | `internal/prompt/builtin.go` | ~~激活 `knowledge-query`（教模型"如何用注入的知识"）~~ ⚠️ 已过时：不存在"注入的知识"，见文首说明与 §4 |
 | **能力级可选提示词** | 内置 Skill / 独立模块常量 | 新增 Knowledge Summarizer 提炼提示词 |
 | **产品层政策** | 用户 `agent.body` | 不涉及 |
 
@@ -33,7 +38,13 @@
 
 ## 2. 两个提示词方案
 
-### 2.1 引擎级：激活 `knowledge-query`（教模型如何用知识）
+### 2.1 引擎级：激活 `knowledge-query`（教模型如何用知识） —— ⚠️ 整节已过时
+
+> **过时说明**：以下"引擎自动检索 + `KnowledgeInjector` 注入 `ContextBlock{Kind:"knowledge"}`"
+> 的描述已不成立。`internal/knowledge/injector.go`、`formatEntries`、`InjectWithAllowlist`、
+> `KnowledgeIndex` 均已删除；知识改用 agentic search（prompt 里只放 `internal/knowledge/pointer.go`
+> 的指路块，检索由模型用 Grep/Glob/Read 自己发起）。因此"在注入的知识文本头部追加使用指令"
+> 无对象可改。若仍要补这类指令，落点是 pointer 块。详见 §4 开头。
 
 **触发机制（已澄清，非用户触发）**：知识检索是**引擎自动**的——TeamRuntime 分发 agent 调用前（`internal/runtime/team/runtime.go:372`），只要装配了 `KnowledgeInjector` 就自动用 `Responsibility + Input` 检索，`agent.Knowledge`（`[]string`）只是**作用域白名单**（过滤该 agent 可用哪些知识），不是触发开关。检索结果作为 `ContextBlock{Kind:"knowledge"}` 注入到 **user 上下文**（该块未设 `Placement:"system"`）。
 

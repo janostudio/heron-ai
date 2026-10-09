@@ -132,10 +132,11 @@ if [ -e "$ROOT/project/approval-sentinel/marker.txt" ]; then
   exit 1
 fi
 
-session_file="$ROOT/.agents/data/sessions/$session_id/session.jsonl"
-if ! grep -q '"type":"approval.resolved"' "$session_file" ||
-  ! grep -q '"approver_id":"qa-user"' "$session_file" ||
-  ! grep -q '"channel":"stream-json"' "$session_file"; then
+# approval.resolved is a Team-layer event, so it lands in team.jsonl.
+team_file="$ROOT/.agents/data/sessions/$session_id/team.jsonl"
+if ! grep -q '"type":"approval.resolved"' "$team_file" ||
+  ! grep -q '"approver_id":"qa-user"' "$team_file" ||
+  ! grep -q '"channel":"stream-json"' "$team_file"; then
   cat "$FIRST_OUTPUT"
   cat "$SECOND_OUTPUT"
   echo "approval audit event is missing approver/channel fields" >&2
