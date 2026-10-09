@@ -34,6 +34,7 @@
 |---|---|
 | `flow_session.created` / `flow_session.updated` | 会话创建/更新 |
 | `flow_turn.started` / `flow_turn.completed` / `flow_turn.waiting_*` | 一轮 flow turn 生命周期 |
+| `team_session.created` / `team_session.updated` | team 会话（**在 flow.jsonl**，不在 team.jsonl） |
 | `team_turn.started` / `team_turn.completed` / `team_turn.waiting_*` | team turn（flow 调度 team） |
 | `shared_record.published` | 发布 SharedRecord（payload.record 含完整 record） |
 | `recovery.requested` / `recovery.completed` | 恢复 |
@@ -42,7 +43,7 @@
 
 | type | 含义 |
 |---|---|
-| `team_session.created` / `team_session.updated` | team 会话 |
+| `agent_session.created` / `agent_session.updated` | agent call 会话 |
 | `agent_turn.started` / `agent_turn.completed` / `agent_turn.waiting_*` | agent turn |
 | `command_turn.*` / `webhook_turn.*` | command/webhook call |
 | `approval.requested` / `approval.resolved` | 审批 |
