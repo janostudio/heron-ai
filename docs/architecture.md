@@ -39,8 +39,8 @@ heron-ai/
 │   ├── state/           # Short-term session state snapshots
 │   ├── logging/         # Rotating execution log（事实源之一：轮转 JSONL）
 │   ├── view/            # TUI (bubbletea), HTTP handler, SSE
-│   ├── eval/            # Evaluation helpers (skeleton, NOT wired into runtime)
-│   ├── mcp/             # MCP adapter
+│   ├── eval/            # Evaluation: 关联 ID 体系 + 事实派生（Phase 1 已落地；尚未接入 CLI/TUI 查看）
+│   ├── mcp/             # MCP client（stdio + http 两种 transport；sse 不支持，配置写 sse 会明确报错）
 │   └── extension/       # Extension registry
 ```
 
