@@ -799,6 +799,17 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				}
 				activationRetries[activationKey]++
 				for _, target := range next.Teams {
+					// Shadow the dispatch: record a mailbox work message to the
+					// target team, then execute exactly as before. The message
+					// is only an extra event on flow.jsonl this step; the
+					// synchronous enqueue below is still the sole execution path.
+					if _, err := r.enqueueWorkMessage(ctx, session, turn,
+						types.MailboxAddress{TeamID: target},
+						map[string]any{"caller_team": execution.activation.teamID},
+					); err != nil {
+						routeFailure = fmt.Errorf("enqueue mailbox work for team %q: %w", target, err)
+						continue
+					}
 					enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
 				}
 			case types.NextReturn:
