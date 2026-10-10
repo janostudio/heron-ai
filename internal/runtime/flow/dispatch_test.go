@@ -182,10 +182,29 @@ func TestAsyncDispatchRecordsBatchDispatchedOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
 
-	// Release the background team so the goroutine cannot leak into other
-	// tests, then assert on the dispatching turn's events.
+	// Release the background team and wait for the goroutine to finish its
+	// final session write before reading events. The dispatch goroutine owns
+	// its own lifetime; it keeps appending to flow.jsonl (delivered + result
+	// events) after Start returns. Replaying without this synchronization
+	// races t.TempDir()'s RemoveAll against those writes and flakes with
+	// "directory not empty" on Linux.
 	<-fake.started
 	close(fake.gate)
+
+	// The result message is the last thing the goroutine records; once it is
+	// visible the dispatcher has no more writes pending for this session.
+	require.Eventually(t, func() bool {
+		box, err := runtime.loadMailbox(context.Background(), result.Session.ID)
+		if err != nil {
+			return false
+		}
+		for _, msg := range box {
+			if msg.Kind == mailboxKindResult && msg.To.TeamID == "default" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond)
 
 	replay, err := sessionWriter.Replay(context.Background(), result.Session.ID)
 	require.NoError(t, err)
