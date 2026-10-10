@@ -120,9 +120,22 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		callResult.Error = result.Error
 	}
 	if recordName := req.Call.Output.Record; recordName != "" {
-		data := map[string]any{"reply": result.Reply}
-		if result.Parsed != nil {
-			data["parsed"] = result.Parsed
+		// The agent's structured output (which the agent declares via its
+		// schema) is flattened onto the record data so downstream calls can
+		// reference the declared fields directly, e.g.
+		// ${records.X.Data.candidates}. Wrapping it under a "parsed" key
+		// would force every consumer to know about that engine-side shell.
+		data := map[string]any{}
+		if parsed, ok := result.Parsed.(map[string]any); ok {
+			for k, v := range parsed {
+				data[k] = v
+			}
+		}
+		// reply is the raw model text; only set it when the agent did not
+		// declare a field of the same name (an explicit schema declaration
+		// is the stronger contract).
+		if _, declared := data["reply"]; !declared {
+			data["reply"] = result.Reply
 		}
 		callResult.Records = []types.SharedRecord{newCallRecord(
 			req,

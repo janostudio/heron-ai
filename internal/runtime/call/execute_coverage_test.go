@@ -141,8 +141,8 @@ func TestAgentExecutorResultError(t *testing.T) {
 	assert.Equal(t, "agent failed", result.Error)
 }
 
-func TestAgentExecutorParsedInRecord(t *testing.T) {
-	parsed := map[string]any{"answer": 42}
+func TestAgentExecutorParsedFlattenedInRecord(t *testing.T) {
+	parsed := map[string]any{"answer": 42, "nested": map[string]any{"k": "v"}}
 	exec := NewAgentExecutor(&stubAgentRunner{result: &types.AgentResult{
 		Status: types.TurnCompleted,
 		Reply:  "done",
@@ -158,8 +158,34 @@ func TestAgentExecutorParsedInRecord(t *testing.T) {
 	require.Len(t, result.Records, 1)
 	assert.Equal(t, "AnswerRecord", result.Records[0].Name)
 	assert.Equal(t, "agent_result", result.Records[0].Kind)
+	// reply is the raw model text.
 	assert.Equal(t, "done", result.Records[0].Data["reply"])
-	assert.Equal(t, parsed, result.Records[0].Data["parsed"])
+	// Declared schema fields are hoisted to the top level so downstream
+	// references like ${records.X.Data.answer} resolve directly.
+	assert.Equal(t, 42, result.Records[0].Data["answer"])
+	assert.Equal(t, map[string]any{"k": "v"}, result.Records[0].Data["nested"])
+	// No engine-side wrapper key.
+	_, wrapped := result.Records[0].Data["parsed"]
+	assert.False(t, wrapped, "structured output must not be wrapped under a parsed key")
+}
+
+func TestAgentExecutorParsedReplyConflict(t *testing.T) {
+	// An explicit agent-declared field named "reply" wins over the raw text.
+	exec := NewAgentExecutor(&stubAgentRunner{result: &types.AgentResult{
+		Status: types.TurnCompleted,
+		Reply:  "raw text",
+		Parsed: map[string]any{"reply": "declared"},
+	}})
+
+	req := validAgentRequest()
+	req.Call.Output.Record = "AnswerRecord"
+
+	result, err := exec.Execute(context.Background(), req)
+
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	assert.Equal(t, "declared", result.Records[0].Data["reply"])
+	assert.Equal(t, "raw text", result.Records[0].Summary)
 }
 
 func TestAgentExecutorNoParsedInRecord(t *testing.T) {
@@ -175,8 +201,45 @@ func TestAgentExecutorNoParsedInRecord(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, result.Records, 1)
+	// No structured output: Data = {reply} only.
+	assert.Equal(t, map[string]any{"reply": "done"}, result.Records[0].Data)
 	_, exists := result.Records[0].Data["parsed"]
 	assert.False(t, exists, "parsed key should be absent when result.Parsed is nil")
+}
+
+func TestAgentExecutorNonMapParsedFallsBackToReplyOnly(t *testing.T) {
+	// A non-map Parsed (should be excluded by schema validation, but be safe)
+	// must not panic; Data falls back to {reply}.
+	exec := NewAgentExecutor(&stubAgentRunner{result: &types.AgentResult{
+		Status: types.TurnCompleted,
+		Reply:  "done",
+		Parsed: []any{1, 2},
+	}})
+
+	req := validAgentRequest()
+	req.Call.Output.Record = "AnswerRecord"
+
+	result, err := exec.Execute(context.Background(), req)
+
+	require.NoError(t, err)
+	require.Len(t, result.Records, 1)
+	assert.Equal(t, map[string]any{"reply": "done"}, result.Records[0].Data)
+}
+
+func TestAgentExecutorNoOutputRecordProducesNoRecord(t *testing.T) {
+	exec := NewAgentExecutor(&stubAgentRunner{result: &types.AgentResult{
+		Status: types.TurnCompleted,
+		Reply:  "done",
+		Parsed: map[string]any{"answer": 42},
+	}})
+
+	req := validAgentRequest()
+	req.Call.Output.Record = ""
+
+	result, err := exec.Execute(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Empty(t, result.Records)
 }
 
 func TestCommandExecutorType(t *testing.T) {

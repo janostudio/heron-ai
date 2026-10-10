@@ -29,6 +29,7 @@
 | [structured-output-forces-single-line](./ISSUE-structured-output-forces-single-line.zh-CN.md) | `structured_output` agent 的回复永远是单行（无分段） | **已修复**（根因更正：非 response_format，是提示缺"允许换行"；引擎 contract 已加） |
 | [replay-missing-tool-call-failed](./ISSUE-replay-missing-tool-call-failed.zh-CN.md) | 重复激活同一 call 时 400（`tool calls and tool results do not match`）；replay 重建的 tool 消息缺 `tool_call_id` | **已定位并修复**（日志一击命中；replay 按序配对补 id） |
 | [record-template-cannot-pass-structures](./ISSUE-record-template-cannot-pass-structures.zh-CN.md) | **`${records.X.Data.<field>}` 传递失效**：`stringify` 注释说 JSON 编码、实现输出 `map[...]`（引擎应按配置忠实传递，不解释业务结构） | **已修复**（default 分支改用 `json.Marshal`） |
+| [agent-output-wrapped-in-parsed](./ISSUE-agent-output-wrapped-in-parsed.zh-CN.md) | **agent 产出被引擎多套一层 `{reply, parsed}`**，下游无法按 schema 声明直接引用字段；`parsed` 与 `reply` 内容重复 | **已修复**（结构化输出键展开到 Data 顶层） |
 
 ## 设计探讨（非缺陷）
 
