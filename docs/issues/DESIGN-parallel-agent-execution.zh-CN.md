@@ -1,10 +1,16 @@
 # 设计探讨：多 agent 并行执行（想要的模型 vs 现状）
 
-> 状态：**分析文档，未改造**（2026-10-09，2026-10-10 修订）
-> 性质：记录"用户想要的并发模型"与"引擎现状"的差异，**只分析冲突点，不含实施方案**
-> 关联：`internal/runtime/flow/runtime.go`、`internal/runtime/team/runtime.go`、`internal/agent/task.go`、`internal/app/runtime.go`、`pkg/types/session.go`
+> 状态：**P0 已实现**（2026-10-09 分析，2026-10-10 修订 + P0 落地）
+> 性质：记录"用户想要的并发模型"与"引擎现状"的差异；§一~§六 为分析，§七~§九 含改造点/P0 实现记录
+> 关联：`internal/runtime/flow/runtime.go`、`internal/runtime/flow/mailbox.go`、`internal/runtime/flow/dispatch.go`、`internal/runtime/flow/resume_mailbox.go`、`pkg/types/mailbox.go`、`internal/app/runtime.go`
 > **要点（见 §五）**：team/agent **各自已有独立、持久、可 replay 的执行状态**，
 > 空闲判据 = `Status != running` 已可直接成立；缺的是**按它调度的调度器**。
+>
+> **P0 落地状态（2026-10-10）**：mailbox 调度已实现并端到端验证——
+> coordinator 派活后**立即返回 `waiting_input`**，后台执行被派发的 team，
+> 完成后投 result 消息到 coordinator inbox 并**唤醒**它开新 turn 汇总。
+> 实现见 §九。**context 归属（话题隔离）仍按 §1.5 搁置**（P0 不做）。
+
 
 ## 一、想要的设计（用户意图）
 
@@ -465,4 +471,52 @@ turn 不独占）→ C5 是记账跟上（并发事件）→ C6 是记账完善�
 **本次 P0 只做 mailbox**（派活不卡住 + 结果回流），**话题固定单话题、由用户自律**——
 ② 的复杂度**不进入 P0**。多话题隔离留待 P1/P2 单独讨论
 （thread_id 的 IM 模型**不可用**：单窗口无显式归属信号，需用户显式切换）。
+
+## 九、P0 实现记录（2026-10-10）
+
+### 9.1 实现内容
+
+| 文件 | 内容 |
+|---|---|
+| `pkg/types/mailbox.go`（新） | `MailboxMessage` / `MailboxAddress` / `MailboxMessageStatus`（`pending`/`claimed`/`delivered`/`dead`），叶子字段 snake_case |
+| `pkg/types/event.go` | 新增 5 常量：`mailbox.message.enqueued/claimed/delivered/dead` + `mailbox.batch.dispatched` |
+| `internal/runtime/flow/mailbox.go`（新） | 投递原语 `enqueueWorkMessage`/`enqueueResultMessage`/`claimMessage`/`deliverMessage`/`markMessageDead`；`loadMailbox`/`listInbox`（事件流折叠，**按 Revision 决胜、Seq 平手**，确定性） |
+| `internal/runtime/flow/dispatch.go`（新） | `launchAsyncDispatch`（后台 goroutine，`context.Background()` + `recover` 兜底）；`wakeIfIdle`（**coordinator running 时不唤醒**，result 留 inbox） |
+| `internal/runtime/flow/resume_mailbox.go`（新） | `ResumeForMailbox`（专用唤醒入口，**不走** pendingTeamResume/AgentResume）；`renderMailboxInbox` |
+| `internal/runtime/flow/runtime.go` | `asyncDispatch`/`wakeFn` 字段 + `SetAsyncDispatch`/`SetWaker`；`NextActivate` 分支 async 化；收尾写 `mailbox.batch.dispatched`（幂等守卫） |
+| `internal/app/runtime.go` | 接线：`SetAsyncDispatch(true)` + `SetWaker(go ResumeForMailbox)` |
+
+### 9.2 关键设计决策（相对 §七 的收敛）
+
+- **不做并发 turn**（C4 收敛）：派活轮 `finishTurn(waiting_input)` 结束，后台跑完后 `ResumeForMailbox` 开**新** turn 唤醒。任何时刻只有一个 flow turn running——`interruptedExecutions`/`pendingTeamResume`/`listInbox` 的单链假设**全部保持成立**。
+- **mailbox 落 `flow.jsonl`**（不新建第四份文件），复用 `storage.SessionWriter` 契约。
+- **开关控制**：`SetAsyncDispatch(bool)`，默认 false = 原同步路径；app 层 P0 硬编码 true。
+- **只对 coordinator 的 `NextActivate` 走 async**（`binding.Coordinator` 保证）。
+- **归属锚点用 `CauseFlowTurnID`**，P0 **不引入** `FlowTurn.round`（§6.4 的降级）。
+- **与 async tool / park-then-resume 共存**：mailbox 是 team/flow 级，`wakeFlowOnToolTaskDone` 是 agent/tool 级，正交。
+
+### 9.3 端到端验证（真实配置，2026-10-10）
+
+配置：coordinator(`main`) `can_activate: [worker]`，`--json-rpc` 常驻进程跑一轮。
+
+观察到的完整闭环：
+```
+flow_turn.started (输入="请…派活")  → 立即 flow_turn.waiting_input（reply "已派活"）
+mailbox.message.enqueued (work→worker, cause_flow_turn_id=ft_…)
+mailbox.message.claimed (后台领取)
+team_turn.started/completed (worker 后台执行)
+mailbox.message.delivered + mailbox.message.enqueued (result→main)
+flow_turn.started (输入=""，被唤醒) → main 读 inbox 汇总 → flow_turn.waiting_input
+mailbox.batch.dispatched ×2（每 turn 各 1，已修重复 bug）
+```
+
+**结论**：派活不阻塞 ✓、结果回流 ✓、唤醒开新 turn ✓。
+
+### 9.4 已知限制 / 后续
+
+- **`--prompt` 单轮模式**：进程跑完一轮即退出，后台 goroutine 随进程结束——异步派发需要**进程存活**（json-rpc / TUI / serve 场景）。这是 `--prompt` 语义决定的，非缺陷。
+- **后台 team 崩溃不可自动恢复**（§7.5 已声明）：P0 接受；`claimed` 但未 `delivered` 的 team 在重启后不被 `interruptedExecutions` 发现。
+- **P1/P2 未做**：context 归属（话题隔离）、round 字段、跨话题共享记忆。
+- **SSE**：async 轮为 `waiting_input` 不触发 `EventFlowTurnCompleted`，流保持连接等 result 回流（§七 I2）。
+
 

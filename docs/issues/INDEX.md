@@ -35,7 +35,7 @@
 
 | 文档 | 主题 | 状态 |
 |---|---|---|
-| [DESIGN-parallel-agent-execution](./DESIGN-parallel-agent-execution.zh-CN.md) | 多 agent 并行执行：想要的 actor/mailbox 模型 vs 现状"单会话单 turn 同步推进"；含**改造点 C1–C7 / 收益 B1–B6 / 影响面 I1–I9**、**P0/P1/P2 阶段切分**（mailbox 与 context 归属正交；thread_id 不可用） | **仅分析，未改造**（2026-10-10 修订：信箱统一抽象、default agent 引擎层无特权、round 降为记账辅助、P0 只做 mailbox） |
+| [DESIGN-parallel-agent-execution](./DESIGN-parallel-agent-execution.zh-CN.md) | 多 agent 并行执行：想要的 actor/mailbox 模型 vs 现状"单会话单 turn 同步推进"；含**改造点 C1–C7 / 收益 B1–B6 / 影响面 I1–I9**、**P0/P1/P2 阶段切分**、**§九 P0 实现记录** | **P0 已实现**（mailbox 派活不阻塞 + 结果回流 + 唤醒；context 归属仍搁置） |
 
 ## 状态含义
 
