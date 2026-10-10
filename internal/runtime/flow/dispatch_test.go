@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -156,6 +157,55 @@ func TestAsyncDispatchDoesNotBlockOnDispatchedTeam(t *testing.T) {
 	// The result container keeps its published Go field names (team_result →
 	// TeamTurnResult), not a re-serialized snake_case shape.
 	require.Contains(t, resultMsg.Payload, "team_result")
+}
+
+// TestAsyncDispatchRecordsBatchDispatchedOnce is the regression guard for a
+// duplicate EventMailboxBatchDispatched: the coordinator's dispatch turn ends
+// via the queue-empty path (queue drains, no wait case matches), and that path
+// used to record the batch-dispatched event and then fall through to the
+// loop-exit path which recorded it a second time. Exactly one event must exist
+// for the turn.
+func TestAsyncDispatchRecordsBatchDispatchedOnce(t *testing.T) {
+	fileStore := storage.NewFileStore(t.TempDir())
+	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
+	fake := &blockingTeamRuntime{
+		gate:    make(chan struct{}),
+		started: make(chan string, 1),
+	}
+	runtime := newTestRuntime(testDefinitions(), fake, sessionWriter, nil)
+	runtime.SetAsyncDispatch(true)
+
+	result, err := runtime.Start(context.Background(), types.StartFlowRequest{
+		FlowID: "code-fix",
+		Input:  "verify the change",
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+
+	// Release the background team so the goroutine cannot leak into other
+	// tests, then assert on the dispatching turn's events.
+	<-fake.started
+	close(fake.gate)
+
+	replay, err := sessionWriter.Replay(context.Background(), result.Session.ID)
+	require.NoError(t, err)
+	dispatched := 0
+	var messageIDs []string
+	for _, event := range replay.Events {
+		if event.Type != types.EventMailboxBatchDispatched {
+			continue
+		}
+		require.Equal(t, result.Turn.ID, event.FlowTurnID,
+			"batch-dispatched event must belong to the dispatching turn")
+		dispatched++
+		if ids, ok := event.Payload["message_ids"].([]any); ok {
+			for _, id := range ids {
+				messageIDs = append(messageIDs, fmt.Sprint(id))
+			}
+		}
+	}
+	require.Equal(t, 1, dispatched, "batch-dispatched must be recorded exactly once per turn")
+	require.Len(t, messageIDs, 1, "the single event carries the dispatched work message")
 }
 
 // TestAsyncDispatchDisabledKeepsSynchronousBehaviour is the no-op contract:

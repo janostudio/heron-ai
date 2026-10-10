@@ -652,6 +652,20 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	// meant to end and accept further input.
 	asyncDispatched := false
 	asyncMessageIDs := make([]string, 0)
+	// recordDispatched emits the batch-dispatched fact at most once per turn.
+	// The dispatch itself happened earlier in the turn and is already on
+	// record; this event is only its end-of-turn bookkeeping, so it must be
+	// written at every normal exit but never twice along the fall-through path
+	// (queue-empty → loop exit). Failure exits deliberately skip it along with
+	// the rest of the turn bookkeeping: a turn that ends failed does not
+	// complete its trailing write-out, matching finishTurn's own discipline.
+	dispatchedRecorded := false
+	recordDispatched := func() {
+		if asyncDispatched && !dispatchedRecorded {
+			r.recordBatchDispatched(ctx, session, turn, asyncMessageIDs)
+			dispatchedRecorded = true
+		}
+	}
 	allRecords, err := r.loadHistoricalFlowRecords(ctx, session.ID)
 	if err != nil {
 		logging.Error("load historical flow records", map[string]any{
@@ -912,10 +926,10 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 			// A turn that dispatched work into the background records that
 			// fact before finishing. The terminal status is deliberately not
 			// changed: a dispatch turn ends waiting_input like any other, so
-			// the session stays continuable.
-			if asyncDispatched {
-				r.recordBatchDispatched(ctx, session, turn, asyncMessageIDs)
-			}
+			// the session stays continuable. Recording here as well as after
+			// the loop is safe: the guard makes it idempotent, so a wait-case
+			// exit records it once and a plain fall-through records it once.
+			recordDispatched()
 			switch {
 			case hasWaitApproval:
 				return r.finishTurn(ctx, result, types.SessionWaitingApproval, nil)
@@ -928,9 +942,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	}
 
 	result.Turn.RecordIDs = recordIDs(result.Records)
-	if asyncDispatched {
-		r.recordBatchDispatched(ctx, session, turn, asyncMessageIDs)
-	}
+	recordDispatched()
 	// A normally finished FlowTurn stays continuable: the session lifecycle
 	// is a runtime decision, not a Flow configuration.
 	return r.finishTurn(ctx, result, types.SessionWaitingInput, nil)
