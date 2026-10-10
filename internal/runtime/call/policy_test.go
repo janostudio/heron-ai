@@ -283,3 +283,53 @@ func TestStringifyRecordValueFallsBackOnMarshalError(t *testing.T) {
 		assert.Equal(t, fmt.Sprint(ch), stringifyRecordValue(ch))
 	})
 }
+
+func TestCommandEnvPassesNestedRecordAsJSON(t *testing.T) {
+	// End-to-end through the real template path (commandEnv -> resolveTemplate
+	// -> resolveRecordPlaceholder -> stringifyRecordValue): a config that does
+	// env: AUTO_QUERY: "${records.DiagnosisReport.Data.parsed}" must receive
+	// valid JSON, not Go's fmt.Sprint format (map[...]).
+	req := templateRequest()
+	req.Call.Command = &types.CommandSpec{Env: map[string]string{
+		"AUTO_QUERY": "${records.DiagnosisReport.Data.parsed}",
+	}}
+	req.Records = []types.SharedRecord{
+		{
+			Name: "DiagnosisReport",
+			Data: map[string]any{
+				"reply": "done",
+				"parsed": map[string]any{
+					"candidates": []any{
+						map[string]any{"number": float64(134288), "repo": "genie/genie"},
+					},
+					"notes": "x",
+				},
+			},
+		},
+	}
+
+	env, err := commandEnv(req)
+	assert.NoError(t, err)
+
+	var got string
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "AUTO_QUERY=") {
+			got = strings.TrimPrefix(entry, "AUTO_QUERY=")
+		}
+	}
+	want := `{"candidates":[{"number":134288,"repo":"genie/genie"}],"notes":"x"}`
+	assert.Equal(t, want, got)
+	assert.True(t, json.Valid([]byte(got)), "env value must be valid JSON, got %q", got)
+
+	// The whole point: a downstream tool (jq) can parse it.
+	var decoded struct {
+		Candidates []struct {
+			Number int    `json:"number"`
+			Repo   string `json:"repo"`
+		} `json:"candidates"`
+	}
+	assert.NoError(t, json.Unmarshal([]byte(got), &decoded))
+	assert.Len(t, decoded.Candidates, 1)
+	assert.Equal(t, 134288, decoded.Candidates[0].Number)
+	assert.Equal(t, "genie/genie", decoded.Candidates[0].Repo)
+}
