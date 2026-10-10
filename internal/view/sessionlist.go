@@ -45,6 +45,49 @@ type SessionPicker struct {
 	height   int
 }
 
+// sessionPickerChrome is the number of terminal lines the picker uses for
+// everything that is not a session row: the title line, the blank line after
+// it, the blank line before the footer, and the footer line. One extra line
+// is reserved so the frame never fills the terminal exactly (which would make
+// the terminal itself scroll and push the title off-screen).
+const sessionPickerChrome = 5
+
+// minVisibleRows keeps the list usable on very short terminals; even if the
+// computed window is smaller, the picker still shows this many rows.
+const minVisibleRows = 3
+
+// visibleRows returns how many session rows fit in the current terminal.
+// It falls back to a sensible default before the first WindowSizeMsg arrives.
+func (p *SessionPicker) visibleRows() int {
+	if p.height <= 0 {
+		return minVisibleRows
+	}
+	rows := p.height - sessionPickerChrome
+	if rows < minVisibleRows {
+		return minVisibleRows
+	}
+	return rows
+}
+
+// window returns the [start, end) slice of sessions to render so that the
+// selected row is visible. When the whole list fits, it returns the full
+// range. Otherwise it scrolls to keep index inside the window.
+func (p *SessionPicker) window() (int, int) {
+	n := len(p.sessions)
+	rows := p.visibleRows()
+	if n <= rows {
+		return 0, n
+	}
+	start := p.index - rows/2
+	if start < 0 {
+		start = 0
+	}
+	if start+rows > n {
+		start = n - rows
+	}
+	return start, start + rows
+}
+
 // NewSessionPicker builds a picker over the given sessions.
 func NewSessionPicker(sessions []sessionlist.Session) *SessionPicker {
 	return &SessionPicker{sessions: sessions}
@@ -101,8 +144,9 @@ func (p *SessionPicker) View() string {
 	b.WriteString(sessionTitleStyle.Render("会话列表（↑↓ 选择，回车进入，q 退出）"))
 	b.WriteString("\n\n")
 
-	for i, s := range p.sessions {
-		line := FormatSessionRow(s)
+	start, end := p.window()
+	for i := start; i < end; i++ {
+		line := FormatSessionRow(p.sessions[i])
 		if i == p.index {
 			b.WriteString(sessionRowSelectedStyle.Render(line))
 		} else {
@@ -112,9 +156,20 @@ func (p *SessionPicker) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(sessionHintStyle.Render(fmt.Sprintf("共 %d 个会话", len(p.sessions))))
+	b.WriteString(sessionHintStyle.Render(p.footerHint(start, end)))
 	b.WriteString("\n")
 	return b.String()
+}
+
+// footerHint renders the status line under the list. When the list scrolls it
+// adds a position indicator so the user knows more sessions exist off-screen.
+func (p *SessionPicker) footerHint(start, end int) string {
+	total := len(p.sessions)
+	if end-start >= total {
+		return fmt.Sprintf("共 %d 个会话", total)
+	}
+	// 1-based inclusive bounds of what the user is looking at.
+	return fmt.Sprintf("共 %d 个会话（%d–%d，↑↓ 滚动查看其余）", total, start+1, end)
 }
 
 // FormatSessionRow renders one session as a single display line. It is shared
