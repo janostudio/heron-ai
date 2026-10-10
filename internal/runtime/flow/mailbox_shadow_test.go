@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -10,18 +11,20 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// TestMailboxShadowOnCoordinatorActivate verifies the shadow-mode mailbox hook:
-// when the coordinator activates a team, the runtime additionally records a
-// work message to that team's mailbox, while the existing synchronous enqueue
-// path (and therefore the turn's outcome) is unchanged.
+// TestMailboxDispatchOnCoordinatorActivate verifies the P0 mailbox dispatch
+// hook: when async dispatch is enabled and the coordinator activates a team,
+// the runtime records a work message to that team's mailbox and hands the team
+// to the background dispatcher, ending the coordinator's turn without waiting.
 //
 // It reuses the exact flow of TestRuntimeStartsActivatesAndEndsResumable,
-// where the coordinator ("default") activates "verify".
-func TestMailboxShadowOnCoordinatorActivate(t *testing.T) {
+// where the coordinator ("default") activates "verify", and then waits for the
+// background dispatch to land its result.
+func TestMailboxDispatchOnCoordinatorActivate(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
 	evidenceStore := storage.NewJSONLEvidenceStore(fileStore)
 	runtime := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, evidenceStore)
+	runtime.SetAsyncDispatch(true)
 
 	result, err := runtime.Start(context.Background(), types.StartFlowRequest{
 		FlowID: "code-fix",
@@ -29,12 +32,25 @@ func TestMailboxShadowOnCoordinatorActivate(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Execution is unchanged: the same aggregate outcome as before the hook.
+	// The coordinator dispatched and ended without waiting for the activated
+	// team, so only the coordinator's own turn is in this result.
 	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
 	require.Equal(t, types.TurnWaitingInput, result.Turn.Status)
-	require.Contains(t, result.Reply, "verification passed")
-	require.NotEmpty(t, result.Reply)
-	require.Len(t, result.TeamResults, 3)
+	require.Len(t, result.TeamResults, 1)
+
+	// Wait for the background "verify" dispatch to post its result.
+	require.Eventually(t, func() bool {
+		box, err := runtime.loadMailbox(context.Background(), result.Session.ID)
+		if err != nil {
+			return false
+		}
+		for _, msg := range box {
+			if msg.Kind == mailboxKindResult && msg.To.TeamID == "default" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 20*time.Millisecond)
 
 	// A mailbox.message.enqueued event was written to flow.jsonl.
 	replay, err := sessionWriter.Replay(context.Background(), result.Session.ID)
@@ -47,23 +63,23 @@ func TestMailboxShadowOnCoordinatorActivate(t *testing.T) {
 	}
 	require.GreaterOrEqual(t, enqueued, 1)
 
-	// loadMailbox folds that event into a pending work message addressed to
-	// the activated team, caused by this turn.
+	// loadMailbox folds those events into a delivered work message addressed
+	// to the activated team, caused by this turn.
 	box, err := runtime.loadMailbox(context.Background(), result.Session.ID)
 	require.NoError(t, err)
 
-	var shadow *types.MailboxMessage
+	var work *types.MailboxMessage
 	for i := range box {
 		msg := box[i]
 		if msg.Kind == mailboxKindWork && msg.To.TeamID == "verify" {
-			shadow = &msg
+			work = &msg
 			break
 		}
 	}
-	require.NotNil(t, shadow, "expected a work message for the activated team")
-	require.Equal(t, types.MailboxPending, shadow.Status)
-	require.Equal(t, mailboxKindWork, shadow.Kind)
-	require.Equal(t, "verify", shadow.To.TeamID)
-	require.Equal(t, result.Turn.ID, shadow.CauseFlowTurnID)
-	require.Equal(t, "default", shadow.Payload["caller_team"])
+	require.NotNil(t, work, "expected a work message for the activated team")
+	require.Equal(t, types.MailboxDelivered, work.Status)
+	require.Equal(t, mailboxKindWork, work.Kind)
+	require.Equal(t, "verify", work.To.TeamID)
+	require.Equal(t, result.Turn.ID, work.CauseFlowTurnID)
+	require.Equal(t, "default", work.Payload["caller_team"])
 }

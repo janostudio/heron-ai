@@ -39,6 +39,19 @@ type Runtime struct {
 	tasks       types.ToolTaskStore
 	media       types.MediaStore
 	resumeMu    sync.Mutex
+
+	// asyncDispatch opts the runtime into P0 mailbox dispatch: when a
+	// coordinator activates a team, the work is handed to a background
+	// goroutine and the current FlowTurn ends immediately instead of
+	// waiting for the activated team. It defaults to false, in which case
+	// the activate path is byte-for-byte the synchronous behaviour it has
+	// always had.
+	asyncDispatch bool
+	// wakeFn is the app-layer wake-up hook (usually go ResumeForMailbox).
+	// It is called after a background dispatch finishes and the session is
+	// idle enough to be resumed. nil means "no wake": the result message is
+	// still recorded, the caller is expected to poll.
+	wakeFn func(sessionID string)
 }
 
 func NewRuntime(
@@ -66,6 +79,22 @@ func (r *Runtime) SetTaskStore(tasks types.ToolTaskStore) {
 
 func (r *Runtime) SetMediaStore(store types.MediaStore) {
 	r.media = store
+}
+
+// SetAsyncDispatch enables or disables asynchronous mailbox dispatch. When
+// enabled, a coordinator's activate hands the work to a background goroutine
+// and the FlowTurn ends immediately; the activated team's result is posted
+// back to the coordinator's mailbox and the session is woken when idle. When
+// disabled (the default) the activate path is fully synchronous and unchanged.
+func (r *Runtime) SetAsyncDispatch(enabled bool) {
+	r.asyncDispatch = enabled
+}
+
+// SetWaker injects the app-layer wake-up callback, usually
+// `go ResumeForMailbox(sessionID)`. It may be nil; a nil waker means the
+// background dispatch records the result but never wakes the session.
+func (r *Runtime) SetWaker(fn func(sessionID string)) {
+	r.wakeFn = fn
 }
 
 func (r *Runtime) persistContextBlocks(ctx context.Context, blocks []types.ContextBlock) ([]types.ContextBlock, error) {
@@ -616,6 +645,13 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	failedTeams := make(map[string]bool)
 	coordinateRetries := make(map[string]int)
 	activationRetries := make(map[string]int)
+	// asyncDispatched records whether this turn handed work to the background
+	// mailbox dispatcher, and the IDs of the work messages it posted. It only
+	// changes the end-of-turn bookkeeping (an extra batch-dispatched event);
+	// the terminal status stays waiting_input, because a dispatch turn is
+	// meant to end and accept further input.
+	asyncDispatched := false
+	asyncMessageIDs := make([]string, 0)
 	allRecords, err := r.loadHistoricalFlowRecords(ctx, session.ID)
 	if err != nil {
 		logging.Error("load historical flow records", map[string]any{
@@ -799,15 +835,24 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				}
 				activationRetries[activationKey]++
 				for _, target := range next.Teams {
-					// Shadow the dispatch: record a mailbox work message to the
-					// target team, then execute exactly as before. The message
-					// is only an extra event on flow.jsonl this step; the
-					// synchronous enqueue below is still the sole execution path.
-					if _, err := r.enqueueWorkMessage(ctx, session, turn,
-						types.MailboxAddress{TeamID: target},
-						map[string]any{"caller_team": execution.activation.teamID},
-					); err != nil {
-						routeFailure = fmt.Errorf("enqueue mailbox work for team %q: %w", target, err)
+					if r.asyncDispatch {
+						// P0 mailbox dispatch: record the work message (the
+						// credential for the hand-off) and launch the team in
+						// the background. The target is deliberately NOT
+						// enqueued into this turn's queue: the coordinator's
+						// turn ends now, and the activated team's result comes
+						// back as a fresh mailbox result message.
+						msg, err := r.enqueueWorkMessage(ctx, session, turn,
+							types.MailboxAddress{TeamID: target},
+							map[string]any{"caller_team": execution.activation.teamID},
+						)
+						if err != nil {
+							routeFailure = fmt.Errorf("enqueue mailbox work for team %q: %w", target, err)
+							continue
+						}
+						asyncDispatched = true
+						asyncMessageIDs = append(asyncMessageIDs, msg.MessageID)
+						r.launchAsyncDispatch(session, turn.ID, target, msg)
 						continue
 					}
 					enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
@@ -864,6 +909,13 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		result.Turn.Next = resolvedRoute
 		if len(queue) == 0 {
 			result.Turn.RecordIDs = recordIDs(result.Records)
+			// A turn that dispatched work into the background records that
+			// fact before finishing. The terminal status is deliberately not
+			// changed: a dispatch turn ends waiting_input like any other, so
+			// the session stays continuable.
+			if asyncDispatched {
+				r.recordBatchDispatched(ctx, session, turn, asyncMessageIDs)
+			}
 			switch {
 			case hasWaitApproval:
 				return r.finishTurn(ctx, result, types.SessionWaitingApproval, nil)
@@ -876,6 +928,9 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	}
 
 	result.Turn.RecordIDs = recordIDs(result.Records)
+	if asyncDispatched {
+		r.recordBatchDispatched(ctx, session, turn, asyncMessageIDs)
+	}
 	// A normally finished FlowTurn stays continuable: the session lifecycle
 	// is a runtime decision, not a Flow configuration.
 	return r.finishTurn(ctx, result, types.SessionWaitingInput, nil)
