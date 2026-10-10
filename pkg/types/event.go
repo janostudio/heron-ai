@@ -40,6 +40,13 @@ const (
 	EventSharedRecordPublished   = "shared_record.published"
 	EventRecoveryRequested       = "recovery.requested"
 	EventRecoveryCompleted       = "recovery.completed"
+
+	// Mailbox events (also recorded in flow.jsonl).
+	EventMailboxMessageEnqueued  = "mailbox.message.enqueued"
+	EventMailboxMessageClaimed   = "mailbox.message.claimed"
+	EventMailboxMessageDelivered = "mailbox.message.delivered"
+	EventMailboxMessageDead      = "mailbox.message.dead"
+	EventMailboxBatchDispatched  = "mailbox.batch.dispatched"
 )
 
 // Team event types (team.jsonl).
