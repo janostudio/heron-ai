@@ -93,6 +93,7 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 		Limits:    l.LoadRuntimeLimits(),
 		Knowledge: l.LoadKnowledgeSettings(),
 		Workspace: resolveWorkspace(flow, teams, agents),
+		Env:       l.LoadGlobalEnv(),
 	}, nil
 }
 

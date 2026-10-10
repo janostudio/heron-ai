@@ -76,15 +76,20 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 		ctx = context.Background()
 	}
 
+	// 引擎级全局环境变量（settings.json 的 env 段，相对路径已解析为绝对）。
+	// 注入所有起子进程的地方：workspace（command call + Bash）、codenav、
+	// MCP stdio server、hooks。
+	injectEnv := definitions.Env
+
 	// The workspace tool backend follows the resolved runtime workspace config
 	// (agent > team > flow, default local). Engine state (storage/logging)
 	// below stays on the local workspaceRoot regardless.
 	var workspaceService workspace.Workspace
 	var err error
 	if definitions.Workspace != nil && definitions.Workspace.Type != "" && definitions.Workspace.Type != "local" {
-		workspaceService, err = workspace.New(*definitions.Workspace, workspaceRoot)
+		workspaceService, err = workspace.New(*definitions.Workspace, workspaceRoot, injectEnv)
 	} else {
-		workspaceService, err = workspace.NewLocal(workspaceRoot)
+		workspaceService, err = workspace.NewLocal(workspaceRoot, injectEnv)
 	}
 	if err != nil {
 		return nil, err
@@ -97,7 +102,7 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	toolRegistry.Register(tool.NewGlobTool(workspaceService))
 	toolRegistry.Register(tool.NewWebSearchTool(newWebHTTPClient(), tool.WebSearchConfig{}))
 	toolRegistry.Register(tool.NewWebFetchTool(newWebHTTPClient(), tool.WebFetchConfig{}))
-	toolRegistry.Register(tool.NewCodeNavTool(workspaceService, "codels"))
+	toolRegistry.Register(tool.NewCodeNavTool(workspaceService, "codels", injectEnv))
 	toolRegistry.Register(tool.NewAskUserQuestionTool())
 	toolRegistry.Register(tool.NewTodoWriteTool())
 	toolRegistry.Register(tool.NewTodoReadTool())
@@ -110,7 +115,7 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 		nil,
 		agent.NewRouteParser(),
 		agent.NewHITLGate(0),
-		agent.NewHookExecutor(),
+		agent.NewHookExecutorWithEnv(injectEnv),
 		promptRenderer,
 	)
 
@@ -275,7 +280,7 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// aborting startup: a broken MCP server should not make the engine
 	// unusable, but it must not be silent either, so every failure is logged
 	// with the server name and the reason.
-	mcpAdapter := mcp.NewMCPAdapter(mcp.Options{})
+	mcpAdapter := mcp.NewMCPAdapter(mcp.Options{GlobalEnv: injectEnv})
 	mcpConfigs, mcpConfigErr := config.NewConfigLoader(workspaceRoot).LoadMCPServers()
 	switch {
 	case mcpConfigErr != nil:

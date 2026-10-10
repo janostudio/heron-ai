@@ -63,6 +63,8 @@ type Options struct {
 	CallTimeout time.Duration
 	// HTTPClient is used by the http transport. Nil uses http.DefaultClient.
 	HTTPClient *http.Client
+	// GlobalEnv 是引擎级全局环境变量，以最低优先级注入每个 stdio server 子进程。
+	GlobalEnv map[string]string
 }
 
 func (o Options) startTimeout() time.Duration {
@@ -207,7 +209,7 @@ func (a *MCPAdapter) newTransport(server MCPServer) (Transport, error) {
 	case TransportHTTP:
 		return NewHTTPTransport(server.URL, server.Headers, a.opts.HTTPClient), nil
 	default:
-		return NewStdioTransport(server.Command, server.Args, server.Env), nil
+		return NewStdioTransport(server.Command, server.Args, server.Env, a.opts.GlobalEnv), nil
 	}
 }
 

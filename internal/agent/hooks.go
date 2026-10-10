@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/osenv"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -36,10 +37,19 @@ type CommandHookRunner func(ctx context.Context, payload types.HookPayload, comm
 type HookExecutor struct {
 	mu    sync.RWMutex
 	hooks map[string][]HookFunc
+	// globalEnv 是引擎级全局环境变量（settings.json 的 env 段），注入钩子
+	// 子进程。nil 表示不注入；命令钩子执行时以最低优先级合并。
+	globalEnv map[string]string
 }
 
 func NewHookExecutor() *HookExecutor {
 	return &HookExecutor{hooks: make(map[string][]HookFunc)}
+}
+
+// NewHookExecutorWithEnv 构造携带全局环境变量的钩子执行器：其命令钩子子进程
+// 会注入 env（同名项由钩子进程环境优先覆盖）。env 为 nil 时等同 NewHookExecutor。
+func NewHookExecutorWithEnv(env map[string]string) *HookExecutor {
+	return &HookExecutor{hooks: make(map[string][]HookFunc), globalEnv: env}
 }
 
 func (h *HookExecutor) Register(event string, fn HookFunc) {
@@ -105,10 +115,16 @@ func (h *HookExecutor) WithCommandHooks(cfg []types.HookConfig, run CommandHookR
 	if len(cfg) == 0 {
 		return h, nil
 	}
-	if run == nil {
-		run = RunHookCommand
+	var globalEnv map[string]string
+	if h != nil {
+		globalEnv = h.globalEnv
 	}
-	derived := NewHookExecutor()
+	if run == nil {
+		run = func(ctx context.Context, payload types.HookPayload, command string, timeout time.Duration) error {
+			return RunHookCommand(ctx, payload, command, timeout, globalEnv)
+		}
+	}
+	derived := NewHookExecutorWithEnv(globalEnv)
 	if h != nil {
 		h.mu.RLock()
 		for event, fns := range h.hooks {
@@ -169,7 +185,7 @@ const hookTerminateGrace = 500 * time.Millisecond
 // On timeout the command's whole process group is signalled (SIGTERM, then
 // SIGKILL), not just the shell: the shell may fork, and a surviving child
 // would keep the captured output pipe open.
-func RunHookCommand(ctx context.Context, payload types.HookPayload, command string, timeout time.Duration) error {
+func RunHookCommand(ctx context.Context, payload types.HookPayload, command string, timeout time.Duration, globalEnv ...map[string]string) error {
 	if timeout <= 0 {
 		timeout = DefaultHookTimeout
 	}
@@ -177,8 +193,12 @@ func RunHookCommand(ctx context.Context, payload types.HookPayload, command stri
 		ctx = context.Background()
 	}
 
+	var inject map[string]string
+	if len(globalEnv) > 0 {
+		inject = globalEnv[0]
+	}
 	cmd := exec.Command("/bin/sh", "-c", command)
-	cmd.Env = append(os.Environ(), hookEnv(payload)...)
+	cmd.Env = osenv.Merge(append(os.Environ(), hookEnv(payload)...), inject)
 	// Own process group, so stopHookCommand can signal the shell and whatever
 	// it forked. A hook command is a shell command and the shell may fork; a
 	// forked child inherits the captured stdout, and killing only the shell

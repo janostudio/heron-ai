@@ -67,6 +67,46 @@ func (l *ConfigLoader) LoadKnowledgeSettings() types.KnowledgeConfig {
 	return cfg
 }
 
+// LoadGlobalEnv 读取 .agents/settings.json 的 env 段，返回注入所有子进程的
+// 全局环境变量。
+//
+// 值按「路径」解析（对齐 internal/logging 的 dir 语义）：绝对路径原样，相对
+// 路径相对 baseDir（配置目录）展开为绝对路径。这样配置里写 `"AUTO": ".."`
+// 就得到配置目录的上一级绝对路径（工作区根），子进程无论 cwd 在哪都能命中。
+//
+// 文件或 env 段缺失是合法状态，返回 nil。
+func (l *ConfigLoader) LoadGlobalEnv() map[string]string {
+	path := filepath.Join(".agents", "settings.json")
+	data, err := l.fileStore.Read(path)
+	if err != nil {
+		return nil
+	}
+	var raw struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil || len(raw.Env) == 0 {
+		return nil
+	}
+	resolved := make(map[string]string, len(raw.Env))
+	for name, value := range raw.Env {
+		if value == "" {
+			resolved[name] = value
+			continue
+		}
+		if filepath.IsAbs(value) {
+			resolved[name] = filepath.Clean(value)
+			continue
+		}
+		joined := filepath.Join(l.baseDir, value)
+		if absolute, absErr := filepath.Abs(joined); absErr == nil {
+			resolved[name] = absolute
+		} else {
+			resolved[name] = filepath.Clean(joined)
+		}
+	}
+	return resolved
+}
+
 // LoadMCPServers 读取 .agents/settings.json 的 mcp 段。
 //
 // 与 runtime / logging / knowledge 三个段不同，这里返回 error：前三者是"缺了

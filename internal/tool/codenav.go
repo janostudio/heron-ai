@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/osenv"
 	"github.com/heron-ai/heron-engine/internal/workspace"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -21,13 +22,21 @@ import (
 type CodeNavTool struct {
 	workspace workspace.Workspace
 	command   string
+	// env 是注入 codels 子进程的环境变量（含引擎级全局 env）。nil 表示继承进程环境。
+	env []string
 }
 
-func NewCodeNavTool(ws workspace.Workspace, command string) *CodeNavTool {
+// NewCodeNavTool 构造 CodeNav 工具。injectEnv 可选（可变参数）：其键值注入
+// codels 子进程（覆盖同名进程环境变量）。
+func NewCodeNavTool(ws workspace.Workspace, command string, injectEnv ...map[string]string) *CodeNavTool {
 	if strings.TrimSpace(command) == "" {
 		command = "codels"
 	}
-	return &CodeNavTool{workspace: ws, command: command}
+	var env []string
+	if len(injectEnv) > 0 && len(injectEnv[0]) > 0 {
+		env = osenv.Merge(nil, injectEnv[0])
+	}
+	return &CodeNavTool{workspace: ws, command: command, env: env}
 }
 
 // NewCodeNavToolWithWorkspace uses the default codels helper command.
@@ -98,6 +107,10 @@ func (t *CodeNavTool) Execute(ctx context.Context, params map[string]any) (*type
 	}
 	cmd := exec.CommandContext(ctx, t.command, args...)
 	cmd.Dir = t.workspace.Root()
+	// 注入全局 env（如有）。nil 时保持 exec 的默认继承行为。
+	if len(t.env) > 0 {
+		cmd.Env = t.env
+	}
 	// Own process group + a group kill on cancel: the helper may fork, and a
 	// forked child holding the captured stdout would keep CombinedOutput
 	// blocked past the deadline (the same trap fixed for Bash in

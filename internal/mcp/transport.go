@@ -87,6 +87,9 @@ type StdioTransport struct {
 	Command string
 	Args    []string
 	Env     map[string]string
+	// GlobalEnv 是引擎级全局环境变量（settings.json 的 env 段），以最低优先级
+	// 并入子进程环境：被 Env（per-server 配置）和进程环境覆盖的同名项除外。
+	GlobalEnv map[string]string
 
 	mu        sync.Mutex
 	cmd       *exec.Cmd
@@ -100,11 +103,12 @@ type StdioTransport struct {
 }
 
 // NewStdioTransport builds a transport for `command args...`.
-func NewStdioTransport(command string, args []string, env map[string]string) *StdioTransport {
+func NewStdioTransport(command string, args []string, env map[string]string, globalEnv map[string]string) *StdioTransport {
 	return &StdioTransport{
 		Command:   command,
 		Args:      args,
 		Env:       env,
+		GlobalEnv: globalEnv,
 		pending:   make(map[int64]chan *Response),
 		done:      make(chan struct{}),
 		stderrBuf: &tailBuffer{},
@@ -152,14 +156,18 @@ func (t *StdioTransport) Start(_ context.Context) error {
 // and a config whose GITHUB_TOKEN loses to whatever the shell happened to
 // export is a config that looks applied and is not.
 func (t *StdioTransport) environment() []string {
-	if len(t.Env) == 0 {
+	if len(t.Env) == 0 && len(t.GlobalEnv) == 0 {
 		return os.Environ()
 	}
-	merged := make(map[string]string, len(t.Env)+16)
+	merged := make(map[string]string, len(t.Env)+len(t.GlobalEnv)+16)
+	// 优先级（低→高）：进程环境 < 全局 env < per-server env。
 	for _, entry := range os.Environ() {
 		if i := strings.IndexByte(entry, '='); i > 0 {
 			merged[entry[:i]] = entry[i+1:]
 		}
+	}
+	for name, value := range t.GlobalEnv {
+		merged[name] = value
 	}
 	for name, value := range t.Env {
 		merged[name] = value

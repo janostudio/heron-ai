@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/heron-ai/heron-engine/internal/osenv"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -50,9 +51,14 @@ const (
 // backend needs them.
 type localWorkspace struct {
 	root string
+	// injectEnv 是注入每条子进程（command call 与 Bash 工具）的全局环境变量。
+	// 由 runtime 从 settings.json 的 env 段解析后传入；nil 表示不注入。
+	injectEnv map[string]string
 }
 
-func NewLocal(root string) (Workspace, error) {
+// NewLocal 构造本地执行后端。injectEnv 可选（可变参数）：传入时其键值会
+// 注入每条子进程（覆盖同名进程环境变量）。
+func NewLocal(root string, injectEnv ...map[string]string) (Workspace, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("workspace root is required")
 	}
@@ -67,7 +73,11 @@ func NewLocal(root string) (Workspace, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace root is not a directory")
 	}
-	return &localWorkspace{root: filepath.Clean(absolute)}, nil
+	var env map[string]string
+	if len(injectEnv) > 0 {
+		env = injectEnv[0]
+	}
+	return &localWorkspace{root: filepath.Clean(absolute), injectEnv: env}, nil
 }
 
 func (s *localWorkspace) Root() string {
@@ -393,9 +403,14 @@ func (s *localWorkspace) Run(ctx context.Context, req CommandRequest) (CommandRe
 	// blocking for as long as that grandchild lives.
 	cmd.WaitDelay = commandWaitDelay
 	cmd.Dir = s.root
-	if len(req.Env) > 0 {
-		cmd.Env = req.Env
+	// 子进程环境 = 调用方给定的 env（非空则以它为底，保持既有语义）或进程
+	// 环境，再叠加注入的全局 env（后者覆盖同名）。无注入且无 req.Env 时结果
+	// 等于 os.Environ()，与 exec 的默认继承一致。
+	base := req.Env
+	if len(base) == 0 {
+		base = os.Environ()
 	}
+	cmd.Env = osenv.Merge(base, s.injectEnv)
 	cmd.Stdin = strings.NewReader(req.Stdin)
 	var stdout, stderr limitedBuffer
 	outputLimit := req.MaxOutputBytes

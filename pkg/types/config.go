@@ -16,6 +16,10 @@ type SettingsConfig struct {
 	Paths     PathsConfig         `json:"paths"`
 	Agent     AgentSettingsConfig `json:"agent"`
 	Knowledge KnowledgeConfig     `json:"knowledge,omitempty"`
+	// Env 是注入给所有子进程（command call、Bash 工具、MCP stdio server、
+	// hooks、codenav）的全局环境变量。值里出现相对路径时按配置目录解析
+	// （与 internal/logging 的 dir 同语义）。
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // KnowledgeConfig 配置知识自动学习相关能力。

@@ -39,10 +39,13 @@ type Workspace interface {
 
 // New constructs a Workspace from a configuration. It is the unified entry
 // point for building the execution backend.
-func New(cfg types.WorkspaceConfig, localRoot string) (Workspace, error) {
+//
+// injectEnv 可选（可变参数）：仅对本地后端生效，注入其每条子进程。远程后端
+// 的进程不在本机，本地路径型环境变量注入过去无意义，故不传递。
+func New(cfg types.WorkspaceConfig, localRoot string, injectEnv ...map[string]string) (Workspace, error) {
 	switch cfg.Type {
 	case "local", "":
-		return NewLocal(localRoot)
+		return NewLocal(localRoot, injectEnv...)
 	case "ssh":
 		if cfg.SSH == nil {
 			return nil, fmt.Errorf("workspace type %q requires an ssh config", cfg.Type)
