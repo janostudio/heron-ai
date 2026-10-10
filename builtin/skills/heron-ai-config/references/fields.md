@@ -84,32 +84,75 @@ command call **不能读对话内容**，但可以通过 `command.env` / `comman
 固定占位符同样可用：`${flow_session_id}`、`${flow_turn_id}`、`${team_id}`、
 `${team_turn_id}`、`${call_id}`、`${call_turn_id}`、`${attempt}`、`${recovery_of}`。
 
+### 先分清 `inputs` 的三种写法（**最容易踩的坑**）
+
+| 写法 | 匹配范围 | 什么时候用 |
+|---|---|---|
+| `user_message: true` | 用户本轮原始输入 | 需要用户输入的 call |
+| `flow_records: [X]` | **Flow 级** record | 引用**其他 team** 的产出，或已被提升为 flow 的 record |
+| **`records: [{from, record}]`** | **指定 call 的产出**（含同 team 内的） | **同 team 内的顺序依赖** |
+
+**关键区别**：`flow_records` / `team_records` 都只在 **Flow 级 record 集合**里按名字匹配
+（`internal/runtime/team/runtime.go` 的 `selectCallRecords`：两者合并进同一个
+`allowedNames`，但都从 `flowRecords` 参数中查找）。
+
+因此**同 team 内"前一个 call 刚产出、后一个 call 要引用"时必须用 `records` + `from`**：
+
+```yaml
+# ❌ 错：IssueCandidates 此刻还是 team scope，不在 Flow 级集合里
+acquire_slot:
+  depends_on: [search]
+  inputs:
+    flow_records: [IssueCandidates]
+# → 报 `record "IssueCandidates" not found among call inputs`
+
+# ✅ 对：用 from 指定同 team 内的产出方
+acquire_slot:
+  depends_on: [search]
+  inputs:
+    records:
+      - from: search              # 同 team 内的 call 名
+        record: IssueCandidates
+```
+
+`records` 形式会沿 `previous`（同 team 内前序 call 的结果）查找，
+这正是"team 内顺序依赖"的正确表达。
+
+### 完整示例
+
 ```yaml
 acquire_slot:
   type: command
+  depends_on: [search]
   command:
     command: "bash .agents/skills/xxx/scripts/acquire.sh"
     env:
       HERON_FLOW_SESSION_ID: "${flow_session_id}"
       AUTO_REPO: "${records.IssueCandidates.Data.repo}"   # ← 从上游记录取
   inputs:
-    flow_records: [IssueCandidates]        # ← 必须声明，否则找不到该 record
+    records:                                 # ← 必须声明，否则找不到该 record
+      - from: search
+        record: IssueCandidates
   output:
     record: WorktreeSlot
 ```
 
-**四个必须注意的点**：
+**三个必须注意的点**：
 
-1. **`inputs.flow_records` 必须包含被引用的 record**，否则报
-   `record "X" not found among call inputs`。
+1. **`inputs` 必须声明被引用的 record**，否则报
+   `record "X" not found among call inputs`（注意选对写法，见上）。
 2. **取不存在的字段会让 call 直接失败**，不是静默传空：
    `record "X" has no data field "y"`。这是有意设计——传空值比报错更危险。
 3. **只能取 `Data` 的顶层字段**。`${records.X.Data.a.b}` 会报
-   `too deep (expected <Name>.Data.<field>)`。若值埋在数组里（如
-   `data.parsed.candidates[0].repo`），需让上游 agent 额外输出一个顶层字段。
-4. **`Data` 里非字符串值会被字符串化**：`stringifyRecordValue` 处理
-   `string` / `bool` / 数字，其它类型走 `fmt.Sprint`——**嵌套对象会输出 Go 的 map 形式**
-   （`map[k:v]`）而非 JSON，不可直接使用。
+   `too deep (expected <Name>.Data.<field>)`。不同产出方的 `Data` 形态不同：
+
+   | 产出方 | `Data` 顶层 | 取业务值的方式 |
+   |---|---|---|
+   | **agent** | agent 在 schema 里声明的字段（**已展开到顶层**） | 直接引 `${...Data.<schema字段>}` |
+   | **command** | `{exit_code, stdout, stderr, passed}` | 业务 JSON 在 `stdout` 字符串里，引 `${...Data.stdout}` 后自行解析 |
+
+   值是非标量（map / array）时，引擎以 **JSON** 形式传递
+   （`stringifyRecordValue` 用 `json.Marshal`），消费方需自行 `jq` 解析。
 
 > **command 输出的 `Data` 是什么？** 视 executor 而定。以 `acquire.sh` 为例，
 > `WorktreeSlot.Data` 是 `{exit_code, passed, stderr, stdout}`——脚本的 JSON 结果在
