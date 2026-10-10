@@ -1,6 +1,7 @@
 package call
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -186,6 +187,14 @@ func stringifyRecordValue(v any) string {
 	case int64:
 		return strconv.FormatInt(typed, 10)
 	default:
-		return fmt.Sprint(typed)
+		// Non-scalar values (maps, slices) are rendered as their JSON
+		// encoding so the consumer receives the value in its original
+		// shape. fmt.Sprint would emit Go's debug format (e.g.
+		// "map[a:1]"), which no consumer (shell/jq) can parse.
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprint(typed)
+		}
+		return string(encoded)
 	}
 }

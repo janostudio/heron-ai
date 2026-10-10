@@ -1,6 +1,8 @@
 package call
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -207,4 +209,77 @@ func TestCommandEnvRespectsOsEnviron(t *testing.T) {
 
 	// commandEnv always appends os.Environ() first.
 	assert.GreaterOrEqual(t, len(env), len(os.Environ()))
+}
+
+func TestStringifyRecordValueScalars(t *testing.T) {
+	// Regression protection: scalar behaviour must not change.
+	cases := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{"nil", nil, ""},
+		{"string", "hello", "hello"},
+		{"bool true", true, "true"},
+		{"bool false", false, "false"},
+		{"float integral", float64(134288), "134288"},
+		{"float fractional", 1.5, "1.5"},
+		{"int", 42, "42"},
+		{"int64", int64(7), "7"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, stringifyRecordValue(tc.in))
+		})
+	}
+}
+
+func TestStringifyRecordValueStructures(t *testing.T) {
+	// Non-scalar values must be rendered as their original JSON shape,
+	// never Go's fmt.Sprint debug format (map[...] / [1 2]).
+	cases := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{"map", map[string]any{"a": float64(1)}, `{"a":1}`},
+		{"slice", []any{float64(1), float64(2)}, `[1,2]`},
+		{
+			"nested",
+			map[string]any{
+				"candidates": []any{
+					map[string]any{"number": float64(134288), "repo": "genie/genie"},
+				},
+				"notes": "x",
+			},
+			`{"candidates":[{"number":134288,"repo":"genie/genie"}],"notes":"x"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stringifyRecordValue(tc.in)
+			assert.Equal(t, tc.want, got)
+			assert.True(t, json.Valid([]byte(got)), "output must be valid JSON, got %q", got)
+		})
+	}
+}
+
+func TestStringifyRecordValueEscapesSpecialChars(t *testing.T) {
+	in := map[string]any{"quote": `he said "hi"`, "newline": "a\nb", "cn": "中文"}
+	got := stringifyRecordValue(in)
+	assert.True(t, json.Valid([]byte(got)), "output must be valid JSON, got %q", got)
+
+	var decoded map[string]string
+	assert.NoError(t, json.Unmarshal([]byte(got), &decoded))
+	assert.Equal(t, `he said "hi"`, decoded["quote"])
+	assert.Equal(t, "a\nb", decoded["newline"])
+	assert.Equal(t, "中文", decoded["cn"])
+}
+
+func TestStringifyRecordValueFallsBackOnMarshalError(t *testing.T) {
+	// A channel cannot be marshalled; fall back to fmt.Sprint without panicking.
+	ch := make(chan int)
+	assert.NotPanics(t, func() {
+		assert.Equal(t, fmt.Sprint(ch), stringifyRecordValue(ch))
+	})
 }
