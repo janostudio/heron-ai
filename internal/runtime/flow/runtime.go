@@ -1406,7 +1406,7 @@ func (r *Runtime) finishTurn(
 			FlowSessionID: result.Session.ID,
 			FlowTurnID:    result.Turn.ID,
 		},
-		Payload: map[string]any{"session": result.Session, "turn": result.Turn},
+		Payload: map[string]any{"session": result.Session, "turn": result.Turn, "error": result.Error},
 	}); err != nil {
 		return result, err
 	}
