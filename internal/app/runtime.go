@@ -317,6 +317,23 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	flowRuntime.SetLimits(definitions.Limits)
 	flowRuntime.SetTaskStore(taskStore)
 	flowRuntime.SetMediaStore(mediaStore)
+	// P0 mailbox dispatch: a coordinator's activate hands the work to a
+	// background team and the FlowTurn ends immediately. When that team
+	// finishes, the result is posted to the coordinator's inbox and the
+	// session is woken so the coordinator can summarize it. The wake runs in
+	// its own goroutine — the dispatch goroutine must not block on a whole
+	// turn — and logs, never panics, on failure.
+	flowRuntime.SetAsyncDispatch(true)
+	flowRuntime.SetWaker(func(sessionID string) {
+		go func() {
+			if _, err := flowRuntime.ResumeForMailbox(context.Background(), sessionID); err != nil {
+				execLogger.Error("resume for mailbox", map[string]any{
+					"flow_session_id": sessionID,
+					"error":           err.Error(),
+				})
+			}
+		}()
+	})
 	onTaskDone := func(doneCtx context.Context, task types.ToolTask) {
 		if task.ToolName == agent.SpawnChildToolName {
 			// Spawned children deliver their results through Collect handles
