@@ -71,7 +71,21 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 	// activation's own attempt when the TeamTurn is built.
 	flowTurn := types.FlowTurn{ID: causeTurnID, FlowSessionID: session.ID}
 
-	execution, err := r.executeTeamTurn(ctx, defs, session, flowTurn, act, "", nil, nil)
+	// The synchronous path hands each activated team the session's historical
+	// Flow-scope records (filtered by its binding's inputs inside
+	// executeTeamTurn). A dispatched team must see the same records: with nil
+	// here, every `flow_records` / `${records.X.Data.y}` reference in a
+	// dispatched team resolved against nothing and failed with "record X not
+	// found among call inputs". A load failure is reported on the work message
+	// like any other team failure rather than silently running with no inputs.
+	records, loadErr := r.loadHistoricalFlowRecords(ctx, session.ID)
+	var execution teamExecution
+	var err error
+	if loadErr != nil {
+		err = fmt.Errorf("load flow records for dispatched team %q: %w", targetTeam, loadErr)
+	} else {
+		execution, err = r.executeTeamTurn(ctx, defs, session, flowTurn, act, "", records, nil)
+	}
 	if err != nil {
 		execution.result.Error = err.Error()
 	}
