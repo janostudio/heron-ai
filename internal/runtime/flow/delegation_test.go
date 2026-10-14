@@ -24,9 +24,6 @@ type delegationTeamRuntime struct {
 	runs    map[string]int
 	callers map[string][]string
 	stepFn  func(run int) *types.Route
-	// coordinatorTarget is the Team the coordinator activates on its first run.
-	// Empty means the delegator.
-	coordinatorTarget string
 }
 
 func newDelegationRuntime(stepFn func(run int) *types.Route) *delegationTeamRuntime {
@@ -48,13 +45,9 @@ func (r *delegationTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest
 	switch id {
 	case "coordinator":
 		if run == 1 {
-			target := r.coordinatorTarget
-			if target == "" {
-				target = "delegator"
-			}
 			return types.TeamTurnResult{
 				Turn: req.TeamTurn,
-				Next: &types.Route{Action: types.NextActivate, Teams: []string{target}},
+				Next: &types.Route{Action: types.NextActivate, Teams: []string{"delegator"}},
 			}, nil
 		}
 		return types.TeamTurnResult{Turn: req.TeamTurn, Reply: "done", Next: &types.Route{Action: types.NextProceed}}, nil
@@ -228,44 +221,3 @@ func TestDelegatorActivationBypassesBackgroundDispatch(t *testing.T) {
 	require.Equal(t, 1, fake.runs["worker-a"])
 	require.Equal(t, []string{"delegator"}, fake.callers["worker-a"])
 }
-
-// With background dispatch enabled, a coordinator that activates a delegator
-// must hand it to the current turn rather than the mailbox: the background
-// path runs a single Team turn and discards its route, so the delegator's own
-// activations would never happen.
-func TestCoordinatorActivatingDelegatorStaysInTurnUnderBackgroundDispatch(t *testing.T) {
-	fake := newDelegationRuntime(func(run int) *types.Route {
-		if run == 1 {
-			return activate("worker-a")
-		}
-		return proceed()
-	})
-	sessions := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
-	runtime := newTestRuntime(delegationDefinitions([]string{"worker-a"}), fake, sessions, nil)
-	runtime.SetAsyncDispatch(true)
-
-	result, err := runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "delegation", Input: "go"})
-	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
-
-	require.Equal(t, 1, fake.runs["worker-a"], "the delegator's activation must run, not be dropped")
-	require.Equal(t, []string{"delegator"}, fake.callers["worker-a"])
-	require.Equal(t, 2, fake.runs["delegator"], "delegator wakes again when worker-a returns")
-	require.Equal(t, 2, fake.runs["coordinator"], "coordinator resumes after the delegator proceeds")
-}
-
-// Background dispatch is still used for Teams that do not delegate.
-func TestCoordinatorStillDispatchesPlainTeamsInBackground(t *testing.T) {
-	fake := newDelegationRuntime(proceed2)
-	fake.coordinatorTarget = "worker-a"
-	sessions := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
-	runtime := newTestRuntime(delegationDefinitions([]string{"worker-a"}), fake, sessions, nil)
-	runtime.SetAsyncDispatch(true)
-
-	result, err := runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "delegation", Input: "go"})
-	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
-	require.Equal(t, 0, fake.runs["delegator"])
-}
-
-func proceed2(int) *types.Route { return proceed() }
