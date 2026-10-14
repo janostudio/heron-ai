@@ -85,15 +85,23 @@ There is currently no configuration for run-data retention.
 ```json
 {
   "runtime": {
-    "max_team_turns": 20,
-    "max_calls_per_team_turn": 20,
+    "max_team_turns": 100,
+    "max_calls_per_team_turn": 100,
     "max_agent_rounds": 200,
     "max_parallel_teams": 20,
     "max_parallel_calls": 20,
-    "max_parallel_tools": 20
+    "max_parallel_tools": 20,
+    "max_activation_retries": 20,
+    "max_coordinate_retries": 20
   }
 }
 ```
+
+These are **safety backstops, not orchestration knobs**. The defaults are deliberately loose: a
+legitimate Flow hands work back and forth many times (a team re-dispatching a fixer after a failed
+test, a reviewer returning work for changes) and must not trip a limit while doing normal work. The
+bounds exist only to stop a runaway loop, so they sit well above any plausible legitimate turn
+count. Lower them in `settings.json` only if you want to fail a looping Flow earlier.
 
 These limits have different scopes:
 
@@ -102,6 +110,8 @@ These limits have different scopes:
 | `max_team_turns` | one `FlowTurn` | Maximum TeamTurns scheduled by this FlowTurn |
 | `max_calls_per_team_turn` | one `TeamTurn` | Maximum Agent/Command/Webhook calls executed by this TeamTurn |
 | `max_agent_rounds` | one `AgentTurn` | Maximum Model/Tool loop iterations inside one AgentTurn |
+| `max_activation_retries` | one `FlowTurn` | How often one Team may activate the same set of targets before the FlowTurn fails |
+| `max_coordinate_retries` | one `FlowTurn` | How often one Team may hand a decision back to its activator (the coordinate route) before the FlowTurn fails |
 
 `max_parallel_teams`, `max_parallel_calls`, and `max_parallel_tools` only limit concurrency. They do
-not change the counted units. The default values are `20 / 20 / 200`.
+not change the counted units, and exceeding them queues work rather than failing the turn.

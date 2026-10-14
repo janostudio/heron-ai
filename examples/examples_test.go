@@ -178,8 +178,9 @@ func TestAutoBugfixGitignoreExampleUsesNativeAgentsSkillsScriptsAndDeterministic
 
 	require.Equal(t, "auto_bugfix_gitignore", definitions.Flow.ID)
 	require.Equal(t, "default", definitions.Flow.EntryTeamID)
-	require.Equal(t, 20, definitions.Limits.MaxTeamTurns)
-	require.Equal(t, 20, definitions.Limits.MaxCallsPerTeamTurn)
+	// The fixture sets no runtime limits, so the (loose) engine defaults apply.
+	require.Equal(t, 100, definitions.Limits.MaxTeamTurns)
+	require.Equal(t, 100, definitions.Limits.MaxCallsPerTeamTurn)
 	require.Equal(t, 200, definitions.Limits.MaxAgentRounds)
 
 	require.ElementsMatch(t,

@@ -209,13 +209,13 @@ func TestRuntimeLimitsWithDefaults(t *testing.T) {
 	t.Run("all zero falls back to defaults", func(t *testing.T) {
 		got := (RuntimeLimits{}).WithDefaults()
 		require.Equal(t, RuntimeLimits{
-			MaxTeamTurns:         20,
-			MaxCallsPerTeamTurn:  20,
+			MaxTeamTurns:         100,
+			MaxCallsPerTeamTurn:  100,
 			MaxAgentRounds:       200,
 			MaxParallelTeams:     20,
 			MaxParallelCalls:     20,
-			MaxCoordinateRetries: 1,
-			MaxActivationRetries: 1,
+			MaxCoordinateRetries: 20,
+			MaxActivationRetries: 20,
 			MaxParallelTools:     20,
 		}, got)
 	})
@@ -233,13 +233,13 @@ func TestRuntimeLimitsWithDefaults(t *testing.T) {
 		}
 		got := in.WithDefaults()
 		require.Equal(t, RuntimeLimits{
-			MaxTeamTurns:         20,
-			MaxCallsPerTeamTurn:  20,
+			MaxTeamTurns:         100,
+			MaxCallsPerTeamTurn:  100,
 			MaxAgentRounds:       200,
 			MaxParallelTeams:     20,
 			MaxParallelCalls:     20,
-			MaxCoordinateRetries: 1,
-			MaxActivationRetries: 1,
+			MaxCoordinateRetries: 20,
+			MaxActivationRetries: 20,
 			MaxParallelTools:     20,
 		}, got)
 	})

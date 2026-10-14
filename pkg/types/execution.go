@@ -291,6 +291,13 @@ type FlowTurnResult struct {
 // RuntimeLimits bounds one external FlowTurn. These are safety defaults, not
 // a new orchestration concept: the flow may still choose any valid static or
 // dynamic route within these bounds.
+//
+// The defaults are deliberately loose. A legitimate Flow may hand work back
+// and forth many times (an owner team re-dispatching a fixer after a failed
+// test, a reviewer sending work back for changes), and it must not trip a
+// limit while doing normal work. These bounds exist only to stop a runaway
+// loop, so they sit well above any plausible legitimate turn count. A Flow
+// that wants tighter bounds can lower them in settings.json.
 type RuntimeLimits struct {
 	MaxTeamTurns        int `json:"max_team_turns"`
 	MaxCallsPerTeamTurn int `json:"max_calls_per_team_turn"`
@@ -308,10 +315,10 @@ type RuntimeLimits struct {
 
 func (l RuntimeLimits) WithDefaults() RuntimeLimits {
 	if l.MaxTeamTurns <= 0 {
-		l.MaxTeamTurns = 20
+		l.MaxTeamTurns = 100
 	}
 	if l.MaxCallsPerTeamTurn <= 0 {
-		l.MaxCallsPerTeamTurn = 20
+		l.MaxCallsPerTeamTurn = 100
 	}
 	if l.MaxAgentRounds <= 0 {
 		l.MaxAgentRounds = 200
@@ -323,10 +330,10 @@ func (l RuntimeLimits) WithDefaults() RuntimeLimits {
 		l.MaxParallelCalls = 20
 	}
 	if l.MaxCoordinateRetries <= 0 {
-		l.MaxCoordinateRetries = 1
+		l.MaxCoordinateRetries = 20
 	}
 	if l.MaxActivationRetries <= 0 {
-		l.MaxActivationRetries = 1
+		l.MaxActivationRetries = 20
 	}
 	if l.MaxParallelTools <= 0 {
 		l.MaxParallelTools = 20

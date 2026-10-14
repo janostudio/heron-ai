@@ -104,10 +104,10 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 
 | 现象 | 去看什么 |
 |---|---|
-| `flow_turn.failed` | 它的 `error`；常见 `repeated Flow activation "A->B" exceeded retry limit`（协调员重复激活同一个 team，调 `settings.json` 的 `runtime.max_activation_retries`） |
+| `flow_turn.failed` | 它的 `error`；常见 `repeated Flow activation "A->B" exceeded retry limit`（某个 team 反复激活同一组目标——多半是路由成环或 agent 没识别"这一步已完成"。先修路由，只有在确属合法的多次转交时才调 `settings.json` 的 `runtime.max_activation_retries`） |
 | `call_result.Status` 非 completed | `call_result.Error` |
 | 某 agent 的 `Requests` 数暴涨 | 上下文膨胀。每轮把前序工具输出重新带给模型；查 `context.compacted`，并考虑收窄工具输出或减少读取量 |
-| `flow_turn` 迟迟不结束 | `runtime.max_team_turns` 与协调员路由是否成环 |
+| `flow_turn` 迟迟不结束 | `runtime.max_team_turns` 兜底上限（默认很宽松，正常编排不会碰到）与路由是否成环 |
 | 模型输出为空 / 解析失败 | 先确认读的是 `payload.text` 而非 `payload.content`；若有 `agent.feedback`，说明模型没按 schema 输出，引擎已追加重试提示 |
 | command call 无输出 | `command_turn.*` 在 `team.jsonl`；看 `payload` 的退出码与 stderr |
 ## 3. 从配置预测"该发生什么"
