@@ -791,11 +791,13 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		batchRoutes := make(map[string]struct{})
 		enqueueBatchRoute := func(next activation) {
 			key := next.teamID + "\x00" + next.callerTeam
-			if next.teamID == coordinatorID(defs.Flow) {
+			if next.teamID == coordinatorID(defs.Flow) || isDelegator(defs.Flow, next.teamID) {
 				// The coordinator is the single aggregation point for this
 				// batch. A failed Team and a successful sibling may both
 				// route there; they must produce one coordinator activation,
-				// not duplicate coordinator turns.
+				// not duplicate coordinator turns. A delegator aggregates the
+				// same way for the Teams it activated: siblings that return in
+				// one batch wake it once, with all of their records visible.
 				key = next.teamID
 			}
 			if _, exists := batchRoutes[key]; exists {
@@ -824,13 +826,20 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 						hasWaitInput = true
 						continue
 					}
-					targets = []string{coordinatorID(defs.Flow)}
+					// A Team that was activated by a delegator returns to that
+					// delegator; every other Team falls through to the
+					// coordinator.
+					if isDelegator(defs.Flow, execution.activation.callerTeam) {
+						targets = []string{execution.activation.callerTeam}
+					} else {
+						targets = []string{coordinatorID(defs.Flow)}
+					}
 				}
 				for _, target := range targets {
 					enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
 				}
 			case types.NextActivate:
-				if !execution.binding.Coordinator {
+				if !canActivate(execution.binding) {
 					routeFailure = fmt.Errorf("team %q cannot activate other teams", execution.activation.teamID)
 					continue
 				}
@@ -849,7 +858,11 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				}
 				activationRetries[activationKey]++
 				for _, target := range next.Teams {
-					if r.asyncDispatch {
+					// Background dispatch reports back through the coordinator's
+					// mailbox, so it only serves the coordinator. A delegator
+					// enqueues its targets into the current turn instead: they
+					// run now and return to it.
+					if r.asyncDispatch && execution.binding.Coordinator {
 						// P0 mailbox dispatch: record the work message (the
 						// credential for the hand-off) and launch the team in
 						// the background. The target is deliberately NOT
@@ -1970,6 +1983,21 @@ func coordinatorID(flow types.Flow) string {
 		}
 	}
 	return ""
+}
+
+// canActivate reports whether a Flow binding may activate other Teams. The
+// coordinator always may; any other Team may once its binding declares
+// can_activate, which also bounds the targets it can name.
+func canActivate(binding types.FlowTeamBinding) bool {
+	return binding.Coordinator || len(binding.CanActivate) > 0
+}
+
+// isDelegator reports whether teamID is a Team other than the coordinator that
+// activates Teams of its own. The Teams it activates return to it, not to the
+// coordinator, so it can inspect their records and decide the next step.
+func isDelegator(flow types.Flow, teamID string) bool {
+	binding, ok := flow.Teams[teamID]
+	return ok && !binding.Coordinator && len(binding.CanActivate) > 0
 }
 
 func sortedStrings(values []string) []string {
