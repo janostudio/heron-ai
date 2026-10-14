@@ -858,11 +858,14 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				}
 				activationRetries[activationKey]++
 				for _, target := range next.Teams {
-					// Background dispatch reports back through the coordinator's
-					// mailbox, so it only serves the coordinator. A delegator
-					// enqueues its targets into the current turn instead: they
-					// run now and return to it.
-					if r.asyncDispatch && execution.binding.Coordinator {
+					// Background dispatch runs a single Team turn and reports
+					// back through the coordinator's mailbox, discarding the
+					// Team's own route. It therefore only fits a Team that
+					// finishes on its own. A delegator keeps activating other
+					// Teams and must see them return, and the Teams it
+					// activates return to it, so both stay in the current turn.
+					if r.asyncDispatch && execution.binding.Coordinator &&
+						!isDelegator(defs.Flow, target) {
 						// P0 mailbox dispatch: record the work message (the
 						// credential for the hand-off) and launch the team in
 						// the background. The target is deliberately NOT
