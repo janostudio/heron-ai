@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
@@ -43,25 +44,25 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 	}
 
 	defs := r.definitions.Snapshot()
-	entry := defs.Flow.EntryTeamID
-	if entry == "" {
-		// No entry team to wake; nothing to do.
-		return types.FlowTurnResult{}, nil
-	}
 
-	messages, err := r.listInbox(ctx, sessionID, types.MailboxAddress{TeamID: entry})
+	// Wake whoever has mail, not a hard-coded Team. A dispatched Team's result
+	// goes back to its activator, so any Team can be the one waiting; the
+	// entry Team is just the Team a user's turn starts at. The pick is by
+	// pending mail rather than by role, which is what makes the wake-up path
+	// the same for every Team.
+	target, messages, err := r.nextWakingTeam(ctx, sessionID)
 	if err != nil {
 		return types.FlowTurnResult{}, err
 	}
-	if len(messages) == 0 {
-		// Nothing to summarize.
+	if target == "" || len(messages) == 0 {
+		// No mail for anyone; nothing to summarize.
 		return types.FlowTurnResult{}, nil
 	}
 
 	// Consume the messages: they are about to be folded into the new turn, so
 	// they must no longer be pending. A failure to record a delivery is
 	// logged rather than escalated, mirroring the async dispatch path — a
-	// bookkeeping write must not turn a waking turn into a failed one.
+	// bookkeeping failure must not turn a waking turn into a failed one.
 	for _, msg := range messages {
 		if _, err := r.deliverMessage(ctx, session, msg, nil); err != nil {
 			logging.Error("deliver mailbox message on resume", map[string]any{
@@ -79,10 +80,50 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		Stability: "dynamic",
 		Priority:  85,
 	}
-	return r.runTurnWithContext(ctx, session, "", []types.ContextBlock{block})
+	// Wake the Team that has mail: its turn starts at that Team rather than at
+	// the Flow entry. The entry Team keeps its usual start when it is the one
+	// with mail, so a plain user turn is unchanged.
+	return r.runTurnWithActivationsAndContext(ctx, defs, session, "", []types.ContextBlock{block},
+		[]activation{{teamID: target}})
 }
 
-// renderMailboxInbox renders the entry team's inbox messages into a single
+// nextWakingTeam picks the Team whose inbox holds pending mail, together with
+// that mail. Teams are considered in a stable order (descending mail count,
+// then TeamID) so a wake-up is deterministic when several Teams have mail.
+// It returns an empty Team when nobody has mail.
+func (r *Runtime) nextWakingTeam(ctx context.Context, sessionID string) (string, []types.MailboxMessage, error) {
+	box, err := r.loadMailbox(ctx, sessionID)
+	if err != nil {
+		return "", nil, err
+	}
+	byTeam := make(map[string][]types.MailboxMessage)
+	for _, msg := range box {
+		if msg.Status != types.MailboxPending || msg.To.TeamID == "" {
+			continue
+		}
+		byTeam[msg.To.TeamID] = append(byTeam[msg.To.TeamID], msg)
+	}
+	if len(byTeam) == 0 {
+		return "", nil, nil
+	}
+	best := ""
+	for team := range byTeam {
+		if best == "" || len(byTeam[team]) > len(byTeam[best]) ||
+			(len(byTeam[team]) == len(byTeam[best]) && team < best) {
+			best = team
+		}
+	}
+	messages := byTeam[best]
+	sort.Slice(messages, func(i, j int) bool {
+		if !messages[i].CreatedAt.Equal(messages[j].CreatedAt) {
+			return messages[i].CreatedAt.Before(messages[j].CreatedAt)
+		}
+		return messages[i].MessageID < messages[j].MessageID
+	})
+	return best, messages, nil
+}
+
+// renderMailboxInbox renders a Team's inbox messages into a single
 // human-readable text block for the waking turn. Each message contributes its
 // originating team and, when present and structurally sound, the dispatched
 // team's Reply (team_result is a TeamTurnResult whose reply field is the

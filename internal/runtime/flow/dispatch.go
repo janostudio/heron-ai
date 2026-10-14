@@ -92,15 +92,21 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 	teamResult := execution.result
 	teamFailed := teamResult.Error != "" || teamResult.Turn.Status == types.TurnFailed
 
-	// Results are posted to the entry team's inbox: it is the Team a woken
-	// session resumes at.
-	entry := defs.Flow.EntryTeamID
-	if entry == "" {
-		entry = targetTeam
+	// Results go back to whoever dispatched this Team, not to the entry Team:
+	// a dispatched Team is a step inside its activator's work, so its result
+	// belongs in the activator's inbox. The activator rode in on the work
+	// message as caller_team; falling back to the entry Team keeps a message
+	// written by an older runtime readable.
+	resultTo := callerTeam
+	if resultTo == "" {
+		resultTo = defs.Flow.EntryTeamID
+	}
+	if resultTo == "" {
+		resultTo = targetTeam
 	}
 
 	// Record the work message's outcome on its own lifecycle first, then post
-	// a separate result message to the entry team's inbox.
+	// a separate result message to the activator's inbox.
 	resultPayload := map[string]any{"team_result": teamResult}
 	if teamFailed {
 		if _, mErr := r.markMessageDead(ctx, session, msg, teamResult.Error); mErr != nil {
@@ -121,12 +127,13 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 		}
 	}
 
-	// The result address carries the entry team in the same
-	// snake_case MailboxAddress shape the enqueue helpers produce. The
-	// container value (TeamTurnResult) keeps its published Go field names.
+	// The result address carries the activator (or the entry Team as a
+	// fallback) in the same snake_case MailboxAddress shape the enqueue
+	// helpers produce. The container value (TeamTurnResult) keeps its
+	// published Go field names.
 	causeTurn := types.FlowTurn{ID: causeTurnID}
 	resultMsg, rErr := r.enqueueResultMessage(ctx, session, causeTurn,
-		types.MailboxAddress{TeamID: entry},
+		types.MailboxAddress{TeamID: resultTo},
 		resultPayload,
 	)
 	if rErr != nil {
