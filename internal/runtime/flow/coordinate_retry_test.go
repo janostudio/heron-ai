@@ -110,7 +110,6 @@ func coordinateRetryDefinitions() *types.Definitions {
 				"default": {
 					ID:          "default",
 					TeamID:      "default-team",
-					Coordinator: true,
 					CanActivate: []string{"broken"},
 				},
 				"broken": {

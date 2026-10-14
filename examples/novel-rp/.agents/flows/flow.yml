@@ -4,7 +4,6 @@ entry: lobby
 teams:
   lobby:
     team: lobby_team
-    coordinator: true
     can_activate: [perform]
     inputs:
       user_message: true

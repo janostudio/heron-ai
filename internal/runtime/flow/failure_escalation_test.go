@@ -87,7 +87,7 @@ func (r *failureAggregationTeamRuntime) Run(_ context.Context, req types.TeamTur
 	}
 }
 
-func TestRuntimeEscalatesTeamFailureToCoordinatorWithoutReplayingFailedTeam(t *testing.T) {
+func TestRuntimeEscalatesTeamFailureToActivatorWithoutReplayingFailedTeam(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	sessions := storage.NewJSONLSessionWriter(files)
 	evidence := storage.NewJSONLEvidenceStore(files)
@@ -136,10 +136,11 @@ func failureAggregationDefinitions() *types.Definitions {
 				"default": {
 					ID:          "default",
 					TeamID:      "default-team",
-					Coordinator: true,
 					CanActivate: []string{"successful", "failed", "blocked"},
+					// The activator lists TeamFailureReport like any other record
+					// it wants to read; the engine does not inject it implicitly.
 					Inputs: types.InputSpec{
-						FlowRecords: []string{"SuccessfulWorkerReport"},
+						FlowRecords: []string{"SuccessfulWorkerReport", "TeamFailureReport"},
 					},
 				},
 				"successful": {

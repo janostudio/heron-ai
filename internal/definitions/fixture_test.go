@@ -12,10 +12,9 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// fixture builds a minimal real config tree: one flow, one coordinator team,
-// one directory-form agent. Nearly every test needs exactly this as a starting
-// point, and the coordinator matters — the loader rejects a flow with anything
-// other than exactly one.
+// fixture builds a minimal real config tree: one flow whose entry team is the
+// only team, and one directory-form agent. Nearly every test needs exactly this
+// as a starting point.
 //
 // Files are written inline rather than kept under testdata/ because the repo has
 // no testdata convention and because each test wants to mutate its own copy
@@ -39,7 +38,6 @@ entry: default
 teams:
   default:
     team: qa_team
-    coordinator: true
     inputs:
       user_message: true
 `)

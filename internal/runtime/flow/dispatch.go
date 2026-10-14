@@ -12,8 +12,8 @@ import (
 
 // launchAsyncDispatch executes a dispatched team in a background goroutine and
 // reports its result back through the mailbox. It is the async half of the P0
-// mailbox dispatch: the coordinator's FlowTurn has already ended by the time
-// this runs, so the goroutine owns its own lifetime.
+// mailbox dispatch: the dispatching FlowTurn has already ended by the time this
+// runs, so the goroutine owns its own lifetime.
 //
 // It deliberately uses context.Background(): the turn context is cancelled the
 // moment the dispatching turn returns, and a background team must not be killed
@@ -92,13 +92,15 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 	teamResult := execution.result
 	teamFailed := teamResult.Error != "" || teamResult.Turn.Status == types.TurnFailed
 
-	coordinator := coordinatorID(defs.Flow)
-	if coordinator == "" {
-		coordinator = targetTeam
+	// Results are posted to the entry team's inbox: it is the Team a woken
+	// session resumes at.
+	entry := defs.Flow.EntryTeamID
+	if entry == "" {
+		entry = targetTeam
 	}
 
 	// Record the work message's outcome on its own lifecycle first, then post
-	// a separate result message to the coordinator's inbox.
+	// a separate result message to the entry team's inbox.
 	resultPayload := map[string]any{"team_result": teamResult}
 	if teamFailed {
 		if _, mErr := r.markMessageDead(ctx, session, msg, teamResult.Error); mErr != nil {
@@ -119,12 +121,12 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 		}
 	}
 
-	// The result address carries the coordinator team in the same
+	// The result address carries the entry team in the same
 	// snake_case MailboxAddress shape the enqueue helpers produce. The
 	// container value (TeamTurnResult) keeps its published Go field names.
 	causeTurn := types.FlowTurn{ID: causeTurnID}
 	resultMsg, rErr := r.enqueueResultMessage(ctx, session, causeTurn,
-		types.MailboxAddress{TeamID: coordinator},
+		types.MailboxAddress{TeamID: entry},
 		resultPayload,
 	)
 	if rErr != nil {
@@ -135,8 +137,8 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 		})
 	}
 
-	// Wake the coordinator only if it is idle. A running coordinator keeps
-	// the result in its inbox; the next turn it starts will drain it.
+	// Wake the entry team only if the session is idle. A running session keeps
+	// the result in the inbox; the next turn it starts will drain it.
 	r.wakeIfIdle(ctx, session.ID)
 
 	if resultMsg.MessageID != "" {

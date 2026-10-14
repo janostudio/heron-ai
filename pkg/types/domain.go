@@ -3,6 +3,8 @@ package types
 import (
 	"fmt"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Flow is the V1 Flow definition. It owns the available Team definitions and
@@ -25,17 +27,44 @@ func (f *Flow) Normalize() {
 	}
 }
 
-// FlowTeamBinding binds a Team definition into a Flow and gives it a role in
-// this Flow. The map key is the Flow-local Team name; TeamID points to the
-// reusable Team definition under .agents/teams/.
+// FlowTeamBinding binds a Team definition into a Flow. The map key is the
+// Flow-local Team name; TeamID points to the reusable Team definition under
+// .agents/teams/.
+//
+// Teams are peers. A binding carries no role: the only structural difference
+// between Teams is which one the Flow enters first. What a Team may activate is
+// declared by CanActivate, and where its result goes follows from who
+// activated it.
 type FlowTeamBinding struct {
 	ID          string    `yaml:"-" json:"id"`
 	TeamID      string    `yaml:"team" json:"team"`
-	Coordinator bool      `yaml:"coordinator,omitempty" json:"coordinator,omitempty"`
 	CanActivate []string  `yaml:"can_activate,omitempty" json:"can_activate,omitempty"`
 	DependsOn   []string  `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 	Inputs      InputSpec `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	OnProceed   *Route    `yaml:"on_proceed,omitempty" json:"on_proceed,omitempty"`
+}
+
+// UnmarshalYAML decodes a binding and rejects the removed `coordinator` key.
+// Silently ignoring it would let an old Flow load and quietly change how it
+// routes, so it is reported with the replacement instead.
+func (b *FlowTeamBinding) UnmarshalYAML(node *yaml.Node) error {
+	type plain FlowTeamBinding
+	var decoded plain
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if node.Content[i].Value == "coordinator" {
+				return fmt.Errorf(
+					"line %d: the binding key \"coordinator\" has been removed; Teams are peers and the Flow's entry Team is set with `entry`",
+					node.Content[i].Line,
+				)
+			}
+		}
+	}
+	*b = FlowTeamBinding(decoded)
+	return nil
 }
 
 // Team is the V1 Team definition. A Team directly coordinates Calls. Each
@@ -220,7 +249,6 @@ func (f Flow) Validate() error {
 		return fmt.Errorf("flow %q: entry team %q not found", f.ID, f.EntryTeamID)
 	}
 
-	coordinators := 0
 	for name, binding := range f.Teams {
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("flow %q: team name is required", f.ID)
@@ -228,12 +256,6 @@ func (f Flow) Validate() error {
 		if binding.ID != "" && name != binding.ID {
 			return fmt.Errorf("flow %q: team key %q does not match binding id %q", f.ID, name, binding.ID)
 		}
-		if binding.Coordinator {
-			coordinators++
-		}
-	}
-	if coordinators != 1 {
-		return fmt.Errorf("flow %q: exactly one coordinator team is required, got %d", f.ID, coordinators)
 	}
 
 	for name, team := range f.Teams {

@@ -29,7 +29,6 @@ entry: default
 teams:
   default:
     team: default-team
-    coordinator: true
     inputs:
       user_message: true
 `), 0644))

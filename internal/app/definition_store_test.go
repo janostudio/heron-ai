@@ -40,7 +40,6 @@ entry: main
 teams:
   main:
     team: main-team
-    coordinator: true
     inputs:
       user_message: true
 `), 0o644))

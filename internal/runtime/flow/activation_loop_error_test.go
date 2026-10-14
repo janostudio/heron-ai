@@ -38,7 +38,6 @@ func loopingCoordinatorDefinitions() *types.Definitions {
 				"default": {
 					ID:          "default",
 					TeamID:      "default-team",
-					Coordinator: true,
 					CanActivate: []string{"worker"},
 				},
 				"worker": {ID: "worker", TeamID: "worker-team"},

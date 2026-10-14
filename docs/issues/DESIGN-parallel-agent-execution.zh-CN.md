@@ -7,9 +7,13 @@
 > 空闲判据 = `Status != running` 已可直接成立；缺的是**按它调度的调度器**。
 >
 > **P0 落地状态（2026-10-10）**：mailbox 调度已实现并端到端验证——
-> coordinator 派活后**立即返回 `waiting_input`**，后台执行被派发的 team，
-> 完成后投 result 消息到 coordinator inbox 并**唤醒**它开新 turn 汇总。
+> 入口 team 派活后**立即返回 `waiting_input`**，后台执行被派发的 team，
+> 完成后投 result 消息到入口 team 的 inbox 并**唤醒**它开新 turn。
 > 实现见 §九。**context 归属（话题隔离）仍按 §1.5 搁置**（P0 不做）。
+>
+> **平权修订（2026-10-14）**：引擎不再有 `coordinator` 这个概念。Flow 里的 team 全部平权，
+> 唯一结构差异是 `entry`（第一个被激活的 team）；回程、失败上报、汇聚都按"谁激活了我"走，
+> 见 §九 末尾"9.5 平权修订"。正文中沿用的"coordinator"一词，指**入口 team** 或**激活者**。
 
 
 ## 一、想要的设计（用户意图）
@@ -481,7 +485,7 @@ turn 不独占）→ C5 是记账跟上（并发事件）→ C6 是记账完善�
 | `pkg/types/mailbox.go`（新） | `MailboxMessage` / `MailboxAddress` / `MailboxMessageStatus`（`pending`/`claimed`/`delivered`/`dead`），叶子字段 snake_case |
 | `pkg/types/event.go` | 新增 5 常量：`mailbox.message.enqueued/claimed/delivered/dead` + `mailbox.batch.dispatched` |
 | `internal/runtime/flow/mailbox.go`（新） | 投递原语 `enqueueWorkMessage`/`enqueueResultMessage`/`claimMessage`/`deliverMessage`/`markMessageDead`；`loadMailbox`/`listInbox`（事件流折叠，**按 Revision 决胜、Seq 平手**，确定性） |
-| `internal/runtime/flow/dispatch.go`（新） | `launchAsyncDispatch`（后台 goroutine，`context.Background()` + `recover` 兜底）；`wakeIfIdle`（**coordinator running 时不唤醒**，result 留 inbox） |
+| `internal/runtime/flow/dispatch.go`（新） | `launchAsyncDispatch`（后台 goroutine，`context.Background()` + `recover` 兜底）；`wakeIfIdle`（**会话 running 时不唤醒**，result 留 inbox） |
 | `internal/runtime/flow/resume_mailbox.go`（新） | `ResumeForMailbox`（专用唤醒入口，**不走** pendingTeamResume/AgentResume）；`renderMailboxInbox` |
 | `internal/runtime/flow/runtime.go` | `asyncDispatch`/`wakeFn` 字段 + `SetAsyncDispatch`/`SetWaker`；`NextActivate` 分支 async 化；收尾写 `mailbox.batch.dispatched`（幂等守卫） |
 | `internal/app/runtime.go` | 接线：`SetAsyncDispatch(true)` + `SetWaker(go ResumeForMailbox)` |
@@ -491,7 +495,7 @@ turn 不独占）→ C5 是记账跟上（并发事件）→ C6 是记账完善�
 - **不做并发 turn**（C4 收敛）：派活轮 `finishTurn(waiting_input)` 结束，后台跑完后 `ResumeForMailbox` 开**新** turn 唤醒。任何时刻只有一个 flow turn running——`interruptedExecutions`/`pendingTeamResume`/`listInbox` 的单链假设**全部保持成立**。
 - **mailbox 落 `flow.jsonl`**（不新建第四份文件），复用 `storage.SessionWriter` 契约。
 - **开关控制**：`SetAsyncDispatch(bool)`，默认 false = 原同步路径；app 层 P0 硬编码 true。
-- **只对 coordinator 的 `NextActivate` 走 async**（`binding.Coordinator` 保证）。
+- **只对入口 team 的 `NextActivate` 走 async**，且目标须是不再自行 `activate` 别人的 team（见 §9.5）。
 - **归属锚点用 `CauseFlowTurnID`**，P0 **不引入** `FlowTurn.round`（§6.4 的降级）。
 - **与 async tool / park-then-resume 共存**：mailbox 是 team/flow 级，`wakeFlowOnToolTaskDone` 是 agent/tool 级，正交。
 
@@ -519,4 +523,28 @@ mailbox.batch.dispatched ×2（每 turn 各 1，已修重复 bug）
 - **P1/P2 未做**：context 归属（话题隔离）、round 字段、跨话题共享记忆。
 - **SSE**：async 轮为 `waiting_input` 不触发 `EventFlowTurnCompleted`，流保持连接等 result 回流（§七 I2）。
 
+### 9.5 平权修订（2026-10-14）
 
+P0 把"派活/汇总/失败上报/邮箱接收"都绑在 `binding.Coordinator` 上，等于在引擎里写死了一个特权角色，
+与 §1.3 "引擎层无特权"的判断相矛盾。修订后引擎只保留一条规则：
+
+> 谁激活了我，我结束或失败就回谁；没人激活我（我是 `entry`），结束时会话等用户，失败时会话失败。
+
+| 原机制 | 修订后 |
+|---|---|
+| `coordinator: true`，Flow 内恰好一个 | **删除**。旧配置里残留该键会在加载时报错并提示改用 `entry` |
+| 只有 coordinator 能 `activate` | 任何声明了 `can_activate` 的 team 都能；目标受其 `can_activate` 约束 |
+| 无 `on_proceed` 时一律回 coordinator | 回**激活者**；入口无激活者，会话 `waiting_input` |
+| 失败 → coordinator（coordinator 自己失败则 fail） | 失败 → 激活者；入口失败则 `fail` |
+| `coordinate` 路由 → coordinator | 交还给激活者；无激活者则由用户决定 |
+| 汇聚只对 coordinator 去重 | 对**所有有激活者的 team**（及入口）按目标去重，同批只唤醒一次 |
+| `TeamFailureReport` 自动注入 coordinator 的输入 | **取消隐式注入**；是否读取由各 team 的 `inputs` 白名单决定 |
+| mailbox 结果投给 coordinator | 投给**入口 team**（会话被唤醒后恢复的位置） |
+| 中断恢复 `coordinate` 激活 coordinator | 激活**入口 team**，由它重新决策 |
+| 后台派发只对 coordinator 生效 | 只对**入口 team** 的 `activate` 生效，且目标不能再自行 `activate`：后台路径只执行一轮并丢弃该 team 的路由，会吞掉目标自己的转交 |
+
+`RecoveryCoordinate`、`NextCoordinate`、`max_coordinate_retries` 的标识符保持不变（对外格式兼容），
+含义改为"把决定交还给激活者"，已在类型注释中说明。
+
+**对配置的影响**：任何 team 可以成为"统筹者"，只要声明 `can_activate`；被它激活的 team 结束后回到它，
+它可以读取这些 team 的记录再决定下一步，不再需要把所有决策集中到一个固定 team。

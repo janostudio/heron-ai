@@ -78,7 +78,6 @@ func testDefinitions() *types.Definitions {
 				"default": {
 					ID:          "default",
 					TeamID:      "default-team",
-					Coordinator: true,
 					CanActivate: []string{"verify"},
 					Inputs: types.InputSpec{
 						UserMessage: true,
@@ -284,7 +283,7 @@ func aggregateResumeDefinitions() *types.Definitions {
 			ID:          "aggregate",
 			EntryTeamID: "entry",
 			Teams: map[string]types.FlowTeamBinding{
-				"entry": {ID: "entry", TeamID: "entry-team", Coordinator: true},
+				"entry": {ID: "entry", TeamID: "entry-team"},
 			},
 		},
 		Teams: map[string]types.Team{

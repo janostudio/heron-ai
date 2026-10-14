@@ -24,6 +24,19 @@ const (
 // TeamRuntime.
 type NextAction string
 
+// The routing actions. Teams are peers, so each action is defined by the
+// activation relationship rather than by a Team's role:
+//
+//   - proceed: the Team is done. It follows the binding's on_proceed, or goes
+//     back to the Team that activated it; the entry has no activator, so the
+//     FlowTurn ends and waits for the user.
+//   - return: send the result back to a named Team, by default the activator.
+//   - coordinate: hand the decision back to the activator. It is what a failure
+//     becomes. The entry has no activator, so the user decides.
+//   - activate: run the named Teams. The Team must declare them in can_activate.
+//   - fail: end the FlowTurn as failed.
+//   - wait_tool, wait_approval: pause until the pending tool task or approval
+//     is resolved.
 const (
 	NextProceed      NextAction = "proceed"
 	NextReturn       NextAction = "return"

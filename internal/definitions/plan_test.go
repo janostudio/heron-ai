@@ -34,7 +34,6 @@ entry: default
 teams:
   default:
     team: qa_team
-    coordinator: true
     inputs:
       user_message: true
   half:

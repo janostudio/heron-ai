@@ -15,7 +15,6 @@ func TestFlowValidateAcceptsMixedCalls(t *testing.T) {
 			"default": {
 				ID:          "default",
 				TeamID:      "default-team",
-				Coordinator: true,
 				CanActivate: []string{"diagnose"},
 			},
 			"diagnose": {
@@ -64,37 +63,42 @@ func TestFlowValidateAcceptsMixedCalls(t *testing.T) {
 	}
 }
 
-func TestFlowValidateRequiresExactlyOneCoordinator(t *testing.T) {
-	tests := []struct {
-		name  string
-		teams map[string]FlowTeamBinding
-	}{
-		{
-			name: "none",
-			teams: map[string]FlowTeamBinding{
-				"default": {ID: "default", TeamID: "default-team"},
-			},
-		},
-		{
-			name: "multiple",
-			teams: map[string]FlowTeamBinding{
-				"default": {ID: "default", TeamID: "default-team", Coordinator: true},
-				"other":   {ID: "other", TeamID: "other-team", Coordinator: true},
-			},
+// Teams are peers: a Flow needs no designated coordinator, and the engine does
+// not care how many Teams can activate others.
+func TestFlowValidateDoesNotRequireACoordinator(t *testing.T) {
+	flow := Flow{
+		ID:          "flow",
+		EntryTeamID: "default",
+		Teams: map[string]FlowTeamBinding{
+			"default": {ID: "default", TeamID: "default-team", CanActivate: []string{"other"}},
+			"other":   {ID: "other", TeamID: "other-team", CanActivate: []string{"default"}},
 		},
 	}
+	if err := flow.Validate(); err != nil {
+		t.Fatalf("expected a Flow of peer Teams to validate, got %v", err)
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := (Flow{
-				ID:          "flow",
-				EntryTeamID: "default",
-				Teams:       tt.teams,
-			}).Validate()
-			if err == nil || !strings.Contains(err.Error(), "exactly one coordinator") {
-				t.Fatalf("expected coordinator validation error, got %v", err)
-			}
-		})
+// The removed `coordinator` binding key is reported with its replacement
+// instead of being ignored, so an old Flow cannot load and quietly route
+// differently.
+func TestFlowBindingRejectsRemovedCoordinatorKey(t *testing.T) {
+	var flow Flow
+	err := yaml.Unmarshal([]byte(`
+id: flow
+entry: default
+teams:
+  default:
+    team: default-team
+    coordinator: true
+`), &flow)
+	if err == nil {
+		t.Fatalf("expected the removed coordinator key to be rejected")
+	}
+	for _, want := range []string{"coordinator", "entry"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q should mention %q", err, want)
+		}
 	}
 }
 
@@ -113,7 +117,6 @@ func TestFlowValidateRejectsUnknownReferencesAndCycles(t *testing.T) {
 					"default": {
 						ID:          "default",
 						TeamID:      "default-team",
-						Coordinator: true,
 						CanActivate: []string{"missing"},
 					},
 				},
@@ -127,10 +130,9 @@ func TestFlowValidateRejectsUnknownReferencesAndCycles(t *testing.T) {
 				EntryTeamID: "default",
 				Teams: map[string]FlowTeamBinding{
 					"default": {
-						ID:          "default",
-						TeamID:      "default-team",
-						Coordinator: true,
-						DependsOn:   []string{"worker"},
+						ID:        "default",
+						TeamID:    "default-team",
+						DependsOn: []string{"worker"},
 					},
 					"worker": {
 						ID:        "worker",
@@ -310,7 +312,6 @@ entry: default
 teams:
   default:
     team: default-team
-    coordinator: true
     can_activate: [verify]
     inputs:
       user_message: true

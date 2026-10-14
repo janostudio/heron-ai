@@ -4,7 +4,6 @@ entry: research
 teams:
   research:
     team: research_team
-    coordinator: true
     inputs:
       user_message: true
     on_proceed: [writing]

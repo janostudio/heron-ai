@@ -41,8 +41,8 @@ func (r *Runtime) enqueueWorkMessage(
 	return r.enqueueMessage(ctx, session, causeTurn, to, mailboxKindWork, payload)
 }
 
-// enqueueResultMessage records a result message (a worker reporting back to its
-// coordinator) and returns it.
+// enqueueResultMessage records a result message (a dispatched Team reporting
+// back to the entry Team) and returns it.
 func (r *Runtime) enqueueResultMessage(
 	ctx context.Context,
 	session types.FlowSession,

@@ -52,7 +52,7 @@ Flow（调度）→ Team（组织）→ Call（执行项）→ Agent / Command /
 
 ```
 .agents/
-├── dev_flow.yml            # Flow：entry=dev，coordinator=true
+├── dev_flow.yml            # Flow：entry=dev
 ├── teams/dev_team.yml      # Team：单 call develop → developer
 ├── agents/developer/AGENT.md  # Agent：persona + model + tools + 正文
 ├── rules/coding-boundary.md   # 硬规则：只改 project/

@@ -82,7 +82,6 @@ agent_specs:                       # 与 team 一并创建的 agent 定义
   assistant: { persona: { role: "助手" }, body: "你是一个简洁的助手。" }
 bind:                              # 绑定进当前 flow（省略则不绑定）
   key: qa
-  coordinator: true
 ```
 
 `create_team` 一次调用可能落三类文件：Team 定义、`calls` 里引用但树里
@@ -95,8 +94,7 @@ bind:                              # 绑定进当前 flow（省略则不绑定�
 | `bind` 字段 | 含义 |
 |---|---|
 | `key` | 在 Flow 里的局部名（必填，不能与已有绑定重复） |
-| `coordinator` | 标记为协调 Team（一个 Flow 只能有一个） |
-| `can_activate` | 本绑定可激活的其他 Team |
+| `can_activate` | 本绑定可激活的其他 Team。任何 Team 都可以声明；不声明则不能激活别的 Team |
 | `depends_on` | 前置 Team |
 | `inputs` | 输入声明 |
 | `on_proceed` | 结束后的固定路由 |

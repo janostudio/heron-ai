@@ -34,7 +34,6 @@ func TestSimpleQAExampleUsesNewRuntimeConfiguration(t *testing.T) {
 	require.Equal(t, "default", definitions.Flow.ID)
 	require.Equal(t, "default", definitions.Flow.EntryTeamID)
 	require.Len(t, definitions.Flow.Teams, 1)
-	require.True(t, definitions.Flow.Teams["default"].Coordinator)
 
 	team := definitions.Teams["qa_team"]
 	require.Equal(t, "qa_team", team.ID)
@@ -58,7 +57,6 @@ func TestCodeReviewExampleUsesParallelCallsAndOutputContract(t *testing.T) {
 
 	require.Equal(t, "code_review_flow", definitions.Flow.ID)
 	require.Equal(t, "review", definitions.Flow.EntryTeamID)
-	require.True(t, definitions.Flow.Teams["review"].Coordinator)
 
 	team := definitions.Teams["review_team"]
 	require.Len(t, team.Calls, 3)
@@ -80,7 +78,6 @@ func TestBlogWriterExampleUsesTeamRoutingAndSharedRecords(t *testing.T) {
 	require.Equal(t, "blog_writer_flow", definitions.Flow.ID)
 	require.Equal(t, "research", definitions.Flow.EntryTeamID)
 	require.Len(t, definitions.Flow.Teams, 3)
-	require.True(t, definitions.Flow.Teams["research"].Coordinator)
 	require.Equal(t, []string{"writing"}, definitions.Flow.Teams["research"].OnProceed.Teams)
 	require.Equal(t, []string{"review"}, definitions.Flow.Teams["writing"].OnProceed.Teams)
 	// Session lifecycle is no longer configurable: the terminal team has no
@@ -115,16 +112,15 @@ func TestBlogWriterExampleUsesTeamRoutingAndSharedRecords(t *testing.T) {
 	}
 }
 
-func TestNovelRPExampleUsesCoordinatorActivationAndParallelLanes(t *testing.T) {
+func TestNovelRPExampleUsesEntryActivationAndParallelLanes(t *testing.T) {
 	definitions := loadDefinitions(t, "novel-rp", ".agents/flows/flow.yml")
 
 	require.Equal(t, "novel_story", definitions.Flow.ID)
 	require.Equal(t, "lobby", definitions.Flow.EntryTeamID)
 	require.Len(t, definitions.Flow.Teams, 3)
 
-	// lobby is the single coordinator and may activate perform.
+	// lobby is the entry and may activate perform.
 	lobby := definitions.Flow.Teams["lobby"]
-	require.True(t, lobby.Coordinator)
 	require.Equal(t, []string{"perform"}, lobby.CanActivate)
 	require.Nil(t, lobby.OnProceed)
 

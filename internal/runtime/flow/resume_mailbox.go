@@ -10,14 +10,14 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// ResumeForMailbox drains the coordinator's pending inbox messages and starts
-// a new FlowTurn so the coordinator can summarize them. It is the wake-up path
+// ResumeForMailbox drains the entry team's pending inbox messages and starts a
+// new FlowTurn so the entry team can act on them. It is the wake-up path
 // for async mailbox dispatch: unlike ResumeWithContext it does NOT consult
 // pendingTeamResume/pendingAgentResume (those are for tool/agent resume), so it
 // cannot mis-route when there are unrelated pending items.
 //
-// It is deliberately forgiving. A wake-up can be raced by the coordinator
-// starting another turn on its own, or arrive for a session that has already
+// It is deliberately forgiving. A wake-up can be raced by another turn the
+// session starts on its own, or arrive for a session that has already
 // reached a terminal state; neither is an error the caller can act on, and the
 // result message simply stays in the inbox for the next turn to drain. In those
 // cases ResumeForMailbox returns a zero-value FlowTurnResult and a nil error
@@ -43,13 +43,13 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 	}
 
 	defs := r.definitions.Snapshot()
-	coordinator := coordinatorID(defs.Flow)
-	if coordinator == "" {
-		// No coordinator to wake; nothing to do.
+	entry := defs.Flow.EntryTeamID
+	if entry == "" {
+		// No entry team to wake; nothing to do.
 		return types.FlowTurnResult{}, nil
 	}
 
-	messages, err := r.listInbox(ctx, sessionID, types.MailboxAddress{TeamID: coordinator})
+	messages, err := r.listInbox(ctx, sessionID, types.MailboxAddress{TeamID: entry})
 	if err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -82,7 +82,7 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 	return r.runTurnWithContext(ctx, session, "", []types.ContextBlock{block})
 }
 
-// renderMailboxInbox renders the coordinator's inbox messages into a single
+// renderMailboxInbox renders the entry team's inbox messages into a single
 // human-readable text block for the waking turn. Each message contributes its
 // originating team and, when present and structurally sound, the dispatched
 // team's Reply (team_result is a TeamTurnResult whose reply field is the

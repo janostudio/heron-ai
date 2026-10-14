@@ -114,7 +114,7 @@ CodeBuddy 的 `prompts` 数组（60+ 条）可归为几类：
 #### 2.5 `structured-handoff`（如何传出固定结构）—— 能力级 Skill
 
 - **你的补充点**：告诉 agent「有哪些可分发（spawn 什么 agent）、怎么传出固定结构（structured output 约定）」。
-- **现状**：`StructuredOutput` 有 schema 校验，但"何时该用结构化输出、如何把结果传给 coordinator/下游"没有系统提示。
+- **现状**：`StructuredOutput` 有 schema 校验，但"何时该用结构化输出、如何把结果传给激活它的 team/下游"没有系统提示。
 - **归属**：能力级，做成内置 skill。内容是"当你需要把结论交给团队/下游时，按 `structured_output` schema 产出，不要自由发挥；字段缺失用空值"。
 - **提示词要点**：
   - 声明本 agent 可产出的记录类型（`output.record`）

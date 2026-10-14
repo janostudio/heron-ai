@@ -4,6 +4,5 @@ entry: review
 teams:
   review:
     team: review_team
-    coordinator: true
     inputs:
       user_message: true

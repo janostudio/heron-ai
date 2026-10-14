@@ -60,7 +60,7 @@ func recordCapturingDefinitions() *types.Definitions {
 			EntryTeamID: "default",
 			Teams: map[string]types.FlowTeamBinding{
 				"default": {
-					ID: "default", TeamID: "default-team", Coordinator: true,
+					ID: "default", TeamID: "default-team",
 					CanActivate: []string{"worker"},
 					Inputs:      types.InputSpec{UserMessage: true},
 				},

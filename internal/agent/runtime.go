@@ -2157,7 +2157,7 @@ func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.Agent
 					"create_team: id (required), goal, state, output, " +
 					"calls (map of callName -> {type, agent, responsibility, depends_on, output}), " +
 					"agent_specs (map of agentID -> agent spec, for agents created alongside the team), " +
-					"bind ({key, coordinator, can_activate, depends_on, inputs, on_proceed}) to wire the team into the current flow. " +
+					"bind ({key, can_activate, depends_on, inputs, on_proceed}) to wire the team into the current flow. " +
 					"name and id are interchangeable."},
 			},
 			Required: []string{"action", "spec"},

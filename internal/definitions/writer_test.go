@@ -103,8 +103,6 @@ func TestCreateTeamCreatesInlineAgentsAndBindsFlow(t *testing.T) {
 	require.Contains(t, snapshot.Flow.Teams, "research",
 		"the new binding must be visible on the next turn")
 	require.Equal(t, "research_team", snapshot.Flow.Teams["research"].TeamID)
-	require.False(t, snapshot.Flow.Teams["research"].Coordinator,
-		"the new binding must not become a second coordinator")
 
 	// The flow file is re-marshalled, so the original binding survives.
 	require.Equal(t, "qa_team", snapshot.Flow.Teams["default"].TeamID)
@@ -382,9 +380,11 @@ calls:
 	requireNoStagingDir(t, f.root)
 }
 
-func TestApplyRejectsSecondCoordinator(t *testing.T) {
+func TestCreateTeamBindsPeerWithoutCoordinatorFlag(t *testing.T) {
 	f := newFixture(t)
 
+	// bind.coordinator no longer exists. A second Team bound without it is an
+	// ordinary peer, so creating it succeeds.
 	_, err := f.writer(t).CreateTeam(ctx(), CreateTeamRequest{
 		Mode: ModeCreate,
 		Spec: map[string]any{
@@ -392,30 +392,12 @@ func TestApplyRejectsSecondCoordinator(t *testing.T) {
 			"calls": map[string]any{
 				"answer": map[string]any{"type": "agent", "agent": "assistant"},
 			},
-			"bind": map[string]any{"key": "second", "coordinator": true},
+			"bind": map[string]any{"key": "second"},
 		},
 	})
-	require.Error(t, err)
-	require.ErrorContains(t, err, "exactly one coordinator team is required")
-
-	// Nothing landed: the flow is untouched and the new definitions were never
-	// committed, because the failure happens while the plan is being built.
-	require.Len(t, f.store.Snapshot().Flow.Teams, 1)
-	require.NotContains(t, f.store.Snapshot().Teams, "second_team")
-	require.False(t, f.exists("teams/second_team.yml"))
-
-	// The pure helper covers the same rule directly.
-	flow := types.Flow{
-		ID:          "default",
-		EntryTeamID: "a",
-		Teams: map[string]types.FlowTeamBinding{
-			"a": {ID: "a", TeamID: "team-a", Coordinator: true},
-			"b": {ID: "b", TeamID: "team-b", Coordinator: true},
-		},
-	}
-	require.ErrorContains(t, checkSingleCoordinator(flow), "exactly one coordinator")
-	delete(flow.Teams, "b")
-	require.NoError(t, checkSingleCoordinator(flow))
+	require.NoError(t, err)
+	require.Len(t, f.store.Snapshot().Flow.Teams, 2)
+	require.Contains(t, f.store.Snapshot().Teams, "second_team")
 }
 
 func TestApplyRejectsOutsideConfigRoot(t *testing.T) {

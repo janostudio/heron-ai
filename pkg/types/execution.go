@@ -292,11 +292,13 @@ type FlowTurnResult struct {
 // a new orchestration concept: the flow may still choose any valid static or
 // dynamic route within these bounds.
 type RuntimeLimits struct {
-	MaxTeamTurns         int `json:"max_team_turns"`
-	MaxCallsPerTeamTurn  int `json:"max_calls_per_team_turn"`
-	MaxAgentRounds       int `json:"max_agent_rounds"`
-	MaxParallelTeams     int `json:"max_parallel_teams"`
-	MaxParallelCalls     int `json:"max_parallel_calls"`
+	MaxTeamTurns        int `json:"max_team_turns"`
+	MaxCallsPerTeamTurn int `json:"max_calls_per_team_turn"`
+	MaxAgentRounds      int `json:"max_agent_rounds"`
+	MaxParallelTeams    int `json:"max_parallel_teams"`
+	MaxParallelCalls    int `json:"max_parallel_calls"`
+	// MaxCoordinateRetries bounds how often one Team may hand a decision back
+	// to its activator (the coordinate route) within a FlowTurn.
 	MaxCoordinateRetries int `json:"max_coordinate_retries"`
 	MaxActivationRetries int `json:"max_activation_retries"`
 	// Tool parallelism is inside one AgentTurn and is not a Flow/Team

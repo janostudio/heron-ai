@@ -40,10 +40,10 @@ type Runtime struct {
 	media       types.MediaStore
 	resumeMu    sync.Mutex
 
-	// asyncDispatch opts the runtime into P0 mailbox dispatch: when a
-	// coordinator activates a team, the work is handed to a background
-	// goroutine and the current FlowTurn ends immediately instead of
-	// waiting for the activated team. It defaults to false, in which case
+	// asyncDispatch opts the runtime into P0 mailbox dispatch: when the entry
+	// team activates a team, the work is handed to a background goroutine and
+	// the current FlowTurn ends immediately instead of waiting for the
+	// activated team. It defaults to false, in which case
 	// the activate path is byte-for-byte the synchronous behaviour it has
 	// always had.
 	asyncDispatch bool
@@ -82,9 +82,9 @@ func (r *Runtime) SetMediaStore(store types.MediaStore) {
 }
 
 // SetAsyncDispatch enables or disables asynchronous mailbox dispatch. When
-// enabled, a coordinator's activate hands the work to a background goroutine
+// enabled, the entry team's activate hands the work to a background goroutine
 // and the FlowTurn ends immediately; the activated team's result is posted
-// back to the coordinator's mailbox and the session is woken when idle. When
+// back to the entry team's mailbox and the session is woken when idle. When
 // disabled (the default) the activate path is fully synchronous and unchanged.
 func (r *Runtime) SetAsyncDispatch(enabled bool) {
 	r.asyncDispatch = enabled
@@ -468,11 +468,11 @@ func (r *Runtime) Recover(ctx context.Context, sessionID string, req types.Recov
 		if target.TeamID == "" {
 			return types.FlowTurnResult{}, fmt.Errorf("interrupted %s cannot coordinate because no Team was recorded", target.Kind)
 		}
-		// Snapshot once here so the coordinator this activation names and the
+		// Snapshot once here so the entry team this activation names and the
 		// tree the turn resolves against come from the same generation.
 		defs := r.definitions.Snapshot()
 		result, runErr := r.runTurnWithActivationsAndContext(ctx, defs, status.Session, recoveryInput(req, target), nil, []activation{{
-			teamID:     coordinatorID(defs.Flow),
+			teamID:     defs.Flow.EntryTeamID,
 			callerTeam: target.CallerTeam,
 			force:      true,
 			attempt:    target.Attempt + 1,
@@ -638,8 +638,18 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		}
 		queue = append(queue, next)
 	}
-	for _, activation := range initial {
-		enqueue(activation)
+	// activators remembers, per Team, who activated it. Only an activate route
+	// (or the turn's initial activation) sets it; a return or an on_proceed
+	// route does not, so a Team keeps the same activator however often it is
+	// reached again.
+	activators := make(map[string]string)
+	for _, initialActivation := range initial {
+		initialActivation.activator = initialActivation.callerTeam
+		activators[initialActivation.teamID] = initialActivation.activator
+		enqueue(initialActivation)
+	}
+	routeTo := func(target, from string) activation {
+		return activation{teamID: target, callerTeam: from, activator: activators[target]}
 	}
 	completedTeams := make(map[string]bool)
 	failedTeams := make(map[string]bool)
@@ -688,8 +698,8 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		if len(ready) == 0 {
 			// Activations whose dependencies failed are intentionally
 			// discarded. Their work cannot be executed with valid inputs;
-			// the coordinator receives the original TeamFailureReport
-			// instead. Do not turn this normal failure propagation into a
+			// the Team that activated the failed one receives the original
+			// TeamFailureReport instead. Do not turn this normal failure propagation into a
 			// generic "activation graph cannot make progress" error.
 			if len(queue) == 0 {
 				break
@@ -767,8 +777,8 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 			if teamFailure := teamFailureRecord(turn, execution); teamFailure != nil {
 				// A failed intermediate Team is a collaboration result, not
 				// an automatic replay request. Publish the failure as a
-				// Flow-scope record so the coordinator can summarize it
-				// together with successful sibling Teams.
+				// Flow-scope record so the Team that activated it can read it
+				// together with the successful sibling Teams' records.
 				allRecords = append(allRecords, *teamFailure)
 				result.Records = append(result.Records, *teamFailure)
 				if err := r.publishFlowRecord(ctx, session, turn, *teamFailure); err != nil {
@@ -785,17 +795,14 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 		hasWaitApproval := false
 		var routeFailure error
 		var resolvedRoute *types.Route
-		// Several sibling Teams can report to the same coordinator in one
-		// batch. Route that coordinator once and let it aggregate all
-		// successful results and TeamFailureReport records.
+		// Several sibling Teams can report to the same Team in one batch. A Team
+		// that has an activator (or is the entry) is an aggregation point: it is
+		// routed once per batch and sees every sibling's records, including
+		// TeamFailureReport, instead of waking once per sibling.
 		batchRoutes := make(map[string]struct{})
 		enqueueBatchRoute := func(next activation) {
 			key := next.teamID + "\x00" + next.callerTeam
-			if next.teamID == coordinatorID(defs.Flow) {
-				// The coordinator is the single aggregation point for this
-				// batch. A failed Team and a successful sibling may both
-				// route there; they must produce one coordinator activation,
-				// not duplicate coordinator turns.
+			if _, aggregates := activators[next.teamID]; aggregates {
 				key = next.teamID
 			}
 			if _, exists := batchRoutes[key]; exists {
@@ -820,17 +827,20 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 			case types.NextProceed:
 				targets := fixedTargets(execution.binding)
 				if len(targets) == 0 {
-					if execution.activation.teamID == coordinatorID(defs.Flow) {
+					// With no fixed route the result goes back to whoever
+					// activated this Team. The entry has no activator, so the
+					// FlowTurn ends and waits for the user.
+					if execution.activation.activator == "" {
 						hasWaitInput = true
 						continue
 					}
-					targets = []string{coordinatorID(defs.Flow)}
+					targets = []string{execution.activation.activator}
 				}
 				for _, target := range targets {
-					enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
+					enqueueBatchRoute(routeTo(target, execution.activation.teamID))
 				}
 			case types.NextActivate:
-				if !execution.binding.Coordinator {
+				if len(execution.binding.CanActivate) == 0 {
 					routeFailure = fmt.Errorf("team %q cannot activate other teams", execution.activation.teamID)
 					continue
 				}
@@ -849,11 +859,19 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				}
 				activationRetries[activationKey]++
 				for _, target := range next.Teams {
-					if r.asyncDispatch {
+					activators[target] = execution.activation.teamID
+					// Background dispatch ends the current turn and wakes the
+					// entry when the result arrives, so only the entry may use
+					// it. The dispatched Team runs a single turn and its route
+					// is discarded, so it must also be a Team that finishes on
+					// its own rather than one that activates others.
+					if r.asyncDispatch &&
+						execution.activation.teamID == defs.Flow.EntryTeamID &&
+						len(defs.Flow.Teams[target].CanActivate) == 0 {
 						// P0 mailbox dispatch: record the work message (the
 						// credential for the hand-off) and launch the team in
 						// the background. The target is deliberately NOT
-						// enqueued into this turn's queue: the coordinator's
+						// enqueued into this turn's queue: the entry team's
 						// turn ends now, and the activated team's result comes
 						// back as a fresh mailbox result message.
 						msg, err := r.enqueueWorkMessage(ctx, session, turn,
@@ -869,17 +887,18 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 						r.launchAsyncDispatch(session, turn.ID, target, msg)
 						continue
 					}
-					enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
+					enqueueBatchRoute(routeTo(target, execution.activation.teamID))
 				}
 			case types.NextReturn:
 				target := next.CallerTeam
 				if target == "" {
-					target = execution.activation.callerTeam
+					target = execution.activation.activator
 				}
 				if target == "" {
-					target = coordinatorID(defs.Flow)
+					hasWaitInput = true
+					continue
 				}
-				enqueueBatchRoute(activation{teamID: target, callerTeam: execution.activation.teamID})
+				enqueueBatchRoute(routeTo(target, execution.activation.teamID))
 			case types.NextCoordinate:
 				sourceTeam := execution.activation.teamID
 				if coordinateRetries[sourceTeam] >= r.limits.MaxCoordinateRetries {
@@ -892,7 +911,13 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 					continue
 				}
 				coordinateRetries[sourceTeam]++
-				enqueueBatchRoute(activation{teamID: coordinatorID(defs.Flow), callerTeam: execution.activation.teamID})
+				// Hand the decision back to whoever activated this Team; with
+				// no activator the user is the one to decide.
+				if execution.activation.activator == "" {
+					hasWaitInput = true
+					continue
+				}
+				enqueueBatchRoute(routeTo(execution.activation.activator, execution.activation.teamID))
 			case types.NextWaitTool:
 				hasWaitTool = true
 			case types.NextWaitApproval:
@@ -949,8 +974,16 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 }
 
 type activation struct {
-	teamID             string
-	callerTeam         string
+	teamID string
+	// callerTeam is the Team whose routing triggered this activation. It
+	// changes every time the Team is reached again, including when a Team it
+	// activated returns to it.
+	callerTeam string
+	// activator is the Team that activated teamID. It is fixed when teamID is
+	// activated and is where the Team's result, failure and escalation go. Empty
+	// means nothing activated it: it is the Flow's entry, so there is no one to
+	// return to.
+	activator          string
 	force              bool
 	attempt            int
 	recoveryOf         string
@@ -1145,9 +1178,10 @@ func (r *Runtime) executeTeamTurn(
 	}
 
 	// A failed Agent/Call makes its containing Team fail. Escalate that
-	// failure to the Flow coordinator exactly once; this is not an automatic
-	// replay request. The coordinator can aggregate this failure with sibling
-	// Team results and decide what to tell the user.
+	// failure to the Team that activated it exactly once; this is not an
+	// automatic replay request. That Team can aggregate the failure with its
+	// sibling Teams' results and decide what to do. A Team nobody activated
+	// (the entry) has nobody to escalate to, so its failure ends the FlowTurn.
 	teamFailed := runErr != nil ||
 		teamResult.Error != "" ||
 		teamResult.Turn.Status == types.TurnFailed ||
@@ -1163,7 +1197,7 @@ func (r *Runtime) executeTeamTurn(
 		if teamResult.Error == "" {
 			teamResult.Error = reason
 		}
-		if current.teamID == coordinatorID(defs.Flow) {
+		if current.activator == "" {
 			teamResult.Next = &types.Route{Action: types.NextFail, Reason: reason}
 		} else {
 			teamResult.Next = &types.Route{Action: types.NextCoordinate, Reason: reason}
@@ -1274,8 +1308,8 @@ func (r *Runtime) executeTeamTurn(
 	execution.result = teamResult
 	execution.next = next
 	// A Team-level execution error is represented in TeamTurnResult so the
-	// Flow can report it to the coordinator. It is not an automatic replay
-	// request; only an explicit coordinator route may activate work again.
+	// Flow can report it to the Team that activated it. It is not an automatic
+	// replay request; only an explicit activate route may run work again.
 	return execution, nil
 }
 
@@ -1309,10 +1343,10 @@ func teamFailureRecord(flowTurn types.FlowTurn, execution teamExecution) *types.
 	if teamResult.Error == "" && teamResult.Turn.Status != types.TurnFailed {
 		return nil
 	}
-	// The default/Flow coordinator has no higher Team to report to. Its
+	// A Team nobody activated (the entry) has nobody to report to. Its
 	// failure is terminal for this FlowTurn and is returned to the caller
 	// directly rather than wrapped as another coordination record.
-	if execution.binding.Coordinator {
+	if execution.activation.activator == "" {
 		return nil
 	}
 
@@ -1937,39 +1971,7 @@ func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec) []typ
 }
 
 func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding) []types.SharedRecord {
-	selected := selectFlowRecords(records, binding.Inputs)
-	if !binding.Coordinator {
-		return selected
-	}
-
-	// Coordinator input is also an execution envelope: it must see failures
-	// produced by sibling Teams even when a Flow omitted the synthetic
-	// TeamFailureReport from its explicit allowlist. Successful records remain
-	// governed by the normal Flow input policy.
-	seen := make(map[string]struct{}, len(selected))
-	for _, record := range selected {
-		seen[record.RecordID] = struct{}{}
-	}
-	for _, record := range records {
-		if record.Name != "TeamFailureReport" {
-			continue
-		}
-		if _, exists := seen[record.RecordID]; exists {
-			continue
-		}
-		selected = append(selected, record)
-		seen[record.RecordID] = struct{}{}
-	}
-	return selected
-}
-
-func coordinatorID(flow types.Flow) string {
-	for name, binding := range flow.Teams {
-		if binding.Coordinator {
-			return name
-		}
-	}
-	return ""
+	return selectFlowRecords(records, binding.Inputs)
 }
 
 func sortedStrings(values []string) []string {

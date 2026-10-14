@@ -26,8 +26,7 @@ Flow → Team → Call → Agent / Command / Webhook
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `team` | string | 指向 `.agents/teams/` 下的真实 Team id |
-| `coordinator` | bool | 标记唯一协调 Team（失败汇总/聚合点） |
-| `can_activate` | []string | 本绑定可激活的 Team |
+| `can_activate` | []string | 本绑定可激活的 Team。任何 Team 都可声明；不声明则不能激活别的 Team。被激活的 Team 结束后回到激活它的 Team |
 | `depends_on` | []string | 前置 Team（完成后本 Team 才执行） |
 | `inputs` | object/list | 用户消息 + SharedRecord 输入 |
 | `on_proceed` | list/object | Team 以 `proceed` 结束后的固定路由 |

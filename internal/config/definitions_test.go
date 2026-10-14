@@ -26,7 +26,6 @@ entry: default
 teams:
   default:
     team: default-team
-    coordinator: true
     can_activate: [verify]
     inputs:
       user_message: true
@@ -103,7 +102,6 @@ entry: default
 teams:
   default:
     team: default-team
-    coordinator: true
     on_proceed:
       action: `+action+`
 `), 0644))
@@ -134,7 +132,6 @@ entry: default
 teams:
   default:
     team: default-team
-    coordinator: true
     on_proceed:
       action: wait_tool
 `), 0644))
@@ -164,7 +161,6 @@ entry: default
 teams:
   default:
     team: default-team
-    coordinator: true
     on_proceed:
       action: `+action+`
 `), 0644))
@@ -196,7 +192,6 @@ entry: default
 teams:
   default:
     team: default-team
-    coordinator: true
 `), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
 id: default-team
@@ -228,7 +223,6 @@ entry: default
 teams:
   default:
     team: default-team
-    coordinator: true
 `), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
 id: default-team
@@ -293,7 +287,6 @@ entry: default
 teams:
   default:
     team: default-team
-    coordinator: true
 `), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
 id: default-team
@@ -369,7 +362,6 @@ entry: default
 teams:
   default:
     team: default-team
-    coordinator: true
 `), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "teams", "default.yml"), []byte(`
 id: default-team

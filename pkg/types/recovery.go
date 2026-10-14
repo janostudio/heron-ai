@@ -10,9 +10,11 @@ import (
 type RecoveryAction string
 
 const (
-	RecoveryInspect    RecoveryAction = "inspect"
-	RecoveryWait       RecoveryAction = "wait"
-	RecoveryRetry      RecoveryAction = "retry"
+	RecoveryInspect RecoveryAction = "inspect"
+	RecoveryWait    RecoveryAction = "wait"
+	RecoveryRetry   RecoveryAction = "retry"
+	// RecoveryCoordinate resumes at the entry Team so it can decide what to do
+	// about the interrupted execution, instead of replaying it.
 	RecoveryCoordinate RecoveryAction = "coordinate"
 )
 

@@ -444,7 +444,7 @@ func (w *Writer) apply(
 	// runs the whole chain — flow, teams, agents, skills, rules — so the writer
 	// never re-implements config semantics. The checks in validate.go cover only
 	// what the loader cannot see: whether a rule is violated BY THIS CHANGE,
-	// such as a newly added second coordinator or a newly claimed binding key.
+	// such as a newly claimed binding key.
 	stagingFlow, err := stagingPath(staging, root, flowPath)
 	if err != nil {
 		return err
@@ -526,9 +526,6 @@ func (w *Writer) planFlowBinding(cur *types.Definitions, spec map[string]any) ([
 	}
 
 	binding := types.FlowTeamBinding{ID: key, TeamID: teamID}
-	if err := decodeInto(bindField(bind, "coordinator"), &binding.Coordinator); err != nil {
-		return nil, "", fmt.Errorf("spec.bind.coordinator: %w", err)
-	}
 	if err := decodeInto(bindField(bind, "can_activate"), &binding.CanActivate); err != nil {
 		return nil, "", fmt.Errorf("spec.bind.can_activate: %w", err)
 	}
@@ -560,13 +557,6 @@ func (w *Writer) planFlowBinding(cur *types.Definitions, spec map[string]any) ([
 		flow.Teams[name] = existing
 	}
 	flow.Teams[key] = binding
-
-	// The extra coordinator check, run here as well as against the reloaded tree
-	// so the failure names the binding instead of arriving wrapped in a loader
-	// error after the files exist.
-	if err := checkSingleCoordinator(flow); err != nil {
-		return nil, "", err
-	}
 
 	data, err := marshalYAML(flow)
 	if err != nil {

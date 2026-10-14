@@ -65,7 +65,6 @@ func twoTeamDefinitions(generation int, entryTeam, secondTeam string) *types.Def
 				"entry": {
 					ID:          "entry",
 					TeamID:      entryTeam,
-					Coordinator: true,
 					CanActivate: []string{"second"},
 					Inputs:      types.InputSpec{UserMessage: true},
 				},

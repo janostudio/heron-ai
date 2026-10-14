@@ -14,38 +14,10 @@ import (
 // validateAgentCallDefinitions, validateAgentSupportDefinitions,
 // validateSkillScripts — against the candidate staging tree, and that chain is
 // the authority on whether a tree loads. What it cannot check is anything that
-// is only wrong RELATIVE TO THE CHANGE we are making: "this second coordinator
-// was fine before and is the new problem", "this binding key was free and is
-// not any more". Those live here as small pure functions over the candidate
+// is only wrong RELATIVE TO THE CHANGE we are making: "this binding key was
+// free and is not any more". Those live here as small pure functions over the candidate
 // typed structs, so they are unit-testable without a filesystem and so the
 // writer never has to re-derive config semantics.
-
-// checkSingleCoordinator rejects a candidate flow with zero or several
-// coordinator teams.
-//
-// Flow.Validate (pkg/types/domain.go) enforces this too, so a violation is
-// reported twice. It is checked here anyway because the message the loader
-// produces is wrapped several layers deep ("validate definitions: flow %q:
-// exactly one coordinator team is required, got 2"), and this is the error a
-// model is most likely to hit when it asks for a second coordinator by
-// accident. The dedicated text is what tells it to drop the flag instead of
-// retrying the same spec.
-func checkSingleCoordinator(flow types.Flow) error {
-	count := 0
-	for _, binding := range flow.Teams {
-		if binding.Coordinator {
-			count++
-		}
-	}
-	if count != 1 {
-		return fmt.Errorf(
-			"flow %q: exactly one coordinator team is required, got %d",
-			flow.ID,
-			count,
-		)
-	}
-	return nil
-}
 
 // checkAgentNameAvailable rejects creating an agent whose name is taken.
 //
@@ -80,8 +52,8 @@ func checkTeamNameAvailable(teams map[string]types.Team, name string) error {
 // obvious. The loud case is reusing an existing key for a DIFFERENT team, which
 // silently repoints a live binding. The quiet case is binding the SAME team
 // definition under a second name, which loads fine and looks harmless but makes
-// the flow ambiguous: Flow.Validate's coordinator count, can_activate targets
-// and on_proceed routing all address teams by key, so the same definition now
+// the flow ambiguous: can_activate targets and on_proceed routing all address
+// teams by key, so the same definition now
 // has two identities and a route written against one of them will not match the
 // other. Both are rejected; the fix is always to pick a fresh key.
 func checkFlowBindingKeyAvailable(flow types.Flow, key, teamID string) error {

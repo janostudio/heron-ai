@@ -1355,7 +1355,7 @@ func applyOutputScope(record *types.SharedRecord, scope string) {
 // Team.Calls is an unordered map, so the configuration carries no declaration
 // order to arbitrate by. Ranking by severity is what makes the choice
 // deterministic and independent of how the calls happen to be named: a
-// terminal failure outranks an escalation to the coordinator, which outranks
+// terminal failure outranks an escalation to the activating Team, which outranks
 // a blocking wait, which outranks the two onward routing actions.
 func routeActionPriority(action types.NextAction) int {
 	switch action {
