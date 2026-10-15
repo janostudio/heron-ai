@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -96,6 +97,18 @@ func runPeer(t *testing.T, defs *types.Definitions, fake *peerRuntime, limits ty
 	runtime := newTestRuntime(defs, fake, sessions, nil)
 	runtime.SetLimits(limits)
 	runtime.SetAsyncDispatch(async)
+	if async {
+		// Mirror the app wiring: a finished dispatched Team wakes the session
+		// so the next Team with mail is taken. Without a waker the chain
+		// stops after the first dispatch and nothing else ever runs.
+		runtime.SetWaker(func(sessionID string) {
+			go func() {
+				if _, err := runtime.ResumeForMailbox(context.Background(), sessionID); err != nil {
+					t.Logf("resume for mailbox: %v", err)
+				}
+			}()
+		})
+	}
 	return runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "peer", Input: "go"})
 }
 
@@ -290,11 +303,12 @@ func TestRepeatedActivationIsBoundedForAnyTeam(t *testing.T) {
 }
 
 // Background dispatch is chosen by the target, not by who activates it. A target
-// that activates other Teams of its own must run inside the current turn so its
-// activations and their returns are handled; a target that finishes by itself
-// may run in the background. This holds for any activator.
+// A dispatched Team is a peer execution unit: when it activates others, its
+// own activation is handed to their mailboxes just like any other, and their
+// results come back to it. Nothing about the dispatched Team's own activates
+// is dropped, whether it runs inline or in the background.
 func TestBackgroundDispatchDependsOnTargetNotActivator(t *testing.T) {
-	t.Run("target that activates others runs in the turn", func(t *testing.T) {
+	t.Run("a dispatched team's own activation is delivered, not dropped", func(t *testing.T) {
 		fake := newPeerRuntime(map[string]func(int) types.TeamTurnResult{
 			"entry": func(run int) types.TeamTurnResult {
 				if run == 1 {
@@ -317,8 +331,17 @@ func TestBackgroundDispatchDependsOnTargetNotActivator(t *testing.T) {
 		result, err := runPeer(t, defs, fake, types.RuntimeLimits{}, true)
 		require.NoError(t, err)
 		require.Equal(t, types.SessionWaitingInput, result.Session.Status)
-		require.Equal(t, 1, fake.runs["leaf"], "mid's own activation must not be dropped")
-		require.Equal(t, []string{"mid"}, fake.callers["leaf"])
+
+		// mid runs in the background and dispatches leaf through its mailbox;
+		// wait for that chain to finish rather than assuming it ran inline.
+		require.Eventually(t, func() bool {
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			return fake.runs["leaf"] == 1
+		}, 5*time.Second, 10*time.Millisecond, "mid's own activation must not be dropped")
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		require.Equal(t, []string{"mid"}, fake.callers["leaf"], "leaf must be activated by mid, not by the entry")
 	})
 
 	t.Run("target that finishes by itself may run in the background", func(t *testing.T) {

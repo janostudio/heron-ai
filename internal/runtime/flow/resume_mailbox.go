@@ -83,8 +83,30 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 	// Wake the Team that has mail: its turn starts at that Team rather than at
 	// the Flow entry. The entry Team keeps its usual start when it is the one
 	// with mail, so a plain user turn is unchanged.
+	//
+	// The activation carries the Team's activator so its round routes back to
+	// the right place. A Team first woken by a work message takes that
+	// message's caller_team; a Team woken by its own dispatches' results has
+	// already been activated (its work message is long delivered) and starts
+	// with no caller, which is the same "no activator" case as the entry Team.
+	wake := activation{teamID: target, callerTeam: activatorFromMessages(messages)}
 	return r.runTurnWithActivationsAndContext(ctx, defs, session, "", []types.ContextBlock{block},
-		[]activation{{teamID: target}})
+		[]activation{wake})
+}
+
+// activatorFromMessages returns the Team that dispatched the work whose mail is
+// being drained. Work messages carry caller_team; result messages do not, so
+// only the former can name an activator.
+func activatorFromMessages(messages []types.MailboxMessage) string {
+	for _, msg := range messages {
+		if msg.Kind != mailboxKindWork {
+			continue
+		}
+		if caller, ok := msg.Payload["caller_team"].(string); ok && caller != "" {
+			return caller
+		}
+	}
+	return ""
 }
 
 // nextWakingTeam picks the Team whose inbox holds pending mail, together with

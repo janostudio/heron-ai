@@ -45,118 +45,18 @@ func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, ta
 }
 
 // dispatchWork is the recoverable body of launchAsyncDispatch, split out so the
-// panic guard wraps every step uniformly.
+// panic guard wraps every step uniformly. The work itself lives in
+// runMessageTurn: a dispatched Team is just a Team taking a message, and its
+// routing follows the same rules whether it runs in the background or inside a
+// turn.
 func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, causeTurnID, targetTeam string, msg types.MailboxMessage) {
-	// Claim the message first: a claimed message is one a turn has picked up,
-	// which is exactly what is happening here.
-	if _, err := r.claimMessage(ctx, session, msg); err != nil {
-		logging.Error("claim dispatched message", map[string]any{
-			"flow_session_id": session.ID,
-			"message_id":      msg.MessageID,
-			"error":           err.Error(),
-		})
+	if msg.CauseFlowTurnID == "" {
+		msg.CauseFlowTurnID = causeTurnID
 	}
-
-	// Snapshot the definitions once for the whole dispatch, matching the
-	// per-turn snapshot discipline of the synchronous path.
-	defs := r.definitions.Snapshot()
-	callerTeam, _ := msg.Payload["caller_team"].(string)
-	act := activation{teamID: targetTeam, callerTeam: callerTeam}
-
-	// The original turn is over, so its FlowTurn is gone. executeTeamTurn
-	// threads the FlowTurn down for provenance (FlowTurnID on team/record
-	// events) and for the team record's producer ref; it does not read
-	// Status. A minimal placeholder carrying the dispatching turn's ID is
-	// therefore enough. Attempt defaults to 0 and is overwritten by the
-	// activation's own attempt when the TeamTurn is built.
-	flowTurn := types.FlowTurn{ID: causeTurnID, FlowSessionID: session.ID}
-
-	// The synchronous path hands each activated team the session's historical
-	// Flow-scope records (filtered by its binding's inputs inside
-	// executeTeamTurn). A dispatched team must see the same records: with nil
-	// here, every `flow_records` / `${records.X.Data.y}` reference in a
-	// dispatched team resolved against nothing and failed with "record X not
-	// found among call inputs". A load failure is reported on the work message
-	// like any other team failure rather than silently running with no inputs.
-	records, loadErr := r.loadHistoricalFlowRecords(ctx, session.ID)
-	var execution teamExecution
-	var err error
-	if loadErr != nil {
-		err = fmt.Errorf("load flow records for dispatched team %q: %w", targetTeam, loadErr)
-	} else {
-		execution, err = r.executeTeamTurn(ctx, defs, session, flowTurn, act, "", records, nil)
+	if msg.To.TeamID == "" {
+		msg.To.TeamID = targetTeam
 	}
-	if err != nil {
-		execution.result.Error = err.Error()
-	}
-	teamResult := execution.result
-	teamFailed := teamResult.Error != "" || teamResult.Turn.Status == types.TurnFailed
-
-	// Results go back to whoever dispatched this Team, not to the entry Team:
-	// a dispatched Team is a step inside its activator's work, so its result
-	// belongs in the activator's inbox. The activator rode in on the work
-	// message as caller_team; falling back to the entry Team keeps a message
-	// written by an older runtime readable.
-	resultTo := callerTeam
-	if resultTo == "" {
-		resultTo = defs.Flow.EntryTeamID
-	}
-	if resultTo == "" {
-		resultTo = targetTeam
-	}
-
-	// Record the work message's outcome on its own lifecycle first, then post
-	// a separate result message to the activator's inbox.
-	resultPayload := map[string]any{"team_result": teamResult}
-	if teamFailed {
-		if _, mErr := r.markMessageDead(ctx, session, msg, teamResult.Error); mErr != nil {
-			logging.Error("mark dispatched message dead", map[string]any{
-				"flow_session_id": session.ID,
-				"message_id":      msg.MessageID,
-				"error":           mErr.Error(),
-			})
-		}
-		resultPayload["error"] = teamResult.Error
-	} else {
-		if _, dErr := r.deliverMessage(ctx, session, msg, resultPayload); dErr != nil {
-			logging.Error("deliver dispatched message", map[string]any{
-				"flow_session_id": session.ID,
-				"message_id":      msg.MessageID,
-				"error":           dErr.Error(),
-			})
-		}
-	}
-
-	// The result address carries the activator (or the entry Team as a
-	// fallback) in the same snake_case MailboxAddress shape the enqueue
-	// helpers produce. The container value (TeamTurnResult) keeps its
-	// published Go field names.
-	causeTurn := types.FlowTurn{ID: causeTurnID}
-	resultMsg, rErr := r.enqueueResultMessage(ctx, session, causeTurn,
-		types.MailboxAddress{TeamID: resultTo},
-		resultPayload,
-	)
-	if rErr != nil {
-		logging.Error("enqueue dispatched result", map[string]any{
-			"flow_session_id": session.ID,
-			"message_id":      msg.MessageID,
-			"error":           rErr.Error(),
-		})
-	}
-
-	// Wake the entry team only if the session is idle. A running session keeps
-	// the result in the inbox; the next turn it starts will drain it.
-	r.wakeIfIdle(ctx, session.ID)
-
-	if resultMsg.MessageID != "" {
-		logging.Info("async dispatch finished", map[string]any{
-			"flow_session_id": session.ID,
-			"team_id":         targetTeam,
-			"status":          string(msg.Status),
-			"result_message":  resultMsg.MessageID,
-			"failed":          teamFailed,
-		})
-	}
+	r.runMessageTurn(ctx, session, msg)
 }
 
 // wakeIfIdle calls the injected waker only when the session is idle enough to

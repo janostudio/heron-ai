@@ -860,20 +860,14 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 				activationRetries[activationKey]++
 				for _, target := range next.Teams {
 					activators[target] = execution.activation.teamID
-					// Background dispatch ends the current turn and wakes the
-					// entry when the result arrives, so only the entry may use
-					// it. The dispatched Team runs a single turn and its route
-					// is discarded, so it must also be a Team that finishes on
-					// its own rather than one that activates others.
-					if r.asyncDispatch &&
-						execution.activation.teamID == defs.Flow.EntryTeamID &&
-						len(defs.Flow.Teams[target].CanActivate) == 0 {
-						// P0 mailbox dispatch: record the work message (the
-						// credential for the hand-off) and launch the team in
-						// the background. The target is deliberately NOT
-						// enqueued into this turn's queue: the entry team's
-						// turn ends now, and the activated team's result comes
-						// back as a fresh mailbox result message.
+					// Execution-state dispatch: any Team's activate hands the
+					// work to the target's mailbox and lets this turn end,
+					// instead of running the target inline. The target is a
+					// peer execution unit, so it may itself activate others;
+					// its own round routes them the same way (see
+					// runMessageTurn). The result comes back as a mailbox
+					// message to whoever dispatched it.
+					if r.asyncDispatch {
 						msg, err := r.enqueueWorkMessage(ctx, session, turn,
 							types.MailboxAddress{TeamID: target},
 							map[string]any{"caller_team": execution.activation.teamID},
