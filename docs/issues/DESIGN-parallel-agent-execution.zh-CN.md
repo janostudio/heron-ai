@@ -495,7 +495,7 @@ turn 不独占）→ C5 是记账跟上（并发事件）→ C6 是记账完善�
 - **不做并发 turn**（C4 收敛）：派活轮 `finishTurn(waiting_input)` 结束，后台跑完后 `ResumeForMailbox` 开**新** turn 唤醒。任何时刻只有一个 flow turn running——`interruptedExecutions`/`pendingTeamResume`/`listInbox` 的单链假设**全部保持成立**。
 - **mailbox 落 `flow.jsonl`**（不新建第四份文件），复用 `storage.SessionWriter` 契约。
 - **开关控制**：`SetAsyncDispatch(bool)`，默认 false = 原同步路径；app 层 P0 硬编码 true。
-- **只对入口 team 的 `NextActivate` 走 async**，且目标须是不再自行 `activate` 别人的 team（见 §9.5）。
+- **[已被 §9.6 取代]** ~~只对入口 team 的 `NextActivate` 走 async，且目标须是不再自行 `activate` 别人的 team~~ → §9.6 把 async 派发推广到**任何 Team**，目标可继续转交。
 - **归属锚点用 `CauseFlowTurnID`**，P0 **不引入** `FlowTurn.round`（§6.4 的降级）。
 - **与 async tool / park-then-resume 共存**：mailbox 是 team/flow 级，`wakeFlowOnToolTaskDone` 是 agent/tool 级，正交。
 
@@ -541,10 +541,39 @@ P0 把"派活/汇总/失败上报/邮箱接收"都绑在 `binding.Coordinator` �
 | `TeamFailureReport` 自动注入 coordinator 的输入 | **取消隐式注入**；是否读取由各 team 的 `inputs` 白名单决定 |
 | mailbox 结果投给 coordinator | 投给**入口 team**（会话被唤醒后恢复的位置） |
 | 中断恢复 `coordinate` 激活 coordinator | 激活**入口 team**，由它重新决策 |
-| 后台派发只对 coordinator 生效 | 只对**入口 team** 的 `activate` 生效，且目标不能再自行 `activate`：后台路径只执行一轮并丢弃该 team 的路由，会吞掉目标自己的转交 |
+| 后台派发只对 coordinator 生效 | **[已被 §9.6 取代]** 当时只对**入口 team** 的 `activate` 生效，且目标不能再自行 `activate`（后台路径只跑一轮、丢弃该 team 的路由）。§9.6 把后台路径改为"跑该 team 的完整子图"，这条限制随之去掉，任何 Team 都能被派发 |
 
 `RecoveryCoordinate`、`NextCoordinate`、`max_coordinate_retries` 的标识符保持不变（对外格式兼容），
 含义改为"把决定交还给激活者"，已在类型注释中说明。
 
 **对配置的影响**：任何 team 可以成为"统筹者"，只要声明 `can_activate`；被它激活的 team 结束后回到它，
 它可以读取这些 team 的记录再决定下一步，不再需要把所有决策集中到一个固定 team。
+
+### 9.6 执行体中心落地（2026-10-14）
+
+§9.2 把"派活/唤醒/结果回流"写成了**入口 team 的特例**（"只对入口 team 的 `NextActivate` 走 async，
+且目标不能再自行 `activate`"）。这与 §1.4「**每个** team/agent 都有一根 mailbox」、§八「非执行即可接
+消息是贯穿三层的调度律」、§7.2 B4「引擎不因角色特殊化」相矛盾——它把最需要异步的长链统筹者
+（会转交下游的 Team）恰好排除在异步之外。
+
+本次把它改成模型本来的形态：**每个 Team 都是对等的执行单元**。
+
+> **一条规则**：转交（activate）= 投一条 work 消息给目标 + 自己让出；
+>  目标完成后，结果作为 result 消息投回它的**激活者**，激活者被唤醒继续。
+
+| 原机制 | 现在 |
+|---|---|
+| 只有入口 Team 的 `activate` 走异步 | **任何 Team** 的 `activate` 都投消息（`asyncDispatch` 开启时） |
+| 目标必须不能再 `activate`（`CanActivate == 0`） | **去掉**：目标可以继续转交，其路由由 `runMessageTurn` 处理 |
+| 结果投给 `EntryTeamID` | 投给**激活者**（work 消息的 `caller_team`） |
+| 唤醒固定入口 Team | 唤醒**持有 pending 邮件的 Team**（`nextWakingTeam`） |
+| 被派发 Team 只跑一轮、路由被丢弃 | `runMessageTurn` 跑完按同一套路由规则投递（activate 投 work，proceed/return/coordinate/fail 投结果） |
+| 同一 Team 可能被并发跑两轮 | `busyTeams` 抢槽：同 Team 永远只跑一轮；被挡下的消息由 `drainTeamInbox` 在槽位释放后接着派 |
+| `max_activation_retries` 只在单 turn 内计数 | 改为**会话级**（`checkActivationBudget` 数 work 消息）；`max_team_turns` 同样升为会话级总量 |
+| 恢复路径假设"单链 turn" | `interruptedExecutions` 排除**本进程正在跑**的 Team；`pendingTeamResumes` 返回全部待恢复 Team，多待恢复时报错而非静默丢弃 |
+
+**不变的部分**：FlowTurn 仍是**一次消息处理事务**，同一时刻每个 Team 至多一个 running round；
+"不做并发 turn"（§9.2）保留——并发发生在 **Team 轮** 之间，FlowTurn 仍是单条判据。
+
+**实跑验证**（`auto_bugfix` 配置，`--json-rpc`）：`default → owner → worktree → owner → …` 整条链
+通过 mailbox 推进，结果回到激活者；重复转交被会话级激活预算拦下，不再无界循环。
