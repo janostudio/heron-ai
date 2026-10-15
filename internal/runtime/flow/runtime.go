@@ -239,7 +239,18 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 		return types.FlowTurnResult{}, err
 	}
 	pending, ok := pendingAgentResume(replay.Events)
-	if pendingTeam, teamOK := pendingTeamResume(replay.Events); teamOK {
+	pendingTeams := pendingTeamResumes(replay.Events)
+	if len(pendingTeams) > 1 {
+		// Several Teams are paused at once, which the single-resume path
+		// cannot resolve without dropping one of them. Refuse rather than
+		// silently resuming only the most recent.
+		return types.FlowTurnResult{}, fmt.Errorf(
+			"flow session %q has %d Teams paused (waiting for a Tool or approval); resume them individually",
+			sessionID, len(pendingTeams),
+		)
+	}
+	if len(pendingTeams) == 1 {
+		pendingTeam := pendingTeams[0]
 		if pendingTeam.FlowTurnID != "" {
 			if ready, err := r.pendingTasksReady(ctx, pendingTeam.PendingToolTasks); err != nil {
 				return types.FlowTurnResult{}, err
@@ -320,16 +331,16 @@ func (r *Runtime) ResumeApprovalWithResponse(ctx context.Context, sessionID stri
 	if err != nil {
 		return types.FlowTurnResult{}, err
 	}
-	pending, ok := pendingTeamResume(replay.Events)
-	if !ok {
+	pendingTeams := pendingTeamResumes(replay.Events)
+	if len(pendingTeams) == 0 {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q has no pending approval", sessionID)
 	}
-	if len(pending.PendingApprovals) > 0 &&
-		pending.PendingApprovals[0].RequestID != decision.RequestID {
-		return types.FlowTurnResult{}, fmt.Errorf(
-			"approval %q is not pending or is not next; process approval %q first",
-			decision.RequestID, pending.PendingApprovals[0].RequestID,
-		)
+	// An approval is addressed by RequestID, so the set is narrowed to the Team
+	// that owns the requested approval rather than taking whichever paused
+	// first.
+	pending, ok := pendingTeamForApproval(pendingTeams, decision.RequestID)
+	if !ok {
+		return types.FlowTurnResult{}, fmt.Errorf("approval %q is not pending in this session", decision.RequestID)
 	}
 	for callID, callResult := range pending.CallResults {
 		if callResult.Status != types.TurnWaitingApproval ||
@@ -401,7 +412,7 @@ func (r *Runtime) RecoveryStatus(ctx context.Context, sessionID string) (types.R
 	if err != nil {
 		return types.RecoveryStatus{}, err
 	}
-	interrupted := interruptedExecutions(replay.Events)
+	interrupted := interruptedExecutions(replay.Events, r.liveTeams())
 	history := recoveryHistory(replay.Events)
 	if len(interrupted) > 0 &&
 		session.Status != types.SessionCompleted &&
@@ -1537,7 +1548,14 @@ func sessionStatusForTurn(status types.TurnStatus) types.SessionStatus {
 	}
 }
 
-func interruptedExecutions(events []storage.SessionEvent) []types.InterruptedExecution {
+// interruptedExecutions reports the executions the event stream shows as
+// started but never finished. liveTeams names the Teams executing in this
+// process right now: their team_turns (and the calls under them) look identical
+// to a crash's leftovers — started with no completion — but they are still
+// running, so they must not be reported as interrupted. Without this, a
+// status query during a dispatched Team's round would mark its session
+// interrupted and refuse further input.
+func interruptedExecutions(events []storage.SessionEvent, liveTeams map[string]bool) []types.InterruptedExecution {
 	type started struct {
 		event storage.SessionEvent
 		input string
@@ -1601,7 +1619,8 @@ func interruptedExecutions(events []storage.SessionEvent) []types.InterruptedExe
 			waitingCalls[turnID] ||
 			resolvedCalls[turnID] ||
 			resolvedTeams[item.event.TeamTurnID] ||
-			resolvedFlows[item.event.FlowTurnID] {
+			resolvedFlows[item.event.FlowTurnID] ||
+			liveTeams[item.event.TeamID] {
 			continue
 		}
 		execution := interruptedFromEvent("call_turn", item.event, item.input)
@@ -1610,7 +1629,8 @@ func interruptedExecutions(events []storage.SessionEvent) []types.InterruptedExe
 		interruptedFlowIDs[item.event.FlowTurnID] = true
 	}
 	for turnID, item := range startedTeams {
-		if completedTeams[turnID] || waitingTeams[turnID] || resolvedTeams[turnID] || interruptedTeamIDs[turnID] {
+		if completedTeams[turnID] || waitingTeams[turnID] || resolvedTeams[turnID] ||
+			interruptedTeamIDs[turnID] || liveTeams[item.event.TeamID] {
 			continue
 		}
 		execution := interruptedFromEvent("team_turn", item.event, item.input)
@@ -1618,7 +1638,8 @@ func interruptedExecutions(events []storage.SessionEvent) []types.InterruptedExe
 		interruptedFlowIDs[item.event.FlowTurnID] = true
 	}
 	for turnID, item := range startedFlows {
-		if completedFlows[turnID] || waitingFlows[turnID] || resolvedFlows[turnID] || interruptedFlowIDs[turnID] {
+		if completedFlows[turnID] || waitingFlows[turnID] || resolvedFlows[turnID] ||
+			interruptedFlowIDs[turnID] {
 			continue
 		}
 		interrupted = append(interrupted, interruptedFromEvent("flow_turn", item.event, item.input))
@@ -1689,73 +1710,115 @@ type pendingTeamResumeInfo struct {
 	PendingApprovals []types.AgentPendingApproval
 }
 
-func pendingTeamResume(events []storage.SessionEvent) (pendingTeamResumeInfo, bool) {
+// pendingTeamResumes returns every Team waiting on a Tool or an approval, most
+// recent first. It used to return a single Team, which was safe while only one
+// Team could be paused at a time; with several Teams running at once more than
+// one can be paused, and a caller that took only the first would silently drop
+// the others. Callers therefore decide what to do with the whole set.
+func pendingTeamResumes(events []storage.SessionEvent) []pendingTeamResumeInfo {
+	var resumes []pendingTeamResumeInfo
+	seen := make(map[string]bool)
 	for index := len(events) - 1; index >= 0; index-- {
 		event := events[index]
 		if event.Type != types.EventTeamTurnWaitingTool &&
 			event.Type != types.EventTeamTurnWaitingApproval {
 			continue
 		}
-		info := pendingTeamResumeInfo{
-			FlowTurnID:  event.FlowTurnID,
-			TeamID:      event.TeamID,
-			TeamTurnID:  event.TeamTurnID,
-			CallerTeam:  payloadString(event.Payload, "caller_team"),
-			Attempt:     event.Attempt,
-			CallResults: make(map[string]types.CallResult),
-		}
-		if raw, ok := event.Payload["team_result"]; ok {
-			var result types.TeamTurnResult
-			if err := decodeValue(raw, &result); err == nil {
-				info.TeamID = result.Turn.TeamID
-				if info.TeamID == "" {
-					info.TeamID = event.TeamID
-				}
-				if info.TeamTurnID == "" {
-					info.TeamTurnID = result.Turn.ID
-				}
-				if info.FlowTurnID == "" {
-					info.FlowTurnID = result.Turn.FlowTurnID
-				}
-				if info.Attempt == 0 {
-					info.Attempt = result.Turn.Attempt
-				}
-				info.CallerTeam = result.Turn.CallerTeam
-				info.CallResults = result.CallResults
-				info.PendingToolTasks = append(info.PendingToolTasks, result.PendingToolTasks...)
-				info.PendingApprovals = append(info.PendingApprovals, result.PendingApprovals...)
-				for callID, callResult := range result.CallResults {
-					if callResult.Status != types.TurnWaitingTool {
-						continue
-					}
-					if hasPendingCall(info.PendingToolTasks, callID) {
-						continue
-					}
-					info.PendingToolTasks = append(info.PendingToolTasks, types.PendingToolTask{
-						CallID:       callID,
-						CallTurnID:   callResult.CallTurnID,
-						AgentID:      callResult.AgentID,
-						TaskID:       callResult.TaskID,
-						CheckpointID: callResult.CheckpointID,
-						Status:       callResult.Status,
-					})
-				}
-			}
-		}
-		hasApproval := false
-		for _, callResult := range info.CallResults {
-			if callResult.Status == types.TurnWaitingApproval &&
-				callResult.PendingApproval != nil {
-				hasApproval = true
-				break
-			}
-		}
-		if len(info.PendingToolTasks) == 0 && !hasApproval {
+		if event.TeamTurnID != "" && seen[event.TeamTurnID] {
 			continue
 		}
-		return info, true
+		info, ok := pendingTeamResumeFromEvent(event)
+		if !ok {
+			continue
+		}
+		if event.TeamTurnID != "" {
+			seen[event.TeamTurnID] = true
+		}
+		resumes = append(resumes, info)
+	}
+	return resumes
+}
+
+// pendingTeamForApproval narrows a set of paused Teams to the one owning the
+// given approval request. An approval is addressed by RequestID, so this is
+// what keeps two Teams paused on approvals from being confused for each other.
+func pendingTeamForApproval(teams []pendingTeamResumeInfo, requestID string) (pendingTeamResumeInfo, bool) {
+	for _, team := range teams {
+		for _, approval := range team.PendingApprovals {
+			if approval.RequestID == requestID {
+				return team, true
+			}
+		}
+		for _, callResult := range team.CallResults {
+			if callResult.Status != types.TurnWaitingApproval || callResult.PendingApproval == nil {
+				continue
+			}
+			if callResult.PendingApproval.RequestID == requestID {
+				return team, true
+			}
+		}
 	}
 	return pendingTeamResumeInfo{}, false
+}
+
+func pendingTeamResumeFromEvent(event storage.SessionEvent) (pendingTeamResumeInfo, bool) {	info := pendingTeamResumeInfo{
+		FlowTurnID:  event.FlowTurnID,
+		TeamID:      event.TeamID,
+		TeamTurnID:  event.TeamTurnID,
+		CallerTeam:  payloadString(event.Payload, "caller_team"),
+		Attempt:     event.Attempt,
+		CallResults: make(map[string]types.CallResult),
+	}
+	if raw, ok := event.Payload["team_result"]; ok {
+		var result types.TeamTurnResult
+		if err := decodeValue(raw, &result); err == nil {
+			info.TeamID = result.Turn.TeamID
+			if info.TeamID == "" {
+				info.TeamID = event.TeamID
+			}
+			if info.TeamTurnID == "" {
+				info.TeamTurnID = result.Turn.ID
+			}
+			if info.FlowTurnID == "" {
+				info.FlowTurnID = result.Turn.FlowTurnID
+			}
+			if info.Attempt == 0 {
+				info.Attempt = result.Turn.Attempt
+			}
+			info.CallerTeam = result.Turn.CallerTeam
+			info.CallResults = result.CallResults
+			info.PendingToolTasks = append(info.PendingToolTasks, result.PendingToolTasks...)
+			info.PendingApprovals = append(info.PendingApprovals, result.PendingApprovals...)
+			for callID, callResult := range result.CallResults {
+				if callResult.Status != types.TurnWaitingTool {
+					continue
+				}
+				if hasPendingCall(info.PendingToolTasks, callID) {
+					continue
+				}
+				info.PendingToolTasks = append(info.PendingToolTasks, types.PendingToolTask{
+					CallID:       callID,
+					CallTurnID:   callResult.CallTurnID,
+					AgentID:      callResult.AgentID,
+					TaskID:       callResult.TaskID,
+					CheckpointID: callResult.CheckpointID,
+					Status:       callResult.Status,
+				})
+			}
+		}
+	}
+	hasApproval := false
+	for _, callResult := range info.CallResults {
+		if callResult.Status == types.TurnWaitingApproval &&
+			callResult.PendingApproval != nil {
+			hasApproval = true
+			break
+		}
+	}
+	if len(info.PendingToolTasks) == 0 && !hasApproval {
+		return pendingTeamResumeInfo{}, false
+	}
+	return info, true
 }
 
 func hasPendingCall(items []types.PendingToolTask, callID string) bool {

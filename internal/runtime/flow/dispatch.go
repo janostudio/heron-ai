@@ -100,6 +100,20 @@ func (r *Runtime) clearTeamBusy(teamID string) {
 	delete(r.busyTeams, teamID)
 }
 
+// liveTeams returns a snapshot of the Teams executing in this process. Recovery
+// uses it to tell a Team that is still running from one a crash left behind:
+// both look like "started with no completion" in the event stream, and only the
+// former must not be reported as interrupted.
+func (r *Runtime) liveTeams() map[string]bool {
+	r.dispatchMu.Lock()
+	defer r.dispatchMu.Unlock()
+	live := make(map[string]bool, len(r.busyTeams))
+	for team := range r.busyTeams {
+		live[team] = true
+	}
+	return live
+}
+
 // dispatchWork is the recoverable body of launchAsyncDispatch, split out so the
 // panic guard wraps every step uniformly. The work itself lives in
 // runMessageTurn: a dispatched Team is just a Team taking a message, and its
