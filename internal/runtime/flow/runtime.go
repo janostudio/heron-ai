@@ -40,6 +40,15 @@ type Runtime struct {
 	media       types.MediaStore
 	resumeMu    sync.Mutex
 
+	// dispatchMu guards busyTeams, the in-process record of which Teams are
+	// executing right now. A Team is a single execution unit, so two messages
+	// for the same Team must not run at once: the scheduler marks a Team busy
+	// before launching it and clears the mark when its round finishes. This is
+	// the live counterpart of the persisted TeamSession.Status a scheduler
+	// reads after a restart.
+	dispatchMu sync.Mutex
+	busyTeams  map[string]bool
+
 	// asyncDispatch opts the runtime into P0 mailbox dispatch: when the entry
 	// team activates a team, the work is handed to a background goroutine and
 	// the current FlowTurn ends immediately instead of waiting for the
@@ -66,6 +75,7 @@ func NewRuntime(
 		sessions:    sessionWriter,
 		evidence:    evidenceStore,
 		limits:      types.RuntimeLimits{}.WithDefaults(),
+		busyTeams:   make(map[string]bool),
 	}
 }
 

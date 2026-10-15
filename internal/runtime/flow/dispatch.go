@@ -11,15 +11,24 @@ import (
 )
 
 // launchAsyncDispatch executes a dispatched team in a background goroutine and
-// reports its result back through the mailbox. It is the async half of the P0
+// reports its result back through the mailbox. It is the async half of the
 // mailbox dispatch: the dispatching FlowTurn has already ended by the time this
 // runs, so the goroutine owns its own lifetime.
+//
+// A Team is one execution unit, so a message is only launched when the Team is
+// free. When it is busy the message stays pending; the running round's
+// completion wakes the session, which takes the next pending message then. This
+// is what lets several Teams run at once while a single Team never runs two
+// rounds concurrently.
 //
 // It deliberately uses context.Background(): the turn context is cancelled the
 // moment the dispatching turn returns, and a background team must not be killed
 // by that. A panic is contained with recover() so a misbehaving team cannot
 // take down the process; the message is then marked dead.
 func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, targetTeam string, msg types.MailboxMessage) {
+	if !r.tryMarkTeamBusy(targetTeam) {
+		return
+	}
 	go func() {
 		ctx := context.Background()
 		defer func() {
@@ -38,10 +47,57 @@ func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, ta
 					})
 				}
 			}
+			// Free the slot before draining, so the drain can take the next
+			// message for this Team.
+			r.clearTeamBusy(targetTeam)
+			r.drainTeamInbox(ctx, session, targetTeam)
 		}()
 
 		r.dispatchWork(ctx, session, causeTurnID, targetTeam, msg)
 	}()
+}
+
+// drainTeamInbox launches the next pending message addressed to teamID, if any.
+// A message is left pending when it arrives while the Team is already running;
+// this is the path that eventually runs it, so a Team's backlog is drained
+// without waiting for a user turn. One message is taken per call: it re-enters
+// the same launch path and drains the one after it when it finishes.
+func (r *Runtime) drainTeamInbox(ctx context.Context, session types.FlowSession, teamID string) {
+	messages, err := r.listInbox(ctx, session.ID, types.MailboxAddress{TeamID: teamID})
+	if err != nil {
+		logging.Error("drain team inbox", map[string]any{
+			"flow_session_id": session.ID,
+			"team_id":         teamID,
+			"error":           err.Error(),
+		})
+		return
+	}
+	if len(messages) == 0 {
+		return
+	}
+	r.launchAsyncDispatch(session, messages[0].CauseFlowTurnID, teamID, messages[0])
+}
+
+// tryMarkTeamBusy claims the Team's execution slot, returning false when the
+// Team is already running. It is the concurrency guard that keeps a Team from
+// running two rounds at once.
+func (r *Runtime) tryMarkTeamBusy(teamID string) bool {
+	r.dispatchMu.Lock()
+	defer r.dispatchMu.Unlock()
+	if r.busyTeams == nil {
+		r.busyTeams = make(map[string]bool)
+	}
+	if r.busyTeams[teamID] {
+		return false
+	}
+	r.busyTeams[teamID] = true
+	return true
+}
+
+func (r *Runtime) clearTeamBusy(teamID string) {
+	r.dispatchMu.Lock()
+	defer r.dispatchMu.Unlock()
+	delete(r.busyTeams, teamID)
 }
 
 // dispatchWork is the recoverable body of launchAsyncDispatch, split out so the
@@ -58,7 +114,6 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 	}
 	r.runMessageTurn(ctx, session, msg)
 }
-
 // wakeIfIdle calls the injected waker only when the session is idle enough to
 // resume. A running session (including the dispatching turn itself, whose
 // flow_session.updated event lands before the background team finishes) is left
