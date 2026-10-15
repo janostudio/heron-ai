@@ -60,3 +60,27 @@ func TestRunMessageTurnStopsAtSessionTeamTurnBudget(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.MailboxDead, box[msg.MessageID].Status, "over-budget work must not run")
 }
+
+// TestActivationBudgetStopsCrossTurnLoop pins the cross-turn bound: a Team that
+// keeps re-activating the same target is stopped by max_activation_retries even
+// though each activation happens in its own turn. Without a session-wide count
+// the repetition would run until the much larger team-turn budget.
+func TestActivationBudgetStopsCrossTurnLoop(t *testing.T) {
+	rt, _ := newMailboxTestRuntime(t)
+	ctx := context.Background()
+	session, turn := mailboxTestSession(t)
+	rt.SetLimits(types.RuntimeLimits{MaxActivationRetries: 2})
+
+	// Two prior dispatches from owner to worktree, each in its own turn.
+	for i := 0; i < 2; i++ {
+		_, err := rt.enqueueWorkMessage(ctx, session, turn, addr("worktree", ""), map[string]any{"caller_team": "owner"})
+		require.NoError(t, err)
+	}
+
+	require.Error(t, rt.checkActivationBudget(ctx, session.ID, "owner", "worktree"),
+		"the third activation from owner to worktree must be refused")
+	require.NoError(t, rt.checkActivationBudget(ctx, session.ID, "owner", "fix"),
+		"a different target is unaffected")
+	require.NoError(t, rt.checkActivationBudget(ctx, session.ID, "other", "worktree"),
+		"a different source is unaffected")
+}

@@ -172,10 +172,18 @@ func (r *Runtime) postRoutes(
 		if err := validateActivation(execution.binding, defs.Flow, next.Teams); err != nil {
 			return err
 		}
+		// Activation is counted across the whole session, not per turn: a
+		// dispatched Team starts a new turn each time, so a Team that keeps
+		// re-activating the same target would otherwise loop until the much
+		// larger session budget stops it. The bound has to see the repetition.
+		source := execution.activation.teamID
 		for _, target := range next.Teams {
+			if err := r.checkActivationBudget(ctx, session.ID, source, target); err != nil {
+				return err
+			}
 			if _, err := r.enqueueWorkMessage(ctx, session, flowTurn,
 				types.MailboxAddress{TeamID: target},
-				map[string]any{"caller_team": execution.activation.teamID},
+				map[string]any{"caller_team": source},
 			); err != nil {
 				return fmt.Errorf("enqueue work for team %q: %w", target, err)
 			}
@@ -210,8 +218,7 @@ func (r *Runtime) postRoutes(
 // postResult enqueues a result message to target carrying the Team's outcome.
 // An empty target means no one is waiting (an entry Team's own completion);
 // that is not an error, it just has nowhere to go.
-func (r *Runtime) postResult(
-	ctx context.Context,
+func (r *Runtime) postResult(	ctx context.Context,
 	session types.FlowSession,
 	flowTurn types.FlowTurn,
 	target string,
