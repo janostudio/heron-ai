@@ -38,6 +38,32 @@ import (
 func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession, msg types.MailboxMessage) {
 	defs := r.definitions.Snapshot()
 
+	// The Team-turn budget is a session total, not a per-turn one: with Teams
+	// dispatching Teams, each round starts a new turn, so only a count across
+	// the whole session bounds a runaway loop. Exceeding it ends the session
+	// rather than spawning another round.
+	if started, err := r.countTeamTurns(ctx, session.ID); err != nil {
+		logging.Error("count team turns", map[string]any{
+			"flow_session_id": session.ID,
+			"error":           err.Error(),
+		})
+	} else if r.limits.MaxTeamTurns > 0 && started >= r.limits.MaxTeamTurns {
+		limitErr := fmt.Errorf("flow session exceeded max team turns: %d", r.limits.MaxTeamTurns)
+		logging.Error("flow session exceeded max team turns", map[string]any{
+			"flow_session_id": session.ID,
+			"team_id":         msg.To.TeamID,
+			"error":           limitErr.Error(),
+		})
+		if _, err := r.markMessageDead(ctx, session, msg, limitErr.Error()); err != nil {
+			logging.Error("mark over-budget message dead", map[string]any{
+				"flow_session_id": session.ID,
+				"message_id":      msg.MessageID,
+				"error":           err.Error(),
+			})
+		}
+		return
+	}
+
 	if _, err := r.claimMessage(ctx, session, msg); err != nil {
 		logging.Error("claim dispatched message", map[string]any{
 			"flow_session_id": session.ID,

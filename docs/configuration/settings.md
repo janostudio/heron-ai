@@ -100,14 +100,14 @@ There is currently no configuration for run-data retention.
 These are **safety backstops, not orchestration knobs**. The defaults are deliberately loose: a
 legitimate Flow hands work back and forth many times (a team re-dispatching a fixer after a failed
 test, a reviewer returning work for changes) and must not trip a limit while doing normal work. The
-bounds exist only to stop a runaway loop, so they sit well above any plausible legitimate turn
-count. Lower them in `settings.json` only if you want to fail a looping Flow earlier.
+bounds exist only to stop a runaway loop, so they sit well above any plausible legitimate count.
+Lower them in `settings.json` only if you want to fail a looping Flow earlier.
 
 These limits have different scopes:
 
 | Field | Scope | Meaning |
 |---|---|---|
-| `max_team_turns` | one `FlowTurn` | Maximum TeamTurns scheduled by this FlowTurn |
+| `max_team_turns` | one `FlowSession` | Maximum Team rounds the session may start in total. It is a session total, not a per-turn one, because a Team's round can dispatch further Teams — the unit that grows without bound is the session |
 | `max_calls_per_team_turn` | one `TeamTurn` | Maximum Agent/Command/Webhook calls executed by this TeamTurn |
 | `max_agent_rounds` | one `AgentTurn` | Maximum Model/Tool loop iterations inside one AgentTurn |
 | `max_activation_retries` | one `FlowTurn` | How often one Team may activate the same set of targets before the FlowTurn fails |

@@ -65,6 +65,24 @@ func (r *Runtime) loadAgentSessions(ctx context.Context, sessionID string) (map[
 	return sessions, nil
 }
 
+// countTeamTurns returns how many Team rounds the session has started. It is
+// the session-level total a Team-turn budget is measured against: with several
+// Teams running and each turn dispatching more, a per-turn count no longer
+// bounds anything, but the event stream still records every round.
+func (r *Runtime) countTeamTurns(ctx context.Context, sessionID string) (int, error) {
+	events, err := r.replayFlowEvents(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, event := range events {
+		if event.Type == types.EventTeamTurnStarted {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // teamIdle reports whether a Team can take a new message. It encodes the one
 // scheduling rule of the execution-state model: a Team that is not executing is
 // free. A Team never seen in the event stream has never run, so it is idle.

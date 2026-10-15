@@ -288,17 +288,21 @@ type FlowTurnResult struct {
 	Error            string                 `json:"Error"`
 }
 
-// RuntimeLimits bounds one external FlowTurn. These are safety defaults, not
-// a new orchestration concept: the flow may still choose any valid static or
-// dynamic route within these bounds.
+// RuntimeLimits bounds one FlowSession. These are safety defaults, not a new
+// orchestration concept: the flow may still choose any valid static or dynamic
+// route within these bounds.
 //
 // The defaults are deliberately loose. A legitimate Flow may hand work back
 // and forth many times (an owner team re-dispatching a fixer after a failed
 // test, a reviewer sending work back for changes), and it must not trip a
 // limit while doing normal work. These bounds exist only to stop a runaway
-// loop, so they sit well above any plausible legitimate turn count. A Flow
-// that wants tighter bounds can lower them in settings.json.
+// loop, so they sit well above any plausible legitimate count. A Flow that
+// wants tighter bounds can lower them in settings.json.
 type RuntimeLimits struct {
+	// MaxTeamTurns bounds the Team rounds one FlowSession may start in total.
+	// It is a session total rather than a per-turn one because a Team's round
+	// can dispatch further Teams, so the unit that grows without bound is the
+	// session, not any single turn.
 	MaxTeamTurns        int `json:"max_team_turns"`
 	MaxCallsPerTeamTurn int `json:"max_calls_per_team_turn"`
 	MaxAgentRounds      int `json:"max_agent_rounds"`
