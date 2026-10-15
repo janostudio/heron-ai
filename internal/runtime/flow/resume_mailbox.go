@@ -113,6 +113,11 @@ func activatorFromMessages(messages []types.MailboxMessage) string {
 // that mail. Teams are considered in a stable order (descending mail count,
 // then TeamID) so a wake-up is deterministic when several Teams have mail.
 // It returns an empty Team when nobody has mail.
+//
+// A Team that is already executing is skipped: its round was launched by the
+// background dispatcher, which owns the message it is working on. Waking that
+// Team here would run a second round for it, and the two would race over the
+// same message.
 func (r *Runtime) nextWakingTeam(ctx context.Context, sessionID string) (string, []types.MailboxMessage, error) {
 	box, err := r.loadMailbox(ctx, sessionID)
 	if err != nil {
@@ -121,6 +126,9 @@ func (r *Runtime) nextWakingTeam(ctx context.Context, sessionID string) (string,
 	byTeam := make(map[string][]types.MailboxMessage)
 	for _, msg := range box {
 		if msg.Status != types.MailboxPending || msg.To.TeamID == "" {
+			continue
+		}
+		if r.teamBusy(msg.To.TeamID) {
 			continue
 		}
 		byTeam[msg.To.TeamID] = append(byTeam[msg.To.TeamID], msg)

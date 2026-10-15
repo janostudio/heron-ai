@@ -64,12 +64,17 @@ func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession,
 		return
 	}
 
-	if _, err := r.claimMessage(ctx, session, msg); err != nil {
-		logging.Error("claim dispatched message", map[string]any{
-			"flow_session_id": session.ID,
-			"message_id":      msg.MessageID,
-			"error":           err.Error(),
-		})
+	// A message launched by the dispatcher was already claimed there, which is
+	// what kept a concurrent wake-up from taking it. Only a message that
+	// arrives unclaimed is claimed here.
+	if msg.Status != types.MailboxClaimed {
+		if _, err := r.claimMessage(ctx, session, msg); err != nil {
+			logging.Error("claim dispatched message", map[string]any{
+				"flow_session_id": session.ID,
+				"message_id":      msg.MessageID,
+				"error":           err.Error(),
+			})
+		}
 	}
 
 	target := msg.To.TeamID

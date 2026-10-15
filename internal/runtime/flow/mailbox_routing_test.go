@@ -89,3 +89,30 @@ func activatorForResult(work types.MailboxMessage, defs *types.Definitions) stri
 	}
 	return defs.Flow.EntryTeamID
 }
+
+// TestNextWakingTeamSkipsBusyTeam pins the fix for a double-run: a Team whose
+// round the background dispatcher already launched must not be woken again, or
+// two rounds race over the same message.
+func TestNextWakingTeamSkipsBusyTeam(t *testing.T) {
+	rt, _ := newMailboxTestRuntime(t)
+	ctx := context.Background()
+	session, turn := mailboxTestSession(t)
+
+	require.NoError(t, func() error {
+		_, err := rt.enqueueWorkMessage(ctx, session, turn, addr("worktree", ""), map[string]any{"caller_team": "owner"})
+		return err
+	}())
+
+	// With worktree free it is the Team to wake.
+	target, _, err := rt.nextWakingTeam(ctx, session.ID)
+	require.NoError(t, err)
+	require.Equal(t, "worktree", target)
+
+	// Once its round is running, the wake-up must not pick it again.
+	require.True(t, rt.tryMarkTeamBusy("worktree"))
+	defer rt.clearTeamBusy("worktree")
+	target, messages, err := rt.nextWakingTeam(ctx, session.ID)
+	require.NoError(t, err)
+	require.Empty(t, target, "a busy team must not be woken")
+	require.Empty(t, messages)
+}

@@ -29,6 +29,21 @@ func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, ta
 	if !r.tryMarkTeamBusy(targetTeam) {
 		return
 	}
+	// Claim the message before starting the goroutine: this is what takes it
+	// out of the pending set, so a concurrent wake-up cannot pick the same
+	// message and run the Team a second time. A failure here still launches the
+	// round — running the work is more important than the bookkeeping — and is
+	// logged.
+	if claimed, err := r.claimMessage(context.Background(), session, msg); err != nil {
+		logging.Error("claim dispatched message", map[string]any{
+			"flow_session_id": session.ID,
+			"message_id":      msg.MessageID,
+			"team_id":         targetTeam,
+			"error":           err.Error(),
+		})
+	} else {
+		msg = claimed
+	}
 	go func() {
 		ctx := context.Background()
 		defer func() {
@@ -98,6 +113,15 @@ func (r *Runtime) clearTeamBusy(teamID string) {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
 	delete(r.busyTeams, teamID)
+}
+
+// teamBusy reports whether a Team is executing in this process right now. The
+// scheduler uses it to keep from starting a second round for a Team whose
+// first round the background dispatcher already owns.
+func (r *Runtime) teamBusy(teamID string) bool {
+	r.dispatchMu.Lock()
+	defer r.dispatchMu.Unlock()
+	return r.busyTeams[teamID]
 }
 
 // liveTeams returns a snapshot of the Teams executing in this process. Recovery
