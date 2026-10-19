@@ -92,6 +92,13 @@ func peerFlow(entry string, activates map[string][]string, teams ...string) *typ
 }
 
 func runPeer(t *testing.T, defs *types.Definitions, fake *peerRuntime, limits types.RuntimeLimits, async bool) (types.FlowTurnResult, error) {
+	_, result, err := runPeerRuntime(t, defs, fake, limits, async)
+	return result, err
+}
+
+// runPeerRuntime is runPeer plus the Runtime it built, for tests that have to
+// wait on the background chain the run started.
+func runPeerRuntime(t *testing.T, defs *types.Definitions, fake *peerRuntime, limits types.RuntimeLimits, async bool) (*Runtime, types.FlowTurnResult, error) {
 	t.Helper()
 	sessions := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	runtime := newTestRuntime(defs, fake, sessions, nil)
@@ -109,7 +116,8 @@ func runPeer(t *testing.T, defs *types.Definitions, fake *peerRuntime, limits ty
 			}()
 		})
 	}
-	return runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "peer", Input: "go"})
+	result, err := runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "peer", Input: "go"})
+	return runtime, result, err
 }
 
 // Any Team that declares can_activate may activate other Teams, entry or not.
@@ -309,6 +317,7 @@ func TestRepeatedActivationIsBoundedForAnyTeam(t *testing.T) {
 // is dropped, whether it runs inline or in the background.
 func TestBackgroundDispatchDependsOnTargetNotActivator(t *testing.T) {
 	t.Run("a dispatched team's own activation is delivered, not dropped", func(t *testing.T) {
+		midGate := make(chan struct{})
 		fake := newPeerRuntime(map[string]func(int) types.TeamTurnResult{
 			"entry": func(run int) types.TeamTurnResult {
 				if run == 1 {
@@ -318,6 +327,15 @@ func TestBackgroundDispatchDependsOnTargetNotActivator(t *testing.T) {
 			},
 			"mid": func(run int) types.TeamTurnResult {
 				if run == 1 {
+					// Hold mid's first round until the dispatching turn has
+					// ended. wakeIfIdle deliberately drops a wake that arrives
+					// while the session is still running, and a scripted Team
+					// that finishes instantly can beat the dispatching turn's
+					// teardown, which leaves mid's mail waiting for the next
+					// turn instead of being taken now. Releasing mid after
+					// Start returns is the production timing: a real round
+					// outlives the turn that dispatched it.
+					<-midGate
 					return peerActivate("leaf")
 				}
 				return peerProceed()
@@ -328,9 +346,16 @@ func TestBackgroundDispatchDependsOnTargetNotActivator(t *testing.T) {
 			"mid":   {"leaf"},
 		}, "entry", "mid", "leaf")
 
-		result, err := runPeer(t, defs, fake, types.RuntimeLimits{}, true)
+		// Release mid even if an assertion below fails first, so a blocked round
+		// cannot outlive the test.
+		var releaseOnce sync.Once
+		releaseMid := func() { releaseOnce.Do(func() { close(midGate) }) }
+		defer releaseMid()
+
+		runtime, result, err := runPeerRuntime(t, defs, fake, types.RuntimeLimits{}, true)
 		require.NoError(t, err)
 		require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+		releaseMid()
 
 		// mid runs in the background and dispatches leaf through its mailbox;
 		// wait for that chain to finish rather than assuming it ran inline.
@@ -339,12 +364,20 @@ func TestBackgroundDispatchDependsOnTargetNotActivator(t *testing.T) {
 			defer fake.mu.Unlock()
 			return fake.runs["leaf"] == 1
 		}, 5*time.Second, 10*time.Millisecond, "mid's own activation must not be dropped")
+
+		// leaf's result goes back to mid, so the chain is still writing session
+		// events after the assertion above. Let it finish before the temp dir
+		// goes away: a RemoveAll that races those writes fails with "directory
+		// not empty" on Linux.
+		waitForDispatchSettled(t, runtime, result.Session.ID)
+
 		fake.mu.Lock()
 		defer fake.mu.Unlock()
 		require.Equal(t, []string{"mid"}, fake.callers["leaf"], "leaf must be activated by mid, not by the entry")
 	})
 
 	t.Run("target that finishes by itself may run in the background", func(t *testing.T) {
+		leafGate := make(chan struct{})
 		fake := newPeerRuntime(map[string]func(int) types.TeamTurnResult{
 			"entry": func(run int) types.TeamTurnResult {
 				if run == 1 {
@@ -352,11 +385,29 @@ func TestBackgroundDispatchDependsOnTargetNotActivator(t *testing.T) {
 				}
 				return peerProceed()
 			},
+			// Hold leaf's round the same way the sibling subtest holds
+			// mid's: a round that ends before the dispatching turn does has
+			// its wake dropped on purpose, which leaves its result stranded
+			// until the next turn and makes the chain below nondeterministic.
+			"leaf": func(int) types.TeamTurnResult {
+				<-leafGate
+				return peerProceed()
+			},
 		})
 		defs := peerFlow("entry", map[string][]string{"entry": {"leaf"}}, "entry", "leaf")
 
-		result, err := runPeer(t, defs, fake, types.RuntimeLimits{}, true)
+		var releaseOnce sync.Once
+		releaseLeaf := func() { releaseOnce.Do(func() { close(leafGate) }) }
+		defer releaseLeaf()
+
+		runtime, result, err := runPeerRuntime(t, defs, fake, types.RuntimeLimits{}, true)
 		require.NoError(t, err)
 		require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+		releaseLeaf()
+
+		// leaf was dispatched to the background; its result wakes the entry
+		// for another round. Wait for that chain to stop writing before the
+		// temp dir is removed.
+		waitForDispatchSettled(t, runtime, result.Session.ID)
 	})
 }

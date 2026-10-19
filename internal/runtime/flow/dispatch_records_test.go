@@ -89,10 +89,18 @@ func TestAsyncDispatchedTeamReceivesDeclaredFlowRecords(t *testing.T) {
 	runtime := newTestRuntime(recordCapturingDefinitions(), fake, sessions, evidence)
 	runtime.SetAsyncDispatch(true)
 
-	_, err := runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "records-to-async", Input: "go"})
+	result, err := runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "records-to-async", Input: "go"})
 	require.NoError(t, err)
 
+	// workerSawCh only proves the worker's round has run, not that the
+	// dispatcher has finished with the session: it still has to record the
+	// work message's delivered event and the result message it posts back to
+	// the coordinator. Returning here races those writes against
+	// t.TempDir()'s RemoveAll, which fails with "directory not empty" on
+	// Linux, so wait for the dispatcher's last write first.
 	<-fake.workerSawCh
+	waitForResultMessage(t, runtime, result.Session.ID, "default")
+
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	require.Contains(t, fake.workerSaw, "CoordinatorReply",

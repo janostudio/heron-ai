@@ -22,12 +22,25 @@ type concurrentTeamRuntime struct {
 	mu       sync.Mutex
 	startedA bool
 	startedB bool
+	entryRun int
 	startCh  chan string
 }
 
 func (c *concurrentTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
 	switch req.TeamTurn.TeamID {
 	case "entry":
+		c.mu.Lock()
+		c.entryRun++
+		first := c.entryRun == 1
+		c.mu.Unlock()
+		if !first {
+			// Only the first round dispatches the leaves. Re-activating
+			// them on every round keeps the chain alive until the
+			// activation budget kills it — dozens of extra rounds whose
+			// churn is not what this test is about, and which turn "the
+			// chain has settled" into a moving target.
+			return types.TeamTurnResult{Turn: req.TeamTurn, Next: &types.Route{Action: types.NextProceed}}, nil
+		}
 		return types.TeamTurnResult{
 			Turn: req.TeamTurn,
 			Next: &types.Route{Action: types.NextActivate, Teams: []string{"leaf-a", "leaf-b"}},
@@ -77,9 +90,13 @@ func TestConcurrentDispatchRunsTeamsInParallel(t *testing.T) {
 		"leaf-a": {}, "leaf-b": {},
 	}, "entry", "leaf-a", "leaf-b"), fake, sessions, nil)
 	rt.SetAsyncDispatch(true)
-	rt.SetWaker(func(sessionID string) {
-		go func() { _, _ = rt.ResumeForMailbox(context.Background(), sessionID) }()
-	})
+	// No waker: this test is about the two Teams running at once, not about
+	// the wake path (which dispatch_test.go and peer_model_test.go cover).
+	// Without one the background work is exactly the two dispatch
+	// goroutines, so "no Team is executing" is a deterministic end state.
+	// With a waker the two results wake the entry at the same time and the
+	// second wake is dropped on purpose while the first resume is running
+	// (dispatch.wakeIfIdle), which leaves mail pending forever.
 
 	result, err := rt.Start(context.Background(), types.StartFlowRequest{FlowID: "peer", Input: "go"})
 	require.NoError(t, err)
@@ -100,20 +117,11 @@ func TestConcurrentDispatchRunsTeamsInParallel(t *testing.T) {
 	close(fake.aGate)
 	close(fake.bGate)
 
-	// Let the chain settle so the background goroutines finish before the
-	// temp dir goes away.
-	require.Eventually(t, func() bool {
-		box, err := rt.loadMailbox(context.Background(), result.Session.ID)
-		if err != nil {
-			return false
-		}
-		for _, m := range box {
-			if m.Status == types.MailboxPending || m.Status == types.MailboxClaimed {
-				return false
-			}
-		}
-		return true
-	}, 5*time.Second, 20*time.Millisecond)
+	// Let the dispatch goroutines finish before the temp dir goes away:
+	// they keep writing delivered/result events after Start returned, and a
+	// RemoveAll that races those writes fails with "directory not empty" on
+	// Linux.
+	waitForDispatchersDone(t, rt, result.Session.ID)
 }
 
 // TestSameTeamDoesNotRunTwoRoundsAtOnce pins the guard: two messages addressed
