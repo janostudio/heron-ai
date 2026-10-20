@@ -70,6 +70,12 @@ Each agent can be configured with:
   (`builtinSchemas`) — Read, Write, Bash, WebSearch, WebFetch, CodeNav,
   AskUserQuestion, Grep, Glob, TodoWrite, TodoRead, Spawn, Collect, State,
   Define. An agent only gets the subset listed in its `tools.builtin`.
+  `WebSearch` and `WebFetch` additionally read their data source from the `web`
+  section of `.agents/settings.json` — the provider defaults to `duckduckgo`
+  (keyless, search only); `tinyfish`, `brave` and `tavily` need an `api_key`
+  and fail closed without one, while `direct` fetches locally. Fetch follows
+  the search provider but falls back to `direct` for providers that expose no
+  fetch API; see `docs/configuration/agent.md`.
 - **Skills**: Packaged tool + prompt combinations
 - **Knowledge**: Searchable knowledge base
 - **Rules**: Soft/hard constraints

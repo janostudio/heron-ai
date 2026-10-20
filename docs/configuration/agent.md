@@ -176,6 +176,74 @@ The content above belongs in:
 Built-in tools: `Read`, `Write`, `Grep`, `Glob`, `Bash`, `WebSearch`,
 `WebFetch`, `CodeNav`, `AskUserQuestion`, `TodoWrite`, `TodoRead`, `State`
 
+### web (data source for `WebSearch` / `WebFetch`)
+
+The web tools' data source is **not** configured on the agent: it lives in the
+`web` section of `.agents/settings.json` and is shared by every agent. The
+default provider is keyless, so `WebSearch` works out of the box with an empty
+`web` section; the smallest configuration that sets anything is a single key:
+
+```json
+{ "web": { "api_key": "..." } }
+```
+
+Note the trap: the snippet above does **not** switch providers — `provider` is
+still `duckduckgo`, which is keyless, so the key is simply ignored. To use a
+keyed provider you have to name it explicitly:
+
+```json
+{ "web": { "provider": "tinyfish", "api_key": "..." } }
+```
+
+| provider | WebSearch | WebFetch | key | built-in endpoint |
+|----------|-----------|----------|-----|-------------------|
+| `duckduckgo` | yes (**default**) | no | keyless | `https://api.duckduckgo.com/` |
+| `tinyfish` | yes | yes | required | `api.search.tinyfish.ai` / `api.fetch.tinyfish.ai` |
+| `brave` | yes | no | required | `https://api.search.brave.com/res/v1/web/search` |
+| `tavily` | yes | yes | required | `api.tavily.com/search` / `api.tavily.com/extract` |
+| `direct` | — | yes | keyless | local direct fetch, no external API |
+
+`provider` governs search. Fetch follows it by default, and since `brave` and
+`duckduckgo` expose no fetch API they fall back to `direct` (a local direct
+fetch) instead of erroring. Write `fetch.provider: direct` to force local
+fetching regardless of the search provider.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `provider` | string | `duckduckgo` (default) / `tinyfish` / `brave` / `tavily` |
+| `api_key` | string | Provider API key; required by `tinyfish`, `brave`, `tavily` |
+| `search.url` | string | Override the search endpoint; empty = provider built-in |
+| `search.max_results` | integer | Result cap, default `10` |
+| `search.location` | string | Country code, `tinyfish` only |
+| `search.language` | string | Language code, `tinyfish` only |
+| `search.timeout_ms` | integer | Per-request timeout, default `30000` |
+| `fetch.provider` | string | `tinyfish` / `tavily` / `direct`; empty = follow `provider` |
+| `fetch.url` | string | Override the fetch endpoint; empty = built-in for the effective provider |
+| `fetch.format` | string | `markdown` (default) / `html` / `json` |
+| `fetch.timeout_ms` | integer | Per-request timeout, default `45000` |
+
+`api_key` has three sources, highest priority first: `web.api_key` in
+plaintext > the `WEB_SEARCH_API_KEY` environment variable >
+`env.WEB_SEARCH_API_KEY` in `settings.json`. The `env` section means "inject
+into child processes", which the in-process web tools cannot see, so the engine
+lifts it up explicitly as the last resort. The variable name is deliberately
+vendor-neutral: the provider and its key are swapped as a pair.
+
+Behaviour worth knowing:
+
+- **Fail-closed is per provider**: only providers that need a key (`tinyfish`,
+  `brave`, `tavily`) report an error when the key is missing, and they never
+  fire the request. `duckduckgo` and `direct` are keyless and pass through.
+- **DuckDuckGo is not a web search engine**: the default hits the Instant
+  Answer API, which only answers encyclopedic / entity-style queries. Ordinary
+  search terms return nothing (`best web search api` yields an empty result
+  set), so for real search results configure a key for `tinyfish`, `brave` or
+  `tavily`.
+- **Private URLs never leave the machine**: `localhost` / intranet targets are
+  downgraded to a local direct fetch instead of being sent to a third-party
+  provider. Downgrading and *allowing* are separate decisions — whether the
+  direct fetch is permitted is still governed by `AllowPrivateHosts`.
+
 ### loop
 
 | Field | Type | Description |

@@ -341,6 +341,113 @@ func TestLoadKnowledgeSettings_MissingFileReturnsZero(t *testing.T) {
 	require.Equal(t, "", cfg.SummaryModel)
 }
 
+func TestLoadWebSettings_DefaultsToDuckDuckGo(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "settings.json"), []byte(`{
+  "web": {
+    "api_key": "k"
+  }
+}`), 0644))
+
+	cfg := NewConfigLoader(root).LoadWebSettings()
+	require.Equal(t, types.WebProviderDuckDuckGo, cfg.Provider)
+	require.Equal(t, "k", cfg.APIKey)
+	require.Equal(t, types.DefaultWebSearchURL(types.WebProviderDuckDuckGo), cfg.Search.URL)
+	require.Equal(t, types.DefaultWebFetchURL(types.WebProviderDuckDuckGo), cfg.Fetch.URL)
+	require.Equal(t, 10, cfg.Search.MaxResults)
+	require.Equal(t, "markdown", cfg.Fetch.Format)
+}
+
+func TestLoadWebSettings_ExplicitProviderAndURLWin(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "settings.json"), []byte(`{
+  "web": {
+    "provider": "brave",
+    "search": { "url": "https://custom/search" }
+  }
+}`), 0644))
+
+	cfg := NewConfigLoader(root).LoadWebSettings()
+	require.Equal(t, types.WebProviderBrave, cfg.Provider)
+	require.Equal(t, "https://custom/search", cfg.Search.URL)
+}
+
+func TestLoadWebSettings_MissingSectionUsesDefaults(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "settings.json"), []byte(`{}`), 0644))
+
+	cfg := NewConfigLoader(root).LoadWebSettings()
+	require.Equal(t, types.WebProviderDuckDuckGo, cfg.Provider)
+	require.Empty(t, cfg.APIKey)
+	require.Equal(t, types.DefaultWebSearchURL(types.WebProviderDuckDuckGo), cfg.Search.URL)
+	require.Equal(t, types.DefaultWebFetchURL(types.WebProviderDuckDuckGo), cfg.Fetch.URL)
+}
+
+func TestLoadWebSettings_MissingFileUsesDefaults(t *testing.T) {
+	root := t.TempDir()
+
+	cfg := NewConfigLoader(root).LoadWebSettings()
+	require.Equal(t, types.WebProviderDuckDuckGo, cfg.Provider)
+	require.Empty(t, cfg.APIKey)
+	require.Equal(t, types.DefaultWebSearchURL(types.WebProviderDuckDuckGo), cfg.Search.URL)
+}
+
+// 零配置可用：没有 web 段（或 web 段没写 provider）时必须落到 duckduckgo 且
+// 无 key。这是「默认 duckduckgo」这条需求的锁死用例——配置层一旦把默认改回
+// 要 key 的 provider，端到端就会 fail-closed，开箱即用失效。
+func TestLoadWebSettings_ZeroConfigIsKeyless(t *testing.T) {
+	for name, body := range map[string]string{
+		"missing section": `{}`,
+		"no provider":     `{"web": {"fetch": {"format": "markdown"}}}`,
+		"empty provider":  `{"web": {"provider": ""}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "settings.json"), []byte(body), 0644))
+
+			cfg := NewConfigLoader(root).LoadWebSettings()
+			require.Equal(t, types.WebProviderDuckDuckGo, cfg.Provider)
+			require.Empty(t, cfg.APIKey)
+			require.Equal(t, "https://api.duckduckgo.com/", cfg.Search.URL)
+			// duckduckgo 没有 fetch API：endpoint 为空，tool 层按 direct 本地直连。
+			require.Empty(t, cfg.Fetch.URL)
+		})
+	}
+}
+
+// web.api_key 为空时回退环境变量 WEB_SEARCH_API_KEY（与具体厂商无关：
+// provider 与 key 是配套整段换的）。
+func TestLoadWebSettings_FallsBackToEnvAPIKey(t *testing.T) {
+	t.Setenv("WEB_SEARCH_API_KEY", "env-key")
+
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "settings.json"), []byte(`{
+  "web": { "provider": "brave" }
+}`), 0644))
+
+	cfg := NewConfigLoader(root).LoadWebSettings()
+	require.Equal(t, "env-key", cfg.APIKey)
+}
+
+// 明文配置的优先级高于环境变量。
+func TestLoadWebSettings_ExplicitAPIKeyBeatsEnv(t *testing.T) {
+	t.Setenv("WEB_SEARCH_API_KEY", "env-key")
+
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".agents", "settings.json"), []byte(`{
+  "web": { "api_key": "file-key" }
+}`), 0644))
+
+	cfg := NewConfigLoader(root).LoadWebSettings()
+	require.Equal(t, "file-key", cfg.APIKey)
+}
+
 func TestLoadDefinitionsLoadsRuntimeLimits(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".agents", "agents"), 0755))

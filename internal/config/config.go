@@ -3,11 +3,15 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
+
+// webAPIKeyEnv 是 web 工具 API Key 的环境变量回退来源，与具体厂商无关。
+const webAPIKeyEnv = "WEB_SEARCH_API_KEY"
 
 // ConfigLoader loads the current global .agents configuration.
 type ConfigLoader struct {
@@ -65,6 +69,32 @@ func (l *ConfigLoader) LoadKnowledgeSettings() types.KnowledgeConfig {
 		cfg = raw.Knowledge
 	}
 	return cfg
+}
+
+// LoadWebSettings 读取 .agents/settings.json 的 web 段，返回已过默认值填充的
+// WebConfig（provider 空 = duckduckgo，endpoint / 超时 / format 都已补齐）。
+//
+// 文件缺失或 web 段缺失是合法状态：返回零值过 WithDefaults，即默认
+// duckduckgo——免 key，零配置可用，不 fail-closed。
+//
+// APIKey 有两级来源，优先级：web.api_key 明文 > 环境变量 WEB_SEARCH_API_KEY。
+// 环境变量名刻意与具体厂商无关——provider 和 key 是配套整段换的，换成 brave
+// 时同一个变量装 brave 的 key。这里不读 settings.json 的 env 段：那是注入子
+// 进程的语义，由 app 层处理。
+func (l *ConfigLoader) LoadWebSettings() types.WebConfig {
+	var cfg types.WebConfig
+	if data, err := l.fileStore.Read(filepath.Join(".agents", "settings.json")); err == nil {
+		var raw struct {
+			Web types.WebConfig `json:"web"`
+		}
+		if json.Unmarshal(data, &raw) == nil {
+			cfg = raw.Web
+		}
+	}
+	if cfg.APIKey == "" {
+		cfg.APIKey = os.Getenv(webAPIKeyEnv)
+	}
+	return cfg.WithDefaults()
 }
 
 // LoadGlobalEnv 读取 .agents/settings.json 的 env 段，返回注入所有子进程的

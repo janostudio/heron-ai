@@ -10,6 +10,9 @@ type Definitions struct {
 	Rules     map[string]RuleItem
 	Limits    RuntimeLimits
 	Knowledge KnowledgeConfig
+	// Web 来自 settings.json 的 web 段，已过 WithDefaults（provider / endpoint /
+	// 超时 / format 的空值都已补齐），运行时直接用来构造 web 工具。
+	Web       WebConfig
 	Workspace *WorkspaceConfig
 	// Env 是解析后的全局环境变量（settings.json 的 env 段，相对路径已按配置
 	// 目录展开为绝对路径）。运行时把它注入所有子进程。

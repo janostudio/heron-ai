@@ -191,6 +191,26 @@ frontmatter 分组：
 > `Spawn`、`Collect`、`State`、`Define` 都是**按需开启**的工具：不写进
 > `builtin` 就既不会提供给模型，调用也会被允许清单拦下。`Define` 的语义
 > 见 `define.md`。
+>
+> `WebSearch` / `WebFetch` 的数据源不在 Agent 层配，统一在 `.agents/settings.json`
+> 的 `web` 段。默认 provider `duckduckgo` 免 key，空配置即可搜；常见写法是
+> `{"web": {"api_key": "..."}}` —— **但这不会切换 provider**，`duckduckgo` 免 key，
+> 这个 key 会被忽略。真要用 TinyFish 必须同时写 provider：
+> `{"web": {"provider": "tinyfish", "api_key": "..."}}`。
+>
+> provider 对照：`duckduckgo`（默认，仅 search，免 key）、`tinyfish`（search+fetch，
+> 要 key）、`brave`（仅 search，要 key）、`tavily`（search+fetch，要 key）、
+> `direct`（仅 fetch，本地直连，免 key）。`provider` 管 search，fetch 默认跟随；
+> `brave`/`duckduckgo` 没有 fetch API，自动落 `direct` 本地直连（不报错），
+> 写 `fetch.provider: direct` 可强制本地抓取。
+>
+> api_key 三级来源：`web.api_key` 明文 > 环境变量 `WEB_SEARCH_API_KEY` > `env` 段
+> 同名变量（变量名刻意不带厂商名，provider 和 key 配套整段换）。fail-closed 按
+> provider 判定：只有 tinyfish/brave/tavily 缺 key 时报错且不发请求，duckduckgo
+> 和 direct 免 key 放行。注意 DuckDuckGo 走的是 Instant Answer API，只答百科/实体
+> 类查询，普通搜索词（如 `best web search api`）返回全空，要真搜索结果得配 key。
+> 私网 URL 自动降级本地直连、不外发（降级与「是否允许抓私网」是两件事，后者看
+> `AllowPrivateHosts`）。
 
 ### loop
 | 字段 | 含义 |

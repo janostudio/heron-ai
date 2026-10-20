@@ -100,8 +100,31 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	toolRegistry.Register(tool.NewBashTool(workspaceService))
 	toolRegistry.Register(tool.NewGrepTool(workspaceService))
 	toolRegistry.Register(tool.NewGlobTool(workspaceService))
-	toolRegistry.Register(tool.NewWebSearchTool(newWebHTTPClient(), tool.WebSearchConfig{}))
-	toolRegistry.Register(tool.NewWebFetchTool(newWebHTTPClient(), tool.WebFetchConfig{}))
+	// WebSearch / WebFetch 的数据源来自 settings.json 的 web 段。provider 的
+	// 默认值由配置层 WithDefaults 填（duckduckgo，免 key、开箱即用），tool 层
+	// 对空 provider 也填同一个默认值，两层一致。需要 key 的 provider（tinyfish /
+	// brave / tavily）走 resolveWebAPIKey 的三级来源，无 key 时按 provider 判
+	// fail-closed；duckduckgo / direct 免 key 直接放行。
+	web := definitions.Web
+	webAPIKey := resolveWebAPIKey(definitions)
+	webClient := newWebHTTPClient()
+	toolRegistry.Register(tool.NewWebSearchTool(webClient, tool.WebSearchConfig{
+		Provider:   web.Provider,
+		Endpoint:   web.Search.URL,
+		APIKey:     webAPIKey,
+		Location:   web.Search.Location,
+		Language:   web.Search.Language,
+		MaxResults: web.Search.MaxResults,
+		TimeoutMs:  web.Search.TimeoutMs,
+	}))
+	toolRegistry.Register(tool.NewWebFetchTool(webClient, tool.WebFetchConfig{
+		// fetch.provider 留空 = 跟随 web.provider。
+		Provider:  web.FetchProvider(),
+		Endpoint:  web.Fetch.URL,
+		APIKey:    webAPIKey,
+		Format:    web.Fetch.Format,
+		TimeoutMs: web.Fetch.TimeoutMs,
+	}))
 	toolRegistry.Register(tool.NewCodeNavTool(workspaceService, "codels", injectEnv))
 	toolRegistry.Register(tool.NewAskUserQuestionTool())
 	toolRegistry.Register(tool.NewTodoWriteTool())
@@ -379,13 +402,36 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 // is only the MCP servers, and it matters: a stdio MCP server is a child
 // process, and a heron run that exits without closing them leaves the servers
 // (and whatever they forked) running.
-// newWebHTTPClient returns an HTTP client with a request timeout. The default
-// http.DefaultClient has Timeout 0 (no limit), which combined with a caller
-// whose context has no deadline would let a stalled web request hang forever
-// and strand the AgentTurn. The executor's backstop already bounds tool calls;
-// this is the second, transport-level guarantee.
+// webAPIKeyEnv 是 web 工具 API Key 的环境变量名，与 internal/config 的
+// webAPIKeyEnv 同名同义（那边管「进程环境变量」这一级，这里管 env 段这一级）。
+const webAPIKeyEnv = "WEB_SEARCH_API_KEY"
+
+// resolveWebAPIKey 决定 web 工具最终使用的 API Key，三级优先级：
+//  1. settings.json 的 web.api_key 明文；
+//  2. 进程环境变量 WEB_SEARCH_API_KEY；
+//  3. settings.json env 段的 WEB_SEARCH_API_KEY。
+//
+// 前两级已由 config.LoadWebSettings 填进 definitions.Web.APIKey，这里只需要补
+// 第三级：env 段的语义是「注入子进程」，而 WebSearch / WebFetch 是同进程内的
+// 工具，读不到子进程环境，所以写在 env 段里的 key 必须在这里显式抬上来才生效。
+func resolveWebAPIKey(definitions *types.Definitions) string {
+	if definitions == nil {
+		return ""
+	}
+	if key := strings.TrimSpace(definitions.Web.APIKey); key != "" {
+		return key
+	}
+	return strings.TrimSpace(definitions.Env[webAPIKeyEnv])
+}
+
+// newWebHTTPClient 返回 web 工具专用的 HTTP client。
+//
+// 这里刻意不设 client 级 Timeout：fetch 的默认超时是 45s，比任何写死的 client
+// 超时都容易被提前截断（曾经是 30s，45s 的语义被吃掉一半）。超时统一由 tool 层
+// 的 withWebTimeout 用 context 控制，配置里的 timeout_ms 才能真正生效。外层还
+// 有执行器的兜底超时兜住卡死的请求，不会无限挂住 AgentTurn。
 func newWebHTTPClient() *http.Client {
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{}
 }
 
 func (b *RuntimeBundle) Close() error {
