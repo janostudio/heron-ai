@@ -40,6 +40,10 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		// Running (a wake raced another turn) or terminal (failed/cancelled/
 		// interrupted): wake-ups are dropped silently. The result message
 		// stays in the inbox; a later turn drains it.
+		logging.Debug("resume for mailbox skipped: session not idle", map[string]any{
+			"flow_session_id": sessionID,
+			"session_status":  string(session.Status),
+		})
 		return types.FlowTurnResult{}, nil
 	}
 
@@ -55,7 +59,13 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		return types.FlowTurnResult{}, err
 	}
 	if target == "" || len(messages) == 0 {
-		// No mail for anyone; nothing to summarize.
+		// No mail for anyone; nothing to summarize. Every Team with mail is
+		// also skipped when it is still executing, so this fires both for an
+		// empty inbox and for one whose only mail belongs to a running Team.
+		logging.Debug("resume for mailbox skipped: no drainable mail", map[string]any{
+			"flow_session_id": sessionID,
+			"team_id":         target,
+		})
 		return types.FlowTurnResult{}, nil
 	}
 
@@ -90,6 +100,12 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 	// already been activated (its work message is long delivered) and starts
 	// with no caller, which is the same "no activator" case as the entry Team.
 	wake := activation{teamID: target, callerTeam: activatorFromMessages(messages)}
+	logging.Debug("resume for mailbox waking team", map[string]any{
+		"flow_session_id": sessionID,
+		"team_id":         target,
+		"caller_team":     wake.callerTeam,
+		"message_count":   len(messages),
+	})
 	return r.runTurnWithActivationsAndContext(ctx, defs, session, "", []types.ContextBlock{block},
 		[]activation{wake})
 }

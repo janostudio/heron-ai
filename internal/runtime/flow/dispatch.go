@@ -27,8 +27,24 @@ import (
 // take down the process; the message is then marked dead.
 func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, targetTeam string, msg types.MailboxMessage) {
 	if !r.tryMarkTeamBusy(targetTeam) {
+		// The silent path: the Team is mid-round, so the message stays
+		// pending and drainTeamInbox picks it up when that round ends.
+		// Without this line a backlog looks like a lost message.
+		logging.Debug("async dispatch deferred: team already running", map[string]any{
+			"flow_session_id": session.ID,
+			"message_id":      msg.MessageID,
+			"team_id":         targetTeam,
+			"status":          string(msg.Status),
+		})
 		return
 	}
+	logging.Debug("async dispatch started", map[string]any{
+		"flow_session_id":    session.ID,
+		"message_id":         msg.MessageID,
+		"team_id":            targetTeam,
+		"kind":               msg.Kind,
+		"cause_flow_turn_id": causeTurnID,
+	})
 	// Claim the message before starting the goroutine: this is what takes it
 	// out of the pending set, so a concurrent wake-up cannot pick the same
 	// message and run the Team a second time. A failure here still launches the
@@ -88,8 +104,18 @@ func (r *Runtime) drainTeamInbox(ctx context.Context, session types.FlowSession,
 		return
 	}
 	if len(messages) == 0 {
+		logging.Debug("drain team inbox: no pending message", map[string]any{
+			"flow_session_id": session.ID,
+			"team_id":         teamID,
+		})
 		return
 	}
+	logging.Debug("drain team inbox: launching next message", map[string]any{
+		"flow_session_id": session.ID,
+		"team_id":         teamID,
+		"message_id":      messages[0].MessageID,
+		"pending_count":   len(messages),
+	})
 	r.launchAsyncDispatch(session, messages[0].CauseFlowTurnID, teamID, messages[0])
 }
 
@@ -150,7 +176,22 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 	if msg.To.TeamID == "" {
 		msg.To.TeamID = targetTeam
 	}
+	logging.Debug("async dispatch round started", map[string]any{
+		"flow_session_id":    session.ID,
+		"message_id":         msg.MessageID,
+		"team_id":            msg.To.TeamID,
+		"cause_flow_turn_id": msg.CauseFlowTurnID,
+	})
+	started := time.Now()
 	r.runMessageTurn(ctx, session, msg)
+	// Success/failure is already logged by runMessageTurn; this closes the
+	// bracket with the wall-clock cost of the round.
+	logging.Debug("async dispatch round finished", map[string]any{
+		"flow_session_id": session.ID,
+		"message_id":      msg.MessageID,
+		"team_id":         msg.To.TeamID,
+		"duration_ms":     time.Since(started).Milliseconds(),
+	})
 }
 // wakeIfIdle calls the injected waker only when the session is idle enough to
 // resume. A running session (including the dispatching turn itself, whose
@@ -158,6 +199,9 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 // alone: its result message sits in the inbox and the next turn drains it.
 func (r *Runtime) wakeIfIdle(ctx context.Context, sessionID string) {
 	if r.wakeFn == nil {
+		logging.Debug("wake skipped: no waker configured", map[string]any{
+			"flow_session_id": sessionID,
+		})
 		return
 	}
 	session, err := r.loadSession(ctx, sessionID)
@@ -170,6 +214,10 @@ func (r *Runtime) wakeIfIdle(ctx context.Context, sessionID string) {
 		return
 	}
 	if session.Status == types.SessionRunning {
+		logging.Debug("wake skipped: session running", map[string]any{
+			"flow_session_id": sessionID,
+			"session_status":  string(session.Status),
+		})
 		return
 	}
 	switch session.Status {
@@ -177,10 +225,18 @@ func (r *Runtime) wakeIfIdle(ctx context.Context, sessionID string) {
 		types.SessionWaitingTool,
 		types.SessionWaitingApproval,
 		types.SessionCreated:
+		logging.Debug("waking session", map[string]any{
+			"flow_session_id": sessionID,
+			"session_status":  string(session.Status),
+		})
 		r.wakeFn(sessionID)
 	default:
 		// Failed / cancelled / interrupted / completed are terminal or
 		// externally controlled; do not wake.
+		logging.Debug("wake skipped: session not idle", map[string]any{
+			"flow_session_id": sessionID,
+			"session_status":  string(session.Status),
+		})
 	}
 }
 
@@ -202,12 +258,20 @@ func (r *Runtime) recordBatchDispatched(ctx context.Context, session types.FlowS
 		},
 		Payload: payload,
 	}); err != nil {
+		// Logged, not returned: a bookkeeping write must not turn a
+		// successfully dispatched turn into a failed one.
 		logging.Error("record mailbox batch dispatched", map[string]any{
 			"flow_session_id": session.ID,
 			"flow_turn_id":    turn.ID,
 			"error":           err.Error(),
 		})
+		return
 	}
+	logging.Debug("recorded mailbox batch dispatched", map[string]any{
+		"flow_session_id": session.ID,
+		"flow_turn_id":    turn.ID,
+		"message_count":   len(messageIDs),
+	})
 }
 
 // mailboxBatchDispatchedPayload builds the payload for the end-of-turn

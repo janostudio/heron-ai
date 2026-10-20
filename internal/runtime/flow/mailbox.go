@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -77,6 +78,16 @@ func (r *Runtime) enqueueMessage(
 	if err := r.appendMailboxEvent(ctx, types.EventMailboxMessageEnqueued, session, causeTurn, msg); err != nil {
 		return types.MailboxMessage{}, err
 	}
+	// The payload is deliberately not logged: it can carry dispatched prompts.
+	logging.Debug("mailbox message enqueued", map[string]any{
+		"message_id":         msg.MessageID,
+		"kind":               kind,
+		"flow_session_id":    session.ID,
+		"from_team":          msg.From.TeamID,
+		"to_team":            msg.To.TeamID,
+		"to_agent":           msg.To.AgentID,
+		"cause_flow_turn_id": msg.CauseFlowTurnID,
+	})
 	return msg, nil
 }
 
@@ -93,6 +104,13 @@ func (r *Runtime) claimMessage(
 	if err := r.appendMailboxEvent(ctx, types.EventMailboxMessageClaimed, session, types.FlowTurn{}, msg); err != nil {
 		return types.MailboxMessage{}, err
 	}
+	logging.Debug("mailbox message claimed", map[string]any{
+		"message_id":      msg.MessageID,
+		"flow_session_id": session.ID,
+		"to_team":         msg.To.TeamID,
+		"status":          string(msg.Status),
+		"revision":        msg.Revision,
+	})
 	return msg, nil
 }
 
@@ -117,6 +135,14 @@ func (r *Runtime) deliverMessage(
 	if err := r.appendMailboxEvent(ctx, types.EventMailboxMessageDelivered, session, types.FlowTurn{}, msg); err != nil {
 		return types.MailboxMessage{}, err
 	}
+	logging.Debug("mailbox message delivered", map[string]any{
+		"message_id":      msg.MessageID,
+		"flow_session_id": session.ID,
+		"to_team":         msg.To.TeamID,
+		"status":          string(msg.Status),
+		"revision":        msg.Revision,
+		"has_result":      result != nil,
+	})
 	return msg, nil
 }
 
@@ -140,6 +166,14 @@ func (r *Runtime) markMessageDead(
 	if err := r.appendMailboxEvent(ctx, types.EventMailboxMessageDead, session, types.FlowTurn{}, msg); err != nil {
 		return types.MailboxMessage{}, err
 	}
+	logging.Debug("mailbox message dead", map[string]any{
+		"message_id":      msg.MessageID,
+		"flow_session_id": session.ID,
+		"to_team":         msg.To.TeamID,
+		"status":          string(msg.Status),
+		"revision":        msg.Revision,
+		"reason":          reason,
+	})
 	return msg, nil
 }
 
@@ -175,7 +209,31 @@ func (r *Runtime) loadMailbox(ctx context.Context, sessionID string) (map[string
 	if err != nil {
 		return nil, err
 	}
-	return foldMailbox(events), nil
+	box := foldMailbox(events)
+
+	// One summary per fold, not one per message: this is the view an operator
+	// needs to see an inbox backing up, and it costs a single pass over the
+	// folded result rather than a log line per event.
+	counts := mailboxStatusCounts(box)
+	logging.Debug("mailbox folded", map[string]any{
+		"flow_session_id": sessionID,
+		"event_count":     len(events),
+		"message_count":   len(box),
+		"pending":         counts[types.MailboxPending],
+		"claimed":         counts[types.MailboxClaimed],
+		"delivered":       counts[types.MailboxDelivered],
+		"dead":            counts[types.MailboxDead],
+	})
+	return box, nil
+}
+
+// mailboxStatusCounts tallies a folded mailbox by status, for diagnostics.
+func mailboxStatusCounts(box map[string]types.MailboxMessage) map[types.MailboxMessageStatus]int {
+	counts := make(map[types.MailboxMessageStatus]int, len(box))
+	for _, msg := range box {
+		counts[msg.Status]++
+	}
+	return counts
 }
 
 // listInbox returns the pending messages addressed to `to`, ordered by
