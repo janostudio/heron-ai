@@ -225,3 +225,73 @@ func TestRenderMailboxInboxErrorFallback(t *testing.T) {
 	require.Contains(t, out, "mb_err")
 	require.Contains(t, out, "team blew up")
 }
+
+// TestRenderMailboxInboxRendersDeliveredResult pins the shape the async
+// dispatcher actually writes: deliverMessage stores the output under
+// payload.result, so the team_result is one level down. Reading only the top
+// level left every dispatched result rendering as "raw result unavailable".
+func TestRenderMailboxInboxRendersDeliveredResult(t *testing.T) {
+	msg := types.MailboxMessage{
+		MessageID: "mb_delivered",
+		Kind:      mailboxKindWork,
+		Payload: map[string]any{
+			"caller_team": "default",
+			"result": map[string]any{
+				"team_result": map[string]any{"Reply": "the branch is master"},
+			},
+		},
+	}
+	out := renderMailboxInbox([]types.MailboxMessage{msg})
+	require.Contains(t, out, "the branch is master")
+	// The reply must be rendered as text, not as the JSON container the
+	// degraded summary path would produce: both contain the reply string, so
+	// asserting only Contains cannot tell a real read from a fallback.
+	require.NotContains(t, out, `"team_result"`)
+	require.NotContains(t, out, `"Reply"`)
+	require.NotContains(t, out, "raw result unavailable")
+}
+
+// TestRenderMailboxInboxWorkMessageIsNotAResult pins the waking-turn case: the
+// message that wakes a Team is a work instruction still waiting in its inbox,
+// so it must not be described as a result that failed to arrive.
+func TestRenderMailboxInboxWorkMessageIsNotAResult(t *testing.T) {
+	msg := types.MailboxMessage{
+		MessageID: "mb_work",
+		Kind:      mailboxKindWork,
+		To:        types.MailboxAddress{TeamID: "repo-info"},
+		Payload:   map[string]any{"caller_team": "owner"},
+	}
+	out := renderMailboxInbox([]types.MailboxMessage{msg})
+	require.Contains(t, out, "dispatched to repo-info")
+	require.NotContains(t, out, "raw result unavailable")
+}
+
+// TestRenderMailboxInboxAfterDeliverMessage closes the loop between writer and
+// reader: the async dispatcher marks a message delivered with its output under
+// payload.result, and the wake-up renderer has to read that exact shape. A
+// hand-built payload would keep passing even if the two drifted apart again.
+func TestRenderMailboxInboxAfterDeliverMessage(t *testing.T) {
+	fileStore := storage.NewFileStore(t.TempDir())
+	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
+	runtime := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
+
+	ctx := context.Background()
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionRunning)
+
+	msg, err := runtime.enqueueMessage(ctx, session, types.FlowTurn{ID: newID("ft")},
+		types.MailboxAddress{TeamID: "owner"}, mailboxKindWork,
+		map[string]any{"caller_team": "default"},
+	)
+	require.NoError(t, err)
+
+	delivered, err := runtime.deliverMessage(ctx, session, msg, map[string]any{
+		"team_result": types.TeamTurnResult{Reply: "the branch is master"},
+	})
+	require.NoError(t, err)
+
+	out := renderMailboxInbox([]types.MailboxMessage{delivered})
+	require.Contains(t, out, "the branch is master")
+	require.NotContains(t, out, `"team_result"`)
+	require.NotContains(t, out, `"Reply"`)
+	require.NotContains(t, out, "raw result unavailable")
+}

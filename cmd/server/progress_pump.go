@@ -18,10 +18,6 @@ const (
 	// progressPumpReconnects bounds how many times the pump re-subscribes
 	// after storage dropped it for falling behind.
 	progressPumpReconnects = 2
-	// progressPumpChannelSize is the buffer handed to Subscribe. Storage
-	// closes the channel when it fills, so a little headroom avoids
-	// needless reconnects during bursty parallel tool runs.
-	progressPumpChannelSize = 256
 )
 
 // eventPump forwards the session events of one flow turn to a JSON-RPC

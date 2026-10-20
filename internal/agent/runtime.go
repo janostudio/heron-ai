@@ -621,6 +621,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			requestStats[requestStatIndex].DurationMS = callDuration.Milliseconds()
 			if resp != nil {
 				requestStats[requestStatIndex].Usage = resp.Usage
+				requestStats[requestStatIndex].FinishReason = resp.FinishReason
 				if resp.Model != "" {
 					requestStats[requestStatIndex].Model = resp.Model
 				}
@@ -651,15 +652,23 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 						"content": hint,
 					})
 					delay := modelRetryDelay(modelRetries, nil)
+					// The usage line below is reached only for replies that
+					// survive this branch, so an empty reply would otherwise
+					// leave no record of its prompt size or stop reason. Those
+					// two numbers are what tells "the prompt got too big" apart
+					// from "the provider returned nothing".
 					logging.Warn("model returned empty response, retrying", map[string]any{
-						"call_id":     req.CallID,
-						"agent_id":    req.AgentID,
-						"team_id":     req.TeamID,
-						"round":       round,
-						"retry":       modelRetries,
-						"model":       modelConfig.Model,
-						"duration_ms": callDuration.Milliseconds(),
-						"wait_ms":     delay.Milliseconds(),
+						"call_id":           req.CallID,
+						"agent_id":          req.AgentID,
+						"team_id":           req.TeamID,
+						"round":             round,
+						"retry":             modelRetries,
+						"model":             modelConfig.Model,
+						"duration_ms":       callDuration.Milliseconds(),
+						"wait_ms":           delay.Milliseconds(),
+						"finish_reason":     resp.FinishReason,
+						"prompt_tokens":     resp.Usage.PromptTokens,
+						"completion_tokens": resp.Usage.CompletionTokens,
 					})
 					if retryErr := sleepModelRetry(ctx, delay); retryErr != nil {
 						chatErr = retryErr
@@ -798,12 +807,16 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		if isEmptyModelResponse(resp) {
 			emptyErr := fmt.Errorf("model returned empty response after %d attempt(s): no text and no tool calls", modelRetries+1)
 			logging.Error("model returned empty response", map[string]any{
-				"call_id":  req.CallID,
-				"agent_id": req.AgentID,
-				"team_id":  req.TeamID,
-				"round":    round,
-				"attempts": modelRetries + 1,
-				"model":    modelConfig.Model,
+				"call_id":           req.CallID,
+				"agent_id":          req.AgentID,
+				"team_id":           req.TeamID,
+				"round":             round,
+				"attempts":          modelRetries + 1,
+				"model":             modelConfig.Model,
+				"duration_ms":       callDuration.Milliseconds(),
+				"finish_reason":     resp.FinishReason,
+				"prompt_tokens":     resp.Usage.PromptTokens,
+				"completion_tokens": resp.Usage.CompletionTokens,
 			})
 			t.emitErrorHook(ctx, agent, req, round, emptyErr)
 			return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,

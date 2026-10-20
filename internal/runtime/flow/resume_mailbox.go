@@ -207,6 +207,18 @@ func renderMailboxInbox(messages []types.MailboxMessage) string {
 			b.WriteString("\n")
 			continue
 		}
+		// A work message is a dispatch instruction, not a result: it is
+		// still waiting in the target Team's inbox. Reporting it as "result
+		// unavailable" told the waking Agent that its own dispatch had
+		// failed, which is the opposite of what the message means.
+		if msg.Kind == mailboxKindWork {
+			target := msg.To.TeamID
+			if target == "" {
+				target = "the dispatched Team"
+			}
+			fmt.Fprintf(&b, "dispatched to %s; the Team has not reported back yet\n", target)
+			continue
+		}
 		b.WriteString("(no rendered reply; raw result unavailable)\n")
 	}
 	return b.String()
@@ -216,10 +228,22 @@ func renderMailboxInbox(messages []types.MailboxMessage) string {
 // team_result value is a TeamTurnResult that arrives either as the typed struct
 // (in-memory) or as a generic map (after a JSONL round-trip), so the value is
 // re-marshalled into the struct to read the published Reply field.
+//
+// deliverMessage stores the produced output under "result", so a delivered
+// message carries it at payload.result.team_result. Records written before
+// that wrapper existed (and the folded in-memory form some tests build) put
+// team_result at the top level; both shapes are accepted.
 func mailboxResultReply(payload map[string]any) (string, bool) {
 	raw, ok := payload["team_result"]
 	if !ok {
-		return "", false
+		container, isMap := payload["result"].(map[string]any)
+		if !isMap {
+			return "", false
+		}
+		raw, ok = container["team_result"]
+		if !ok {
+			return "", false
+		}
 	}
 	var result types.TeamTurnResult
 	switch v := raw.(type) {
