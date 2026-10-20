@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
 // Model requests must never hang unbounded: a stalled provider connection would
@@ -53,4 +55,13 @@ var defaultModelClient = &http.Client{
 		ExpectContinueTimeout: modelExpectContinue,
 		ResponseHeaderTimeout: modelResponseHeader,
 	},
+}
+
+// classifyRejection builds the structured error for a non-2xx provider response
+// and carries the Retry-After hint so the agent loop can wait as long as the
+// provider asked instead of its own (shorter) backoff.
+func classifyRejection(statusCode int, errorType string, body []byte, header http.Header) *types.ProviderError {
+	providerErr := types.ClassifyProviderError(statusCode, errorType, body)
+	providerErr.RetryAfter = types.ParseRetryAfter(header.Get("Retry-After"))
+	return providerErr
 }

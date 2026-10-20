@@ -518,12 +518,16 @@ type mockModelProvider struct {
 	// built by buildToolSchemas, and a test that only checks that function
 	// proves nothing about what the model was actually handed.
 	lastTools []types.JSONSchema
+	// lastMessages records the conversation the loop sent on the most recent
+	// call, so retry tests can assert what the model was told after a failure.
+	lastMessages []types.Message
 }
 
 func (m *mockModelProvider) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
 	m.attempts++
 	m.lastConfig = config
 	m.lastTools = tools
+	m.lastMessages = messages
 	if m.err != nil {
 		err := m.err
 		m.err = nil

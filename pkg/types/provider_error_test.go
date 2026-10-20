@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -126,3 +127,36 @@ func TestNewProviderTimeoutError(t *testing.T) {
 }
 
 var _ = time.Now // keep time import if unused elsewhere in future edits
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{name: "delta seconds", value: "120", want: 120 * time.Second},
+		{name: "surrounding spaces", value: " 5 ", want: 5 * time.Second},
+		{name: "zero", value: "0", want: 0},
+		{name: "negative", value: "-3", want: 0},
+		{name: "absent", value: "", want: 0},
+		{name: "garbage", value: "soon", want: 0},
+		{name: "absurd delta seconds", value: "999999999999", want: maxRetryAfterSeconds * time.Second},
+		{name: "http date in the past", value: now.Add(-time.Hour).UTC().Format(http.TimeFormat), want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ParseRetryAfter(tc.value); got != tc.want {
+				t.Fatalf("ParseRetryAfter(%q) = %v, want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("http date in the future", func(t *testing.T) {
+		future := time.Now().Add(90 * time.Second).UTC().Format(http.TimeFormat)
+		got := ParseRetryAfter(future)
+		if got <= 0 || got > 95*time.Second {
+			t.Fatalf("ParseRetryAfter(%q) = %v, want a delay near 90s", future, got)
+		}
+	})
+}
