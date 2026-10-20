@@ -631,12 +631,21 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			}
 			if chatErr == nil {
 				// An empty reply (no text, no tool calls) is a failed model call,
-				// not a schema violation. Retry it as-is: injecting the schema
-				// feedback here would put words the model never said ("previous
-				// response was not valid JSON") into the conversation and pull the
-				// retry towards answering that instruction instead of the user.
+				// not a schema violation. The retry must not claim the reply was
+				// invalid JSON — the model never produced any. It still has to say
+				// something: a silent retry resends a byte-identical prompt, and a
+				// provider that answered empty once answers empty again (measured:
+				// three attempts, same 11560-token prompt, completion_tokens 1/2/2).
 				if isEmptyModelResponse(resp) && !isStructuredOutputTruncated(resp.FinishReason) && modelRetries < maxRetries {
 					modelRetries++
+					hint := emptyResponseRetryHint(agent.Structured != nil)
+					if addErr := contextManager.AddMessage(types.Message{Role: "user", Content: hint}); addErr != nil {
+						return nil, addErr
+					}
+					t.emitAgentEvent(ctx, req, round, types.EventAgentFeedback, map[string]any{
+						"round":   round,
+						"content": hint,
+					})
 					delay := modelRetryDelay(modelRetries, nil)
 					logging.Warn("model returned empty response, retrying", map[string]any{
 						"call_id":     req.CallID,
@@ -1149,6 +1158,17 @@ func isStructuredOutputTruncated(reason string) bool {
 // not valid JSON" message describing output the model never produced.
 func isEmptyModelResponse(resp *types.ChatResponse) bool {
 	return resp != nil && len(resp.ToolCalls) == 0 && strings.TrimSpace(resp.Text) == ""
+}
+
+// emptyResponseRetryHint states what actually happened, so the retry differs
+// from the attempt that failed without claiming the model emitted invalid JSON.
+// Structured agents need the format restated; plain agents only need to be
+// pointed back at the user's message.
+func emptyResponseRetryHint(structured bool) string {
+	if structured {
+		return "The previous response was empty (no text and no tool calls). Return one complete JSON object only, with every required field, and no explanation or Markdown."
+	}
+	return "The previous response was empty (no text and no tool calls). Answer the user's last message."
 }
 
 func contextBlockText(blocks []types.ContextBlock, kind string) string {
