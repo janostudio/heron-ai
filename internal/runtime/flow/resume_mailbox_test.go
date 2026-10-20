@@ -295,3 +295,36 @@ func TestRenderMailboxInboxAfterDeliverMessage(t *testing.T) {
 	require.NotContains(t, out, `"Reply"`)
 	require.NotContains(t, out, "raw result unavailable")
 }
+
+// TestResumeForMailboxMarksTurnOrigin pins the origin/intermediate contract the
+// JSON-RPC caller needs to relay a background answer: a wake-up that has a
+// caller is an internal hop, one without a caller (the entry Team summarising
+// its inbox) is the answer for the user.
+func TestResumeForMailboxMarksTurnOrigin(t *testing.T) {
+	fileStore := storage.NewFileStore(t.TempDir())
+	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
+	runtime := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
+
+	ctx := context.Background()
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+
+	_, err := runtime.enqueueResultMessage(ctx, session, types.FlowTurn{ID: newID("ft")},
+		types.MailboxAddress{TeamID: "default"},
+		map[string]any{"team_result": types.TeamTurnResult{Reply: "verification passed"}},
+	)
+	require.NoError(t, err)
+
+	result, err := runtime.ResumeForMailbox(ctx, session.ID)
+	require.NoError(t, err)
+	require.Equal(t, turnOriginMailbox, result.Turn.Origin)
+	require.False(t, result.Turn.Intermediate,
+		"a wake-up with no caller is the final hop and must be relayable")
+}
+
+// TestCallerTeamOfIgnoresEmptyCallers covers the dispatch-triggered wake-up,
+// where the drained mail names the Team that handed the work over.
+func TestCallerTeamOfIgnoresEmptyCallers(t *testing.T) {
+	require.Equal(t, "", callerTeamOf(nil))
+	require.Equal(t, "", callerTeamOf([]activation{{teamID: "default"}}))
+	require.Equal(t, "default", callerTeamOf([]activation{{teamID: "owner", callerTeam: "default"}}))
+}

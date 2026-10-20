@@ -601,6 +601,34 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	blocks []types.ContextBlock,
 	initial []activation,
 ) (types.FlowTurnResult, error) {
+	return r.runTurnWithOrigin(ctx, defs, session, input, blocks, initial, turnOriginUser)
+}
+
+// Turn origin values recorded on FlowTurn.Origin.
+const (
+	// turnOriginUser is a turn started from the caller's input, the only turn
+	// whose reply is an answer to what the user asked.
+	turnOriginUser = "user"
+	// turnOriginMailbox is a turn woken by async dispatch mail: a Team reports
+	// back, or the entry Team summarises what came back.
+	turnOriginMailbox = "mailbox"
+	// turnOriginResume is a turn that continues a paused Tool call or approval.
+	turnOriginResume = "resume"
+)
+
+// runTurnWithOrigin is runTurnWithActivationsAndContext with an explicit
+// origin. Only the mailbox wake-up uses a different value: every other entry
+// point runs because the caller — or a paused call the caller is waiting on —
+// asked for it.
+func (r *Runtime) runTurnWithOrigin(
+	ctx context.Context,
+	defs *types.Definitions,
+	session types.FlowSession,
+	input string,
+	blocks []types.ContextBlock,
+	initial []activation,
+	origin string,
+) (types.FlowTurnResult, error) {
 	if err := r.validateDependencies(session.FlowID); err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -623,6 +651,13 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	turn := types.FlowTurn{
 		ID:            newID("ft"),
 		FlowSessionID: session.ID,
+		// Origin of this turn, and whether its reply answers the user. A
+		// wake-up that activates a Team without a caller (the entry Team
+		// summarising its inbox) is the last hop of a chained return and is
+		// the only mailbox turn worth relaying; a wake-up with an activator
+		// just hands work or a result upstream.
+		Origin:        origin,
+		Intermediate:  origin == turnOriginMailbox && callerTeamOf(initial) != "",
 		Attempt:       flowAttempt,
 		RecoveryOf:    recoveryOf,
 		Input:         input,
@@ -998,6 +1033,17 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	// A normally finished FlowTurn stays continuable: the session lifecycle
 	// is a runtime decision, not a Flow configuration.
 	return r.finishTurn(ctx, result, types.SessionWaitingInput, nil)
+}
+
+// callerTeamOf returns the caller that dispatched the work a wake-up drains,
+// or "" when the wake-up starts at a Team nobody activated (the entry Team).
+func callerTeamOf(initial []activation) string {
+	for _, a := range initial {
+		if a.callerTeam != "" {
+			return a.callerTeam
+		}
+	}
+	return ""
 }
 
 type activation struct {
@@ -1467,7 +1513,17 @@ func (r *Runtime) finishTurn(
 			FlowSessionID: result.Session.ID,
 			FlowTurnID:    result.Turn.ID,
 		},
-		Payload: map[string]any{"session": result.Session, "turn": result.Turn, "error": result.Error},
+		Payload: map[string]any{
+			"session": result.Session,
+			"turn":    result.Turn,
+			"error":   result.Error,
+			// reply and origin are hoisted to the top level because a caller
+			// relaying the answer of an unattended turn reads them without
+			// decoding the turn record.
+			"reply":        result.Reply,
+			"origin":       result.Turn.Origin,
+			"intermediate": result.Turn.Intermediate,
+		},
 	}); err != nil {
 		return result, err
 	}

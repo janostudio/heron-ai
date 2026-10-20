@@ -106,8 +106,8 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		"caller_team":     wake.callerTeam,
 		"message_count":   len(messages),
 	})
-	return r.runTurnWithActivationsAndContext(ctx, defs, session, "", []types.ContextBlock{block},
-		[]activation{wake})
+	return r.runTurnWithOrigin(ctx, defs, session, "", []types.ContextBlock{block},
+		[]activation{wake}, turnOriginMailbox)
 }
 
 // activatorFromMessages returns the Team that dispatched the work whose mail is

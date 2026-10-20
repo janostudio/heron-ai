@@ -67,11 +67,13 @@ func projectSessionEvent(event storage.SessionEvent) map[string]any {
 	switch event.Type {
 	case types.EventFlowTurnStarted:
 		base["type"] = progressTypeFlowTurnStarted
+		copyTurnAnnouncement(base, event.Payload)
 		return base
 	case types.EventFlowTurnCompleted:
 		base["type"] = progressTypeFlowTurnCompleted
 		base["status"] = payloadTurnStatus(event.Payload)
 		base["error"] = payloadString(event.Payload, "error")
+		copyTurnAnnouncement(base, event.Payload)
 		return base
 	case types.EventTeamTurnStarted:
 		base["type"] = progressTypeTeamTurnStarted
@@ -105,9 +107,35 @@ func projectSessionEvent(event storage.SessionEvent) map[string]any {
 	case types.EventFlowTurnWaitingInput, types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
 		base["type"] = progressTypeStatus
 		base["status"] = waitingEventStatus(event.Type)
+		// A finished turn also lands here when it ends waiting_input, which is
+		// every normal turn. Without the reply it carries, a caller would only
+		// ever see the turn boundary and never the answer of a turn it did not
+		// start.
+		copyTurnAnnouncement(base, event.Payload)
 		return base
 	default:
 		return nil
+	}
+}
+
+// copyTurnAnnouncement hoists the fields a caller needs to relay the answer of
+// a turn it is not waiting on: the reply text, who started the turn, and
+// whether that reply is an internal step rather than an answer.
+//
+// Keys are omitted when unset so an older caller decoding a newer engine (or
+// the reverse) sees no change in shape for turns that have nothing to relay.
+func copyTurnAnnouncement(base map[string]any, payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	if reply, ok := payload["reply"].(string); ok && reply != "" {
+		base["reply"] = truncateUTF8(reply, progressMaxTextBytes)
+	}
+	if origin := payloadString(payload, "origin"); origin != "" {
+		base["origin"] = origin
+	}
+	if intermediate, ok := payload["intermediate"].(bool); ok && intermediate {
+		base["intermediate"] = true
 	}
 }
 

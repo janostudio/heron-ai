@@ -101,6 +101,15 @@ type FlowTurn struct {
 	RecordIDs     []string       `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
 	StartedAt     time.Time      `yaml:"started_at" json:"started_at"`
 	FinishedAt    *time.Time     `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
+	// Origin records who started the turn: the caller ("user"), a mailbox
+	// wake-up ("mailbox"), or a tool/approval resume ("resume"). A consumer
+	// that only relays user-facing answers needs it because a session may run
+	// several turns per user message and only one of them answers the user.
+	Origin string `yaml:"origin,omitempty" json:"origin,omitempty"`
+	// Intermediate marks a turn whose reply is an internal step: a Team
+	// handing work or a result to its activator. Such a turn contributes to
+	// the conversation but its Reply is not an answer for the caller.
+	Intermediate bool `yaml:"intermediate,omitempty" json:"intermediate,omitempty"`
 }
 
 // TeamTurn represents one invocation of a TeamSession.

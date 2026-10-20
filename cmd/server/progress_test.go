@@ -358,3 +358,53 @@ func TestServerWriterSerialisesNotificationsAndResponses(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(line), &decoded), "corrupted line: %q", line)
 	}
 }
+
+// TestProjectFlowTurnCarriesReplyAndOrigin covers the notification a caller
+// uses to relay an unattended turn's answer. A finished turn ends as
+// flow_turn.waiting_input (every normal turn does), so the announcement has to
+// ride on that event as well as on flow_turn.completed.
+func TestProjectFlowTurnCarriesReplyAndOrigin(t *testing.T) {
+	payload := map[string]any{
+		"turn":         types.FlowTurn{ID: "ft-bg", Status: types.TurnWaitingInput, Origin: "mailbox"},
+		"error":        "",
+		"reply":        "heron-ai 的主分支是 master",
+		"origin":       "mailbox",
+		"intermediate": true,
+	}
+	for _, eventType := range []string{types.EventFlowTurnCompleted, types.EventFlowTurnWaitingInput} {
+		event := storage.SessionEvent{
+			EventHeader: types.EventHeader{
+				Type:          eventType,
+				FlowSessionID: "fs-1",
+				FlowTurnID:    "ft-bg",
+			},
+			Payload: payload,
+		}
+		params := projectSessionEvent(event)
+		require.NotNil(t, params, eventType)
+		require.Equal(t, "heron-ai 的主分支是 master", params["reply"], eventType)
+		require.Equal(t, "mailbox", params["origin"], eventType)
+		require.Equal(t, true, params["intermediate"], eventType)
+	}
+}
+
+// TestProjectFlowTurnOmitsAnnouncementFieldsWhenUnset keeps the notification
+// shape unchanged for a plain user turn.
+func TestProjectFlowTurnOmitsAnnouncementFieldsWhenUnset(t *testing.T) {
+	event := storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowTurnWaitingInput,
+			FlowSessionID: "fs-1",
+			FlowTurnID:    "ft-user",
+		},
+		Payload: map[string]any{"turn": types.FlowTurn{ID: "ft-user", Status: types.TurnWaitingInput}},
+	}
+	params := projectSessionEvent(event)
+	require.NotNil(t, params)
+	_, hasReply := params["reply"]
+	_, hasOrigin := params["origin"]
+	_, hasIntermediate := params["intermediate"]
+	require.False(t, hasReply)
+	require.False(t, hasOrigin)
+	require.False(t, hasIntermediate)
+}
