@@ -58,7 +58,8 @@ func TestRuntimeStopsRepeatedCoordinateAfterConfiguredRetryLimit(t *testing.T) {
 		Input:  "run",
 	})
 	require.Error(t, err)
-	require.Equal(t, types.SessionFailed, result.Session.Status)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status, "a failed turn must leave the session continuable")
+	require.Equal(t, types.TurnFailed, result.Turn.Status)
 	require.Contains(t, result.Error, "exceeded coordinate retry limit")
 }
 
@@ -97,7 +98,8 @@ func TestRuntimeStopsRepeatedActivationAfterConfiguredRetryLimit(t *testing.T) {
 		Input:  "run",
 	})
 	require.Error(t, err)
-	require.Equal(t, types.SessionFailed, result.Session.Status)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status, "a failed turn must leave the session continuable")
+	require.Equal(t, types.TurnFailed, result.Turn.Status)
 	require.Contains(t, result.Error, "repeated Flow activation")
 }
 

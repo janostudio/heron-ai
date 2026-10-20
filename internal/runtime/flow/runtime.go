@@ -178,10 +178,14 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	// exists in sessions recorded before the lifecycle refactor, and those
 	// legacy sessions stay continuable with the same session_id. A normally
 	// finished turn is always left in waiting_input.
-	if session.Status == types.SessionFailed ||
-		session.Status == types.SessionCancelled ||
-		session.Status == types.SessionInterrupted ||
-		session.Status == types.SessionWaitingApproval {
+	//
+	// Failed, cancelled and interrupted are absent for the same reason: they
+	// describe an earlier turn (or an earlier process), never the conversation.
+	// A new turn starts from the Flow entry team and rewrites the session status
+	// to running, so continuing is safe; blocking here would make one bad turn
+	// permanently end the conversation, which is not what the user sees — they
+	// see that turn's error and then send the next message.
+	if session.Status == types.SessionWaitingApproval {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is already %s", session.ID, session.Status)
 	}
 	// waiting_tool is rejected for the same reason waiting_approval is: this
@@ -196,6 +200,14 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 		return types.FlowTurnResult{}, fmt.Errorf(
 			"flow session %q is waiting for a Tool: resume the pending Tool task instead of starting a new turn",
 			session.ID,
+		)
+	}
+	if running, err := r.runningTeams(ctx, sessionID); err != nil {
+		return types.FlowTurnResult{}, err
+	} else if len(running) > 0 {
+		return types.FlowTurnResult{}, fmt.Errorf(
+			"flow session %q still has running teams %v: wait for them to finish or cancel the session before starting a new turn",
+			session.ID, running,
 		)
 	}
 	if interrupted, err := r.RecoveryStatus(ctx, sessionID); err == nil && len(interrupted.Interrupted) > 0 {
@@ -1426,7 +1438,7 @@ func (r *Runtime) finishTurn(
 	runErr error,
 ) (types.FlowTurnResult, error) {
 	now := time.Now().UTC()
-	result.Session.Status = status
+	result.Session.Status = sessionStatusAfterTurn(status)
 	result.Session.UpdatedAt = now
 	result.Turn.Status = turnStatusForSession(status)
 	result.Turn.FinishedAt = &now
@@ -1460,6 +1472,45 @@ func (r *Runtime) finishTurn(
 		return result, err
 	}
 	return result, runErr
+}
+
+// runningTeams lists Teams of this session that are still executing in this
+// process: started, never finished, and present in the runtime's busy set.
+// A failed turn may have launched an async Team that keeps running after the
+// turn itself failed. Starting a new turn then would stack a second turn on top
+// of results still being produced, so continuation waits for them to drain —
+// a transient condition, unlike the terminal session status this call no longer
+// treats as blocking.
+func (r *Runtime) runningTeams(ctx context.Context, sessionID string) ([]string, error) {
+	if r.sessions == nil {
+		return nil, nil
+	}
+	replay, err := r.sessions.Replay(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	live := r.liveTeams()
+	started := make(map[string]bool)
+	finished := make(map[string]bool)
+	for _, event := range replay.Events {
+		switch event.Type {
+		case types.EventTeamTurnStarted:
+			started[event.TeamID] = true
+		case types.EventTeamTurnCompleted,
+			types.EventTeamTurnWaitingInput,
+			types.EventTeamTurnWaitingTool,
+			types.EventTeamTurnWaitingApproval:
+			finished[event.TeamID] = true
+		}
+	}
+	running := make([]string, 0, len(started))
+	for team := range started {
+		if !finished[team] && live[team] {
+			running = append(running, team)
+		}
+	}
+	sort.Strings(running)
+	return running, nil
 }
 
 func (r *Runtime) loadSession(ctx context.Context, sessionID string) (types.FlowSession, error) {
@@ -1761,7 +1812,8 @@ func pendingTeamForApproval(teams []pendingTeamResumeInfo, requestID string) (pe
 	return pendingTeamResumeInfo{}, false
 }
 
-func pendingTeamResumeFromEvent(event storage.SessionEvent) (pendingTeamResumeInfo, bool) {	info := pendingTeamResumeInfo{
+func pendingTeamResumeFromEvent(event storage.SessionEvent) (pendingTeamResumeInfo, bool) {
+	info := pendingTeamResumeInfo{
 		FlowTurnID:  event.FlowTurnID,
 		TeamID:      event.TeamID,
 		TeamTurnID:  event.TeamTurnID,
@@ -2088,6 +2140,18 @@ func turnStatusForSession(status types.SessionStatus) types.TurnStatus {
 	default:
 		return types.TurnRunning
 	}
+}
+
+// sessionStatusAfterTurn maps a turn outcome onto the session state. A failed
+// turn ends that turn, not the conversation: the session goes back to
+// waiting_input so the next user message starts a new turn, while the turn
+// itself keeps the failed status and the error callers display. SessionFailed
+// stays in the enum for old session data; nothing new writes it.
+func sessionStatusAfterTurn(status types.SessionStatus) types.SessionStatus {
+	if status == types.SessionFailed {
+		return types.SessionWaitingInput
+	}
+	return status
 }
 
 func joinReply(current, next string) string {

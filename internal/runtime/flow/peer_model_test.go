@@ -168,7 +168,8 @@ func TestTeamWithoutCanActivateCannotActivate(t *testing.T) {
 
 	result, err := runPeer(t, defs, fake, types.RuntimeLimits{}, false)
 	require.Error(t, err)
-	require.Equal(t, types.SessionFailed, result.Session.Status)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status, "a failed turn must leave the session continuable")
+	require.Equal(t, types.TurnFailed, result.Turn.Status)
 	require.Contains(t, result.Error, "cannot activate")
 	require.Equal(t, 0, fake.runs["leaf"])
 }
@@ -182,7 +183,8 @@ func TestActivationOutsideCanActivateIsRejected(t *testing.T) {
 
 	result, err := runPeer(t, defs, fake, types.RuntimeLimits{}, false)
 	require.Error(t, err)
-	require.Equal(t, types.SessionFailed, result.Session.Status)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status, "a failed turn must leave the session continuable")
+	require.Equal(t, types.TurnFailed, result.Turn.Status)
 	require.Contains(t, result.Error, `cannot activate "other"`)
 	require.Equal(t, 0, fake.runs["other"])
 }
@@ -245,7 +247,8 @@ func TestEntryFailureFailsSession(t *testing.T) {
 
 	result, err := runPeer(t, defs, fake, types.RuntimeLimits{}, false)
 	require.Error(t, err)
-	require.Equal(t, types.SessionFailed, result.Session.Status)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status, "a failed turn must leave the session continuable")
+	require.Equal(t, types.TurnFailed, result.Turn.Status)
 }
 
 // TeamFailureReport is an ordinary record. A Team that does not list it in its
@@ -305,7 +308,8 @@ func TestRepeatedActivationIsBoundedForAnyTeam(t *testing.T) {
 		fake, defs := build()
 		result, err := runPeer(t, defs, fake, types.RuntimeLimits{MaxActivationRetries: 1}, false)
 		require.Error(t, err)
-		require.Equal(t, types.SessionFailed, result.Session.Status)
+		require.Equal(t, types.SessionWaitingInput, result.Session.Status, "a failed turn must leave the session continuable")
+		require.Equal(t, types.TurnFailed, result.Turn.Status)
 		require.Contains(t, result.Error, "repeated Flow activation")
 	})
 }

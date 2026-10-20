@@ -53,13 +53,14 @@ Agent Calls produce signals that control Flow execution:
 | `continue` | Proceed with the next orchestration step |
 | `wait_input` | End the turn; the session stays `waiting_input` and can be continued |
 | `goal_achieved` | End the turn; the session stays `waiting_input` and can be continued |
-| `goal_failed` | End the run with failure |
-| `goal_impossible` | End the run with failure |
+| `goal_failed` | End the turn as failed; the session stays continuable |
+| `goal_impossible` | End the turn as failed; the session stays continuable |
 
-Session lifecycle is a runtime decision: a normally finished turn always
+Session lifecycle is a runtime decision: every turn, including a failed one,
 leaves the FlowSession continuable, and Flow configuration (`on_proceed`)
 may only choose orchestration actions (`proceed` / `return` / `coordinate` /
-`activate` / `fail`).
+`activate` / `fail`). A failure is reported on that turn's result (status
+`failed` plus `error`) and never turns the conversation into a dead session.
 
 ## Agent Capabilities
 
