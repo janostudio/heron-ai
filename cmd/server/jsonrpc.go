@@ -10,8 +10,10 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -133,9 +135,15 @@ type jsonRPCRecordSummary struct {
 // Newline-delimited JSON provides framing for the CLI pipes. This is not the
 // same schema as the persistent session.jsonl event log.
 type jsonRPCServer struct {
-	runtime types.FlowRuntime
-	flowID  string
-	writer  io.Writer
+	runtime  types.FlowRuntime
+	flowID   string
+	writer   io.Writer
+	sessions storage.SessionWriter
+
+	// writeMu serialises everything written to the pipe. Responses come from
+	// the serve loop while progress notifications come from a per-turn pump;
+	// without this lock the two can interleave and corrupt a JSONL line.
+	writeMu sync.Mutex
 }
 
 type jsonRPCFlusher interface {
@@ -148,6 +156,14 @@ func newJSONRPCServer(runtime types.FlowRuntime, flowID string, writer io.Writer
 		flowID:  flowID,
 		writer:  writer,
 	}
+}
+
+// withSessions wires the session event store used to stream progress
+// notifications. Without it the server keeps its previous single-response
+// behaviour, which is what the existing tests rely on.
+func (s *jsonRPCServer) withSessions(sessions storage.SessionWriter) *jsonRPCServer {
+	s.sessions = sessions
+	return s
 }
 
 // Serve reads one JSON-RPC request per line and writes one response per
@@ -250,7 +266,23 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 		params.SessionID = params.FlowSessionID
 	}
 
+	pump := s.startTurnPump(ctx, params.SessionID)
 	result, err := executeFlowTurn(ctx, s.runtime, s.flowID, params.SessionID, params.Input)
+	if pump == nil && s.sessions != nil && params.SessionID == "" && result.Session.ID != "" {
+		// A brand-new session has no id until Start returns, so there was no
+		// subscription window to stream from: replay the turn's events as one
+		// ordered snapshot instead.
+		pump = &eventPump{
+			sessions:   s.sessions,
+			emit:       s.writeProgress,
+			flowTurnID: result.Turn.ID,
+			done:       make(chan struct{}),
+		}
+		pump.replayEventsSnapshot(ctx, result.Session.ID)
+	}
+	if pump != nil {
+		pump.Stop()
+	}
 	if err != nil {
 		code := jsonRPCFlowTurnFailed
 		switch {
@@ -261,10 +293,26 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 		case params.SessionID != "" && result.Session.ID == "":
 			code = jsonRPCSessionFailed
 		}
+		turnSummaryFromResult(result, s.writeProgress)
 		return s.writeError(id, code, err.Error(), turnErrorData(result, params.SessionID))
 	}
 
+	turnSummaryFromResult(result, s.writeProgress)
 	return s.writeResult(id, jsonRPCTurnResultFrom(result))
+}
+
+// startTurnPump subscribes to the session's events for the duration of one
+// turn. It returns nil when progress streaming is not configured, or when the
+// session is unknown (the caller then falls back to a post-turn snapshot).
+func (s *jsonRPCServer) startTurnPump(ctx context.Context, sessionID string) *eventPump {
+	if s.sessions == nil || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	replay, err := s.sessions.Replay(ctx, sessionID)
+	if err != nil {
+		return nil
+	}
+	return startEventPump(ctx, s.sessions, sessionID, "", replay.LastSeq, s.writeProgress)
 }
 
 // handleApprove answers the pending approval of a session parked at
@@ -497,13 +545,40 @@ func (s *jsonRPCServer) writeError(id json.RawMessage, code int, message string,
 }
 
 func (s *jsonRPCServer) write(response jsonRPCResponse) error {
-	encoder := json.NewEncoder(s.writer)
-	if err := encoder.Encode(response); err != nil {
+	if err := s.writeLocked(response); err != nil {
 		return fmt.Errorf("write JSON-RPC response: %w", err)
+	}
+	return nil
+}
+
+// writeProgress sends one "progress" notification. It shares the writer lock
+// with responses so a notification can never split a response line.
+func (s *jsonRPCServer) writeProgress(params map[string]any) error {
+	if params == nil {
+		return nil
+	}
+	envelope := progressEnvelope{
+		JSONRPC: "2.0",
+		Method:  "progress",
+		Params:  params,
+	}
+	if err := s.writeLocked(envelope); err != nil {
+		return fmt.Errorf("write JSON-RPC progress: %w", err)
+	}
+	return nil
+}
+
+func (s *jsonRPCServer) writeLocked(value any) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	encoder := json.NewEncoder(s.writer)
+	if err := encoder.Encode(value); err != nil {
+		return err
 	}
 	if flusher, ok := s.writer.(jsonRPCFlusher); ok {
 		if err := flusher.Flush(); err != nil {
-			return fmt.Errorf("flush JSON-RPC response: %w", err)
+			return fmt.Errorf("flush: %w", err)
 		}
 	}
 	return nil
@@ -518,7 +593,7 @@ func runJSONRPC(flowPath string, o cliOverrides) {
 	}
 
 	writer := bufio.NewWriter(os.Stdout)
-	server := newJSONRPCServer(bundle.Flow, bundle.Definitions.Flow.ID, writer)
+	server := newJSONRPCServer(bundle.Flow, bundle.Definitions.Flow.ID, writer).withSessions(bundle.Sessions)
 	if err := server.Serve(ctx, os.Stdin); err != nil {
 		fmt.Fprintf(os.Stderr, "JSON-RPC server error: %v\n", err)
 		os.Exit(1)

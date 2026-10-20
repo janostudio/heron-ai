@@ -56,6 +56,7 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 
 	result, err := e.runner.Run(execCtx, *req.AgentDefinition, types.AgentRequest{
 		FlowSessionID:      req.FlowSession.ID,
+		FlowTurnID:         req.FlowTurn.ID,
 		TeamID:             req.TeamTurn.TeamID,
 		TeamTurnID:         req.TeamTurn.ID,
 		CallID:             req.Call.ID,

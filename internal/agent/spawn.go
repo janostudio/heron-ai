@@ -539,6 +539,7 @@ func (t *SpawnTool) runChild(
 
 	result, err := t.runner.Run(childCtx, def, types.AgentRequest{
 		FlowSessionID:    parent.FlowSessionID,
+		FlowTurnID:       parent.FlowTurnID,
 		TeamID:           parent.TeamID,
 		TeamTurnID:       parent.TeamTurnID,
 		CallID:           childCall,
@@ -875,6 +876,7 @@ func spawnChildArguments(
 		"item":  item,
 		"parent": map[string]any{
 			"flow_session_id":    parent.FlowSessionID,
+			"flow_turn_id":       parent.FlowTurnID,
 			"team_id":            parent.TeamID,
 			"team_turn_id":       parent.TeamTurnID,
 			"call_id":            parent.CallID,
@@ -896,6 +898,7 @@ func spawnParentFromArguments(raw map[string]any) types.AgentRequest {
 	}
 	return types.AgentRequest{
 		FlowSessionID:    stringFromArgs(raw, "flow_session_id"),
+		FlowTurnID:       stringFromArgs(raw, "flow_turn_id"),
 		TeamID:           stringFromArgs(raw, "team_id"),
 		TeamTurnID:       stringFromArgs(raw, "team_turn_id"),
 		CallID:           stringFromArgs(raw, "call_id"),

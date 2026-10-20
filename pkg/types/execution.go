@@ -17,6 +17,7 @@ import (
 // CallResult below.
 type AgentRequest struct {
 	FlowSessionID      string
+	FlowTurnID         string
 	TeamID             string
 	TeamTurnID         string
 	CallID             string

@@ -174,13 +174,17 @@ func (t *TurnLoop) emitAgentEvent(ctx context.Context, req types.AgentRequest, r
 		EventHeader: types.EventHeader{
 			Type:          eventType,
 			FlowSessionID: req.FlowSessionID,
-			TeamID:        req.TeamID,
-			TeamTurnID:    req.TeamTurnID,
-			CallID:        req.CallID,
-			CallTurnID:    req.CallTurnID,
-			CallType:      types.CallAgent,
-			Attempt:       req.Attempt,
-			RecoveryOf:    req.RecoveryOf,
+			// FlowTurnID is what lets a consumer scope events to one turn.
+			// Without it the agent layer cannot be filtered, and a listener
+			// that only wants the current turn has to drop every tool event.
+			FlowTurnID: req.FlowTurnID,
+			TeamID:     req.TeamID,
+			TeamTurnID: req.TeamTurnID,
+			CallID:     req.CallID,
+			CallTurnID: req.CallTurnID,
+			CallType:   types.CallAgent,
+			Attempt:    req.Attempt,
+			RecoveryOf: req.RecoveryOf,
 		},
 		Payload: payload,
 	}
@@ -1501,7 +1505,18 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 	copy(filtered, calls)
 	for i, call := range filtered {
 		if _, ok := allowed[call.Name]; !ok {
+			// Keep the requested name: the rejection event still has to
+			// tell the caller which tool the model asked for.
+			filtered[i].Arguments = map[string]any{"_rejected": "tool is not allowed for this Agent"}
 			filtered[i].Name = ""
+		}
+	}
+	// A model may omit the tool call id. The started/completed/failed events
+	// share this value as their pairing key, so it has to exist before the
+	// first event is emitted and must not change afterwards.
+	for i := range filtered {
+		if filtered[i].ID == "" {
+			filtered[i].ID = fmt.Sprintf("tc-%d-%d", round, i)
 		}
 	}
 	for i, call := range filtered {
@@ -1529,18 +1544,19 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 		parallelIndexes := make([]int, 0, len(filtered))
 		for i, call := range filtered {
 			if call.Name == "" {
-				results[i] = &types.ToolResult{Success: false, Error: "tool is not allowed for this Agent"}
+				results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, "tool is not allowed for this Agent")
 				continue
 			}
 			if err := t.executeHook(ctx, HookOnToolStart, hookPayload(agent, req, round, &call, nil)); err != nil {
-				results[i] = &types.ToolResult{Success: false, Error: err.Error()}
 				t.emitErrorHook(ctx, agent, req, round, err)
+				results[i] = t.rejectToolCall(ctx, agent, req, round, call, call, err.Error())
 				continue
 			}
 			t.emitAgentEvent(ctx, req, round, types.EventToolCallStarted, map[string]any{
-				"round":     round,
-				"tool_name": call.Name,
-				"arguments": call.Arguments,
+				"round":        round,
+				"tool_name":    call.Name,
+				"tool_call_id": call.ID,
+				"arguments":    call.Arguments,
 			})
 			parallelCalls = append(parallelCalls, call)
 			parallelIndexes = append(parallelIndexes, i)
@@ -1574,22 +1590,23 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 	results := make([]*types.ToolResult, len(filtered))
 	for i, call := range filtered {
 		if call.Name == "" {
-			results[i] = &types.ToolResult{Success: false, Error: "tool is not allowed for this Agent"}
+			results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, "tool is not allowed for this Agent")
 			continue
 		}
 		if t.toolExecutor == nil {
-			results[i] = &types.ToolResult{Success: false, Error: "tool executor is nil"}
+			results[i] = t.rejectToolCall(ctx, agent, req, round, call, call, "tool executor is nil")
 			continue
 		}
 		if err := t.executeHook(ctx, HookOnToolStart, hookPayload(agent, req, round, &call, nil)); err != nil {
-			results[i] = &types.ToolResult{Success: false, Error: err.Error()}
 			t.emitErrorHook(ctx, agent, req, round, err)
+			results[i] = t.rejectToolCall(ctx, agent, req, round, call, call, err.Error())
 			continue
 		}
 		t.emitAgentEvent(ctx, req, round, types.EventToolCallStarted, map[string]any{
-			"round":     round,
-			"tool_name": call.Name,
-			"arguments": call.Arguments,
+			"round":        round,
+			"tool_name":    call.Name,
+			"tool_call_id": call.ID,
+			"arguments":    call.Arguments,
 		})
 		result, err := t.toolExecutor.Execute(ctx, call.Name, call.Arguments)
 		if err != nil {
@@ -1723,6 +1740,33 @@ func (t *TurnLoop) contextConfig(agent types.AgentConfig) types.ContextConfig {
 		}
 	}
 	return config
+}
+
+// rejectToolCall records a tool invocation that never reached the executor
+// (disallowed tool, failed start hook, missing executor). Without this the
+// caller sees a tool that was announced by the model but never resolved, so
+// the started/failed pair has to be emitted here too.
+func (t *TurnLoop) rejectToolCall(
+	ctx context.Context, agent types.AgentConfig, req types.AgentRequest, round int,
+	original, call types.ToolCall, reason string,
+) *types.ToolResult {
+	name := original.Name
+	if name == "" {
+		name = "unknown"
+	}
+	t.emitAgentEvent(ctx, req, round, types.EventToolCallStarted, map[string]any{
+		"round":        round,
+		"tool_name":    name,
+		"tool_call_id": call.ID,
+		"arguments":    call.Arguments,
+	})
+	t.emitAgentEvent(ctx, req, round, types.EventToolCallFailed, map[string]any{
+		"round":        round,
+		"tool_name":    name,
+		"tool_call_id": call.ID,
+		"error":        reason,
+	})
+	return &types.ToolResult{Success: false, Error: reason}
 }
 
 func (t *TurnLoop) executeHook(ctx context.Context, event string, payload types.HookPayload) error {

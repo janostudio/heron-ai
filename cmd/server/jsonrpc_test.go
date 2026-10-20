@@ -237,8 +237,7 @@ func TestJSONRPCServerRejectsTurnWhileWaitingApproval(t *testing.T) {
 	require.Equal(t, 0, stub.handleCalls, "HandleInput must not bypass the approval gate")
 	require.Equal(t, 0, stub.resumeCalls, "Resume must not bypass the approval gate")
 
-	var response jsonRPCResponse
-	require.NoError(t, json.Unmarshal(output.Bytes(), &response))
+	response := lastResponseLine(t, output.Bytes())
 	require.NotNil(t, response.Error, "turn must be rejected")
 	require.Equal(t, jsonRPCSessionFailed, response.Error.Code)
 	require.Contains(t, response.Error.Message, "approval")
@@ -481,8 +480,18 @@ func serveOne(t *testing.T, runtime types.FlowRuntime, line string) jsonRPCRespo
 	server := newJSONRPCServer(runtime, "test-flow", &output)
 	require.NoError(t, server.Serve(context.Background(), strings.NewReader(line+"\n")))
 
+	return lastResponseLine(t, output.Bytes())
+}
+
+// lastResponseLine decodes the final JSONL frame written by the server. A turn
+// that ends parked in a waiting state now emits a "progress" status
+// notification before its response, so the response is not always the only
+// line on the wire.
+func lastResponseLine(t *testing.T, raw []byte) jsonRPCResponse {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
 	var response jsonRPCResponse
-	require.NoError(t, json.Unmarshal(output.Bytes(), &response))
+	require.NoError(t, json.Unmarshal([]byte(lines[len(lines)-1]), &response))
 	return response
 }
 
