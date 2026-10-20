@@ -53,7 +53,7 @@ func TestTUIModel_WheelScrollsTranscript(t *testing.T) {
 	model.viewport.GotoBottom()
 	before := model.viewport.YOffset
 
-	model.Update(tea.MouseMsg{Type: tea.MouseWheelUp})
+	model.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp})
 	assert.Less(t, model.viewport.YOffset, before, "wheel up must scroll")
 }
 

@@ -1,0 +1,26 @@
+version: "2"
+
+# Pin the linter set instead of inheriting golangci-lint's defaults. The CI
+# step ran `version: latest`, so any release that adds a linter to the default
+# set turns existing code red with no change on our side — that is exactly how
+# run 39363298208 went red. Enabling a linter is now an explicit edit here.
+#
+# The set below is the one the failures were fixed against (errcheck, govet,
+# ineffassign, staticcheck, unused). CI and local runs read the same file, and
+# the action's `version` is pinned to match the local binary.
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+  exclusions:
+    rules:
+      # Test code asserts on errors rather than returning them, and cleanup
+      # helpers (defer os.RemoveAll, temp files) cannot usefully handle a
+      # failure. Requiring `_ =` everywhere there adds noise, not safety.
+      - linters: [errcheck]
+        path: _test\.go

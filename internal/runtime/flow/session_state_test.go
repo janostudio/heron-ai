@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,85 @@ func appendTeamSessionEvent(t *testing.T, rt *Runtime, sessionID, teamID string,
 		},
 		Payload: map[string]any{teamSessionPayloadKey: session},
 	}))
+}
+
+// appendAgentSessionEvent writes an agent_session event for agentID with
+// status, the same shape the Team runtime writes (payload key "agent_session").
+// The value travels as a generic map, the way it looks after a JSONL
+// round-trip, so the fold is exercised on the form a resumed session holds.
+func appendAgentSessionEvent(t *testing.T, rt *Runtime, sessionID, agentID string, status types.SessionStatus) {
+	t.Helper()
+	session := types.AgentSession{
+		ID:      sessionID + ":" + agentID,
+		AgentID: agentID,
+		Status:  status,
+	}
+	data, err := json.Marshal(session)
+	require.NoError(t, err)
+	var asMap map[string]any
+	require.NoError(t, json.Unmarshal(data, &asMap))
+
+	require.NoError(t, rt.appendSessionEvent(context.Background(), sessionID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventAgentSessionUpdated,
+			FlowSessionID: sessionID,
+			CallID:        agentID,
+		},
+		Payload: map[string]any{agentSessionPayloadKey: asMap},
+	}))
+}
+
+// TestLoadAgentSessionsFoldsLatestPerAgent is the agent-level counterpart of
+// the Team fold: the last status written for an AgentSession wins. Nothing in
+// the scheduler reads it back yet — the events are written, so this pins the
+// read path for the per-agent execution state a scheduler will need.
+func TestLoadAgentSessionsFoldsLatestPerAgent(t *testing.T) {
+	rt, _ := newMailboxTestRuntime(t)
+	ctx := context.Background()
+	session, _ := mailboxTestSession(t)
+
+	appendAgentSessionEvent(t, rt, session.ID, "writer", types.SessionRunning)
+	appendAgentSessionEvent(t, rt, session.ID, "reviewer", types.SessionRunning)
+	appendAgentSessionEvent(t, rt, session.ID, "reviewer", types.SessionCompleted)
+	appendAgentSessionEvent(t, rt, session.ID, "writer", types.SessionWaitingInput)
+
+	sessions, err := rt.loadAgentSessions(ctx, session.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 2)
+	require.Equal(t, types.SessionWaitingInput, sessions[session.ID+":writer"].Status)
+	require.Equal(t, types.SessionCompleted, sessions[session.ID+":reviewer"].Status)
+	require.Equal(t, "writer", sessions[session.ID+":writer"].AgentID)
+}
+
+// TestLoadAgentSessionsEmptySessionIsNotAnError keeps the agent read path
+// usable on a fresh session, like its Team counterpart.
+func TestLoadAgentSessionsEmptySessionIsNotAnError(t *testing.T) {
+	rt, _ := newMailboxTestRuntime(t)
+	sessions, err := rt.loadAgentSessions(context.Background(), "fs_never_written")
+	require.NoError(t, err)
+	require.Empty(t, sessions)
+}
+
+// TestLoadAgentSessionsIgnoresMalformedPayload guards the agent fold against
+// one bad event hiding every other Agent's state.
+func TestLoadAgentSessionsIgnoresMalformedPayload(t *testing.T) {
+	rt, _ := newMailboxTestRuntime(t)
+	ctx := context.Background()
+	session, _ := mailboxTestSession(t)
+
+	appendAgentSessionEvent(t, rt, session.ID, "writer", types.SessionRunning)
+	require.NoError(t, rt.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventAgentSessionUpdated,
+			FlowSessionID: session.ID,
+		},
+		Payload: map[string]any{agentSessionPayloadKey: "not-a-session"},
+	}))
+
+	sessions, err := rt.loadAgentSessions(ctx, session.ID)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	require.Equal(t, types.SessionRunning, sessions[session.ID+":writer"].Status)
 }
 
 // TestLoadTeamSessionsFoldsLatestPerTeam verifies the read path a

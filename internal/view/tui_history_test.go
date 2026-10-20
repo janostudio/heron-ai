@@ -66,11 +66,8 @@ func TestAppendHistoryTrimsAndIgnoresBlank(t *testing.T) {
 
 func TestAppendHistoryCaps(t *testing.T) {
 	var h []string
-	for i := 0; i < tuiHistoryMax+10; i++ {
-		h = append(h, "x") // bypass appendHistory's dedup for a fast fill
-	}
-	// Fill via appendHistory with unique values to exercise the cap.
-	h = nil
+	// Fill via appendHistory with unique values: adjacent duplicates are
+	// dropped by design, so a fill of the same value never reaches the cap.
 	for i := 0; i < tuiHistoryMax+10; i++ {
 		h = appendHistory(h, string(rune('a'+i%26))+string(rune('0'+i%10)))
 	}

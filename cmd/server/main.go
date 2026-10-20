@@ -978,14 +978,17 @@ func usage() {
 // testable without the process-global CommandLine.
 func printUsage(fs *flag.FlagSet) {
 	out := fs.Output()
-	fmt.Fprintf(out, "Usage: %s [options]\n\n", filepath.Base(os.Args[0]))
-	fmt.Fprintln(out, "Options:")
+	// Writes to the FlagSet's output (os.Stderr by default) are best-effort:
+	// usage is the last thing printed before the process exits, and a failed
+	// write has nothing to report it to.
+	_, _ = fmt.Fprintf(out, "Usage: %s [options]\n\n", filepath.Base(os.Args[0]))
+	_, _ = fmt.Fprintln(out, "Options:")
 	fs.VisitAll(func(f *flag.Flag) {
 		name := "--" + f.Name
 		if label := flagTypeLabel(f); label != "" {
 			name += " " + label
 		}
-		fmt.Fprintf(out, "  %s\n        %s\n", name, f.Usage)
+		_, _ = fmt.Fprintf(out, "  %s\n        %s\n", name, f.Usage)
 	})
 }
 

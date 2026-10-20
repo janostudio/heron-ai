@@ -26,4 +26,7 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # Pinned, not `latest`: a new golangci-lint release can add a linter
+          # to the default set and turn unchanged code red. The linter set is
+          # declared in .golangci.yml; bump this deliberately.
+          version: v2.13.2

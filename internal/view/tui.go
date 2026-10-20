@@ -366,11 +366,14 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// is on so the wheel works) but are ignored: we do not implement our
 		// own selection. Users select text with Shift/Option+drag, which the
 		// terminal handles natively by bypassing the capture.
-		switch msg.Type {
-		case tea.MouseWheelUp:
+		// msg.Button, not the deprecated msg.Type: bubbletea fills both from
+		// the same button code, and Button is what distinguishes a wheel event
+		// (MouseButtonWheelUp/Down) from a click.
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
 			m.viewport.ScrollUp(scrollLines)
 			return m, nil
-		case tea.MouseWheelDown:
+		case tea.MouseButtonWheelDown:
 			m.viewport.ScrollDown(scrollLines)
 			return m, nil
 		}
@@ -409,8 +412,8 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if msg.Alt {
-				// Alt+↑ scrolls the transcript (REPL-safe: plain ↑ is history).
-				m.viewport.LineUp(scrollLines)
+			// Alt+↑ scrolls the transcript (REPL-safe: plain ↑ is history).
+			m.viewport.ScrollUp(scrollLines)
 				return m, nil
 			}
 			// In a multi-line input, ↑ first moves the cursor up; only once it
@@ -432,7 +435,7 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if msg.Alt {
-				m.viewport.LineDown(scrollLines)
+				m.viewport.ScrollDown(scrollLines)
 				return m, nil
 			}
 			if m.textarea.Line() < m.textarea.LineCount()-1 {

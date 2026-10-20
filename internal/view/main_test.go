@@ -16,7 +16,7 @@ func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "heron-view-history")
 	if err == nil {
 		_ = os.Setenv("HERON_TUI_HISTORY_FILE", filepath.Join(dir, "history"))
-		defer os.RemoveAll(dir)
+		defer func() { _ = os.RemoveAll(dir) }()
 	}
 	os.Exit(m.Run())
 }
