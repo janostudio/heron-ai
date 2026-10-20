@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -589,8 +591,13 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		modelConfig := structuredModelConfig(agent)
 		var resp *types.ChatResponse
 		var chatErr error
+		var callDuration time.Duration
 		contextRecovered := false
 		modelRetries := 0
+		maxRetries := agent.Loop.MaxModelRetries
+		if maxRetries == 0 {
+			maxRetries = 2
+		}
 		for {
 			requestMessages := contextManager.Messages()
 			contextStats := contextManager.Stats()
@@ -604,7 +611,10 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			))
 			observedCompactions = contextManager.CompactionCount()
 
+			callStarted := time.Now()
 			resp, chatErr = t.model.Chat(ctx, requestMessages, toolSchemas, modelConfig)
+			callDuration = time.Since(callStarted)
+			requestStats[requestStatIndex].DurationMS = callDuration.Milliseconds()
 			if resp != nil {
 				requestStats[requestStatIndex].Usage = resp.Usage
 				if resp.Model != "" {
@@ -620,6 +630,30 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				})
 			}
 			if chatErr == nil {
+				// An empty reply (no text, no tool calls) is a failed model call,
+				// not a schema violation. Retry it as-is: injecting the schema
+				// feedback here would put words the model never said ("previous
+				// response was not valid JSON") into the conversation and pull the
+				// retry towards answering that instruction instead of the user.
+				if isEmptyModelResponse(resp) && !isStructuredOutputTruncated(resp.FinishReason) && modelRetries < maxRetries {
+					modelRetries++
+					delay := modelRetryDelay(modelRetries, nil)
+					logging.Warn("model returned empty response, retrying", map[string]any{
+						"call_id":     req.CallID,
+						"agent_id":    req.AgentID,
+						"team_id":     req.TeamID,
+						"round":       round,
+						"retry":       modelRetries,
+						"model":       modelConfig.Model,
+						"duration_ms": callDuration.Milliseconds(),
+						"wait_ms":     delay.Milliseconds(),
+					})
+					if retryErr := sleepModelRetry(ctx, delay); retryErr != nil {
+						chatErr = retryErr
+						break
+					}
+					continue
+				}
 				break
 			}
 			if isContextLimitError(chatErr) && !contextRecovered {
@@ -628,37 +662,42 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 					continue
 				}
 			}
-			maxRetries := agent.Loop.MaxModelRetries
-			if maxRetries == 0 {
-				maxRetries = 2
-			}
 			if maxRetries < 0 || !isRetryableModelError(chatErr) || modelRetries >= maxRetries {
 				break
 			}
 			modelRetries++
-			logging.Warn("model call failed, retrying", map[string]any{
-				"call_id":  req.CallID,
-				"agent_id": req.AgentID,
-				"team_id":  req.TeamID,
-				"round":    round,
-				"retry":    modelRetries,
-				"model":    modelConfig.Model,
-				"error":    chatErr.Error(),
-			})
-			if retryErr := waitModelRetry(ctx, modelRetries); retryErr != nil {
+			delay := modelRetryDelay(modelRetries, chatErr)
+			fields := map[string]any{
+				"call_id":     req.CallID,
+				"agent_id":    req.AgentID,
+				"team_id":     req.TeamID,
+				"round":       round,
+				"retry":       modelRetries,
+				"model":       modelConfig.Model,
+				"duration_ms": callDuration.Milliseconds(),
+				"wait_ms":     delay.Milliseconds(),
+				"error":       chatErr.Error(),
+			}
+			addProviderErrorFields(fields, chatErr)
+			logging.Warn("model call failed, retrying", fields)
+			if retryErr := sleepModelRetry(ctx, delay); retryErr != nil {
 				chatErr = retryErr
 				break
 			}
 		}
 		if chatErr != nil {
-			logging.Error("model chat failed", map[string]any{
-				"call_id":  req.CallID,
-				"agent_id": req.AgentID,
-				"team_id":  req.TeamID,
-				"round":    round,
-				"model":    modelConfig.Model,
-				"error":    chatErr.Error(),
-			})
+			fields := map[string]any{
+				"call_id":     req.CallID,
+				"agent_id":    req.AgentID,
+				"team_id":     req.TeamID,
+				"round":       round,
+				"model":       modelConfig.Model,
+				"attempts":    modelRetries + 1,
+				"duration_ms": callDuration.Milliseconds(),
+				"error":       chatErr.Error(),
+			}
+			addProviderErrorFields(fields, chatErr)
+			logging.Error("model chat failed", fields)
 			t.emitErrorHook(ctx, agent, req, round, chatErr)
 			return nil, fmt.Errorf("llm chat: %w", chatErr)
 		}
@@ -690,6 +729,9 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			"agent_id":                    req.AgentID,
 			"round":                       round,
 			"model":                       modelConfig.Model,
+			"attempt":                     modelRetries + 1,
+			"duration_ms":                 callDuration.Milliseconds(),
+			"finish_reason":               resp.FinishReason,
 			"prompt_tokens":               resp.Usage.PromptTokens,
 			"completion_tokens":           resp.Usage.CompletionTokens,
 			"total_tokens":                resp.Usage.TotalTokens,
@@ -735,6 +777,25 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 					Reason: truncatedErr.Error(),
 				},
 			}, nil
+		}
+		// Retries are exhausted and the provider still returned nothing. Fail the
+		// turn with the real reason instead of letting an empty reply flow into
+		// route parsing (and, for structured agents, instead of telling the model
+		// its non-existent output was invalid JSON).
+		if isEmptyModelResponse(resp) {
+			emptyErr := fmt.Errorf("model returned empty response after %d attempt(s): no text and no tool calls", modelRetries+1)
+			logging.Error("model returned empty response", map[string]any{
+				"call_id":  req.CallID,
+				"agent_id": req.AgentID,
+				"team_id":  req.TeamID,
+				"round":    round,
+				"attempts": modelRetries + 1,
+				"model":    modelConfig.Model,
+			})
+			t.emitErrorHook(ctx, agent, req, round, emptyErr)
+			return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
+				round+1, lastText, workspaceOps, toolCalls, types.TurnFailed, emptyErr, nil,
+				loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
 		}
 		lastText = resp.Text
 		if strings.TrimSpace(resp.Text) != "" && strings.TrimSpace(resp.Text) == strings.TrimSpace(lastModelText) {
@@ -1080,6 +1141,14 @@ func isStructuredOutputTruncated(reason string) bool {
 	default:
 		return false
 	}
+}
+
+// isEmptyModelResponse reports a provider reply that carried neither text nor
+// tool calls. Such a reply is a failed model call, not a schema violation: a
+// retry must resend the same conversation, never a "your previous response was
+// not valid JSON" message describing output the model never produced.
+func isEmptyModelResponse(resp *types.ChatResponse) bool {
+	return resp != nil && len(resp.ToolCalls) == 0 && strings.TrimSpace(resp.Text) == ""
 }
 
 func contextBlockText(blocks []types.ContextBlock, kind string) string {
@@ -1721,21 +1790,49 @@ func parallelToolsEnabled(agent types.AgentConfig) bool {
 	return agent.Loop.ToolExecution == "parallel_safe"
 }
 
+// contextLimitPhrases covers how providers word "the prompt is too large".
+// OpenAI says context_length_exceeded, Anthropic says "prompt is too long",
+// gateways say "reduce the length of the messages" — matching one vendor's
+// wording means the others silently turn into plain 400s and never trigger
+// compaction.
+var contextLimitPhrases = []string{
+	"context length",
+	"context_length_exceeded",
+	"context window",
+	"maximum context",
+	"max context",
+	"too many tokens",
+	"input too long",
+	"input is too long",
+	"prompt is too long",
+	"prompt too long",
+	"token limit",
+	"reduce the length",
+	"request too large",
+	"exceeds the model's maximum context",
+}
+
+// contextLimitStatuses are the HTTP statuses a provider uses for an oversized
+// prompt. A retryable status (429/5xx) is deliberately excluded: rate limiting
+// and outages are handled by the retry path, and compacting the context there
+// would throw away history for a problem that is not size-related.
+var contextLimitStatuses = map[int]bool{
+	0:                                true, // non-HTTP failure: judge by message
+	http.StatusBadRequest:            true,
+	http.StatusRequestEntityTooLarge: true,
+	http.StatusUnprocessableEntity:   true,
+}
+
 func isContextLimitError(err error) bool {
 	if err == nil {
 		return false
 	}
+	var providerErr *types.ProviderError
+	if errors.As(err, &providerErr) && !contextLimitStatuses[providerErr.StatusCode] {
+		return false
+	}
 	message := strings.ToLower(err.Error())
-	for _, phrase := range []string{
-		"context length",
-		"context window",
-		"maximum context",
-		"max context",
-		"too many tokens",
-		"input too long",
-		"prompt is too long",
-		"token limit",
-	} {
+	for _, phrase := range contextLimitPhrases {
 		if strings.Contains(message, phrase) {
 			return true
 		}
@@ -1746,6 +1843,14 @@ func isContextLimitError(err error) bool {
 func isRetryableModelError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// The provider layer already classifies every HTTP failure (429, any 5xx
+	// including 500/529, timeouts, network resets). Prefer that over guessing
+	// from the message text, which missed 500 because the phrase list only
+	// carried 502/503/504.
+	var providerErr *types.ProviderError
+	if errors.As(err, &providerErr) {
+		return providerErr.Retryable()
 	}
 	message := strings.ToLower(err.Error())
 	for _, phrase := range []string{
@@ -1770,11 +1875,54 @@ func isRetryableModelError(err error) bool {
 	return false
 }
 
-func waitModelRetry(ctx context.Context, attempt int) error {
+// Model-call retry policy. Delays grow exponentially from a base of 200ms and
+// stop at 8s; a Retry-After hint from the provider wins over the computed delay
+// (capped so a bogus header cannot park the turn for hours). Jitter keeps
+// concurrent agents from retrying in lockstep after a shared outage.
+const (
+	modelRetryBaseDelay       = 200 * time.Millisecond
+	modelRetryMaxDelay        = 8 * time.Second
+	modelRetryAfterCap        = 30 * time.Second
+	modelRetryJitterPermille  = 200 // ±20%
+	modelRetryMaxBackoffShift = 6
+)
+
+// modelRetryDelay returns how long to wait before retry number attempt (1-based).
+func modelRetryDelay(attempt int, err error) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	delay := time.Duration(1<<minInt(attempt-1, 4)) * 100 * time.Millisecond
+	var providerErr *types.ProviderError
+	if errors.As(err, &providerErr) && providerErr.RetryAfter > 0 {
+		if providerErr.RetryAfter > modelRetryAfterCap {
+			return modelRetryAfterCap
+		}
+		return providerErr.RetryAfter
+	}
+	delay := modelRetryBaseDelay << uint(minInt(attempt-1, modelRetryMaxBackoffShift))
+	if delay > modelRetryMaxDelay {
+		delay = modelRetryMaxDelay
+	}
+	spread := int64(delay) * modelRetryJitterPermille / 1000
+	if spread <= 0 {
+		return delay
+	}
+	return delay - time.Duration(spread) + time.Duration(rand.Int64N(2*spread))
+}
+
+// addProviderErrorFields copies the structured provider classification into a
+// log entry so a failure is diagnosable without parsing the message text.
+func addProviderErrorFields(fields map[string]any, err error) {
+	var providerErr *types.ProviderError
+	if !errors.As(err, &providerErr) {
+		return
+	}
+	fields["error_kind"] = string(providerErr.Kind)
+	fields["status_code"] = providerErr.StatusCode
+	fields["retry_after_ms"] = providerErr.RetryAfter.Milliseconds()
+}
+
+func sleepModelRetry(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {

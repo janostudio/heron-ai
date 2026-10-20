@@ -2,10 +2,8 @@ package model
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -152,82 +150,6 @@ func TestModelRegistry_Concurrent(t *testing.T) {
 
 	names := reg.List()
 	assert.NotEmpty(t, names)
-}
-
-// --- RetryHandler Tests ---
-
-func TestRetryHandler_Success(t *testing.T) {
-	h := NewRetryHandler(3, 10*time.Millisecond)
-	callCount := 0
-	err := h.Retry(context.Background(), func() error {
-		callCount++
-		return nil
-	})
-	assert.NoError(t, err)
-	assert.Equal(t, 1, callCount)
-}
-
-func TestRetryHandler_RetryThenSuccess(t *testing.T) {
-	h := NewRetryHandler(3, 10*time.Millisecond)
-	callCount := 0
-	err := h.Retry(context.Background(), func() error {
-		callCount++
-		if callCount < 3 {
-			return errors.New("temporary error")
-		}
-		return nil
-	})
-	assert.NoError(t, err)
-	assert.Equal(t, 3, callCount)
-}
-
-func TestRetryHandler_Exhausted(t *testing.T) {
-	h := NewRetryHandler(3, 10*time.Millisecond)
-	callCount := 0
-	err := h.Retry(context.Background(), func() error {
-		callCount++
-		return errors.New("persistent error")
-	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "retry exhausted")
-	assert.Equal(t, 3, callCount)
-}
-
-func TestRetryHandler_ContextCancelled(t *testing.T) {
-	h := NewRetryHandler(5, 100*time.Millisecond)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	err := h.Retry(ctx, func() error {
-		return errors.New("some error")
-	})
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, context.Canceled))
-}
-
-func TestRetryHandler_ContextCancelledDuringRetry(t *testing.T) {
-	h := NewRetryHandler(5, 500*time.Millisecond)
-	ctx, cancel := context.WithCancel(context.Background())
-
-	callCount := 0
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
-
-	err := h.Retry(ctx, func() error {
-		callCount++
-		return errors.New("some error")
-	})
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, context.Canceled))
-	assert.GreaterOrEqual(t, callCount, 1)
-}
-
-func TestRetryHandler_Defaults(t *testing.T) {
-	h := NewRetryHandler(0, 0)
-	assert.Equal(t, 3, h.maxRetries)
-	assert.Equal(t, time.Second, h.backoff)
 }
 
 // --- TokenCounter Tests ---

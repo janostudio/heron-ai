@@ -348,13 +348,13 @@ func (p *OpenAIProvider) post(ctx context.Context, effective types.ModelConfig, 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var apiErr openAIErrorResponse
 		if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
-			pe := types.ClassifyProviderError(resp.StatusCode, apiErr.Error.Type, body)
+			pe := classifyRejection(resp.StatusCode, apiErr.Error.Type, body, resp.Header)
 			pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
 			logRejectedRequest("model request rejected", resp.StatusCode, req, body)
 			return pe
 		}
 		logRejectedRequest("model request rejected", resp.StatusCode, req, body)
-		return types.ClassifyProviderError(resp.StatusCode, "", body)
+		return classifyRejection(resp.StatusCode, "", body, resp.Header)
 	}
 	if err := json.Unmarshal(body, output); err != nil {
 		return fmt.Errorf("decode response: %w", err)
@@ -406,13 +406,13 @@ func (p *OpenAIProvider) postStream(ctx context.Context, effective types.ModelCo
 		}
 		var apiErr openAIErrorResponse
 		if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
-			pe := types.ClassifyProviderError(resp.StatusCode, apiErr.Error.Type, body)
+			pe := classifyRejection(resp.StatusCode, apiErr.Error.Type, body, resp.Header)
 			pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
 			logRejectedRequest("model request rejected", resp.StatusCode, req, body)
 			return nil, pe
 		}
 		logRejectedRequest("model request rejected", resp.StatusCode, req, body)
-		return nil, types.ClassifyProviderError(resp.StatusCode, "", body)
+		return nil, classifyRejection(resp.StatusCode, "", body, resp.Header)
 	}
 
 	result := &openAIResponse{}

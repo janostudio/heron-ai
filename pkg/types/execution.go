@@ -165,6 +165,10 @@ type ModelRequestStats struct {
 	ToolSchemaHash        string     `json:"tool_schema_hash,omitempty"`
 	Compacted             bool       `json:"compacted,omitempty"`
 	Usage                 TokenUsage `json:"usage"`
+	// DurationMS is the wall-clock time this single provider call took. A
+	// retried attempt appears as its own entry, so the value never spans
+	// attempts.
+	DurationMS int64 `json:"duration_ms,omitempty"`
 	// Model is the actual model name that produced this request, which may
 	// differ from the configured primary when fallback was triggered.
 	Model string `json:"model,omitempty"`

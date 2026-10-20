@@ -3,7 +3,9 @@ package types
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // ProviderErrorKind classifies a provider failure for fallback decisions.
@@ -27,6 +29,10 @@ type ProviderError struct {
 	StatusCode int    // HTTP status code, 0 for non-HTTP failures
 	Message    string // original error text
 	Err        error  // underlying error (optional, surfaced via Unwrap)
+	// RetryAfter is the delay the provider asked for via the Retry-After
+	// response header (429 and some 503s). Zero means the header was absent or
+	// unusable, and the caller falls back to its own backoff.
+	RetryAfter time.Duration
 }
 
 func (e *ProviderError) Error() string {
@@ -37,6 +43,37 @@ func (e *ProviderError) Error() string {
 }
 
 func (e *ProviderError) Unwrap() error { return e.Err }
+
+// maxRetryAfterSeconds bounds the delta-seconds form of Retry-After. Real
+// providers ask for seconds to minutes; anything larger is a broken or hostile
+// header, and multiplying it by time.Second would overflow time.Duration.
+const maxRetryAfterSeconds = 24 * 60 * 60
+
+// ParseRetryAfter converts a Retry-After header value into a delay. Both forms
+// defined by RFC 9110 are accepted: delta-seconds ("120") and an HTTP-date. An
+// absent, malformed, or already-elapsed value yields 0 so callers keep their own
+// backoff instead of retrying immediately on a bad header.
+func ParseRetryAfter(value string) time.Duration {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(trimmed); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		if int64(seconds) > maxRetryAfterSeconds {
+			return maxRetryAfterSeconds * time.Second
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(trimmed); err == nil {
+		if wait := time.Until(when); wait > 0 {
+			return wait
+		}
+	}
+	return 0
+}
 
 // Retryable reports whether the error is worth switching to a fallback model.
 func (e *ProviderError) Retryable() bool {
