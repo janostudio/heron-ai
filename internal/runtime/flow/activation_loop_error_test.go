@@ -64,7 +64,8 @@ func TestRuntimeActivationLoopFailurePersistsErrorInEvent(t *testing.T) {
 		Input:  "loop forever",
 	})
 	require.Error(t, err, "activation loop must fail, not silently succeed")
-	require.Equal(t, types.SessionFailed, result.Session.Status)
+	require.Equal(t, types.SessionWaitingInput, result.Session.Status, "a failed turn must leave the session continuable")
+	require.Equal(t, types.TurnFailed, result.Turn.Status)
 	require.Contains(t, result.Error, "repeated Flow activation")
 
 	// 事件流里必须能读到同一条失败原因。

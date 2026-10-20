@@ -39,11 +39,11 @@ func newEmptyResponseLoop(model *mockModelProvider) *TurnLoop {
 	)
 }
 
-// An empty reply must be retried verbatim: the model sees the same conversation
-// again, never a "your previous response was not valid JSON" message describing
-// output it did not produce. That fabricated message is what pulled the retry
-// towards answering the schema instead of the user's question.
-func TestTurnLoopRetriesEmptyModelResponseWithoutSchemaFeedback(t *testing.T) {
+// An empty reply must be retried with a hint that states what happened. The
+// retry must never claim the reply was "not valid JSON" (the model emitted
+// nothing), and it must not be byte-identical to the failed attempt: a provider
+// that answered empty once answers empty again for the same prompt.
+func TestTurnLoopRetriesEmptyModelResponseWithFactualHint(t *testing.T) {
 	model := &mockModelProvider{
 		responses: []types.ChatResponse{
 			{Text: "", FinishReason: "stop"},
@@ -58,7 +58,10 @@ func TestTurnLoopRetriesEmptyModelResponseWithoutSchemaFeedback(t *testing.T) {
 	require.Equal(t, "master", result.Reply)
 	require.Equal(t, 2, model.callCount, "the empty reply must trigger exactly one retry")
 
-	require.Len(t, model.lastMessages, 1, "retry must resend the original conversation unchanged")
+	require.Len(t, model.lastMessages, 2, "the retry carries the original message plus the hint")
+	require.Equal(t, "查看仓库 heron-ai，目前主分支是什么", model.lastMessages[0].Content)
+	require.Contains(t, strings.ToLower(model.lastMessages[1].Content), "previous response was empty")
+	require.Contains(t, strings.ToLower(model.lastMessages[1].Content), "json object")
 	for _, message := range model.lastMessages {
 		require.NotContains(t, strings.ToLower(message.Content), "not valid json",
 			"an empty reply must not be described to the model as invalid JSON")
@@ -125,6 +128,7 @@ func TestTurnLoopFailsEmptyModelResponseWithoutStructuredOutput(t *testing.T) {
 	require.Contains(t, result.Error, "empty response")
 	require.Equal(t, 3, model.callCount)
 
+	require.Contains(t, strings.ToLower(model.lastMessages[len(model.lastMessages)-1].Content), "empty")
 	for _, message := range model.lastMessages {
 		require.NotContains(t, strings.ToLower(message.Content), "not valid json")
 	}

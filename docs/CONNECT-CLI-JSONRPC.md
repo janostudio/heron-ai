@@ -390,16 +390,16 @@ bundle.Flow.Resume(ctx, sessionID, input)
 | `created` / `running` | 会话已建立或正在执行 | 调用 `HandleInput` |
 | `waiting_approval` | 中途审批门禁 | 必须先调用 `approve` 响应审批（§6.3），不能直接发送普通 `turn` |
 | `waiting_tool` | 停在异步 Tool 任务上 | 等任务结束后 `Resume`；普通 `turn` 会被拒绝（返回 `-32002`）——新轮次不继承 pending 任务，会造孤儿 |
-| `failed` | 终态 | 修正输入后创建新 FlowSession，或使用显式 Recovery API |
-| `cancelled` | 终态 | 创建新 FlowSession |
+| `failed` | 上一轮失败（失败属于那一轮，不属于会话；新引擎不再写该状态，仅旧数据回放出现） | 继续同一个 FlowSession，下一轮从 Flow 入口重新开始 |
+| `cancelled` | 上一轮被取消 | 继续同一个 FlowSession |
 | `interrupted` | 存在未完成的执行 | 需要先执行 Recovery，不能直接发送普通 `turn` |
 | `completed` | 仅出现在旧数据回放中 | 新引擎不再产生该状态；旧 `completed` 会话也可以继续同一个 FlowSession |
 
 会话生命周期由运行时决定：轮次正常结束一律可续，`on_proceed` 不再提供
 `complete` / `wait_input` 之类的生命周期动作。因此 `heron-connect` 可以把
-同一个 `session_id` 当作永久聊天线程 ID 一直复用；只有会话进入
-`failed` / `cancelled` / `interrupted` 之后，才需要按业务决定使用 Recovery
-或省略 `session_id` 开启新 FlowSession。
+同一个 `session_id` 当作永久聊天线程 ID 一直复用；一轮失败只在该轮响应里
+带回 `-32001` 与错误信息，会话本身不会因此不可用。只有存在未完成执行
+（`interrupted` 且有 live Team）时才需要先走 Recovery。
 
 ### 6.3 响应审批（`waiting_approval`）
 

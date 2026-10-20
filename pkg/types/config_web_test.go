@@ -61,8 +61,13 @@ func TestWebConfigWithDefaults_KeepsExplicitValues(t *testing.T) {
 func TestWebConfigWithDefaults_DoesNotMutateInput(t *testing.T) {
 	in := WebConfig{Provider: WebProviderDuckDuckGo}
 
-	in.WithDefaults()
+	got := in.WithDefaults()
 
+	// The returned copy carries the defaults...
+	if got.Search.URL == "" || got.Search.MaxResults != 10 || got.Fetch.Format != "markdown" {
+		t.Fatalf("returned copy missing defaults: %+v", got)
+	}
+	// ...while the receiver stays untouched.
 	if in.Search.URL != "" || in.Fetch.URL != "" || in.Fetch.Format != "" {
 		t.Fatalf("input mutated: %+v", in)
 	}
