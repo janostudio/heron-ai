@@ -55,4 +55,8 @@ jobs:
         run: |
           cd dist/npm
           echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          # npm 对无效/过期的 token 返回 404（"'<pkg>@<version>' is not in this registry"）
+          # 而不是 401，看起来像"包不存在/没权限发布"，极易误诊。发布前先确认 token 有效，
+          # 失败就明确报认证问题并终止，不让 publish 带着坏 token 继续。
+          npm whoami || { echo "::error::NPM_TOKEN 无效或已过期（npm whoami 失败）；请到 npm 账户重新生成 token 并更新仓库 secret NPM_TOKEN"; exit 1; }
           npm publish --access public
