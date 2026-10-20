@@ -151,6 +151,13 @@ func TestDispatchWorkMarksMessageDeadOnTeamFailure(t *testing.T) {
 	var teamResult types.TeamTurnResult
 	require.NoError(t, json.Unmarshal(data, &teamResult))
 	require.Equal(t, "verify exploded", teamResult.Error)
+
+	// And as a top-level "error" key: that is what renderMailboxInbox falls
+	// back to (mailboxResultSummary) when team_result carries no Reply, so a
+	// failed round must show its reason instead of "(no rendered reply;
+	// raw result unavailable)".
+	require.Equal(t, "verify exploded", resultMsg.Payload["error"])
+	require.Equal(t, "error: verify exploded", mailboxResultSummary(resultMsg.Payload))
 }
 
 // TestDispatchWorkRecoversPanicAndMarksDead proves the panic guard: a Team

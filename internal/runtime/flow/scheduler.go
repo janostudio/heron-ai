@@ -223,7 +223,7 @@ func (r *Runtime) postRoutes(
 // postResult enqueues a result message to target carrying the Team's outcome.
 // An empty target means no one is waiting (an entry Team's own completion);
 // that is not an error, it just has nowhere to go.
-func (r *Runtime) postResult(	ctx context.Context,
+func (r *Runtime) postResult(ctx context.Context,
 	session types.FlowSession,
 	flowTurn types.FlowTurn,
 	target string,
@@ -232,9 +232,19 @@ func (r *Runtime) postResult(	ctx context.Context,
 	if target == "" {
 		return nil
 	}
+	payload := map[string]any{"team_result": execution.result}
+	// This message is what the caller renders, so the failure text has to
+	// travel on it: mailboxResultSummary reads payload["error"], and without
+	// it a failed round degrades to "(no rendered reply; raw result
+	// unavailable)". A failed round always carries error text —
+	// executeTeamTurn fills in a fallback reason when the Team itself
+	// returned none — so this is the same condition as teamFailed above.
+	if execution.result.Error != "" {
+		payload["error"] = execution.result.Error
+	}
 	_, err := r.enqueueResultMessage(ctx, session, flowTurn,
 		types.MailboxAddress{TeamID: target},
-		map[string]any{"team_result": execution.result},
+		payload,
 	)
 	return err
 }
