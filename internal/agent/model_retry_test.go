@@ -140,3 +140,20 @@ func TestIsContextLimitErrorUsesStatusAndMessage(t *testing.T) {
 		})
 	}
 }
+
+// The persisted request summary must carry the provider stop reason. Without
+// it an empty reply, a tool call, and a plain answer produce identical
+// ModelRequestStats entries, so team.jsonl cannot be used to tell them apart
+// after the debug log has rotated away.
+func TestTurnLoopRecordsFinishReasonInRequestStats(t *testing.T) {
+	model := &mockModelProvider{
+		responses: []types.ChatResponse{{Text: `{"reply":"ok"}`, FinishReason: "stop"}},
+	}
+	loop := newEmptyResponseLoop(model)
+
+	result, err := loop.Run(context.Background(), structuredReplyAgent(types.LoopConfig{MaxRounds: 3}), types.AgentRequest{})
+	require.NoError(t, err)
+	require.Equal(t, types.TurnCompleted, result.Status)
+	require.Len(t, result.Requests, 1)
+	require.Equal(t, "stop", result.Requests[0].FinishReason)
+}

@@ -173,6 +173,12 @@ type ModelRequestStats struct {
 	// Model is the actual model name that produced this request, which may
 	// differ from the configured primary when fallback was triggered.
 	Model string `json:"model,omitempty"`
+	// FinishReason is the provider's stop reason for this request ("stop",
+	// "tool_calls", "length", …). Without it a persisted request looks the
+	// same whether the model answered, asked for a tool, or was truncated,
+	// which makes an empty or looping reply impossible to tell apart after
+	// the fact.
+	FinishReason string `json:"finish_reason,omitempty"`
 }
 
 // CallExecutorProvider executes exactly one V1 call type.
