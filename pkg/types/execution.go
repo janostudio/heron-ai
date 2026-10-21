@@ -301,7 +301,12 @@ type FlowTurnResult struct {
 	// is the concatenation of every Team's reply in the turn, which includes
 	// intermediate hops; FinalReply is the only one meant for the caller.
 	FinalReply string `json:"FinalReply,omitempty"`
-	Error      string `json:"Error"`
+	// FinalReplyFromEntry records whether FinalReply came from a hop that had
+	// nobody to hand the result to — the entry Team answering the user. A
+	// mailbox turn whose intermediate hops end up dispatching the entry Team
+	// is still an answer, even though the turn itself was woken by a mailbox.
+	FinalReplyFromEntry bool   `json:"-"`
+	Error               string `json:"Error"`
 }
 
 // RuntimeLimits bounds one FlowSession. These are safety defaults, not a new
