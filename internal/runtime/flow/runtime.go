@@ -1003,6 +1003,8 @@ func (r *Runtime) runTurnWithOrigin(
 				// values describe lifecycle completion, not Flow/Team
 				// orchestration. The current lifecycle leaves a normal Flow
 				// turn resumable, so do not enqueue another Team here.
+				// The turn ends on this hop, so its reply is the answer.
+				recordFinalReply(execution.result.Reply)
 			case types.NextFail:
 				if routeFailure == nil {
 					routeFailure = errors.New(next.Reason)

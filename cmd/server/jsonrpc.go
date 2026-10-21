@@ -150,6 +150,12 @@ type jsonRPCServer struct {
 	// the serve loop while progress notifications come from a per-turn pump;
 	// without this lock the two can interleave and corrupt a JSONL line.
 	writeMu sync.Mutex
+
+	// pumpMu guards pumps. A following pump outlives the turn that started
+	// it, so a second turn on the same session must attach to that stream
+	// instead of opening a second one that would deliver every event twice.
+	pumpMu sync.Mutex
+	pumps  map[string]*eventPump
 }
 
 type jsonRPCFlusher interface {
@@ -290,6 +296,7 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 		if params.FollowAsync {
 			if replay, replayErr := s.sessions.Replay(ctx, result.Session.ID); replayErr == nil {
 				pump = startEventPump(ctx, s.sessions, result.Session.ID, "", replay.LastSeq, s.writeProgress)
+				s.registerPump(result.Session.ID, pump)
 			}
 		}
 	}
@@ -302,12 +309,12 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 			return
 		}
 		if !params.FollowAsync {
-			pump.Stop()
+			s.releasePump(sessionID, pump)
 			return
 		}
 		go func() {
 			pump.waitForIdle(ctx, sessionID, followAsyncMaxWait)
-			pump.Stop()
+			s.releasePump(sessionID, pump)
 		}()
 	}
 
@@ -334,17 +341,60 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 }
 
 // startTurnPump subscribes to the session's events for the duration of one
-// turn. It returns nil when progress streaming is not configured, or when the
-// session is unknown (the caller then falls back to a post-turn snapshot).
+// turn. It returns nil when progress streaming is not configured, when the
+// session is unknown (the caller then falls back to a post-turn snapshot), or
+// when a pump is already streaming this session — that pump keeps forwarding,
+// so a second one would duplicate every event.
 func (s *jsonRPCServer) startTurnPump(ctx context.Context, sessionID string) *eventPump {
 	if s.sessions == nil || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	// Check and register under one lock: a second turn that saw a pump being
+	// created but not yet recorded would open a competing stream.
+	s.pumpMu.Lock()
+	defer s.pumpMu.Unlock()
+	if s.pumps == nil {
+		s.pumps = make(map[string]*eventPump)
+	}
+	if _, streaming := s.pumps[sessionID]; streaming {
 		return nil
 	}
 	replay, err := s.sessions.Replay(ctx, sessionID)
 	if err != nil {
 		return nil
 	}
-	return startEventPump(ctx, s.sessions, sessionID, "", replay.LastSeq, s.writeProgress)
+	pump := startEventPump(ctx, s.sessions, sessionID, "", replay.LastSeq, s.writeProgress)
+	s.pumps[sessionID] = pump
+	return pump
+}
+
+// registerPump records the session's streaming pump so later turns attach to
+// it instead of opening a competing stream.
+func (s *jsonRPCServer) registerPump(sessionID string, pump *eventPump) {
+	if pump == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	s.pumpMu.Lock()
+	if s.pumps == nil {
+		s.pumps = make(map[string]*eventPump)
+	}
+	s.pumps[sessionID] = pump
+	s.pumpMu.Unlock()
+}
+
+// releasePump unregisters one pump and then stops it. The order matters: a
+// new turn arriving while the old pump drains must not find it registered —
+// it would attach to a stream that is already closing and miss its events.
+func (s *jsonRPCServer) releasePump(sessionID string, pump *eventPump) {
+	if pump == nil {
+		return
+	}
+	s.pumpMu.Lock()
+	if s.pumps[sessionID] == pump {
+		delete(s.pumps, sessionID)
+	}
+	s.pumpMu.Unlock()
+	pump.Stop()
 }
 
 // handleApprove answers the pending approval of a session parked at
@@ -522,21 +572,26 @@ func jsonRPCTurnResultFrom(result types.FlowTurnResult) jsonRPCTurnResult {
 	// Reply is what the caller shows the user. FinalReply is the hop that
 	// ended the turn; Reply concatenates every hop, intermediate Teams'
 	// raw output included.
-	reply := result.Reply
-	if strings.TrimSpace(result.FinalReply) != "" {
-		reply = result.FinalReply
-	}
-
 	return jsonRPCTurnResult{
 		SessionID:        result.Session.ID,
 		FlowTurnID:       result.Turn.ID,
 		Status:           result.Session.Status,
-		Reply:            reply,
+		Reply:            replyForCaller(result),
 		Records:          records,
 		Usage:            aggregateTeamUsage(result.TeamResults),
 		Error:            result.Error,
 		PendingApprovals: pending,
 	}
+}
+
+// replyForCaller picks the text a caller relays to the user: the hop that
+// ended the turn when the runtime could identify it, otherwise the
+// concatenation (a turn that failed before any route resolved).
+func replyForCaller(result types.FlowTurnResult) string {
+	if strings.TrimSpace(result.FinalReply) != "" {
+		return result.FinalReply
+	}
+	return result.Reply
 }
 
 func turnErrorData(result types.FlowTurnResult, requestedSessionID string) map[string]any {

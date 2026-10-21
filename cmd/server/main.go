@@ -245,8 +245,8 @@ func writePromptResult(w io.Writer, flowID, modelName string, result types.FlowT
 	if usage := aggregateTeamUsage(result.TeamResults); usage.TotalTokens > 0 {
 		printf("Tokens: %d (prompt %d, completion %d)\n", usage.TotalTokens, usage.PromptTokens, usage.CompletionTokens)
 	}
-	if strings.TrimSpace(result.Reply) != "" {
-		printf("\n%s\n", result.Reply)
+	if reply := replyForCaller(result); strings.TrimSpace(reply) != "" {
+		printf("\n%s\n", reply)
 	}
 	for _, record := range result.Records {
 		printf("\n[%s] %s\n", record.Name, record.Summary)
