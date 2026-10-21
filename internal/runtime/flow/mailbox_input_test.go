@@ -14,14 +14,18 @@ import (
 // inputRecordingTeamRuntime keeps every TeamTurnRequest.Input it is asked to
 // run, and answers with a route the test controls.
 type inputRecordingTeamRuntime struct {
-	mu     sync.Mutex
-	inputs []string
-	next   *types.Route
+	mu      sync.Mutex
+	inputs  []string
+	records []string
+	next    *types.Route
 }
 
 func (r *inputRecordingTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
 	r.mu.Lock()
 	r.inputs = append(r.inputs, req.Input)
+	for _, record := range req.Records {
+		r.records = append(r.records, record.Name)
+	}
 	next := r.next
 	r.mu.Unlock()
 	if next == nil {
@@ -155,4 +159,49 @@ func TestEntryHopClearsIntermediateOnMailboxTurn(t *testing.T) {
 	require.NotNil(t, payload)
 	require.Equal(t, false, payload["intermediate"],
 		"the relayed event must not suppress the answer")
+}
+
+// A Team woken by a result message must see what the upstream Team produced.
+// Those records are published in team scope; a Team's declared flow_records are
+// matched against the flow-scope slice, so they have to be promoted first.
+func TestResultMessageExposesUpstreamRecords(t *testing.T) {
+	recorder := &inputRecordingTeamRuntime{}
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	defs := testDefinitions()
+	defs.Flow.Teams["default"] = types.FlowTeamBinding{
+		ID:     "default",
+		TeamID: "default-team",
+		Inputs: types.InputSpec{
+			UserMessage: true,
+			FlowRecords: []string{"OwnerReply"},
+		},
+	}
+	rt := newTestRuntime(defs, recorder, writer, nil)
+
+	session, turn := mailboxTestSession(t)
+	msg, err := rt.enqueueResultMessage(context.Background(), session, turn,
+		addr("default", ""),
+		map[string]any{
+			"input": "查看仓库 heron-connect，目前主分支是什么",
+			"team_result": types.TeamTurnResult{
+				Reply: "heron-connect 的主分支是 main",
+				Records: []types.SharedRecord{{
+					RecordID: "owner-1",
+					Name:     "OwnerReply",
+					Kind:     "agent_result",
+					Scope:    types.RecordScopeTeam,
+					Summary:  "heron-connect 的主分支是 main",
+				}},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	rt.runMessageTurn(context.Background(), session, msg)
+
+	recorder.mu.Lock()
+	seen := append([]string(nil), recorder.records...)
+	recorder.mu.Unlock()
+	require.Contains(t, seen, "OwnerReply",
+		"the entry Team must receive the upstream result record")
 }
