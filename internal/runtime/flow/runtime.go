@@ -291,19 +291,19 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 				TaskID:       pendingTask.TaskID,
 			}
 		}
-		return r.runTurnWithActivationsAndContext(ctx, r.definitions.Snapshot(), session, input, persistedBlocks, []activation{{
+		return r.runTurnWithOrigin(ctx, r.definitions.Snapshot(), session, input, persistedBlocks, []activation{{
 			teamID:        pendingTeam.TeamID,
 			callerTeam:    pendingTeam.CallerTeam,
 			force:         true,
 			attempt:       pendingTeam.Attempt + 1,
 			resumeResults: resumeResults,
 			resumeCalls:   resumeCalls,
-		}})
+		}}, turnOriginResume)
 	}
 	if !ok {
 		return r.runTurnWithContext(ctx, session, input, persistedBlocks)
 	}
-	return r.runTurnWithActivationsAndContext(ctx, r.definitions.Snapshot(), session, input, persistedBlocks, []activation{{
+	return r.runTurnWithOrigin(ctx, r.definitions.Snapshot(), session, input, persistedBlocks, []activation{{
 		teamID:             pending.TeamID,
 		callerTeam:         pending.CallerTeam,
 		force:              true,
@@ -313,7 +313,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 		resumeInput:        input,
 		resumeCallTurnID:   pending.CallTurnID,
 		resumeTaskID:       pending.TaskID,
-	}})
+	}}, turnOriginResume)
 }
 
 func (r *Runtime) ResumeApproval(ctx context.Context, sessionID, approvalID string, approved bool, reason string) (types.FlowTurnResult, error) {
@@ -617,9 +617,9 @@ const (
 )
 
 // runTurnWithOrigin is runTurnWithActivationsAndContext with an explicit
-// origin. Only the mailbox wake-up uses a different value: every other entry
-// point runs because the caller — or a paused call the caller is waiting on —
-// asked for it.
+// origin: caller input, a mailbox wake-up, or a resumed Tool call/approval.
+// Only a mailbox wake-up can be an intermediate turn; a resume is the caller
+// finishing what it started, so its reply answers them.
 func (r *Runtime) runTurnWithOrigin(
 	ctx context.Context,
 	defs *types.Definitions,
