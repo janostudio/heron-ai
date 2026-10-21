@@ -625,14 +625,25 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				if resp.Model != "" {
 					requestStats[requestStatIndex].Model = resp.Model
 				}
-				t.emitAgentEvent(ctx, req, round, types.EventAgentModelResponse, map[string]any{
+				fields := map[string]any{
 					"round":         round,
 					"text":          resp.Text,
 					"tool_calls":    resp.ToolCalls,
 					"usage":         resp.Usage,
 					"finish_reason": resp.FinishReason,
 					"model":         resp.Model,
-				})
+				}
+				// A structured Agent answers with a JSON envelope. Progress
+				// consumers show text to a user, so the envelope has to say
+				// what it is and carry the readable field with it — otherwise
+				// the raw JSON is what lands in the chat.
+				if agent.Structured != nil {
+					fields["structured"] = true
+					if reply := structuredReply(resp.Text); reply != "" {
+						fields["reply"] = reply
+					}
+				}
+				t.emitAgentEvent(ctx, req, round, types.EventAgentModelResponse, fields)
 			}
 			if chatErr == nil {
 				// An empty reply (no text, no tool calls) is a failed model call,

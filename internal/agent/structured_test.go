@@ -140,3 +140,31 @@ func TestTurnLoopRetriesOneInvalidStructuredResponse(t *testing.T) {
 	require.Equal(t, "ok", result.Reply)
 	require.Equal(t, 2, model.callCount)
 }
+
+// Progress consumers show text to a user, so the JSON envelope a structured
+// Agent emits has to be reduced to its readable field.
+func TestStructuredReplyExtractsReplyField(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "envelope with routing fields",
+			raw:  `{"reply":"主分支是 master","repo":"heron-ai","next":{"action":"activate"}}`,
+			want: "主分支是 master",
+		},
+		{name: "reply only", raw: `{"reply":"ok"}`, want: "ok"},
+		{name: "trims surrounding space", raw: `{"reply":"  ok  "}`, want: "ok"},
+		{name: "no reply field", raw: `{"next":{"action":"proceed"}}`, want: ""},
+		{name: "reply is not a string", raw: `{"reply":{"text":"nested"}}`, want: ""},
+		{name: "empty reply", raw: `{"reply":""}`, want: ""},
+		{name: "not json", raw: "已经核实完毕，主分支是 master", want: ""},
+		{name: "json array", raw: `["ok"]`, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, structuredReply(tc.raw))
+		})
+	}
+}
