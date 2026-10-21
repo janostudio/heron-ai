@@ -1001,8 +1001,19 @@ func renderState(snapshot types.StateSnapshot) string {
 	appendList("Confirmed", snapshot.Confirmed)
 	appendList("Open Questions", snapshot.OpenQuestions)
 	appendList("Decisions", snapshot.Decisions)
-	appendList("Next Steps", snapshot.NextSteps)
-	return strings.Join(sections, "\n\n")
+	// Next Steps is deliberately not rendered. The whiteboard survives across
+	// turns, but a Next Step is a plan for the turn that wrote it: rendered
+	// again later, a finished plan reads as the outcome of the current task. A
+	// Team asked about repo B answered with repo A's branch and HEAD word for
+	// word, because that verdict was still sitting in Next Steps.
+	body := strings.Join(sections, "\n\n")
+	if body == "" {
+		return ""
+	}
+	// Everything that does survive is labelled for what it is. Without the
+	// boundary the same confusion happens one section earlier: a stale
+	// "confirmed" line is read as this turn's finding.
+	return "State carried over from earlier turns (memory, not the outcome of the current task unless the current task continues it):\n\n" + body
 }
 
 func renderRules(definitions map[string]types.RuleItem, names []string, agentID, teamID string) string {

@@ -112,6 +112,10 @@ func TestAddUsageNilReceiverIsNoop(t *testing.T) {
 	})
 }
 
+// stateCarriedOverHeader is the boundary that keeps a previous turn's verdict
+// from being read as the current task's result.
+const stateCarriedOverHeader = "State carried over from earlier turns (memory, not the outcome of the current task unless the current task continues it):\n\n"
+
 func TestRenderState(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -128,7 +132,7 @@ func TestRenderState(t *testing.T) {
 			snapshot: types.StateSnapshot{
 				Goal: "fix the bug",
 			},
-			expected: "Goal: fix the bug",
+			expected: stateCarriedOverHeader + "Goal: fix the bug",
 		},
 		{
 			name: "goal plus lists",
@@ -139,18 +143,20 @@ func TestRenderState(t *testing.T) {
 				Decisions:     []types.StateItem{{ID: "i-4", Text: "d1"}, {ID: "i-5", Text: "d2"}},
 				NextSteps:     []types.StateItem{{ID: "i-6", Text: "n"}},
 			},
-			expected: "Goal: g\n\n" +
+			expected: stateCarriedOverHeader +
+				"Goal: g\n\n" +
 				"Confirmed:\n- a\n- b\n\n" +
 				"Open Questions:\n- q\n\n" +
-				"Decisions:\n- d1\n- d2\n\n" +
-				"Next Steps:\n- n",
+				"Decisions:\n- d1\n- d2",
 		},
 		{
-			name: "lists without goal",
+			// A finished turn's plan must not survive into the next one — it is
+			// exactly what a Team quotes back as its answer.
+			name: "next steps only",
 			snapshot: types.StateSnapshot{
-				NextSteps: []types.StateItem{{ID: "i-7", Text: "n1"}},
+				NextSteps: []types.StateItem{{ID: "i-7", Text: "已核实仓库 heron-ai 的主分支是 master"}},
 			},
-			expected: "Next Steps:\n- n1",
+			expected: "",
 		},
 	}
 	for _, tt := range tests {
