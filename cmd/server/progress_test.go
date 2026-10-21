@@ -183,6 +183,76 @@ func TestProjectAssistantSkipsEmptyRounds(t *testing.T) {
 	require.Nil(t, params, "a round with no text and no tool calls must not be emitted")
 }
 
+// A structured Agent answers with a JSON envelope. A caller renders the text
+// block as message content, so the envelope must never reach it — only the
+// sentence the model wrote for the user.
+func TestProjectAssistantUsesReplyForStructuredOutput(t *testing.T) {
+	envelope := `{"reply":"仓库 heron-ai 的主分支是 master","repo":"heron-ai","next":{"action":"activate","teams":["owner"]}}`
+	params := projectSessionEvent(eventFor(7, types.EventAgentModelResponse, map[string]any{
+		"round":      0,
+		"text":       envelope,
+		"reply":      "仓库 heron-ai 的主分支是 master",
+		"structured": true,
+	}))
+	require.NotNil(t, params)
+	require.Equal(t, progressTypeAssistant, params["type"])
+	require.Equal(t, true, params["structured"])
+	content, ok := params["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, content, 1)
+	block, ok := content[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "仓库 heron-ai 的主分支是 master", block["text"])
+	require.NotContains(t, block["text"], "next")
+	require.NotContains(t, block["text"], "{")
+}
+
+// Without a readable reply the frame is dropped rather than falling back to
+// the envelope: a JSON blob in a chat bubble is worse than no preview.
+func TestProjectAssistantDropsStructuredFrameWithoutReply(t *testing.T) {
+	params := projectSessionEvent(eventFor(8, types.EventAgentModelResponse, map[string]any{
+		"round":      0,
+		"text":       `{"next":{"action":"activate","teams":["owner"]}}`,
+		"structured": true,
+	}))
+	require.Nil(t, params, "a structured frame with no reply must not be emitted")
+}
+
+// Dropping the unreadable text must not drop the tool call the same round
+// asked for: the tool_use block is what a caller shows as activity.
+func TestProjectStructuredFrameKeepsToolCallsWithoutReply(t *testing.T) {
+	params := projectSessionEvent(eventFor(10, types.EventAgentModelResponse, map[string]any{
+		"round":      1,
+		"text":       `{"next":{"action":"proceed"}}`,
+		"structured": true,
+		"tool_calls": []types.ToolCall{{ID: "tc-1", Name: "Bash", Arguments: map[string]any{"command": "ls"}}},
+	}))
+	require.NotNil(t, params)
+	content, ok := params["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, content, 1)
+	block, ok := content[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "tool_use", block["type"])
+	require.Equal(t, "Bash", block["name"])
+}
+
+// Non-structured Agents keep sending their plain text.
+func TestProjectAssistantKeepsPlainTextForNonStructuredOutput(t *testing.T) {
+	params := projectSessionEvent(eventFor(9, types.EventAgentModelResponse, map[string]any{
+		"round": 0,
+		"text":  "checking the tree",
+	}))
+	require.NotNil(t, params)
+	content, ok := params["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, content, 1)
+	block, ok := content[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "checking the tree", block["text"])
+	require.NotContains(t, params, "structured")
+}
+
 func TestProjectDropsInternalEvents(t *testing.T) {
 	for _, eventType := range []string{
 		types.EventFlowSessionCreated,

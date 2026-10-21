@@ -50,6 +50,29 @@ func NewStructuredOutputManager() *StructuredOutputManager {
 	return &StructuredOutputManager{}
 }
 
+// structuredReply extracts the human-readable "reply" field from a
+// structured-output document. Progress consumers relay what the model wrote
+// for the user, not the JSON envelope it arrived in; the envelope also carries
+// routing fields (next, repo, task) that mean nothing outside the engine.
+//
+// It returns "" when the document is not JSON, has no reply field, or the
+// field is not a string, so a caller can fall back instead of showing "null".
+func structuredReply(raw string) string {
+	parsed, err := parseJSONDocument(raw)
+	if err != nil {
+		return ""
+	}
+	document, ok := parsed.(map[string]any)
+	if !ok {
+		return ""
+	}
+	reply, ok := document["reply"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(reply)
+}
+
 func (m *StructuredOutputManager) ParseAndValidate(raw string, schema *types.StructuredOutput) (any, error) {
 	if schema == nil {
 		return raw, nil

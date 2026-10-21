@@ -176,7 +176,17 @@ func optionalHeaderFields(header types.EventHeader) map[string]any {
 
 func projectModelResponse(base map[string]any, payload map[string]any) map[string]any {
 	content := make([]any, 0, 2)
-	if text := payloadString(payload, "text"); text != "" {
+	// A structured Agent answers with a JSON envelope carrying its routing
+	// fields (next, repo, task) next to the sentence meant for the user.
+	// Forward the sentence, never the envelope: a caller renders this as
+	// message text. When the envelope has no readable reply, the frame is
+	// dropped rather than showing raw JSON.
+	text := payloadString(payload, "text")
+	if structured, ok := payload["structured"].(bool); ok && structured {
+		text = payloadString(payload, "reply")
+		base["structured"] = true
+	}
+	if text != "" {
 		content = append(content, map[string]any{
 			"type": "text",
 			"text": truncateUTF8(text, progressMaxTextBytes),
