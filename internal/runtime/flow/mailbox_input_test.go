@@ -205,3 +205,37 @@ func TestResultMessageExposesUpstreamRecords(t *testing.T) {
 	require.Contains(t, seen, "OwnerReply",
 		"the entry Team must receive the upstream result record")
 }
+
+// ResumeForMailbox starts the woken Team's turn at that Team, not at the flow
+// entry, so the user's original input does not reach it by the usual path. The
+// dispatched messages carry it; without it the Team can only answer from its
+// own history.
+func TestResumeForMailboxFeedsDispatchedTask(t *testing.T) {
+	recorder := &inputRecordingTeamRuntime{}
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	defs := testDefinitions()
+	defs.Flow.Teams["default"] = types.FlowTeamBinding{
+		ID:     "default",
+		TeamID: "default-team",
+		Inputs: types.InputSpec{UserMessage: true},
+	}
+	rt := newTestRuntime(defs, recorder, writer, nil)
+
+	session := seedMailboxSession(t, rt, "fs-task", types.SessionWaitingInput)
+	turn := types.FlowTurn{ID: "ft-1", FlowSessionID: session.ID}
+	const task = "查看仓库genie，目前主分支是什么"
+	_, err := rt.enqueueResultMessage(context.Background(), session, turn,
+		addr("default", ""),
+		map[string]any{
+			"input":       task,
+			"team_result": types.TeamTurnResult{Reply: "上游结果"},
+		},
+	)
+	require.NoError(t, err)
+
+	_, err = rt.ResumeForMailbox(context.Background(), session.ID)
+	require.NoError(t, err)
+
+	require.Contains(t, recorder.recorded(), task,
+		"the woken Team must receive the task, not an empty input")
+}

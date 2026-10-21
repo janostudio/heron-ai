@@ -102,8 +102,25 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		"caller_team":     wake.callerTeam,
 		"message_count":   len(messages),
 	})
-	return r.runTurnWithOrigin(ctx, defs, session, "", blocks,
+	return r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
 		[]activation{wake}, turnOriginMailbox)
+}
+
+// taskInputFromMessages returns the task the woken Team is working on.
+//
+// A dispatched message carries the original user input next to its payload.
+// Without it the Team sees only the inbox block and whatever its own history
+// remembers — enough to answer a question nobody asked, which is how a Team
+// asked about one repository replied with another's branch. The newest message
+// wins: it is the one the wake-up is for.
+func taskInputFromMessages(messages []types.MailboxMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		input, ok := messages[i].Payload["input"].(string)
+		if ok && strings.TrimSpace(input) != "" {
+			return input
+		}
+	}
+	return ""
 }
 
 // activatorFromMessages returns the Team that dispatched the work whose mail is
