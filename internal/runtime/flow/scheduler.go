@@ -79,8 +79,13 @@ func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession,
 
 	target := msg.To.TeamID
 	caller, _ := msg.Payload["caller_team"].(string)
+	// The task travels with the message. A Team woken by a mailbox has no user
+	// input of its own, and the only other source of "what am I doing" is its
+	// own history — which is how a Team ends up answering the previous
+	// question: it sees its last completed task and repeats that verdict.
+	input, _ := msg.Payload["input"].(string)
 
-	flowTurn := types.FlowTurn{ID: msg.CauseFlowTurnID, FlowSessionID: session.ID}
+	flowTurn := types.FlowTurn{ID: msg.CauseFlowTurnID, FlowSessionID: session.ID, Input: input}
 	records, loadErr := r.loadHistoricalFlowRecords(ctx, session.ID)
 
 	act := activation{teamID: target, callerTeam: caller}
@@ -96,7 +101,7 @@ func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession,
 	if loadErr != nil {
 		err = fmt.Errorf("load flow records for dispatched team %q: %w", target, loadErr)
 	} else {
-		execution, err = r.executeTeamTurn(ctx, defs, session, flowTurn, act, "", records, nil)
+		execution, err = r.executeTeamTurn(ctx, defs, session, flowTurn, act, input, records, nil)
 	}
 	if err != nil {
 		execution.result.Error = err.Error()
@@ -188,7 +193,7 @@ func (r *Runtime) postRoutes(
 			}
 			if _, err := r.enqueueWorkMessage(ctx, session, flowTurn,
 				types.MailboxAddress{TeamID: target},
-				map[string]any{"caller_team": source},
+				map[string]any{"caller_team": source, "input": flowTurn.Input},
 			); err != nil {
 				return fmt.Errorf("enqueue work for team %q: %w", target, err)
 			}
@@ -233,6 +238,11 @@ func (r *Runtime) postResult(ctx context.Context,
 		return nil
 	}
 	payload := map[string]any{"team_result": execution.result}
+	// The entry Team is woken to answer the user, so it needs the question —
+	// not just the result it is relaying.
+	if flowTurn.Input != "" {
+		payload["input"] = flowTurn.Input
+	}
 	// This message is what the caller renders, so the failure text has to
 	// travel on it: mailboxResultSummary reads payload["error"], and without
 	// it a failed round degrades to "(no rendered reply; raw result

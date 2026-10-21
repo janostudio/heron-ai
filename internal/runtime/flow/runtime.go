@@ -759,9 +759,15 @@ func (r *Runtime) runTurnWithOrigin(
 	// every hop (an intermediate Team's raw output included), so a caller
 	// that relayed it would show the user a RepoFacts JSON blob instead of
 	// the answer the entry Team wrote for them.
-	recordFinalReply := func(reply string) {
+	//
+	// fromEntry distinguishes "the entry Team answered" from "a dispatched
+	// Team ran out of things to hand off": both end the turn, but only the
+	// first is an answer. A mailbox turn can start with an activator and
+	// still end at the entry Team, which makes it the user-facing hop.
+	recordFinalReply := func(reply string, fromEntry bool) {
 		if strings.TrimSpace(reply) != "" {
 			result.FinalReply = reply
+			result.FinalReplyFromEntry = fromEntry
 		}
 	}
 
@@ -899,7 +905,7 @@ func (r *Runtime) runTurnWithOrigin(
 				// The Team paused mid-execution for user input. Do not route
 				// it onward; the FlowTurn ends resumable instead.
 				hasWaitInput = true
-				recordFinalReply(execution.result.Reply)
+				recordFinalReply(execution.result.Reply, execution.activation.activator == "")
 				continue
 			}
 			switch next.Action {
@@ -911,7 +917,7 @@ func (r *Runtime) runTurnWithOrigin(
 					// FlowTurn ends and waits for the user.
 					if execution.activation.activator == "" {
 						hasWaitInput = true
-						recordFinalReply(execution.result.Reply)
+						recordFinalReply(execution.result.Reply, execution.activation.activator == "")
 						continue
 					}
 					targets = []string{execution.activation.activator}
@@ -950,7 +956,13 @@ func (r *Runtime) runTurnWithOrigin(
 					if r.asyncDispatch {
 						msg, err := r.enqueueWorkMessage(ctx, session, turn,
 							types.MailboxAddress{TeamID: target},
-							map[string]any{"caller_team": execution.activation.teamID},
+							map[string]any{
+								"caller_team": execution.activation.teamID,
+								// The target runs later, with no user input
+								// of its own; without the task it can only
+								// repeat its previous verdict.
+								"input": turn.Input,
+							},
 						)
 						if err != nil {
 							routeFailure = fmt.Errorf("enqueue mailbox work for team %q: %w", target, err)
@@ -970,7 +982,7 @@ func (r *Runtime) runTurnWithOrigin(
 				}
 				if target == "" {
 					hasWaitInput = true
-					recordFinalReply(execution.result.Reply)
+					recordFinalReply(execution.result.Reply, execution.activation.activator == "")
 					continue
 				}
 				enqueueBatchRoute(routeTo(target, execution.activation.teamID))
@@ -990,7 +1002,7 @@ func (r *Runtime) runTurnWithOrigin(
 				// no activator the user is the one to decide.
 				if execution.activation.activator == "" {
 					hasWaitInput = true
-					recordFinalReply(execution.result.Reply)
+					recordFinalReply(execution.result.Reply, execution.activation.activator == "")
 					continue
 				}
 				enqueueBatchRoute(routeTo(execution.activation.activator, execution.activation.teamID))
@@ -1004,7 +1016,7 @@ func (r *Runtime) runTurnWithOrigin(
 				// orchestration. The current lifecycle leaves a normal Flow
 				// turn resumable, so do not enqueue another Team here.
 				// The turn ends on this hop, so its reply is the answer.
-				recordFinalReply(execution.result.Reply)
+				recordFinalReply(execution.result.Reply, execution.activation.activator == "")
 			case types.NextFail:
 				if routeFailure == nil {
 					routeFailure = errors.New(next.Reason)
@@ -1530,6 +1542,13 @@ func (r *Runtime) finishTurn(
 	replyForCaller := result.Reply
 	if strings.TrimSpace(result.FinalReply) != "" {
 		replyForCaller = result.FinalReply
+	}
+	// Intermediate was decided when the turn started, from the activator of
+	// its first hop. A mailbox turn may start with an activator and still end
+	// at the entry Team — that final hop answers the user, so the turn is not
+	// an intermediate step after all.
+	if result.FinalReplyFromEntry {
+		result.Turn.Intermediate = false
 	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
