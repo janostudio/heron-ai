@@ -87,6 +87,16 @@ func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession,
 
 	flowTurn := types.FlowTurn{ID: msg.CauseFlowTurnID, FlowSessionID: session.ID, Input: input}
 	records, loadErr := r.loadHistoricalFlowRecords(ctx, session.ID)
+	// A Team woken by a result message has to see that result. The upstream
+	// Team publishes its records with team scope, while loadHistoricalFlowRecords
+	// only reads flow scope and a Team's declared flow_records are matched by
+	// name against that slice — so without promoting them here the entry Team
+	// reads nothing and repeats its dispatch line instead of relaying the answer.
+	if msg.Kind == mailboxKindResult {
+		if upstream, ok := msg.Payload["team_result"].(types.TeamTurnResult); ok {
+			records = append(records, promoteToFlowScope(upstream.Records)...)
+		}
+	}
 
 	act := activation{teamID: target, callerTeam: caller}
 	// The activator is whoever dispatched this Team: its work message carries
@@ -257,4 +267,20 @@ func (r *Runtime) postResult(ctx context.Context,
 		payload,
 	)
 	return err
+}
+
+// promoteToFlowScope exposes an upstream Team's records to a dispatch target.
+// A Team that declares `flow_records: [OwnerReply]` is matched by name against
+// the flow-scope slice only, so a record published in team scope is invisible
+// to it — including the reply it is supposed to relay.
+func promoteToFlowScope(records []types.SharedRecord) []types.SharedRecord {
+	promoted := make([]types.SharedRecord, 0, len(records))
+	for _, record := range records {
+		if record.Name == "" {
+			continue
+		}
+		record.Scope = types.RecordScopeFlow
+		promoted = append(promoted, record)
+	}
+	return promoted
 }
