@@ -79,6 +79,12 @@ type jsonRPCTurnParams struct {
 	FlowSessionID string `json:"flow_session_id,omitempty"`
 	Input         string `json:"input,omitempty"`
 	Message       string `json:"message,omitempty"`
+	// FollowAsync keeps the progress subscription open after this turn
+	// returns, until the work it dispatched into the background finishes.
+	// A dispatch turn answers "handed off, more to come" and the real answer
+	// arrives in a later FlowTurn that no other caller is subscribed to, so
+	// without this flag that answer has nowhere to go.
+	FollowAsync bool `json:"follow_async,omitempty"`
 }
 
 type jsonRPCTurnResult struct {
@@ -279,10 +285,32 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 			done:       make(chan struct{}),
 		}
 		pump.replayEventsSnapshot(ctx, result.Session.ID)
+		// Following needs a live subscription, not a one-shot snapshot: the
+		// background turns happen after this response is written.
+		if params.FollowAsync {
+			if replay, replayErr := s.sessions.Replay(ctx, result.Session.ID); replayErr == nil {
+				pump = startEventPump(ctx, s.sessions, result.Session.ID, "", replay.LastSeq, s.writeProgress)
+			}
+		}
 	}
-	if pump != nil {
-		pump.Stop()
+	// Following happens after the response, so the caller sees this turn's
+	// answer at turn pace instead of waiting for the background work. The
+	// subscription stays alive in a goroutine; every write goes through
+	// jsonRPCServer.write, which serialises notifications and responses.
+	startFollow := func(sessionID string, pump *eventPump) {
+		if pump == nil {
+			return
+		}
+		if !params.FollowAsync {
+			pump.Stop()
+			return
+		}
+		go func() {
+			pump.waitForIdle(ctx, sessionID, followAsyncMaxWait)
+			pump.Stop()
+		}()
 	}
+
 	if err != nil {
 		code := jsonRPCFlowTurnFailed
 		switch {
@@ -294,11 +322,15 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 			code = jsonRPCSessionFailed
 		}
 		turnSummaryFromResult(result, s.writeProgress)
-		return s.writeError(id, code, err.Error(), turnErrorData(result, params.SessionID))
+		writeErr := s.writeError(id, code, err.Error(), turnErrorData(result, params.SessionID))
+		startFollow(result.Session.ID, pump)
+		return writeErr
 	}
 
 	turnSummaryFromResult(result, s.writeProgress)
-	return s.writeResult(id, jsonRPCTurnResultFrom(result))
+	writeErr := s.writeResult(id, jsonRPCTurnResultFrom(result))
+	startFollow(result.Session.ID, pump)
+	return writeErr
 }
 
 // startTurnPump subscribes to the session's events for the duration of one
