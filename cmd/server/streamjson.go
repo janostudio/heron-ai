@@ -179,7 +179,7 @@ func (c *streamJSONClient) writeResult(raw json.RawMessage) error {
 	return c.write(map[string]any{
 		"type": "result", "subtype": subtype,
 		"session_id": result.Session.ID, "status": result.Session.Status,
-		"reply": result.Reply, "error": result.Error,
+		"reply": replyForCaller(result), "error": result.Error,
 		"pending_approvals":  result.PendingApprovals,
 		"pending_tool_tasks": result.PendingToolTasks,
 		"records":            result.Records,

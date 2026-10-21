@@ -291,19 +291,19 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 				TaskID:       pendingTask.TaskID,
 			}
 		}
-		return r.runTurnWithActivationsAndContext(ctx, r.definitions.Snapshot(), session, input, persistedBlocks, []activation{{
+		return r.runTurnWithOrigin(ctx, r.definitions.Snapshot(), session, input, persistedBlocks, []activation{{
 			teamID:        pendingTeam.TeamID,
 			callerTeam:    pendingTeam.CallerTeam,
 			force:         true,
 			attempt:       pendingTeam.Attempt + 1,
 			resumeResults: resumeResults,
 			resumeCalls:   resumeCalls,
-		}})
+		}}, turnOriginResume)
 	}
 	if !ok {
 		return r.runTurnWithContext(ctx, session, input, persistedBlocks)
 	}
-	return r.runTurnWithActivationsAndContext(ctx, r.definitions.Snapshot(), session, input, persistedBlocks, []activation{{
+	return r.runTurnWithOrigin(ctx, r.definitions.Snapshot(), session, input, persistedBlocks, []activation{{
 		teamID:             pending.TeamID,
 		callerTeam:         pending.CallerTeam,
 		force:              true,
@@ -313,7 +313,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 		resumeInput:        input,
 		resumeCallTurnID:   pending.CallTurnID,
 		resumeTaskID:       pending.TaskID,
-	}})
+	}}, turnOriginResume)
 }
 
 func (r *Runtime) ResumeApproval(ctx context.Context, sessionID, approvalID string, approved bool, reason string) (types.FlowTurnResult, error) {
@@ -617,9 +617,9 @@ const (
 )
 
 // runTurnWithOrigin is runTurnWithActivationsAndContext with an explicit
-// origin. Only the mailbox wake-up uses a different value: every other entry
-// point runs because the caller — or a paused call the caller is waiting on —
-// asked for it.
+// origin: caller input, a mailbox wake-up, or a resumed Tool call/approval.
+// Only a mailbox wake-up can be an intermediate turn; a resume is the caller
+// finishing what it started, so its reply answers them.
 func (r *Runtime) runTurnWithOrigin(
 	ctx context.Context,
 	defs *types.Definitions,
@@ -754,6 +754,16 @@ func (r *Runtime) runTurnWithOrigin(
 		return r.finishTurn(ctx, result, types.SessionFailed, err)
 	}
 	teamTurns := 0
+	// finalReply is the reply of the hop that ends this turn: the Team whose
+	// route leaves nobody to hand the result to. result.Reply concatenates
+	// every hop (an intermediate Team's raw output included), so a caller
+	// that relayed it would show the user a RepoFacts JSON blob instead of
+	// the answer the entry Team wrote for them.
+	recordFinalReply := func(reply string) {
+		if strings.TrimSpace(reply) != "" {
+			result.FinalReply = reply
+		}
+	}
 
 	for len(queue) > 0 {
 		if err := contextErr(ctx); err != nil {
@@ -889,6 +899,7 @@ func (r *Runtime) runTurnWithOrigin(
 				// The Team paused mid-execution for user input. Do not route
 				// it onward; the FlowTurn ends resumable instead.
 				hasWaitInput = true
+				recordFinalReply(execution.result.Reply)
 				continue
 			}
 			switch next.Action {
@@ -900,6 +911,7 @@ func (r *Runtime) runTurnWithOrigin(
 					// FlowTurn ends and waits for the user.
 					if execution.activation.activator == "" {
 						hasWaitInput = true
+						recordFinalReply(execution.result.Reply)
 						continue
 					}
 					targets = []string{execution.activation.activator}
@@ -958,6 +970,7 @@ func (r *Runtime) runTurnWithOrigin(
 				}
 				if target == "" {
 					hasWaitInput = true
+					recordFinalReply(execution.result.Reply)
 					continue
 				}
 				enqueueBatchRoute(routeTo(target, execution.activation.teamID))
@@ -977,6 +990,7 @@ func (r *Runtime) runTurnWithOrigin(
 				// no activator the user is the one to decide.
 				if execution.activation.activator == "" {
 					hasWaitInput = true
+					recordFinalReply(execution.result.Reply)
 					continue
 				}
 				enqueueBatchRoute(routeTo(execution.activation.activator, execution.activation.teamID))
@@ -989,6 +1003,8 @@ func (r *Runtime) runTurnWithOrigin(
 				// values describe lifecycle completion, not Flow/Team
 				// orchestration. The current lifecycle leaves a normal Flow
 				// turn resumable, so do not enqueue another Team here.
+				// The turn ends on this hop, so its reply is the answer.
+				recordFinalReply(execution.result.Reply)
 			case types.NextFail:
 				if routeFailure == nil {
 					routeFailure = errors.New(next.Reason)
@@ -1507,6 +1523,14 @@ func (r *Runtime) finishTurn(
 	case types.SessionWaitingApproval:
 		eventType = types.EventFlowTurnWaitingApproval
 	}
+	// A caller relaying this turn needs the answer, not every intermediate
+	// hop concatenated: FinalReply is the hop that ended the turn. Fall back
+	// to the concatenation for turns that never reached that hop (a failure
+	// before any route resolved).
+	replyForCaller := result.Reply
+	if strings.TrimSpace(result.FinalReply) != "" {
+		replyForCaller = result.FinalReply
+	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          eventType,
@@ -1520,7 +1544,7 @@ func (r *Runtime) finishTurn(
 			// reply and origin are hoisted to the top level because a caller
 			// relaying the answer of an unattended turn reads them without
 			// decoding the turn record.
-			"reply":        result.Reply,
+			"reply":        replyForCaller,
 			"origin":       result.Turn.Origin,
 			"intermediate": result.Turn.Intermediate,
 		},

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
@@ -18,6 +19,18 @@ const (
 	// progressPumpReconnects bounds how many times the pump re-subscribes
 	// after storage dropped it for falling behind.
 	progressPumpReconnects = 2
+	// followAsyncPoll is how often a following pump re-checks whether the
+	// session still has background work.
+	followAsyncPoll = 500 * time.Millisecond
+	// followAsyncHold is how long the session must look quiescent before the
+	// subscription closes. A dispatch turn ends waiting_input and the
+	// mailbox wake-up starts a fresh turn a moment later, so an instant
+	// "no work" reading would close the window before the answer arrives.
+	followAsyncHold = 3 * time.Second
+	// followAsyncMaxWait caps how long one turn may keep following. A model
+	// call can legitimately take minutes; a wedged Team must not hold the
+	// subscription (and the caller's stdout) forever.
+	followAsyncMaxWait = 15 * time.Minute
 )
 
 // eventPump forwards the session events of one flow turn to a JSON-RPC
@@ -156,6 +169,123 @@ func (p *eventPump) handle(event storage.SessionEvent) {
 			"seq":        event.Seq,
 			"error":      err.Error(),
 		})
+	}
+}
+
+// waitForIdle keeps the subscription open until the session stops producing
+// background work, so a caller that asked to follow async turns receives the
+// events of turns it never started. Without it the pump stops with the turn
+// response and the background answer is written to storage with nobody
+// listening.
+//
+// The idle check reads the event log rather than runtime state on purpose:
+// the pump already owns a subscription and the log is the same source the
+// caller sees, so the two cannot disagree about whether work is left.
+func (p *eventPump) waitForIdle(ctx context.Context, sessionID string, maxWait time.Duration) {
+	if p == nil || p.sessions == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	deadline := time.Now().Add(maxWait)
+	ticker := time.NewTicker(followAsyncPoll)
+	defer ticker.Stop()
+
+	var idleSince time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if time.Now().After(deadline) {
+			logging.Warn("progress pump: follow_async timed out", map[string]any{
+				"session_id": sessionID,
+				"last_seq":   p.lastSeq,
+			})
+			return
+		}
+		replay, err := p.sessions.Replay(ctx, sessionID)
+		if err != nil {
+			logging.Debug("progress pump: follow_async replay failed", map[string]any{
+				"session_id": sessionID,
+				"error":      err.Error(),
+			})
+			return
+		}
+		if sessionHasBackgroundWork(replay.Events) {
+			idleSince = time.Time{}
+			continue
+		}
+		if idleSince.IsZero() {
+			idleSince = time.Now()
+			continue
+		}
+		if time.Since(idleSince) >= followAsyncHold {
+			return
+		}
+	}
+}
+
+// sessionHasBackgroundWork reports whether the session still owes the caller
+// something: dispatched mail that no Team has consumed, or a turn whose route
+// still activates more Teams.
+func sessionHasBackgroundWork(events []storage.SessionEvent) bool {
+	var lastTerminal *storage.SessionEvent
+	openMail := make(map[string]struct{})
+	for i := range events {
+		event := events[i]
+		switch event.Type {
+		case types.EventFlowTurnCompleted,
+			types.EventFlowTurnWaitingInput,
+			types.EventFlowTurnWaitingTool,
+			types.EventFlowTurnWaitingApproval:
+			lastTerminal = &events[i]
+		case types.EventMailboxMessageEnqueued, types.EventMailboxMessageClaimed:
+			if id := mailboxMessageID(event.Payload); id != "" {
+				openMail[id] = struct{}{}
+			}
+		case types.EventMailboxMessageDelivered, types.EventMailboxMessageDead:
+			if id := mailboxMessageID(event.Payload); id != "" {
+				delete(openMail, id)
+			}
+		}
+	}
+	if len(openMail) > 0 {
+		return true
+	}
+	if lastTerminal == nil {
+		return false
+	}
+	return turnRoutesToActivation(lastTerminal.Payload)
+}
+
+func mailboxMessageID(payload map[string]any) string {
+	switch message := payload["message"].(type) {
+	case types.MailboxMessage:
+		return message.MessageID
+	case map[string]any:
+		id, _ := message["message_id"].(string)
+		return id
+	default:
+		return ""
+	}
+}
+
+// turnRoutesToActivation reads the route of a finished turn. A turn that ends
+// with activate has handed work to another Team and will be followed by
+// another turn; anything else is the answer.
+func turnRoutesToActivation(payload map[string]any) bool {
+	switch turn := payload["turn"].(type) {
+	case types.FlowTurn:
+		return turn.Next != nil && turn.Next.Action == types.NextActivate
+	case map[string]any:
+		next, ok := turn["next"].(map[string]any)
+		if !ok {
+			return false
+		}
+		action, _ := next["action"].(string)
+		return action == string(types.NextActivate)
+	default:
+		return false
 	}
 }
 
