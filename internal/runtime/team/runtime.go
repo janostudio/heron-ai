@@ -1002,7 +1002,16 @@ func renderState(snapshot types.StateSnapshot) string {
 	appendList("Open Questions", snapshot.OpenQuestions)
 	appendList("Decisions", snapshot.Decisions)
 	appendList("Next Steps", snapshot.NextSteps)
-	return strings.Join(sections, "\n\n")
+	body := strings.Join(sections, "\n\n")
+	if body == "" {
+		return ""
+	}
+	// The snapshot is carried across turns: a verdict written last turn is
+	// still sitting in Next Steps. Without a boundary the model reads it as the
+	// outcome of the task it was just handed and repeats it — a Team asked
+	// about repo B answers with repo A's branch because A is still listed as
+	// confirmed. Say plainly that this is memory, not a result.
+	return "State carried over from earlier turns (memory, not the outcome of the current task unless the current task continues it):\n\n" + body
 }
 
 func renderRules(definitions map[string]types.RuleItem, names []string, agentID, teamID string) string {
