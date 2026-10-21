@@ -111,6 +111,11 @@ func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
 	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
 	require.Equal(t, types.TurnWaitingInput, result.Turn.Status)
 	require.Contains(t, result.Reply, "verification passed")
+	// Reply concatenates every hop; FinalReply is the hop that ended the turn
+	// (default taking the result back with nobody left to route to). A caller
+	// relaying Reply would show the intermediate hops' raw output first.
+	require.Contains(t, result.Reply, "starting diagnosis")
+	require.Equal(t, "coordination finished", result.FinalReply)
 	require.Len(t, result.TeamResults, 3)
 	require.Len(t, result.Records, 1)
 
@@ -121,6 +126,19 @@ func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
 	replay, err := sessionWriter.Replay(context.Background(), result.Session.ID)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(replay.Events), 5)
+
+	// The terminal event hoists the reply for callers that relay it without
+	// decoding the turn record; that reply must be the answer, not every hop.
+	foundTerminal := false
+	for _, event := range replay.Events {
+		if event.Type != types.EventFlowTurnWaitingInput {
+			continue
+		}
+		foundTerminal = true
+		require.Equal(t, "coordination finished", event.Payload["reply"],
+			"the hoisted reply must be the terminating hop, not the concatenation")
+	}
+	require.True(t, foundTerminal, "a waiting_input event must be recorded for the terminal hop")
 
 	records, err := evidenceStore.List(context.Background(), result.Session.ID, types.RecordScopeFlow)
 	require.NoError(t, err)

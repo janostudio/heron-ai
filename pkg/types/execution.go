@@ -296,7 +296,12 @@ type FlowTurnResult struct {
 	PendingApprovals []AgentPendingApproval `json:"PendingApprovals"`
 	Records          []SharedRecord         `json:"Records"`
 	Reply            string                 `json:"Reply"`
-	Error            string                 `json:"Error"`
+	// FinalReply is the reply of the hop that ended the turn — the Team that
+	// handed the result back to nobody (no activator) or to the user. Reply
+	// is the concatenation of every Team's reply in the turn, which includes
+	// intermediate hops; FinalReply is the only one meant for the caller.
+	FinalReply string `json:"FinalReply,omitempty"`
+	Error      string `json:"Error"`
 }
 
 // RuntimeLimits bounds one FlowSession. These are safety defaults, not a new

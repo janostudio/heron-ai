@@ -487,11 +487,19 @@ func jsonRPCTurnResultFrom(result types.FlowTurnResult) jsonRPCTurnResult {
 		pending = append(pending, summary)
 	}
 
+	// Reply is what the caller shows the user. FinalReply is the hop that
+	// ended the turn; Reply concatenates every hop, intermediate Teams'
+	// raw output included.
+	reply := result.Reply
+	if strings.TrimSpace(result.FinalReply) != "" {
+		reply = result.FinalReply
+	}
+
 	return jsonRPCTurnResult{
 		SessionID:        result.Session.ID,
 		FlowTurnID:       result.Turn.ID,
 		Status:           result.Session.Status,
-		Reply:            result.Reply,
+		Reply:            reply,
 		Records:          records,
 		Usage:            aggregateTeamUsage(result.TeamResults),
 		Error:            result.Error,

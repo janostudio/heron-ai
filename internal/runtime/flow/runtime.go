@@ -754,6 +754,16 @@ func (r *Runtime) runTurnWithOrigin(
 		return r.finishTurn(ctx, result, types.SessionFailed, err)
 	}
 	teamTurns := 0
+	// finalReply is the reply of the hop that ends this turn: the Team whose
+	// route leaves nobody to hand the result to. result.Reply concatenates
+	// every hop (an intermediate Team's raw output included), so a caller
+	// that relayed it would show the user a RepoFacts JSON blob instead of
+	// the answer the entry Team wrote for them.
+	recordFinalReply := func(reply string) {
+		if strings.TrimSpace(reply) != "" {
+			result.FinalReply = reply
+		}
+	}
 
 	for len(queue) > 0 {
 		if err := contextErr(ctx); err != nil {
@@ -889,6 +899,7 @@ func (r *Runtime) runTurnWithOrigin(
 				// The Team paused mid-execution for user input. Do not route
 				// it onward; the FlowTurn ends resumable instead.
 				hasWaitInput = true
+				recordFinalReply(execution.result.Reply)
 				continue
 			}
 			switch next.Action {
@@ -900,6 +911,7 @@ func (r *Runtime) runTurnWithOrigin(
 					// FlowTurn ends and waits for the user.
 					if execution.activation.activator == "" {
 						hasWaitInput = true
+						recordFinalReply(execution.result.Reply)
 						continue
 					}
 					targets = []string{execution.activation.activator}
@@ -958,6 +970,7 @@ func (r *Runtime) runTurnWithOrigin(
 				}
 				if target == "" {
 					hasWaitInput = true
+					recordFinalReply(execution.result.Reply)
 					continue
 				}
 				enqueueBatchRoute(routeTo(target, execution.activation.teamID))
@@ -977,6 +990,7 @@ func (r *Runtime) runTurnWithOrigin(
 				// no activator the user is the one to decide.
 				if execution.activation.activator == "" {
 					hasWaitInput = true
+					recordFinalReply(execution.result.Reply)
 					continue
 				}
 				enqueueBatchRoute(routeTo(execution.activation.activator, execution.activation.teamID))
@@ -1507,6 +1521,14 @@ func (r *Runtime) finishTurn(
 	case types.SessionWaitingApproval:
 		eventType = types.EventFlowTurnWaitingApproval
 	}
+	// A caller relaying this turn needs the answer, not every intermediate
+	// hop concatenated: FinalReply is the hop that ended the turn. Fall back
+	// to the concatenation for turns that never reached that hop (a failure
+	// before any route resolved).
+	replyForCaller := result.Reply
+	if strings.TrimSpace(result.FinalReply) != "" {
+		replyForCaller = result.FinalReply
+	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          eventType,
@@ -1520,7 +1542,7 @@ func (r *Runtime) finishTurn(
 			// reply and origin are hoisted to the top level because a caller
 			// relaying the answer of an unattended turn reads them without
 			// decoding the turn record.
-			"reply":        result.Reply,
+			"reply":        replyForCaller,
 			"origin":       result.Turn.Origin,
 			"intermediate": result.Turn.Intermediate,
 		},
