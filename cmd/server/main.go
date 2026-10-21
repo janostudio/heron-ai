@@ -37,6 +37,13 @@ func main() {
 		runKnowledgeCLI(os.Args[2:])
 		return
 	}
+	// teams is a definition-management command: it must run before any Flow
+	// config is resolved, so listing installed packages works in a directory
+	// that has no .agents/ yet.
+	if len(os.Args) > 1 && os.Args[1] == "teams" {
+		runTeamsCLI(os.Args[2:])
+		return
+	}
 
 	prompt := flag.String("prompt", "", "Run one FlowTurn and exit")
 	flow := flag.String("flow", "", "Flow config path (default: .agents/flows/default.yml)")

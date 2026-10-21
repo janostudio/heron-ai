@@ -74,13 +74,29 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 		rules[name] = rule
 	}
 
+	// Loaded Team packages live beside the local tree, so a broken package must
+	// not block a Flow that does not use it: scope validation is deferred until
+	// a Flow binding actually names that scope.
+	flowTeamScopes := make(map[string]string, len(flow.Teams))
+	scopes, err := l.loadScopeDefinitions(ctx, filepath.Join(configRoot, scopesDirName), teams, agents, skills, rules, flowTeamScopes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Packages are validated before the local chain so a package Team's Calls
+	// are resolved against its own tree before Flow.ValidateWithTeams checks
+	// them, and so a broken package names its own Team rather than surfacing
+	// as a Flow-level "missing agent".
+	if err := validateScopeDefinitions(flow, scopes, flowTeamScopes, skills, rules); err != nil {
+		return nil, fmt.Errorf("validate team packages: %w", err)
+	}
 	if err := flow.ValidateWithTeams(teams); err != nil {
 		return nil, fmt.Errorf("validate definitions: %w", err)
 	}
-	if err := validateAgentCallDefinitions(flow, teams, agents); err != nil {
+	if err := validateAgentCallDefinitions(flow, teams, agents, flowTeamScopes); err != nil {
 		return nil, fmt.Errorf("validate agents: %w", err)
 	}
-	if err := validateAgentSupportDefinitions(flow, teams, agents, skills); err != nil {
+	if err := validateAgentSupportDefinitions(flow, teams, agents, skills, flowTeamScopes); err != nil {
 		return nil, fmt.Errorf("validate agent support: %w", err)
 	}
 
@@ -420,11 +436,17 @@ func (l *ConfigLoader) loadAgentRuleDefinitions(agentsDir string) (map[string]ty
 	return rules, nil
 }
 
-func validateAgentCallDefinitions(flow types.Flow, teams map[string]types.Team, agents map[string]types.AgentConfig) error {
+// validateAgentCallDefinitions checks local Teams only: a Team from a package
+// must resolve its Calls inside its own scope, which validateScopeDefinitions
+// enforces, and must never fall back to a local Agent of the same name.
+func validateAgentCallDefinitions(flow types.Flow, teams map[string]types.Team, agents map[string]types.AgentConfig, flowTeamScopes map[string]string) error {
 	for flowTeamName, binding := range flow.Teams {
 		team, ok := teams[binding.TeamID]
 		if !ok {
 			return fmt.Errorf("flow team %q references missing definition %q", flowTeamName, binding.TeamID)
+		}
+		if _, ok := flowTeamScopes[binding.TeamID]; ok {
+			continue
 		}
 		for callName, call := range team.Calls {
 			if call.Type != types.CallAgent {
@@ -448,11 +470,15 @@ func validateAgentSupportDefinitions(
 	teams map[string]types.Team,
 	agents map[string]types.AgentConfig,
 	skills map[string]types.Skill,
+	flowTeamScopes map[string]string,
 ) error {
 	for flowTeamName, binding := range flow.Teams {
 		team, ok := teams[binding.TeamID]
 		if !ok {
 			return fmt.Errorf("flow team %q references missing definition %q", flowTeamName, binding.TeamID)
+		}
+		if _, ok := flowTeamScopes[binding.TeamID]; ok {
+			continue
 		}
 		for callName, call := range team.Calls {
 			if call.Type != types.CallAgent {
