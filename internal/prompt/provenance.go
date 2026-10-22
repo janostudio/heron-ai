@@ -202,7 +202,8 @@ func collaboratorGroups(blocks []types.ContextBlock) []provenanceGroup {
 		case "records":
 			var records []types.SharedRecord
 			if err := json.Unmarshal([]byte(block.Text), &records); err != nil {
-				return nil
+				// One malformed block must not erase every other contributor.
+				continue
 			}
 			target.records = append(target.records, records...)
 		case "mailbox_result":
@@ -224,8 +225,23 @@ func collaboratorGroups(blocks []types.ContextBlock) []provenanceGroup {
 			parts = append(parts, text)
 		}
 		parts = append(parts, current.work...)
-		if len(current.records) == 0 {
-			parts = append(parts, current.results...)
+		// A delivered result and the record it produced are often the same
+		// sentence; keep one copy of that sentence. Dropping results merely
+		// because the source has *some* record is wrong: a Team publishes an
+		// intermediate reply ("dispatching a lookup") before its final answer,
+		// and discarding the delivered answer on that basis left the caller
+		// blind to the answer and re-dispatching the same task.
+		recorded := make(map[string]struct{}, len(current.records))
+		for _, record := range current.records {
+			if summary := strings.TrimSpace(record.Summary); summary != "" {
+				recorded[summary] = struct{}{}
+			}
+		}
+		for _, result := range current.results {
+			if _, duplicate := recorded[strings.TrimSpace(result)]; duplicate {
+				continue
+			}
+			parts = append(parts, result)
 		}
 		text := strings.Join(parts, "\n\n")
 		if text == "" {
