@@ -421,3 +421,32 @@ func TestReplayAgentContextPairsToolCallIDByOrder(t *testing.T) {
 	assert.Equal(t, "call_b", got[2].ToolCallID, "second result pairs to the second call")
 	assert.Equal(t, "boom", got[2].Content, "failed call's error becomes content")
 }
+
+// 跨回合重放会让模型看到自己上一轮的结论，于是把新问题当旧任务继续答
+// （s13：问 cls 日志，回了上一轮 genie-agent 的主分支）。同一 call 的历史
+// 必须按 flow turn 隔离，只重放本回合的增量。
+func TestReplayAgentContextStopsAtTurnBoundary(t *testing.T) {
+	w := &fakeSessionWriter{}
+	loop := newReplayTurnLoop(w)
+
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1", FlowTurnID: "ft-old"},
+		Payload:     map[string]any{"text": "上一轮的结论：genie-agent 主分支是 main"},
+	})
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1", FlowTurnID: "ft-new"},
+		Payload:     map[string]any{"text": "本回合的中间输出"},
+	})
+
+	req := reqFor("call-1")
+	req.FlowTurnID = "ft-new"
+	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看cls线上日志"}}
+
+	got := loop.replayAgentContext(context.Background(), req, initial)
+
+	require.Len(t, got, 3, "只应重放本回合的事件")
+	assert.Equal(t, "本回合的中间输出", got[2].Content)
+	for _, msg := range got {
+		assert.NotContains(t, msg.Content, "genie-agent")
+	}
+}

@@ -39,6 +39,12 @@ func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentReques
 		if event.CallID != req.CallID {
 			continue
 		}
+		// 跨回合不重放。历史事件里带着这个 call 上一轮的输出，重放后模型看到
+		// 自己上次的结论，会把新问题当成旧任务继续答（s13：问 cls 日志，回了
+		// 上一轮 genie-agent 的主分支）。同一回合内的重放（断点续跑）不受影响。
+		if req.FlowTurnID != "" && event.FlowTurnID != "" && event.FlowTurnID != req.FlowTurnID {
+			continue
+		}
 		switch event.Type {
 		case types.EventAgentModelResponse:
 			msg := modelResponseMessage(event.Payload)
