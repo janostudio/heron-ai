@@ -219,3 +219,33 @@ func TestStructuredOutputContractAllowsNewlines(t *testing.T) {
 func TestStructuredOutputContractNilIsEmpty(t *testing.T) {
 	require.Empty(t, structuredOutputContract(nil))
 }
+
+// A Team publishes an intermediate reply ("dispatching a lookup") before its
+// final answer arrives through the mailbox. Dropping the delivered result just
+// because the source already has a record hid the answer from the caller, which
+// then re-dispatched the same task in a loop.
+func TestRenderKeepsDeliveredResultWhenRecordIsIntermediate(t *testing.T) {
+	data, err := json.Marshal([]types.SharedRecord{{
+		Name:    "OwnerReply",
+		Summary: "我来查 genie-agent 仓库的主分支，已派事实查询。",
+	}})
+	require.NoError(t, err)
+
+	const finalAnswer = "genie-agent 仓库的主分支是 main。"
+	messages, err := NewPromptRenderer(nil).Render(types.AgentConfig{}, types.AgentRequest{TeamID: "default"},
+		RenderContext{ContextBlocks: []types.ContextBlock{
+			{Kind: "records", Text: string(data), Source: "owner"},
+			{Kind: "mailbox_result", Text: finalAnswer, Source: "owner"},
+			{Kind: "input", Text: "查看仓库genie-agent，目前主分支是什么", Source: "user"},
+		}})
+	require.NoError(t, err)
+
+	var ownerText string
+	for _, message := range messages {
+		if message.TeamID == "owner" {
+			ownerText += message.Content
+		}
+	}
+	require.Contains(t, ownerText, "已派事实查询", "the intermediate record is kept")
+	require.Contains(t, ownerText, finalAnswer, "the delivered answer must survive")
+}
