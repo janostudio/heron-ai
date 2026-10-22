@@ -131,7 +131,15 @@ func mailboxScopeSince(messages []types.MailboxMessage) time.Time {
 // A woken turn that ends with one of these while a result is sitting in the
 // inbox leaves the user with nothing, so the result is appended.
 var progressOnlyPhrases = []string{
-	"进行中", "尚未返回", "还没有返回", "暂无结论", "正在处理", "正在核实", "稍后给你", "稍后给结论",
+	"进行中", "尚未返回", "还没有返回", "暂无结论", "正在处理", "正在核实",
+	// 确认语的实际写法很发散：稍后给你/稍后给结论/稍后给出结论/结果出来后…
+	"稍后给", "结果出来后", "会第一时间", "稍后回复", "稍后同步",
+}
+
+// handoffOnlyPhrases 标记"只报告已派发"的短句。它们没有结论，也不含提问，
+// 命中且邮箱里有结果时同样需要把执行侧原话顶上来。
+var handoffOnlyPhrases = []string{
+	"已转给执行侧", "已派给执行侧", "已转交执行侧", "已重新派发", "已派发执行侧",
 }
 
 func isProgressOnlyReply(reply string) bool {
@@ -142,6 +150,14 @@ func isProgressOnlyReply(reply string) bool {
 	for _, phrase := range progressOnlyPhrases {
 		if strings.Contains(trimmed, phrase) {
 			return true
+		}
+	}
+	// 只转达"已派发"的短句同样是确认语。长回复不在此列——它可能已经带着结论。
+	if len([]rune(trimmed)) <= 80 {
+		for _, phrase := range handoffOnlyPhrases {
+			if strings.Contains(trimmed, phrase) {
+				return true
+			}
 		}
 	}
 	return false

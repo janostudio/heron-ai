@@ -450,3 +450,24 @@ func TestReplayAgentContextStopsAtTurnBoundary(t *testing.T) {
 		assert.NotContains(t, msg.Content, "genie-agent")
 	}
 }
+
+// schema 里没有 reply 字段时，原始 JSON 曾直接成为 Reply 并进入对话。
+func TestStructuredSummaryFlattensToReadableLine(t *testing.T) {
+	parsed := map[string]any{
+		"status":         "done",
+		"repo":           "genie-agent",
+		"primary_branch": "main",
+		"exists":         true,
+	}
+	got := structuredSummary(parsed)
+	require.Contains(t, got, "repo=genie-agent")
+	require.Contains(t, got, "primary_branch=main")
+	require.NotContains(t, got, "{")
+}
+
+func TestStructuredSummaryPrefersNamedFields(t *testing.T) {
+	require.Equal(t, "主分支是 main", structuredSummary(map[string]any{
+		"summary": "主分支是 main", "repo": "genie-agent",
+	}))
+	require.Equal(t, "", structuredSummary("not a map"))
+}

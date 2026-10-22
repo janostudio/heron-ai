@@ -101,3 +101,22 @@ func TestMailboxScopeSinceUsesOldestMessage(t *testing.T) {
 	require.Equal(t, early, mailboxScopeSince(messages))
 	require.True(t, mailboxScopeSince(nil).IsZero())
 }
+
+// s14 里 coordinator 回的是"已转给执行侧排查…稍后给出结论"，而旧词表只认
+// "稍后给你/稍后给结论"，差一个字没命中，结果把 owner 的澄清吞掉了。
+func TestIsProgressOnlyReplyCoversAckVariants(t *testing.T) {
+	for _, reply := range []string{
+		"已转给执行侧排查 cls 线上日志中 workbuddy.host 流量消失的问题，稍后给出结论。",
+		"已派给执行侧核实，结果出来后我会第一时间转达。",
+		"已重新派发执行侧处理。",
+	} {
+		require.True(t, isProgressOnlyReply(reply), "should be treated as ack: %q", reply)
+	}
+}
+
+// 长回复即便包含"已转给执行侧"，也可能已经带着结论，不能被当成确认语覆盖。
+func TestIsProgressOnlyReplyKeepsLongAnswerWithHandoffMention(t *testing.T) {
+	reply := "已转给执行侧核查，结论如下：workbuddy.host 的流量在 14:20 之后归零，" +
+		"CLS 中最后一条记录时间为 14:19:58，此后 6 小时无新写入，判断为上报链路中断而非业务下线。"
+	require.False(t, isProgressOnlyReply(reply))
+}
