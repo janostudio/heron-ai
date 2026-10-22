@@ -298,7 +298,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 			attempt:       pendingTeam.Attempt + 1,
 			resumeResults: resumeResults,
 			resumeCalls:   resumeCalls,
-		}}, turnOriginResume)
+		}}, turnOriginResume, time.Time{})
 	}
 	if !ok {
 		return r.runTurnWithContext(ctx, session, input, persistedBlocks)
@@ -313,7 +313,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 		resumeInput:        input,
 		resumeCallTurnID:   pending.CallTurnID,
 		resumeTaskID:       pending.TaskID,
-	}}, turnOriginResume)
+	}}, turnOriginResume, time.Time{})
 }
 
 func (r *Runtime) ResumeApproval(ctx context.Context, sessionID, approvalID string, approved bool, reason string) (types.FlowTurnResult, error) {
@@ -601,7 +601,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	blocks []types.ContextBlock,
 	initial []activation,
 ) (types.FlowTurnResult, error) {
-	return r.runTurnWithOrigin(ctx, defs, session, input, blocks, initial, turnOriginUser)
+	return r.runTurnWithOrigin(ctx, defs, session, input, blocks, initial, turnOriginUser, time.Time{})
 }
 
 // Turn origin values recorded on FlowTurn.Origin.
@@ -628,6 +628,7 @@ func (r *Runtime) runTurnWithOrigin(
 	blocks []types.ContextBlock,
 	initial []activation,
 	origin string,
+	scopeSince time.Time,
 ) (types.FlowTurnResult, error) {
 	if err := r.validateDependencies(session.FlowID); err != nil {
 		return types.FlowTurnResult{}, err
@@ -664,6 +665,11 @@ func (r *Runtime) runTurnWithOrigin(
 		ContextBlocks: blocks,
 		Status:        types.TurnRunning,
 		StartedAt:     time.Now().UTC(),
+	}
+	// 用户回合以本轮开始时间为界；被唤起的回合由调用方给出邮箱到达时间。
+	// 早于该时间的记录回答的是上一个问题，不能当作本轮已确认的事实。
+	if scopeSince.IsZero() {
+		scopeSince = turn.StartedAt
 	}
 	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
@@ -823,6 +829,7 @@ func (r *Runtime) runTurnWithOrigin(
 					current,
 					input,
 					allRecords,
+					scopeSince,
 					blocks,
 				)
 				executions[index] = execution
@@ -1188,6 +1195,7 @@ func (r *Runtime) executeTeamTurn(
 	current activation,
 	input string,
 	records []types.SharedRecord,
+	scopeSince time.Time,
 	blocks []types.ContextBlock,
 ) (teamExecution, error) {
 	execution := teamExecution{activation: current}
@@ -1254,7 +1262,7 @@ func (r *Runtime) executeTeamTurn(
 		Team:               team,
 		Input:              teamInput(input, binding.Inputs),
 		ContextBlocks:      blocks,
-		Records:            selectFlowRecordsForBinding(records, binding),
+		Records:            selectFlowRecordsForBinding(records, binding, scopeSince),
 		Limits:             r.limits,
 		ResumeCallID:       current.resumeCallID,
 		ResumeCheckpointID: current.resumeCheckpointID,
@@ -2164,7 +2172,7 @@ func teamInput(input string, spec types.InputSpec) string {
 	return ""
 }
 
-func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec) []types.SharedRecord {
+func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec, since time.Time) []types.SharedRecord {
 	if spec.FlowRecords == nil && spec.Records == nil {
 		return nil
 	}
@@ -2181,15 +2189,21 @@ func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec) []typ
 
 	selected := make([]types.SharedRecord, 0, len(records))
 	for _, record := range records {
-		if _, ok := allowed[record.Name]; ok {
-			selected = append(selected, record)
+		if _, ok := allowed[record.Name]; !ok {
+			continue
 		}
+		// 记录跨轮留存：上一轮问题产生的结论不能被当成本轮已确认的事实。
+		// 只取本轮会话窗口内的记录，避免 owner 把旧结论直接当答案（s13）。
+		if !since.IsZero() && !record.CreatedAt.IsZero() && record.CreatedAt.Before(since) {
+			continue
+		}
+		selected = append(selected, record)
 	}
 	return selected
 }
 
-func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding) []types.SharedRecord {
-	return selectFlowRecords(records, binding.Inputs)
+func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding, since time.Time) []types.SharedRecord {
+	return selectFlowRecords(records, binding.Inputs, since)
 }
 
 func sortedStrings(values []string) []string {

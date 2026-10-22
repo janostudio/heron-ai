@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -102,8 +103,78 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		"caller_team":     wake.callerTeam,
 		"message_count":   len(messages),
 	})
-	return r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
-		[]activation{wake}, turnOriginMailbox)
+	result, err := r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
+		[]activation{wake}, turnOriginMailbox, mailboxScopeSince(messages))
+	if err != nil {
+		return result, err
+	}
+	return relayDeliveredResults(result, messages), nil
+}
+
+// mailboxScopeSince bounds the records a woken Team may treat as current.
+// Anything produced before the mail arrived answers an earlier question, and a
+// Team that reads it as "already confirmed" skips the work it was just given.
+func mailboxScopeSince(messages []types.MailboxMessage) time.Time {
+	var earliest time.Time
+	for _, msg := range messages {
+		if msg.CreatedAt.IsZero() {
+			continue
+		}
+		if earliest.IsZero() || msg.CreatedAt.Before(earliest) {
+			earliest = msg.CreatedAt
+		}
+	}
+	return earliest
+}
+
+// progressOnlyPhrases mark a reply that reports on work instead of relaying it.
+// A woken turn that ends with one of these while a result is sitting in the
+// inbox leaves the user with nothing, so the result is appended.
+var progressOnlyPhrases = []string{
+	"进行中", "尚未返回", "还没有返回", "暂无结论", "正在处理", "正在核实", "稍后给你", "稍后给结论",
+}
+
+func isProgressOnlyReply(reply string) bool {
+	trimmed := strings.TrimSpace(reply)
+	if trimmed == "" {
+		return true
+	}
+	for _, phrase := range progressOnlyPhrases {
+		if strings.Contains(trimmed, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// relayDeliveredResults guarantees a woken turn surfaces what the dispatch
+// actually returned. The alternative — a "still running" reply with no follow
+// up — is indistinguishable from a lost result (s13).
+func relayDeliveredResults(result types.FlowTurnResult, messages []types.MailboxMessage) types.FlowTurnResult {
+	delivered := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Kind == mailboxKindWork {
+			continue
+		}
+		if text := strings.TrimSpace(mailboxBodyText(msg)); text != "" {
+			delivered = append(delivered, text)
+		}
+	}
+	if len(delivered) == 0 {
+		return result
+	}
+	body := strings.Join(delivered, "\n\n")
+	if strings.Contains(result.Reply, body) {
+		return result
+	}
+	if isProgressOnlyReply(result.Reply) {
+		if strings.TrimSpace(result.Reply) == "" {
+			result.Reply = "执行侧返回：\n" + body
+		} else {
+			result.Reply = strings.TrimSpace(result.Reply) + "\n\n" + "执行侧返回：\n" + body
+		}
+	}
+	return result
 }
 
 // taskInputFromMessages returns the task the woken Team is working on.

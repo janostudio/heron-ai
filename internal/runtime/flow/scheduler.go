@@ -6,6 +6,7 @@ import (
 
 	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
+	"time"
 )
 
 // This file is the session-level scheduler for the execution-state model: a
@@ -111,7 +112,7 @@ func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession,
 	if loadErr != nil {
 		err = fmt.Errorf("load flow records for dispatched team %q: %w", target, loadErr)
 	} else {
-		execution, err = r.executeTeamTurn(ctx, defs, session, flowTurn, act, input, records, nil)
+		execution, err = r.executeTeamTurn(ctx, defs, session, flowTurn, act, input, records, time.Time{}, nil)
 	}
 	if err != nil {
 		execution.result.Error = err.Error()
