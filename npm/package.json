@@ -1,6 +1,6 @@
 {
   "name": "@qinghuangniao/heron-ai",
-  "version": "0.0.25",
+  "version": "0.0.26",
   "description": "Heron AI - Multi-Agent Generic Engine. Build, orchestrate, and evaluate AI agents.",
   "keywords": ["heron", "ai", "agent", "multi-agent", "cli", "llm"],
   "bin": {
