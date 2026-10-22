@@ -112,6 +112,10 @@ func TestAddUsageNilReceiverIsNoop(t *testing.T) {
 	})
 }
 
+// stateCarriedOverHeader is the boundary that keeps a previous turn's verdict
+// from being read as the current task's result.
+const stateCarriedOverHeader = "State carried over from earlier turns (memory, not the outcome of the current task unless the current task continues it):\n\n"
+
 func TestRenderState(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -128,7 +132,7 @@ func TestRenderState(t *testing.T) {
 			snapshot: types.StateSnapshot{
 				Goal: "fix the bug",
 			},
-			expected: "Goal: fix the bug",
+			expected: stateCarriedOverHeader + "Goal: fix the bug",
 		},
 		{
 			name: "goal plus lists",
@@ -139,7 +143,8 @@ func TestRenderState(t *testing.T) {
 				Decisions:     []types.StateItem{{ID: "i-4", Text: "d1"}, {ID: "i-5", Text: "d2"}},
 				NextSteps:     []types.StateItem{{ID: "i-6", Text: "n"}},
 			},
-			expected: "Goal: g\n\n" +
+			expected: stateCarriedOverHeader +
+				"Goal: g\n\n" +
 				"Confirmed:\n- a\n- b\n\n" +
 				"Open Questions:\n- q\n\n" +
 				"Decisions:\n- d1\n- d2\n\n" +
@@ -150,7 +155,7 @@ func TestRenderState(t *testing.T) {
 			snapshot: types.StateSnapshot{
 				NextSteps: []types.StateItem{{ID: "i-7", Text: "n1"}},
 			},
-			expected: "Next Steps:\n- n1",
+			expected: stateCarriedOverHeader + "Next Steps:\n- n1",
 		},
 	}
 	for _, tt := range tests {
