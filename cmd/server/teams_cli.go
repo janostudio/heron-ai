@@ -125,5 +125,5 @@ func teamsUsage(w io.Writer) {
 		"Flags for remove:",
 		"  --keep-agents  Keep agents/, skills/ and rules/; delete only teams/",
 	}
-	fmt.Fprintln(w, strings.Join(lines, "\n"))
+	_, _ = fmt.Fprintln(w, strings.Join(lines, "\n"))
 }

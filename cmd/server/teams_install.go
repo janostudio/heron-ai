@@ -216,7 +216,7 @@ func acquirePackageSource(source string, refresh bool, stdout io.Writer) (string
 		return "", noop, err
 	}
 	if err := extractTarGz(source, dir); err != nil {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		return "", noop, err
 	}
 	return unwrapPackageRoot(dir)
@@ -257,13 +257,13 @@ func extractTarGz(archive, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", archive, err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 	var total int64
@@ -324,7 +324,7 @@ func writeExtractedFile(target string, r io.Reader, size int64) error {
 	// CopyN to the vetted size: the limit above is only meaningful if nothing
 	// reads past the header that was checked.
 	if _, err := io.CopyN(out, r, size); err != nil {
-		out.Close()
+		_ = out.Close()
 		return fmt.Errorf("extract %s: %w", target, err)
 	}
 	return out.Close()
@@ -520,7 +520,7 @@ func writeScriptPreview(w io.Writer, data []byte) {
 			fmt.Fprintf(w, "... (%d more lines)\n", len(lines)-scriptPreviewLines)
 			break
 		}
-		fmt.Fprintln(w, line)
+		_, _ = fmt.Fprintln(w, line)
 	}
 }
 
@@ -531,7 +531,7 @@ func writeScriptPreview(w io.Writer, data []byte) {
 // in Read instead of failing the install.
 func readerAtEOF(r io.Reader) bool {
 	v := reflect.ValueOf(r)
-	if !v.IsValid() || (v.Kind() == reflect.Ptr && v.IsNil()) {
+	if !v.IsValid() || (v.Kind() == reflect.Pointer && v.IsNil()) {
 		return true
 	}
 	// A character device is a terminal: a human can type into it even though a
@@ -581,7 +581,7 @@ func writeInstalledPackage(srcDir, targetDir string, tree *teamspkg.Tree, trimme
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(staging)
+	defer func() { _ = os.RemoveAll(staging) }()
 
 	if err := copyPackageTree(srcDir, staging); err != nil {
 		return err
