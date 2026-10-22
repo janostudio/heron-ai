@@ -2218,18 +2218,16 @@ func structuredSummary(parsed any) string {
 		case []any:
 			items := make([]string, 0, len(value))
 			for i, item := range value {
-				if i >= 5 {
+				if i >= 3 {
 					items = append(items, "…")
 					break
 				}
-				if text, isString := item.(string); isString {
+				if text := summarizeArrayItem(item); text != "" {
 					items = append(items, text)
-				} else {
-					items = append(items, fmt.Sprintf("%v", item))
 				}
 			}
 			if len(items) > 0 {
-				parts = append(parts, key+"="+strings.Join(items, ","))
+				parts = append(parts, key+"="+strings.Join(items, "; "))
 			}
 		}
 	}
@@ -2241,6 +2239,39 @@ func structuredSummary(parsed any) string {
 		line = string(runes[:300]) + " …"
 	}
 	return line
+}
+
+// summarizeArrayItem renders one structured array element. Elements are often
+// {question, answer} pairs (repo-info's checks), and %v would leak Go's
+// map[...] syntax into the reply.
+func summarizeArrayItem(item any) string {
+	switch typed := item.(type) {
+	case string:
+		return typed
+	case map[string]any:
+		if answer, ok := typed["answer"].(string); ok && strings.TrimSpace(answer) != "" {
+			if question, hasQuestion := typed["question"].(string); hasQuestion && strings.TrimSpace(question) != "" {
+				return strings.TrimSpace(question) + "→" + strings.TrimSpace(answer)
+			}
+			return strings.TrimSpace(answer)
+		}
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		pairs := make([]string, 0, len(keys))
+		for _, key := range keys {
+			if text, isString := typed[key].(string); isString && strings.TrimSpace(text) != "" {
+				pairs = append(pairs, key+"="+strings.TrimSpace(text))
+			}
+		}
+		return strings.Join(pairs, ",")
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", typed)
+	}
 }
 
 func stringFromParsed(parsed any, key string) string {

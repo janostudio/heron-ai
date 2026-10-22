@@ -471,3 +471,16 @@ func TestStructuredSummaryPrefersNamedFields(t *testing.T) {
 	}))
 	require.Equal(t, "", structuredSummary("not a map"))
 }
+
+// 数组元素常常是 {question, answer} 对，%v 会把 Go 的 map[...] 语法漏进回复。
+func TestStructuredSummaryRendersArrayItemsReadably(t *testing.T) {
+	got := structuredSummary(map[string]any{
+		"repo": "genie-agent",
+		"checks": []any{
+			map[string]any{"question": "主分支", "answer": "main"},
+			map[string]any{"question": "当前分支", "answer": "main"},
+		},
+	})
+	require.Contains(t, got, "checks=主分支→main; 当前分支→main")
+	require.NotContains(t, got, "map[")
+}
