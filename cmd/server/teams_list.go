@@ -178,9 +178,9 @@ func writeTeamTable(out io.Writer, rows []teamRow) {
 			widths[2] = n
 		}
 	}
-	fmt.Fprintf(out, "%-*s  %-*s  %-*s  %s\n", widths[0], header[0], widths[1], header[1], widths[2], header[2], header[3])
+	_, _ = fmt.Fprintf(out, "%-*s  %-*s  %-*s  %s\n", widths[0], header[0], widths[1], header[1], widths[2], header[2], header[3])
 	for _, r := range rows {
-		fmt.Fprintf(out, "%-*s  %-*s  %-*s  %s\n", widths[0], r.Name, widths[1], r.Source, widths[2], r.Version, r.Status)
+		_, _ = fmt.Fprintf(out, "%-*s  %-*s  %-*s  %s\n", widths[0], r.Name, widths[1], r.Source, widths[2], r.Version, r.Status)
 	}
 }
 

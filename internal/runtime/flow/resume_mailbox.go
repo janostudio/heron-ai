@@ -301,9 +301,9 @@ func renderMailboxInbox(messages []types.MailboxMessage) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "## Message %s", msg.MessageID)
+		_, _ = fmt.Fprintf(&b, "## Message %s", msg.MessageID)
 		if msg.From.TeamID != "" {
-			fmt.Fprintf(&b, " from %s", msg.From.TeamID)
+			_, _ = fmt.Fprintf(&b, " from %s", msg.From.TeamID)
 		}
 		b.WriteString("\n")
 
@@ -328,7 +328,7 @@ func renderMailboxInbox(messages []types.MailboxMessage) string {
 			if target == "" {
 				target = "the dispatched Team"
 			}
-			fmt.Fprintf(&b, "dispatched to %s; the Team has not reported back yet\n", target)
+			_, _ = fmt.Fprintf(&b, "dispatched to %s; the Team has not reported back yet\n", target)
 			continue
 		}
 		b.WriteString("(no rendered reply; raw result unavailable)\n")

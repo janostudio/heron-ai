@@ -101,7 +101,7 @@ func installTeamPackage(root, source string, opts installOptions, stdout, stderr
 	// message appears exactly once in the caller's output.
 	for _, p := range check.Problems {
 		if p.Severity != teamspkg.SeverityError {
-			fmt.Fprintf(stderr, "warning: %s\n", p.Message)
+			_, _ = fmt.Fprintf(stderr, "warning: %s\n", p.Message)
 		}
 	}
 	if check.HasErrors() {
@@ -455,12 +455,12 @@ func reviewPackageScripts(srcDir string, tree *teamspkg.Tree, manifest *teamspkg
 	if stdin == nil || readerAtEOF(stdin) {
 		return nil, errors.New("package scripts need review but no terminal is available; re-run with --yes to accept them")
 	}
-	fmt.Fprintf(stdout, "Package %s ships %d script(s):\n", manifest.Name, len(scripts))
+	_, _ = fmt.Fprintf(stdout, "Package %s ships %d script(s):\n", manifest.Name, len(scripts))
 	for _, s := range scripts {
-		fmt.Fprintf(stdout, "\n--- %s\n", s.Path)
+		_, _ = fmt.Fprintf(stdout, "\n--- %s\n", s.Path)
 		writeScriptPreview(stdout, s.Data)
 	}
-	fmt.Fprintf(stdout, "\nInstall these scripts? [y/N] ")
+	_, _ = fmt.Fprintf(stdout, "\nInstall these scripts? [y/N] ")
 	if !confirm(stdin) {
 		return nil, errors.New("install cancelled: package scripts were not approved")
 	}
@@ -517,7 +517,7 @@ func writeScriptPreview(w io.Writer, data []byte) {
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	for i, line := range lines {
 		if i >= scriptPreviewLines {
-			fmt.Fprintf(w, "... (%d more lines)\n", len(lines)-scriptPreviewLines)
+			_, _ = fmt.Fprintf(w, "... (%d more lines)\n", len(lines)-scriptPreviewLines)
 			break
 		}
 		_, _ = fmt.Fprintln(w, line)
@@ -848,22 +848,22 @@ func hashBytes(data []byte) string {
 // writeInstallDryRun reports what a real install would produce.
 func writeInstallDryRun(out io.Writer, manifest *teamspkg.Manifest, result *installResult, scripts []packageScript) {
 	title := manifest.Name + " " + manifest.Version
-	fmt.Fprintf(out, "Applying team package: %s\n", title)
+	_, _ = fmt.Fprintf(out, "Applying team package: %s\n", title)
 	if d := strings.TrimSpace(manifest.Description); d != "" {
-		fmt.Fprintf(out, "  description: %s\n", d)
+		_, _ = fmt.Fprintf(out, "  description: %s\n", d)
 	}
-	fmt.Fprintf(out, "  teams:    %d%s\n", len(result.Teams), formatNames(result.Teams))
-	fmt.Fprintf(out, "  agents:   %d%s\n", len(result.Agents), formatNames(result.Agents))
-	fmt.Fprintf(out, "  skills:   %d%s\n", len(result.Skills), formatNames(result.Skills))
-	fmt.Fprintf(out, "  rules:    %d\n", result.RuleCount)
-	fmt.Fprintf(out, "Target: .agents/_teams/%s/\n", result.Scope)
+	_, _ = fmt.Fprintf(out, "  teams:    %d%s\n", len(result.Teams), formatNames(result.Teams))
+	_, _ = fmt.Fprintf(out, "  agents:   %d%s\n", len(result.Agents), formatNames(result.Agents))
+	_, _ = fmt.Fprintf(out, "  skills:   %d%s\n", len(result.Skills), formatNames(result.Skills))
+	_, _ = fmt.Fprintf(out, "  rules:    %d\n", result.RuleCount)
+	_, _ = fmt.Fprintf(out, "Target: .agents/_teams/%s/\n", result.Scope)
 	for _, t := range result.Trimmed {
-		fmt.Fprintf(out, "  would trim tools: %s: %s\n", t.Agent, strings.Join(t.Tools, ", "))
+		_, _ = fmt.Fprintf(out, "  would trim tools: %s: %s\n", t.Agent, strings.Join(t.Tools, ", "))
 	}
 	if len(scripts) > 0 {
-		fmt.Fprintf(out, "  scripts: %d%s (%s)\n", len(scripts), formatNames(scriptPaths(scripts)), scriptPolicyNote(manifest.Sandbox.Scripts))
+		_, _ = fmt.Fprintf(out, "  scripts: %d%s (%s)\n", len(scripts), formatNames(scriptPaths(scripts)), scriptPolicyNote(manifest.Sandbox.Scripts))
 	}
-	fmt.Fprintln(out, "Dry run: nothing was written.")
+	_, _ = fmt.Fprintln(out, "Dry run: nothing was written.")
 }
 
 func scriptPolicyNote(policy string) string {
@@ -881,29 +881,29 @@ func scriptPolicyNote(policy string) string {
 // user may paste. The Flow is never written: team bindings are the receiver's
 // orchestration decision, not the package's.
 func writeInstallSummary(out io.Writer, manifest *teamspkg.Manifest, result *installResult) {
-	fmt.Fprintf(out, "Installed team package: %s %s -> .agents/_teams/%s/\n", manifest.Name, result.Version, result.Scope)
+	_, _ = fmt.Fprintf(out, "Installed team package: %s %s -> .agents/_teams/%s/\n", manifest.Name, result.Version, result.Scope)
 	for _, t := range result.Trimmed {
-		fmt.Fprintf(out, "  trimmed tools: %s: %s\n", t.Agent, strings.Join(t.Tools, ", "))
+		_, _ = fmt.Fprintf(out, "  trimmed tools: %s: %s\n", t.Agent, strings.Join(t.Tools, ", "))
 	}
 	if result.ScriptsReviewed > 0 {
-		fmt.Fprintf(out, "  scripts reviewed: %d\n", result.ScriptsReviewed)
+		_, _ = fmt.Fprintf(out, "  scripts reviewed: %d\n", result.ScriptsReviewed)
 	}
 	if len(result.MissingModels) > 0 {
-		fmt.Fprintf(out, "  missing models: %s (add it to models.json to run)\n", strings.Join(result.MissingModels, ", "))
+		_, _ = fmt.Fprintf(out, "  missing models: %s (add it to models.json to run)\n", strings.Join(result.MissingModels, ", "))
 	}
 	if len(result.Teams) == 0 {
 		return
 	}
 
 	teamID := result.Teams[0]
-	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "Add it to a flow:")
-	fmt.Fprintln(out, "  # .agents/flows/default.yml")
-	fmt.Fprintln(out, "  teams:")
-	fmt.Fprintf(out, "    %s:\n", flowAlias(result.Scope))
-	fmt.Fprintf(out, "      team: %q\n", result.Scope+"/"+teamID)
-	fmt.Fprintln(out, "      inputs:")
-	fmt.Fprintln(out, "        user_message: true")
+	_, _ = fmt.Fprintln(out, "")
+	_, _ = fmt.Fprintln(out, "Add it to a flow:")
+	_, _ = fmt.Fprintln(out, "  # .agents/flows/default.yml")
+	_, _ = fmt.Fprintln(out, "  teams:")
+	_, _ = fmt.Fprintf(out, "    %s:\n", flowAlias(result.Scope))
+	_, _ = fmt.Fprintf(out, "      team: %q\n", result.Scope+"/"+teamID)
+	_, _ = fmt.Fprintln(out, "      inputs:")
+	_, _ = fmt.Fprintln(out, "        user_message: true")
 }
 
 // flowAlias derives a Flow key from the scope, replacing the characters Flow

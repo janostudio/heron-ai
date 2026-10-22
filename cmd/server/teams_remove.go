@@ -117,14 +117,14 @@ func markTeamEntryKept(root, scope string) error {
 func writeRemoveSummary(out io.Writer, res *removeResult, root string) {
 	rel := slashedRelPath(root, res.Deleted)
 	if !res.Kept {
-		fmt.Fprintf(out, "Removed team package: @%s\n", res.Scope)
-		fmt.Fprintf(out, "  deleted: %s\n", rel)
+		_, _ = fmt.Fprintf(out, "Removed team package: @%s\n", res.Scope)
+		_, _ = fmt.Fprintf(out, "  deleted: %s\n", rel)
 		return
 	}
-	fmt.Fprintf(out, "Removed team package: @%s (kept agents)\n", res.Scope)
-	fmt.Fprintf(out, "  deleted: %s (teams/, %s)\n", rel, teamManifestFile)
+	_, _ = fmt.Fprintf(out, "Removed team package: @%s (kept agents)\n", res.Scope)
+	_, _ = fmt.Fprintf(out, "  deleted: %s (teams/, %s)\n", rel, teamManifestFile)
 	if len(res.Preserved) > 0 {
-		fmt.Fprintf(out, "  kept: %s\n", strings.Join(res.Preserved, ", "))
+		_, _ = fmt.Fprintf(out, "  kept: %s\n", strings.Join(res.Preserved, ", "))
 	}
 }
 

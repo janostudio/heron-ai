@@ -136,7 +136,7 @@ func fetchRemotePackage(base, source string, refresh bool, client *http.Client, 
 		// function of the unpacked layout, so a hit is only valid when that
 		// root still carries a manifest.
 		if pkgDir, err := unpackPackageDir(cacheDir); err == nil {
-			fmt.Fprintf(stdout, "Using cached download: %s\n", cacheDir)
+			_, _ = fmt.Fprintf(stdout, "Using cached download: %s\n", cacheDir)
 			return pkgDir, nil
 		}
 	}
