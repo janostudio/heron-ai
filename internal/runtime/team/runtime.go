@@ -469,27 +469,23 @@ func (r *Runtime) runBatch(
 					if text := r.knowledge.Text(ctx, agentID, req.Team.ID); text != "" {
 						callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
 							Kind: "knowledge", Text: text,
-							Source: "knowledge", Placement: "system",
-							// `stable`, not `semi_stable` as before. Stability is a
-							// promise about how the block varies, and the promise
-							// changed when retrieval did:
-							//
-							//   semi_stable was correct for the old block because
-							//   its text was rebuilt from each turn's query — same
-							//   shape, different content, so it could not be part of
-							//   a cached prefix.
-							//
-							//   This block is a function of the agent's *identity*
-							//   alone (which directories it owns), so for a given
-							//   agent it is byte-identical across turns. Promoting it
-							//   to `stable` puts it in the same class as the skill
-							//   listing and the rules block — content that can sit in
-							//   a prompt-cache prefix instead of being re-sent at
-							//   full price every turn.
-							//
-							// It DOES change when the agent gains its first private
-							// entry, which is a configuration event, not a per-turn
-							// one; a cache epoch is the right granularity for it.
+							// `user`, not `system`. Caching and compaction are
+							// decided by position, not by role: the renderer puts
+							// this block immediately after the system prompt, so it
+							// still sits in the cacheable prefix and inside the
+							// anchor region compaction protects. Keeping it out of
+							// the system prompt is about authority — retrieved
+							// reference material must not read as an instruction —
+							// and it makes the channel explicit via
+							// <system-reminder>.
+							Source: "knowledge", Placement: "user",
+							// `stable` records the block's variation, which did not
+							// change with the placement: it is a function of the
+							// agent's *identity* (which directories it owns) alone,
+							// so it is byte-identical across turns. It DOES change
+							// when the agent gains its first private entry — a
+							// configuration event, so a cache epoch is the right
+							// granularity.
 							Stability: "stable", Priority: 90,
 							// Not compressible: it is small, fixed and load-bearing
 							// (the model must know where to look before it looks).
@@ -1175,15 +1171,48 @@ func buildContextBlocks(req types.CallRequest) []types.ContextBlock {
 			Priority: priority, Compressible: compressible,
 		})
 	}
-	add("responsibility", req.Call.Responsibility, "call", "semi_stable", 100, true)
+	// Responsibility is the framework's instruction for this call, not speech.
+	// It belongs next to the persona in the system prompt instead of sharing a
+	// message with the user's own words.
+	if text := strings.TrimSpace(req.Call.Responsibility); text != "" {
+		blocks = append(blocks, types.ContextBlock{
+			Kind: "responsibility", Text: text, Source: "call", Placement: "system",
+			Stability: "semi_stable", Priority: 100, Compressible: true,
+		})
+	}
 	if !hasInput {
 		add("input", req.Input, "user", "dynamic", 80, true)
 	}
-	if len(req.Records) > 0 {
-		data, err := json.Marshal(req.Records)
-		if err == nil {
-			add("records", string(data), "shared_records", "dynamic", 50, true)
+	// One block per producing team: the renderer turns each into its own
+	// message named after that team. Splitting per record would be collapsed by
+	// ContextPolicy.Normalize, which dedupes on kind+source.
+	blocks = append(blocks, recordBlocks(req.Records)...)
+	return blocks
+}
+
+func recordBlocks(records []types.SharedRecord) []types.ContextBlock {
+	if len(records) == 0 {
+		return nil
+	}
+	var order []string
+	grouped := make(map[string][]types.SharedRecord, len(records))
+	for _, record := range records {
+		team := strings.TrimSpace(record.Producer.TeamID)
+		if _, ok := grouped[team]; !ok {
+			order = append(order, team)
 		}
+		grouped[team] = append(grouped[team], record)
+	}
+	blocks := make([]types.ContextBlock, 0, len(order))
+	for _, team := range order {
+		data, err := json.Marshal(grouped[team])
+		if err != nil {
+			continue
+		}
+		blocks = append(blocks, types.ContextBlock{
+			Kind: "records", Text: string(data), Source: team,
+			Stability: "dynamic", Priority: 50, Compressible: true,
+		})
 	}
 	return blocks
 }

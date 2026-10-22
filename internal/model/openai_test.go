@@ -1,10 +1,15 @@
 package model
 
 import (
+	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
 func TestConvertOpenAIResponse_EmptyChoices(t *testing.T) {
@@ -156,4 +161,40 @@ func TestLogRejectedRequestDoesNotPanic(t *testing.T) {
 	require.NotPanics(t, func() {
 		logRejectedRequest("rejected", 400, req, []byte(`{"error":{"message":"x"}}`))
 	})
+}
+
+// A collaborator's output reaches the model as a normal message whose `name`
+// says which Team produced it. Without the field the model cannot tell another
+// Team's claim from its own earlier output.
+func TestOpenAIMessagesCarryParticipantName(t *testing.T) {
+	provider := &OpenAIProvider{}
+	messages, err := provider.convertMessages(context.Background(), []types.Message{
+		{Role: "assistant", TeamID: "owner", Content: "the branch is main"},
+		{Role: "assistant", Content: "my own earlier answer"},
+		{Role: "user", Content: "查看主分支"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if messages[0].Name != "owner" {
+		t.Fatalf("collaborator message must carry its team as name, got %q", messages[0].Name)
+	}
+	if messages[1].Name != "" || messages[2].Name != "" {
+		t.Fatalf("own output and user input must stay unnamed: %#v", messages)
+	}
+
+	encoded, err := json.Marshal(messages[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"name":"owner"`) {
+		t.Fatalf("name missing from the wire payload: %s", encoded)
+	}
+	encoded, err = json.Marshal(messages[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"name"`) {
+		t.Fatalf("an empty name must be omitted, not sent blank: %s", encoded)
+	}
 }

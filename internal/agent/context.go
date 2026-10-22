@@ -236,7 +236,23 @@ func (m *MessageContextManager) needsCompactionLocked() bool {
 
 func (m *MessageContextManager) exceedsHardLimitLocked() bool {
 	limit := m.hardLimitTokens()
-	return limit > 0 && m.estimateMessagesLocked() > limit
+	return limit > 0 && m.controllableTokensLocked() > limit
+}
+
+// controllableTokensLocked estimates what compaction can actually act on. The
+// harness-injected prefix is rebuilt from records, state and mailbox every turn
+// and must not be folded away (that would erase who said what), so counting it
+// toward the hard limit would fail a turn over content the engine assembled
+// itself.
+func (m *MessageContextManager) controllableTokensLocked() int {
+	controllable := make([]types.Message, 0, len(m.active))
+	for _, message := range m.active {
+		if message.Injected {
+			continue
+		}
+		controllable = append(controllable, message)
+	}
+	return m.estimator.EstimateMessages(controllable) + m.estimator.EstimateTools(m.tools)
 }
 
 func (m *MessageContextManager) targetLimitTokens() int {
@@ -293,9 +309,7 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	system, anchor, existingSummary, groups := splitContextLayers(m.active)
 	groups = microcompactGroups(groups, len(groups)-m.config.RecentMessageGroups, m.config, &m.microcompacts)
 	prefix := cloneMessages(system)
-	if anchor != nil {
-		prefix = append(prefix, *anchor)
-	}
+	prefix = append(prefix, anchor...)
 	target := m.targetLimitTokens()
 	if target <= 0 {
 		target = m.compactionLimitTokens()
@@ -394,9 +408,7 @@ func (m *MessageContextManager) applyMicrocompactLocked() {
 	}
 
 	candidate := cloneMessages(system)
-	if anchor != nil {
-		candidate = append(candidate, *anchor)
-	}
+	candidate = append(candidate, anchor...)
 	if existingSummary != "" {
 		candidate = append(candidate, types.Message{
 			Role:    "user",
@@ -591,7 +603,7 @@ func contextErr(ctx context.Context) error {
 	}
 }
 
-func splitContextLayers(messages []types.Message) ([]types.Message, *types.Message, string, [][]types.Message) {
+func splitContextLayers(messages []types.Message) ([]types.Message, []types.Message, string, [][]types.Message) {
 	var system []types.Message
 	index := 0
 	for index < len(messages) && messages[index].Role == "system" {
@@ -599,7 +611,7 @@ func splitContextLayers(messages []types.Message) ([]types.Message, *types.Messa
 		index++
 	}
 
-	var anchor *types.Message
+	var anchor []types.Message
 	var existingSummary string
 	if index < len(messages) {
 		first := cloneMessage(messages[index])
@@ -608,8 +620,16 @@ func splitContextLayers(messages []types.Message) ([]types.Message, *types.Messa
 			first.Content = base
 			existingSummary = summary
 		}
-		anchor = &first
+		anchor = append(anchor, first)
 		index++
+		// Everything the harness injected for this turn stays with the anchor.
+		// Those messages carry who said what (role + name) and are rebuilt from
+		// records, state and mailbox every turn, so folding them into a summary
+		// would erase the provenance they exist to express.
+		for index < len(messages) && messages[index].Injected {
+			anchor = append(anchor, cloneMessage(messages[index]))
+			index++
+		}
 	}
 
 	var groups [][]types.Message
@@ -742,6 +762,9 @@ func (defaultContextTokenEstimator) EstimateMessages(messages []types.Message) i
 	total := 0
 	for _, message := range messages {
 		total += estimateContextText(message.Role) + estimateContextText(message.Content) + 4
+		// The participant name travels in the request (OpenAI `name`), so it is
+		// billed input like any other field.
+		total += estimateContextText(message.TeamID)
 		if len(message.ToolCalls) > 0 {
 			data, _ := json.Marshal(message.ToolCalls)
 			total += estimateContextText(string(data))

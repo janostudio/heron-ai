@@ -78,6 +78,7 @@ type openAIRequest struct {
 
 type openAIMessage struct {
 	Role       string           `json:"role"`
+	Name       string           `json:"name,omitempty"`
 	Content    any              `json:"content,omitempty"`
 	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string           `json:"tool_call_id,omitempty"`
@@ -523,6 +524,7 @@ func (p *OpenAIProvider) convertMessages(ctx context.Context, messages []types.M
 		}
 		result[i] = openAIMessage{
 			Role:       msg.Role,
+			Name:       msg.TeamID,
 			Content:    content,
 			ToolCallID: msg.ToolCallID,
 		}

@@ -737,6 +737,49 @@ func TestContextManagerCompactionKeepsStableSystemAndRecentToolGroup(t *testing.
 	}
 }
 
+// Messages the harness injects carry who said what (role + name) and are
+// rebuilt from records, state and mailbox every turn. Folding them into a
+// summary would erase exactly the provenance they exist to express, and the
+// loss only shows up once a session is long enough to compact.
+func TestContextManagerCompactionKeepsInjectedProvenance(t *testing.T) {
+	manager := NewContextManagerWithEstimator(
+		types.ContextConfig{
+			MaxInputTokens:      120,
+			TargetRatio:         0.35,
+			CompactionThreshold: 0.45,
+			HardLimitRatio:      0.75,
+			OutputReserveRatio:  0,
+			MaxToolOutputChars:  24,
+		},
+		charCountEstimator{},
+	)
+	require.NoError(t, manager.AddMessage(types.Message{Role: "system", Content: "stable instructions"}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "knowledge block", Injected: true}))
+	require.NoError(t, manager.AddMessage(types.Message{
+		Role: "assistant", TeamID: "owner", Content: "the branch is main", Injected: true,
+	}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "the current task", Injected: true}))
+	require.NoError(t, manager.AddMessage(types.Message{
+		Role: "assistant", Content: "old tool call",
+		ToolCalls: []types.ToolCall{{ID: "old", Name: "Read"}},
+	}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "tool", ToolCallID: "old", Content: strings.Repeat("old-result ", 8)}))
+
+	active := manager.Messages()
+	require.Greater(t, manager.CompactionCount(), 0, "the fixture must actually compact")
+
+	var ownerKept bool
+	for _, message := range active {
+		if message.Role == "assistant" && message.TeamID == "owner" {
+			ownerKept = true
+			require.Contains(t, message.Content, "the branch is main")
+			require.True(t, message.Injected)
+		}
+	}
+	require.True(t, ownerKept, "a collaborator's message must survive compaction with its name")
+	require.Contains(t, strings.Join(messageContents(active), "\n"), "the current task")
+}
+
 func messageContents(messages []types.Message) []string {
 	result := make([]string, 0, len(messages))
 	for _, message := range messages {
