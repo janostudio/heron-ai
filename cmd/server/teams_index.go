@@ -85,22 +85,6 @@ func updateTeamsIndex(root, scope string, entry installedTeam) error {
 	return writeTeamsIndex(root, idx)
 }
 
-// updateTeamEntry rewrites one existing scope in place through a read-modify
-// function, so a remove only has to name the fields it changes.
-func updateTeamEntry(root, scope string, edit func(*installedTeam)) error {
-	idx, err := readTeamsIndex(root)
-	if err != nil {
-		return err
-	}
-	entry, ok := idx.Installed[scope]
-	if !ok {
-		return nil
-	}
-	edit(&entry)
-	idx.Installed[scope] = entry
-	return writeTeamsIndex(root, idx)
-}
-
 // dropTeamEntry removes one scope. A missing ledger is not an error: the user
 // may have deleted .teams.json by hand, and the package directory is still
 // removable, so remove must not fail on bookkeeping it can simply skip.

@@ -297,6 +297,12 @@ type Message struct {
 	ToolCallID string        `json:"tool_call_id,omitempty"`
 	ToolName   string        `json:"tool_name,omitempty"`
 	CreatedAt  string        `json:"created_at,omitempty"`
+	// Injected marks a message the harness assembled for this turn (user input,
+	// a collaborator's output, memory, knowledge) rather than something the
+	// model produced. Compaction must not fold these into a summary: they are
+	// rebuilt from source every turn, and folding them would erase who said
+	// what. Runtime-only, never persisted.
+	Injected bool `json:"-"`
 }
 
 // ToolCall represents an LLM tool call request

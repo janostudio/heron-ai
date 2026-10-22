@@ -202,7 +202,7 @@ func (s *KnowledgeSummarizer) SummarizeLayered(ctx context.Context, sources []La
 		if layer == "" {
 			layer = "flow"
 		}
-		fmt.Fprintf(&b, "[layer: %s]\n%s\n\n", layer, strings.TrimSpace(src.Text))
+		_, _ = fmt.Fprintf(&b, "[layer: %s]\n%s\n\n", layer, strings.TrimSpace(src.Text))
 		if owner := strings.TrimSpace(src.Owner); owner != "" {
 			owners[layer] = owner
 		}

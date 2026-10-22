@@ -83,13 +83,9 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		}
 	}
 
-	block := types.ContextBlock{
-		Kind:      "mailbox",
-		Text:      renderMailboxInbox(messages),
-		Source:    "mailbox",
-		Stability: "dynamic",
-		Priority:  85,
-	}
+	// One block per sender, so the renderer can turn each into its own message
+	// named after that Team. A single concatenated block would carry no source.
+	blocks := mailboxBlocks(messages)
 	// Wake the Team that has mail: its turn starts at that Team rather than at
 	// the Flow entry. The entry Team keeps its usual start when it is the one
 	// with mail, so a plain user turn is unchanged.
@@ -106,8 +102,25 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		"caller_team":     wake.callerTeam,
 		"message_count":   len(messages),
 	})
-	return r.runTurnWithOrigin(ctx, defs, session, "", []types.ContextBlock{block},
+	return r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
 		[]activation{wake}, turnOriginMailbox)
+}
+
+// taskInputFromMessages returns the task the woken Team is working on.
+//
+// A dispatched message carries the original user input next to its payload.
+// Without it the Team sees only the inbox block and whatever its own history
+// remembers — enough to answer a question nobody asked, which is how a Team
+// asked about one repository replied with another's branch. The newest message
+// wins: it is the one the wake-up is for.
+func taskInputFromMessages(messages []types.MailboxMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		input, ok := messages[i].Payload["input"].(string)
+		if ok && strings.TrimSpace(input) != "" {
+			return input
+		}
+	}
+	return ""
 }
 
 // activatorFromMessages returns the Team that dispatched the work whose mail is
@@ -179,6 +192,105 @@ func (r *Runtime) nextWakingTeam(ctx context.Context, sessionID string) (string,
 // missing or of an unexpected shape degrades to a header carrying the message
 // ID and whatever human-readable summary is available, so a malformed payload
 // still shows up in the turn rather than silently vanishing.
+// mailboxBlocks turns the drained inbox into one block per message, carrying
+// the sender so the renderer can emit each as its own protocol-level message.
+//
+// The block Kind separates results from dispatch instructions: a result and the
+// record it produced describe the same thing, and the renderer keeps only one
+// of them (the record wins). Work messages carry no record, so they must not be
+// folded away.
+func mailboxBlocks(messages []types.MailboxMessage) []types.ContextBlock {
+	blocks := make([]types.ContextBlock, 0, len(messages))
+	for _, msg := range messages {
+		body := strings.TrimSpace(mailboxBodyText(msg))
+		if body == "" {
+			continue
+		}
+		kind := "mailbox_result"
+		if msg.Kind == mailboxKindWork {
+			kind = "mailbox"
+		}
+		blocks = append(blocks, types.ContextBlock{
+			Kind: kind, Text: body, Source: mailboxSender(msg),
+			Stability: "dynamic", Priority: 85,
+		})
+	}
+	return blocks
+}
+
+// mailboxBodyText is the part of a message worth showing the model, without the
+// "## Message mb_x from y" header: the sender now travels in the protocol, so
+// repeating it in the text would say the same thing twice.
+func mailboxBodyText(msg types.MailboxMessage) string {
+	if reply, ok := mailboxResultReply(msg.Payload); ok && reply != "" {
+		return reply
+	}
+	if summary := mailboxResultSummary(msg.Payload); summary != "" {
+		return summary
+	}
+	if msg.Kind == mailboxKindWork {
+		// A work message is the task this Team was handed. Showing its text is
+		// what tells the Team what to do; the previous "dispatched to ..." line
+		// only reported routing.
+		if input, ok := msg.Payload["input"].(string); ok && strings.TrimSpace(input) != "" {
+			return strings.TrimSpace(input)
+		}
+		target := msg.To.TeamID
+		if target == "" {
+			target = "the dispatched Team"
+		}
+		return fmt.Sprintf("dispatched to %s; the Team has not reported back yet", target)
+	}
+	return "(no rendered reply; raw result unavailable)"
+}
+
+// mailboxSender resolves the flow key of the Team that sent a message. From is
+// normally empty (enqueueMessage never populated it), so the payload is the
+// only reliable source: work messages carry caller_team, results carry
+// team_result.Turn.TeamID.
+func mailboxSender(msg types.MailboxMessage) string {
+	if from := strings.TrimSpace(msg.From.TeamID); from != "" {
+		return from
+	}
+	if caller, ok := msg.Payload["caller_team"].(string); ok && strings.TrimSpace(caller) != "" {
+		return strings.TrimSpace(caller)
+	}
+	return mailboxResultTeam(msg.Payload)
+}
+
+func mailboxResultTeam(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	raw, ok := payload["team_result"]
+	if !ok {
+		container, isMap := payload["result"].(map[string]any)
+		if !isMap {
+			return ""
+		}
+		raw, ok = container["team_result"]
+		if !ok {
+			return ""
+		}
+	}
+	var result types.TeamTurnResult
+	switch v := raw.(type) {
+	case types.TeamTurnResult:
+		result = v
+	case map[string]any:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		if err := json.Unmarshal(data, &result); err != nil {
+			return ""
+		}
+	default:
+		return ""
+	}
+	return strings.TrimSpace(result.Turn.TeamID)
+}
+
 func renderMailboxInbox(messages []types.MailboxMessage) string {
 	if len(messages) == 0 {
 		return ""
@@ -189,9 +301,9 @@ func renderMailboxInbox(messages []types.MailboxMessage) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "## Message %s", msg.MessageID)
+		_, _ = fmt.Fprintf(&b, "## Message %s", msg.MessageID)
 		if msg.From.TeamID != "" {
-			fmt.Fprintf(&b, " from %s", msg.From.TeamID)
+			_, _ = fmt.Fprintf(&b, " from %s", msg.From.TeamID)
 		}
 		b.WriteString("\n")
 
@@ -216,7 +328,7 @@ func renderMailboxInbox(messages []types.MailboxMessage) string {
 			if target == "" {
 				target = "the dispatched Team"
 			}
-			fmt.Fprintf(&b, "dispatched to %s; the Team has not reported back yet\n", target)
+			_, _ = fmt.Fprintf(&b, "dispatched to %s; the Team has not reported back yet\n", target)
 			continue
 		}
 		b.WriteString("(no rendered reply; raw result unavailable)\n")

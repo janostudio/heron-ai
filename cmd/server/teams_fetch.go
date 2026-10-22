@@ -136,7 +136,7 @@ func fetchRemotePackage(base, source string, refresh bool, client *http.Client, 
 		// function of the unpacked layout, so a hit is only valid when that
 		// root still carries a manifest.
 		if pkgDir, err := unpackPackageDir(cacheDir); err == nil {
-			fmt.Fprintf(stdout, "Using cached download: %s\n", cacheDir)
+			_, _ = fmt.Fprintf(stdout, "Using cached download: %s\n", cacheDir)
 			return pkgDir, nil
 		}
 	}
@@ -150,7 +150,7 @@ func fetchRemotePackage(base, source string, refresh bool, client *http.Client, 
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(staging)
+	defer func() { _ = os.RemoveAll(staging) }()
 
 	archive := filepath.Join(staging, "package.tar.gz")
 	if err := downloadArchive(client, spec.URL, archive); err != nil {
@@ -251,7 +251,7 @@ func downloadArchive(client *http.Client, rawURL, path string) error {
 	if err != nil {
 		return fmt.Errorf("download %s: %w", rawURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("download %s: server returned %s", rawURL, resp.Status)
 	}

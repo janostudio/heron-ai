@@ -441,12 +441,12 @@ func sortedRuleNames(rules []string) []string {
 }
 
 func writeExportReport(w io.Writer, r exportReport) {
-	fmt.Fprintf(w, "Exported team package: %s %s\n", r.Name, r.Version)
-	fmt.Fprintf(w, "  output:  %s\n", displayPath(r.Output))
-	fmt.Fprintf(w, "  teams:   %d%s\n", len(r.Teams), formatNames(r.Teams))
-	fmt.Fprintf(w, "  agents:  %d%s\n", len(r.Agents), formatNames(r.Agents))
-	fmt.Fprintf(w, "  skills:  %d%s\n", len(r.Skills), formatNames(r.Skills))
-	fmt.Fprintf(w, "  rules:   %d\n", r.RuleCount)
+	_, _ = fmt.Fprintf(w, "Exported team package: %s %s\n", r.Name, r.Version)
+	_, _ = fmt.Fprintf(w, "  output:  %s\n", displayPath(r.Output))
+	_, _ = fmt.Fprintf(w, "  teams:   %d%s\n", len(r.Teams), formatNames(r.Teams))
+	_, _ = fmt.Fprintf(w, "  agents:  %d%s\n", len(r.Agents), formatNames(r.Agents))
+	_, _ = fmt.Fprintf(w, "  skills:  %d%s\n", len(r.Skills), formatNames(r.Skills))
+	_, _ = fmt.Fprintf(w, "  rules:   %d\n", r.RuleCount)
 
 	var excluded []string
 	if r.Knowledge > 0 {
@@ -456,7 +456,7 @@ func writeExportReport(w io.Writer, r exportReport) {
 		excluded = append(excluded, "1 models.json")
 	}
 	if len(excluded) > 0 {
-		fmt.Fprintf(w, "  excluded: %s\n", strings.Join(excluded, ", "))
+		_, _ = fmt.Fprintf(w, "  excluded: %s\n", strings.Join(excluded, ", "))
 	}
 }
 

@@ -3,7 +3,6 @@ package prompt
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -55,19 +54,78 @@ type RenderContext struct {
 	ContextBlocks []types.ContextBlock
 }
 
-// Render builds system and user messages for one Agent turn.
+// Render builds the message sequence for one Agent turn.
+//
+// Provenance is carried by the protocol (role, plus OpenAI's `name`), not by
+// prose in the content. The order is by stability: knowledge is byte-stable and
+// goes first so it stays in the cacheable prefix and inside the region
+// compaction protects; memory and collaborator output change every turn; the
+// user's task goes last so the model answers it instead of continuing its own
+// text.
 func (p *PromptRenderer) Render(agent types.AgentConfig, req types.AgentRequest, rctx RenderContext) ([]types.Message, error) {
 	systemPrompt := p.BuildSystemPrompt(agent, rctx)
-	userPrompt := p.BuildUserPrompt(agent, req, rctx)
-	userParts := contextParts(rctx.ContextBlocks, "user")
+	if team := strings.TrimSpace(req.TeamID); team != "" {
+		systemPrompt += fmt.Sprintf(
+			"\n\nYour team is %s. A message carrying another name comes from that team; a message with no name is your own.",
+			team,
+		)
+	}
 	systemParts := contextParts(rctx.ContextBlocks, "system")
 
-	var messages []types.Message
-	messages = append(messages, types.Message{
+	messages := []types.Message{{
 		Role: "system", Content: systemPrompt, Parts: systemParts,
-	})
+	}}
+
+	for _, block := range rctx.ContextBlocks {
+		if block.Kind != "knowledge" || strings.TrimSpace(block.Text) == "" {
+			continue
+		}
+		messages = append(messages, types.Message{
+			Role: "user", Content: wrapSystemReminder(block.Text), Injected: true,
+		})
+	}
+
+	for _, block := range rctx.ContextBlocks {
+		if !isMemoryKind(block.Kind) || strings.TrimSpace(block.Text) == "" {
+			continue
+		}
+		messages = append(messages, types.Message{
+			Role: "assistant", Content: renderContextBlock(block), Injected: true,
+		})
+	}
+
+	unattributed := make([]string, 0, 2)
+	for _, group := range collaboratorGroups(rctx.ContextBlocks) {
+		if group.source == "" {
+			unattributed = append(unattributed, group.text)
+			continue
+		}
+		messages = append(messages, types.Message{
+			Role: "assistant", TeamID: group.source, Content: group.text, Injected: true,
+		})
+	}
+
+	userPrompt := p.BuildUserPrompt(agent, req, rctx)
+	if len(unattributed) > 0 {
+		// A record without a producer cannot be attributed, and an unnamed
+		// assistant message would read as the model's own words. Keep it in the
+		// user turn, marked as harness-supplied context.
+		extra := wrapSystemReminder(strings.Join(unattributed, "\n\n"))
+		if strings.TrimSpace(userPrompt) == "" {
+			userPrompt = extra
+		} else {
+			userPrompt = extra + "\n\n" + userPrompt
+		}
+	}
+	userParts := contextParts(rctx.ContextBlocks, "user")
+	if strings.TrimSpace(userPrompt) == "" && len(userParts) == 0 {
+		// A Team that receives no user input still needs a user turn to answer;
+		// otherwise the request ends on an assistant message and the model
+		// continues its own text instead of responding.
+		userPrompt = "Continue with the task above."
+	}
 	messages = append(messages, types.Message{
-		Role: userRole(userPrompt, userParts), Content: userPrompt, Parts: userParts,
+		Role: userRole(userPrompt, userParts), Content: userPrompt, Parts: userParts, Injected: true,
 	})
 
 	return messages, nil
@@ -127,12 +185,19 @@ func (p *PromptRenderer) BuildSystemPrompt(agent types.AgentConfig, rctx RenderC
 	return strings.Join(parts, "\n\n")
 }
 
-// BuildUserPrompt builds the user-visible context for one Agent turn.
+// BuildUserPrompt builds the trailing user turn: the task itself plus any
+// context that has no speaker (the item this Agent owns).
 func (p *PromptRenderer) BuildUserPrompt(_ types.AgentConfig, req types.AgentRequest, rctx RenderContext) string {
 	if len(rctx.ContextBlocks) > 0 {
 		var parts []string
 		for _, block := range rctx.ContextBlocks {
 			if block.Placement == "system" || (strings.TrimSpace(block.Text) == "" && len(block.Parts) == 0) {
+				continue
+			}
+			// Provenance-bearing blocks become their own messages; repeating
+			// them here would duplicate content and lose the role that carries
+			// the source.
+			if isCollaboratorKind(block.Kind) || isMemoryKind(block.Kind) || block.Kind == "knowledge" {
 				continue
 			}
 			parts = append(parts, renderContextBlock(block))
@@ -220,24 +285,6 @@ func renderContextBlock(block types.ContextBlock) string {
 	default:
 		return "## " + block.Kind + "\n" + block.Text
 	}
-}
-
-func formatRecordData(data map[string]any) string {
-	// Keep the prompt renderer dependency-free and readable. SharedRecord.Data
-	// is intentionally business-defined, so JSON serialization is handled by
-	// the standard formatter only where a stable representation is useful.
-	keys := make([]string, 0, len(data))
-	for key := range data {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	var lines []string
-	for _, key := range keys {
-		value := data[key]
-		lines = append(lines, fmt.Sprintf("- %s: %v", key, value))
-	}
-	return strings.Join(lines, "\n")
 }
 
 // Built-in template content

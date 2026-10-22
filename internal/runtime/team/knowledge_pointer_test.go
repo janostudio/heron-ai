@@ -97,7 +97,11 @@ func TestTeamRuntimeAddsKnowledgePointerBlock(t *testing.T) {
 	// `semi_stable` — which would silently cost a cache miss every turn — has
 	// to be a deliberate edit rather than a typo.
 	require.Equal(t, "stable", block.Stability)
-	require.Equal(t, "system", block.Placement)
+	// `user` since the provenance change: the block is still byte-stable and the
+	// renderer places it immediately after the system prompt, so it stays in the
+	// cacheable prefix — but it is retrieved reference material, not an
+	// instruction, and must not carry system-level authority.
+	require.Equal(t, "user", block.Placement)
 	require.False(t, block.Compressible,
 		"the block is fixed and load-bearing; compacting it away would disable knowledge lookup")
 }

@@ -147,15 +147,16 @@ func TestRenderState(t *testing.T) {
 				"Goal: g\n\n" +
 				"Confirmed:\n- a\n- b\n\n" +
 				"Open Questions:\n- q\n\n" +
-				"Decisions:\n- d1\n- d2\n\n" +
-				"Next Steps:\n- n",
+				"Decisions:\n- d1\n- d2",
 		},
 		{
-			name: "lists without goal",
+			// A finished turn's plan must not survive into the next one — it is
+			// exactly what a Team quotes back as its answer.
+			name: "next steps only",
 			snapshot: types.StateSnapshot{
-				NextSteps: []types.StateItem{{ID: "i-7", Text: "n1"}},
+				NextSteps: []types.StateItem{{ID: "i-7", Text: "已核实仓库 heron-ai 的主分支是 master"}},
 			},
-			expected: stateCarriedOverHeader + "Next Steps:\n- n1",
+			expected: "",
 		},
 	}
 	for _, tt := range tests {
