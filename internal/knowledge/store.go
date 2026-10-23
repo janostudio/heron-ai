@@ -357,6 +357,14 @@ func (s *MarkdownStore) RebuildIndex(ctx context.Context) error {
 	builder.WriteString("# Knowledge Index\n\n")
 	builder.WriteString("> Generated index. Knowledge正文保存在同级 Markdown 文件中。\n\n")
 	for _, entry := range entries {
+		// Only current entries belong in the generated index. Save keeps every
+		// superseded version on disk as <id>.vN.md with status "deprecated",
+		// and Load returns them (search and FindDuplicate filter by status
+		// themselves), so an unfiltered index listed the same id once per
+		// version it had ever been through.
+		if entry.Status != "" && entry.Status != "active" {
+			continue
+		}
 		title := entry.Title
 		if title == "" {
 			title = entry.ID
