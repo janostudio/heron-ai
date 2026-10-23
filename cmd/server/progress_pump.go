@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
@@ -19,6 +20,15 @@ const (
 	// progressPumpReconnects bounds how many times the pump re-subscribes
 	// after storage dropped it for falling behind.
 	progressPumpReconnects = 2
+	// followAsyncMaxWait caps how long one turn may keep following. A model
+	// call can legitimately take minutes; a wedged Team must not hold the
+	// subscription (and the caller's stdout) forever.
+	followAsyncMaxWait = 15 * time.Minute
+)
+
+// The follow cadence is a var so tests can shorten it; production keeps the
+// values below.
+var (
 	// followAsyncPoll is how often a following pump re-checks whether the
 	// session still has background work.
 	followAsyncPoll = 500 * time.Millisecond
@@ -27,10 +37,6 @@ const (
 	// mailbox wake-up starts a fresh turn a moment later, so an instant
 	// "no work" reading would close the window before the answer arrives.
 	followAsyncHold = 3 * time.Second
-	// followAsyncMaxWait caps how long one turn may keep following. A model
-	// call can legitimately take minutes; a wedged Team must not hold the
-	// subscription (and the caller's stdout) forever.
-	followAsyncMaxWait = 15 * time.Minute
 )
 
 // eventPump forwards the session events of one flow turn to a JSON-RPC
@@ -52,6 +58,12 @@ type eventPump struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	dropped int
+
+	// work is the incrementally maintained background-work state that
+	// waitForIdle reads. workMu guards it: the subscription goroutine writes,
+	// the follower goroutine reads.
+	workMu sync.Mutex
+	work   backgroundWork
 }
 
 func startEventPump(
@@ -148,6 +160,9 @@ func (p *eventPump) consume(ctx context.Context, channel <-chan storage.SessionE
 }
 
 func (p *eventPump) handle(event storage.SessionEvent) {
+	// Track before the turn filter: the follower asks about the whole session,
+	// and events belonging to other turns still change whether work is left.
+	p.track(event)
 	if event.Seq <= p.lastSeq {
 		return
 	}
@@ -189,6 +204,10 @@ func (p *eventPump) waitForIdle(ctx context.Context, sessionID string, maxWait t
 	ticker := time.NewTicker(followAsyncPoll)
 	defer ticker.Stop()
 
+	// One full replay seeds the state; every event after that arrives through
+	// the subscription and is applied incrementally (track).
+	p.seedBackgroundWork(ctx, sessionID)
+
 	var idleSince time.Time
 	for {
 		select {
@@ -203,15 +222,7 @@ func (p *eventPump) waitForIdle(ctx context.Context, sessionID string, maxWait t
 			})
 			return
 		}
-		replay, err := p.sessions.Replay(ctx, sessionID)
-		if err != nil {
-			logging.Debug("progress pump: follow_async replay failed", map[string]any{
-				"session_id": sessionID,
-				"error":      err.Error(),
-			})
-			return
-		}
-		if sessionHasBackgroundWork(replay.Events) {
+		if p.backgroundPending() {
 			idleSince = time.Time{}
 			continue
 		}
@@ -225,37 +236,94 @@ func (p *eventPump) waitForIdle(ctx context.Context, sessionID string, maxWait t
 	}
 }
 
-// sessionHasBackgroundWork reports whether the session still owes the caller
-// something: dispatched mail that no Team has consumed, or a turn whose route
-// still activates more Teams.
-func sessionHasBackgroundWork(events []storage.SessionEvent) bool {
-	var lastTerminal *storage.SessionEvent
-	openMail := make(map[string]struct{})
-	for i := range events {
-		event := events[i]
-		switch event.Type {
-		case types.EventFlowTurnCompleted,
-			types.EventFlowTurnWaitingInput,
-			types.EventFlowTurnWaitingTool,
-			types.EventFlowTurnWaitingApproval:
-			lastTerminal = &events[i]
-		case types.EventMailboxMessageEnqueued, types.EventMailboxMessageClaimed:
-			if id := mailboxMessageID(event.Payload); id != "" {
-				openMail[id] = struct{}{}
-			}
-		case types.EventMailboxMessageDelivered, types.EventMailboxMessageDead:
-			if id := mailboxMessageID(event.Payload); id != "" {
-				delete(openMail, id)
-			}
+// seedBackgroundWork establishes the initial background-work state from the
+// events already on disk. The subscription only carries events after this
+// point, so the history has to be folded once.
+func (p *eventPump) seedBackgroundWork(ctx context.Context, sessionID string) {
+	replay, err := p.sessions.Replay(ctx, sessionID)
+	if err != nil {
+		logging.Debug("progress pump: follow_async replay failed", map[string]any{
+			"session_id": sessionID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	state := backgroundWorkFromEvents(replay.Events)
+	p.workMu.Lock()
+	p.work = state
+	p.workMu.Unlock()
+}
+
+// track applies one event to the background-work state. Called for every pumped
+// event regardless of which turn it belongs to: the follower asks about the
+// session, not about one turn.
+func (p *eventPump) track(event storage.SessionEvent) {
+	p.workMu.Lock()
+	defer p.workMu.Unlock()
+	if p.work.openMail == nil {
+		p.work.openMail = make(map[string]struct{})
+	}
+	p.work.apply(event)
+}
+
+func (p *eventPump) backgroundPending() bool {
+	p.workMu.Lock()
+	defer p.workMu.Unlock()
+	return p.work.pending()
+}
+
+// backgroundWork is the part of the event log that decides whether a session
+// still owes the caller something. Tracking it incrementally is what keeps
+// follow_async from re-reading the whole session every poll: at the default
+// 500ms interval a 15-minute follow used to parse the entire JSONL ~1800 times,
+// each parse holding the writer's global lock and blocking every event append.
+type backgroundWork struct {
+	openMail     map[string]struct{}
+	lastTerminal *storage.SessionEvent
+}
+
+func newBackgroundWork() backgroundWork {
+	return backgroundWork{openMail: make(map[string]struct{})}
+}
+
+// backgroundWorkFromEvents folds a complete event log. The follower uses the
+// incremental form; this is the one-shot version for callers that already hold
+// the events.
+func backgroundWorkFromEvents(events []storage.SessionEvent) backgroundWork {
+	state := newBackgroundWork()
+	for _, event := range events {
+		state.apply(event)
+	}
+	return state
+}
+
+func (b *backgroundWork) apply(event storage.SessionEvent) {
+	switch event.Type {
+	case types.EventFlowTurnCompleted,
+		types.EventFlowTurnWaitingInput,
+		types.EventFlowTurnWaitingTool,
+		types.EventFlowTurnWaitingApproval:
+		copied := event
+		b.lastTerminal = &copied
+	case types.EventMailboxMessageEnqueued, types.EventMailboxMessageClaimed:
+		if id := mailboxMessageID(event.Payload); id != "" {
+			b.openMail[id] = struct{}{}
+		}
+	case types.EventMailboxMessageDelivered, types.EventMailboxMessageDead:
+		if id := mailboxMessageID(event.Payload); id != "" {
+			delete(b.openMail, id)
 		}
 	}
-	if len(openMail) > 0 {
+}
+
+func (b backgroundWork) pending() bool {
+	if len(b.openMail) > 0 {
 		return true
 	}
-	if lastTerminal == nil {
+	if b.lastTerminal == nil {
 		return false
 	}
-	return turnRoutesToActivation(lastTerminal.Payload)
+	return turnRoutesToActivation(b.lastTerminal.Payload)
 }
 
 func mailboxMessageID(payload map[string]any) string {
