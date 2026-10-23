@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/adrg/frontmatter"
@@ -100,6 +101,10 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 		return nil, fmt.Errorf("validate agent support: %w", err)
 	}
 
+	workspace, err := resolveWorkspace(flow, teams, agents)
+	if err != nil {
+		return nil, err
+	}
 	return &types.Definitions{
 		Flow:      flow,
 		Teams:     teams,
@@ -109,7 +114,7 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 		Limits:    l.LoadRuntimeLimits(),
 		Knowledge: l.LoadKnowledgeSettings(),
 		Web:       l.LoadWebSettings(),
-		Workspace: resolveWorkspace(flow, teams, agents),
+		Workspace: workspace,
 		Env:       l.LoadGlobalEnv(),
 	}, nil
 }
@@ -117,25 +122,96 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 // resolveWorkspace resolves the runtime's single execution backend from
 // three-level inheritance: agent > team > flow, falling back to local (nil)
 // when nothing is configured.
-func resolveWorkspace(flow types.Flow, teams map[string]types.Team, agents map[string]types.AgentConfig) *types.WorkspaceConfig {
-	// 1. First non-empty agent-level workspace.
-	for _, agent := range agents {
+//
+// Within one level, every declaration must agree. The runtime has exactly one
+// backend (the Workspace interface is process-wide), so "the first agent that
+// declares one" was decided by Go's map iteration order: the same configuration
+// could pick a different backend on the next start. Disagreement is now a
+// configuration error that names the candidates, not a coin flip.
+func resolveWorkspace(flow types.Flow, teams map[string]types.Team, agents map[string]types.AgentConfig) (*types.WorkspaceConfig, error) {
+	agentWorkspaces := make(map[string]*types.WorkspaceConfig)
+	for id, agent := range agents {
 		if agent.Workspace != nil && agent.Workspace.Type != "" {
-			return agent.Workspace
+			agentWorkspaces[id] = agent.Workspace
 		}
 	}
-	// 2. First non-empty team-level workspace.
-	for _, team := range teams {
+	if resolved, err := singleWorkspace("agent", agentWorkspaces); resolved != nil || err != nil {
+		return resolved, err
+	}
+
+	teamWorkspaces := make(map[string]*types.WorkspaceConfig)
+	for id, team := range teams {
 		if team.Workspace != nil && team.Workspace.Type != "" {
-			return team.Workspace
+			teamWorkspaces[id] = team.Workspace
 		}
 	}
-	// 3. Flow-level workspace.
-	if flow.Workspace != nil && flow.Workspace.Type != "" {
-		return flow.Workspace
+	if resolved, err := singleWorkspace("team", teamWorkspaces); resolved != nil || err != nil {
+		return resolved, err
 	}
-	// 4. Default local.
-	return nil
+
+	if flow.Workspace != nil && flow.Workspace.Type != "" {
+		return flow.Workspace, nil
+	}
+	return nil, nil
+}
+
+// singleWorkspace returns the one distinct workspace declared at a level, nil
+// when nothing is declared, or an error when the declarations disagree.
+func singleWorkspace(level string, declared map[string]*types.WorkspaceConfig) (*types.WorkspaceConfig, error) {
+	if len(declared) == 0 {
+		return nil, nil
+	}
+	type candidate struct {
+		owners    []string
+		workspace *types.WorkspaceConfig
+		signature string
+	}
+	bySignature := make(map[string]*candidate, len(declared))
+	for _, owner := range sortedKeys(declared) {
+		workspace := declared[owner]
+		signature := workspaceSignature(workspace)
+		if existing, ok := bySignature[signature]; ok {
+			existing.owners = append(existing.owners, owner)
+			continue
+		}
+		bySignature[signature] = &candidate{owners: []string{owner}, workspace: workspace, signature: signature}
+	}
+	if len(bySignature) == 1 {
+		for _, only := range bySignature {
+			return only.workspace, nil
+		}
+	}
+	descriptions := make([]string, 0, len(bySignature))
+	for _, signature := range sortedKeys(bySignature) {
+		entry := bySignature[signature]
+		descriptions = append(descriptions, fmt.Sprintf("%s (%s)", entry.workspace.Type, strings.Join(entry.owners, ", ")))
+	}
+	return nil, fmt.Errorf("conflicting %s-level workspaces: %s; the runtime has one execution backend, so declare it once or set it at flow level",
+		level, strings.Join(descriptions, "; "))
+}
+
+// workspaceSignature identifies a backend by every field that changes where
+// commands run, so two declarations that differ only by SSH host or root are
+// treated as a conflict rather than as agreement.
+func workspaceSignature(workspace *types.WorkspaceConfig) string {
+	if workspace == nil {
+		return ""
+	}
+	if workspace.SSH == nil {
+		return workspace.Type
+	}
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s\x00%s",
+		workspace.Type, workspace.SSH.Host, workspace.SSH.Port, workspace.SSH.User,
+		workspace.SSH.Root, workspace.SSH.KeyPath)
+}
+
+func sortedKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // ConfigRootForFlow derives the config root from a flow file path: the

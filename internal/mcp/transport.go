@@ -249,10 +249,7 @@ func (t *StdioTransport) Send(ctx context.Context, req Request) (*Response, erro
 		return nil, fmt.Errorf("mcp stdio transport: encode request: %w", err)
 	}
 	line = append(line, '\n')
-	t.writeMu.Lock()
-	_, writeErr := stdin.Write(line)
-	t.writeMu.Unlock()
-	if writeErr != nil {
+	if writeErr := t.writeWithContext(ctx, stdin, line); writeErr != nil {
 		t.forget(req.ID)
 		return nil, fmt.Errorf("mcp stdio transport: write to %q: %w", t.Command, writeErr)
 	}
@@ -269,6 +266,37 @@ func (t *StdioTransport) Send(ctx context.Context, req Request) (*Response, erro
 	case <-ctx.Done():
 		t.forget(req.ID)
 		return nil, ctx.Err()
+	}
+}
+
+// writeWithContext bounds the write by ctx. A child process that stops reading
+// its stdin (npx still installing, a wedged server) blocks Write forever, and
+// the request path had no deadline on this side even though the read loop did:
+// the whole AgentTurn hung behind a pipe that nobody was draining.
+//
+// The write itself runs on its own goroutine because os.File.Write is not
+// cancelable. When ctx expires the caller gets the error and the goroutine
+// finishes whenever the pipe drains; writeMu keeps a second write from
+// interleaving with it.
+func (t *StdioTransport) writeWithContext(ctx context.Context, stdin io.Writer, line []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	written := make(chan error, 1)
+	go func() {
+		t.writeMu.Lock()
+		defer t.writeMu.Unlock()
+		_, err := stdin.Write(line)
+		written <- err
+	}()
+	select {
+	case err := <-written:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -416,7 +444,7 @@ func (t *HTTPTransport) Send(ctx context.Context, req Request) (*Response, error
 			req.Method, t.URL, res.Status, readSnippet(res.Body))
 	}
 	t.rememberSession(res)
-	msg, err := readResponseMessage(res)
+	msg, err := readResponseMessage(res, req.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -497,10 +525,10 @@ func (t *HTTPTransport) isClosed() bool {
 
 // readResponseMessage decodes one JSON-RPC message from a response body,
 // accepting either a plain JSON body or an SSE-framed one.
-func readResponseMessage(res *http.Response) (*Response, error) {
+func readResponseMessage(res *http.Response, expectedID int64) (*Response, error) {
 	body := io.LimitReader(res.Body, maxHTTPBodyBytes)
 	if strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "text/event-stream") {
-		return readSSEMessage(body)
+		return readSSEMessage(body, expectedID)
 	}
 	var msg Response
 	if err := json.NewDecoder(body).Decode(&msg); err != nil {
@@ -517,7 +545,7 @@ func readResponseMessage(res *http.Response) (*Response, error) {
 // streamable-HTTP rule that a POST may answer `Content-Type:
 // text/event-stream` with one or more `data:` events, which every server
 // built on the current SDKs does.
-func readSSEMessage(r io.Reader) (*Response, error) {
+func readSSEMessage(r io.Reader, expectedID int64) (*Response, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxHTTPBodyBytes)
 	var event bytes.Buffer
@@ -528,9 +556,13 @@ func readSSEMessage(r io.Reader) (*Response, error) {
 				continue
 			}
 			var msg Response
-			if err := json.Unmarshal(event.Bytes(), &msg); err == nil {
+			if err := json.Unmarshal(event.Bytes(), &msg); err == nil && msg.ID == expectedID {
 				return &msg, nil
 			}
+			// Not the reply to this request: a server-initiated notification or
+			// request on the same stream. Handing its empty Result back as the
+			// response made the call fail while decoding a payload that was
+			// never an answer.
 			event.Reset()
 			continue
 		}
@@ -541,11 +573,11 @@ func readSSEMessage(r io.Reader) (*Response, error) {
 	}
 	if event.Len() > 0 {
 		var msg Response
-		if err := json.Unmarshal(event.Bytes(), &msg); err == nil {
+		if err := json.Unmarshal(event.Bytes(), &msg); err == nil && msg.ID == expectedID {
 			return &msg, nil
 		}
 	}
-	return nil, errors.New("mcp http transport: no JSON-RPC message in SSE response")
+	return nil, fmt.Errorf("mcp http transport: no JSON-RPC response for request %d in SSE body", expectedID)
 }
 
 // readSnippet returns a short prefix of an error body so an HTTP failure

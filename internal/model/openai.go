@@ -76,6 +76,15 @@ type openAIRequest struct {
 	ReasoningEffort     string          `json:"reasoning_effort,omitempty"`
 	ResponseFormat      map[string]any  `json:"response_format,omitempty"`
 	Stream              bool            `json:"stream,omitempty"`
+	// StreamOptions asks the provider to emit a final usage-only chunk. Without
+	// it the SSE stream carries no usage at all, and every token counter —
+	// including the Agent budget that stops runaway turns — reads zero.
+	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+}
+
+// openAIStreamOptions is the subset of stream_options this engine sends.
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 type openAIMessage struct {
@@ -227,8 +236,12 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []types.Message, too
 	var wire openAIResponse
 	if err := p.post(ctx, effective, req, &wire); err != nil {
 		// response_format is an optional optimization. The structured-output
-		// validator remains authoritative when a compatible gateway omits it.
-		if len(req.ResponseFormat) > 0 {
+		// validator remains authoritative when a compatible gateway omits it,
+		// so dropping it and retrying is the right recovery — but only when the
+		// gateway actually rejected the parameter. Retrying on every error made
+		// a rate limit or an auth failure pay for two extra round trips, which
+		// tripled traffic exactly when the provider was already pushing back.
+		if len(req.ResponseFormat) > 0 && isUnsupportedParameterError(err) {
 			req.ResponseFormat = nil
 			if retryErr := p.post(ctx, effective, req, &wire); retryErr == nil {
 				return withModel(convertOpenAIResponse(wire), modelName), nil
@@ -281,6 +294,9 @@ func (p *OpenAIProvider) buildRequest(
 		Model:    modelName,
 		Messages: converted,
 		Stream:   stream,
+	}
+	if stream {
+		req.StreamOptions = &openAIStreamOptions{IncludeUsage: true}
 	}
 
 	if profileAllowsToolCalls(p.profile, len(tools) > 0) {
@@ -457,6 +473,13 @@ func (p *OpenAIProvider) postStream(ctx context.Context, effective types.ModelCo
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
 		}
+		// Usage arrives in its own final chunk with an empty choices array, so
+		// it has to be read before the choices check skips this chunk.
+		if chunk.Usage != nil {
+			result.Usage.PromptTokens = chunk.Usage.PromptTokens
+			result.Usage.CompletionTokens = chunk.Usage.CompletionTokens
+			result.Usage.TotalTokens = chunk.Usage.TotalTokens
+		}
 		if len(chunk.Choices) == 0 {
 			continue
 		}
@@ -491,11 +514,6 @@ func (p *OpenAIProvider) postStream(ctx context.Context, effective types.ModelCo
 		}
 		if chunk.Choices[0].FinishReason != "" {
 			finishReason = chunk.Choices[0].FinishReason
-		}
-		if chunk.Usage != nil {
-			result.Usage.PromptTokens = chunk.Usage.PromptTokens
-			result.Usage.CompletionTokens = chunk.Usage.CompletionTokens
-			result.Usage.TotalTokens = chunk.Usage.TotalTokens
 		}
 	}
 	if err := scanner.Err(); err != nil {

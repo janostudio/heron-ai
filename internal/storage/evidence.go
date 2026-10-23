@@ -37,8 +37,8 @@ func (s *JSONLEvidenceStore) Publish(ctx context.Context, sessionID string, reco
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
-	if strings.TrimSpace(sessionID) == "" {
-		return errors.New("session id is required")
+	if err := ValidatePathSegment("session id", sessionID); err != nil {
+		return err
 	}
 	if strings.TrimSpace(record.RecordID) == "" {
 		return errors.New("record id is required")
@@ -114,8 +114,8 @@ func (s *JSONLEvidenceStore) listAll(ctx context.Context, sessionID string) ([]t
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, errors.New("session id is required")
+	if err := ValidatePathSegment("session id", sessionID); err != nil {
+		return nil, err
 	}
 
 	s.mu.Lock()

@@ -14,6 +14,11 @@ import (
 
 var ErrContextLimit = errors.New("agent context exceeds hard limit")
 
+// defaultSummaryTokenBudget bounds the compaction summary when the manager has
+// no configured input capacity to derive one from. Small on purpose: it is a
+// recap of what was dropped, not a replacement for the history.
+const defaultSummaryTokenBudget = 4096
+
 // ContextManager separates the complete Agent transcript from the bounded
 // message list sent to the model. CanonicalMessages is never compacted;
 // Messages returns the active model context.
@@ -73,9 +78,24 @@ func NewContextManagerWithCompactor(config types.ContextConfig, estimator Contex
 	}
 }
 
+// AddMessage appends one message and compacts when the threshold is crossed.
+// It is AddMessageContext without a cancellation scope; callers inside a turn
+// pass the turn's context instead, so a compaction cannot outlive the turn.
 func (m *MessageContextManager) AddMessage(message types.Message) error {
+	return m.AddMessageContext(context.Background(), message)
+}
+
+// AddMessageContext is AddMessage with a context that bounds the compaction.
+//
+// The compaction can call the model (LLM compactor). Running it on a
+// context.Background() meant a stalled provider held the manager — and the
+// turn waiting on it — past the turn's own deadline, with nothing able to stop
+// it. Passing the turn context bounds it.
+func (m *MessageContextManager) AddMessageContext(ctx context.Context, message types.Message) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	message = cloneMessage(message)
 	m.canonical = append(m.canonical, cloneMessage(message))
@@ -86,15 +106,30 @@ func (m *MessageContextManager) AddMessage(message types.Message) error {
 	m.active = append(m.active, message)
 	m.applyMicrocompactLocked()
 
+	var (
+		summary    string
+		dropped    int
+		compactErr error
+		hardErr    error
+	)
 	if m.needsCompactionLocked() {
-		if err := m.compactLocked(context.Background()); err != nil {
-			return err
-		}
+		summary, dropped, compactErr = m.compactLocked(ctx)
 	}
-	if m.exceedsHardLimitLocked() {
-		return fmt.Errorf("%w: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
+	if compactErr == nil && m.exceedsHardLimitLocked() {
+		hardErr = fmt.Errorf("%w: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
 	}
-	return nil
+	hook := m.compactHook
+	m.mu.Unlock()
+
+	// Outside the lock: the hook writes a session event, and holding the
+	// manager mutex across that append serialised every reader behind disk IO.
+	if compactErr == nil && summary != "" && hook != nil {
+		hook(summary, dropped)
+	}
+	if compactErr != nil {
+		return compactErr
+	}
+	return hardErr
 }
 
 func (m *MessageContextManager) Messages() []types.Message {
@@ -156,8 +191,16 @@ func (m *MessageContextManager) Compact(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.compactLocked(ctx)
+	summary, dropped, err := m.compactLocked(ctx)
+	hook := m.compactHook
+	m.mu.Unlock()
+	// Outside the lock: the hook writes a session event, and doing that while
+	// holding the manager mutex serialised every other reader (Messages, Stats)
+	// behind a disk append.
+	if err == nil && summary != "" && hook != nil {
+		hook(summary, dropped)
+	}
+	return err
 }
 
 // CompactForce performs one deterministic compaction even when the local
@@ -168,8 +211,13 @@ func (m *MessageContextManager) CompactForce(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.compactLocked(ctx, true)
+	summary, dropped, err := m.compactLocked(ctx, true)
+	hook := m.compactHook
+	m.mu.Unlock()
+	if err == nil && summary != "" && hook != nil {
+		hook(summary, dropped)
+	}
+	return err
 }
 
 func (m *MessageContextManager) Reset() error {
@@ -294,16 +342,20 @@ func (m *MessageContextManager) toolOutputLimitChars() int {
 	return 64 * 1024
 }
 
-func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool) error {
+// compactLocked rewrites the active context and reports what it dropped. It
+// returns the summary and the number of dropped groups instead of invoking the
+// hook itself: the hook is caller-facing state (a session write) and must not
+// run under m.mu. Callers hold the lock.
+func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool) (string, int, error) {
 	if err := contextErr(ctx); err != nil {
-		return err
+		return "", 0, err
 	}
 	forced := len(force) > 0 && force[0]
 	if !forced && !m.needsCompactionLocked() {
 		if m.exceedsHardLimitLocked() {
-			return fmt.Errorf("%w: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
+			return "", 0, fmt.Errorf("%w: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
 		}
-		return nil
+		return "", 0, nil
 	}
 
 	system, anchor, existingSummary, groups := splitContextLayers(m.active)
@@ -327,9 +379,16 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	var selected []types.Message
 	selectedTokens := 0
 	dropped := make([][]types.Message, 0)
+	// The loop walks newest-first because the budget does (keep the tail), but
+	// `dropped` must come out oldest-first: every consumer reads it
+	// chronologically — the mechanical summary, the LLM compactor's
+	// "Errors / Current Work / Next Step" template, and the message the model
+	// finally reads. Prepending reverses the order for free, and unlike a
+	// post-hoc reverse it stays correct on the forced branch below, where
+	// dropped is filled by appending a prefix of groups.
 	for i := len(groups) - 1; i >= 0; i-- {
 		if err := contextErr(ctx); err != nil {
-			return err
+			return "", 0, err
 		}
 		group := groups[i]
 		groupTokens := m.estimator.EstimateMessages(group)
@@ -338,7 +397,7 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 			selectedTokens += groupTokens
 			continue
 		}
-		dropped = append(dropped, group)
+		dropped = append([][]types.Message{group}, dropped...)
 	}
 
 	if forced && len(dropped) == 0 && len(groups) > m.config.RecentMessageGroups {
@@ -357,11 +416,21 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	}
 	summary := mergeCompactionSummary(existingSummary, nextSummary)
 	if summary != "" {
+		// The summary budget follows the same rule as hardLimit below: with no
+		// configured capacity `target` is 0, and fitCompactionSummary treats a
+		// non-positive budget as "no room", silently dropping the summary
+		// while the messages it describes have already been dropped. Fall back
+		// to a fixed budget so a compression still hands the model an account
+		// of what it lost.
+		summaryBudget := target - m.estimator.EstimateTools(m.tools)
+		if summaryBudget <= 0 {
+			summaryBudget = defaultSummaryTokenBudget
+		}
 		if compacted := fitCompactionSummary(
 			summary,
 			prefix,
 			m.estimator,
-			target-m.estimator.EstimateTools(m.tools),
+			summaryBudget,
 		); compacted != nil {
 			candidate = append(candidate, *compacted)
 		}
@@ -372,28 +441,37 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	if hardLimit < 0 {
 		hardLimit = 0
 	}
-	if m.estimator.EstimateMessages(candidate) > hardLimit {
-		candidate, _ = trimToolMessagesToLimit(candidate, m.estimator, hardLimit)
-	}
-	if m.estimator.EstimateMessages(candidate) > hardLimit {
-		candidate, _ = trimCompactionSummaryToLimit(candidate, m.estimator, hardLimit)
-	}
-	if m.estimator.EstimateMessages(candidate) > hardLimit && hasCompactionSummary(candidate) {
-		// A summary is useful but never more important than preserving the
-		// current active messages. Remove its text once more before failing.
-		candidate = removeCompactionSummary(candidate)
-		candidate, _ = trimToolMessagesToLimit(candidate, m.estimator, hardLimit)
+	// hardLimit == 0 means the manager has no input capacity to budget
+	// against: contextConfig falls back to the provider's MaxInputTokens, and
+	// a provider that does not implement ModelContextSizer leaves it at zero.
+	// Trimming to a zero limit is not "make it fit" — trimToolMessagesToLimit
+	// would empty every tool result and then the summary would be removed
+	// too, producing a conversation with the history deleted. This is the path
+	// CompactForce takes after a provider reports the prompt is too large, so
+	// the degraded outcome is a silently emptied context followed by a retry
+	// of the same request. Drop what the window rule selected and keep the
+	// rest verbatim instead.
+	if hardLimit > 0 {
+		if m.estimator.EstimateMessages(candidate) > hardLimit {
+			candidate, _ = trimToolMessagesToLimit(candidate, m.estimator, hardLimit)
+		}
+		if m.estimator.EstimateMessages(candidate) > hardLimit {
+			candidate, _ = trimCompactionSummaryToLimit(candidate, m.estimator, hardLimit)
+		}
+		if m.estimator.EstimateMessages(candidate) > hardLimit && hasCompactionSummary(candidate) {
+			// A summary is useful but never more important than preserving the
+			// current active messages. Remove its text once more before failing.
+			candidate = removeCompactionSummary(candidate)
+			candidate, _ = trimToolMessagesToLimit(candidate, m.estimator, hardLimit)
+		}
 	}
 
 	m.active = candidate
 	m.compactions++
-	if m.compactHook != nil {
-		m.compactHook(summary, len(dropped))
-	}
 	if m.exceedsHardLimitLocked() {
-		return fmt.Errorf("%w after compaction: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
+		return summary, len(dropped), fmt.Errorf("%w after compaction: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
 	}
-	return nil
+	return summary, len(dropped), nil
 }
 
 func (m *MessageContextManager) applyMicrocompactLocked() {
@@ -784,11 +862,31 @@ func (defaultContextTokenEstimator) EstimateTools(tools []types.JSONSchema) int 
 	return total
 }
 
+// estimateContextText approximates the token count of one string.
+//
+// "Four characters per token" holds for English and is wrong by a factor of
+// three to four for Chinese, Japanese and Korean: those are roughly one token
+// per character to the tokenizers the providers use. Dividing their rune count
+// by four under-reported the prompt size, so a CJK conversation hit the provider
+// with "prompt is too long" long before the local budget noticed — and the local
+// budget is what decides when to compact.
+//
+// ASCII keeps the 4:1 ratio; every other rune is charged one token. Over-
+// estimating is the safe direction here: it compacts sooner, never later.
 func estimateContextText(text string) int {
 	if text == "" {
 		return 0
 	}
-	return (utf8.RuneCountInString(text) + 3) / 4
+	ascii := 0
+	other := 0
+	for _, r := range text {
+		if r < utf8.RuneSelf {
+			ascii++
+			continue
+		}
+		other++
+	}
+	return (ascii+3)/4 + other
 }
 
 func truncateContextText(text string, maxChars int) string {

@@ -70,18 +70,25 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		return types.FlowTurnResult{}, nil
 	}
 
-	// Consume the messages: they are about to be folded into the new turn, so
-	// they must no longer be pending. A failure to record a delivery is
-	// logged rather than escalated, mirroring the async dispatch path — a
-	// bookkeeping failure must not turn a waking turn into a failed one.
+	// Claim the messages before running the turn, and consume them only after it
+	// succeeds. Delivering first (the old order) meant a turn that failed to
+	// start — or a process that died before it ran — left the messages marked
+	// delivered while nothing had consumed them: the result the user was
+	// waiting for disappeared with no dead-letter record and no way to retry.
+	// Claiming takes them out of the pending set just as effectively, but says
+	// "in progress", which a crash can be recognised from.
+	claimed := make([]types.MailboxMessage, 0, len(messages))
 	for _, msg := range messages {
-		if _, err := r.deliverMessage(ctx, session, msg, nil); err != nil {
-			logging.Error("deliver mailbox message on resume", map[string]any{
+		updated, claimErr := r.claimMessage(ctx, session, msg)
+		if claimErr != nil {
+			logging.Error("claim mailbox message on resume", map[string]any{
 				"flow_session_id": session.ID,
 				"message_id":      msg.MessageID,
-				"error":           err.Error(),
+				"error":           claimErr.Error(),
 			})
+			continue
 		}
+		claimed = append(claimed, updated)
 	}
 
 	// One block per sender, so the renderer can turn each into its own message
@@ -103,10 +110,35 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		"caller_team":     wake.callerTeam,
 		"message_count":   len(messages),
 	})
-	return r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
+	result, runErr := r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
 		[]activation{wake}, turnOriginMailbox,
 		r.taskChainSince(ctx, sessionID, mailboxScopeSince(messages)),
 		userDeliveries(messages))
+
+	// Bookkeeping failures stay logged, never escalated: they must not turn a
+	// completed turn into a failed one.
+	for _, msg := range claimed {
+		if runErr != nil {
+			// The mail was not consumed. Record why, so the loss is visible in
+			// the stream instead of the message sitting claimed forever.
+			if _, deadErr := r.markMessageDead(ctx, session, msg, "resume turn failed: "+runErr.Error()); deadErr != nil {
+				logging.Error("mark mailbox message dead on resume", map[string]any{
+					"flow_session_id": session.ID,
+					"message_id":      msg.MessageID,
+					"error":           deadErr.Error(),
+				})
+			}
+			continue
+		}
+		if _, deliverErr := r.deliverMessage(ctx, session, msg, nil); deliverErr != nil {
+			logging.Error("deliver mailbox message on resume", map[string]any{
+				"flow_session_id": session.ID,
+				"message_id":      msg.MessageID,
+				"error":           deliverErr.Error(),
+			})
+		}
+	}
+	return result, runErr
 }
 
 // taskChainSince returns where the task the woken Team is working on started:
@@ -281,7 +313,7 @@ func (r *Runtime) nextWakingTeam(ctx context.Context, sessionID string) (string,
 		if msg.Status != types.MailboxPending || msg.To.TeamID == "" {
 			continue
 		}
-		if r.teamBusy(msg.To.TeamID) {
+		if r.teamBusy(sessionID, msg.To.TeamID) {
 			continue
 		}
 		byTeam[msg.To.TeamID] = append(byTeam[msg.To.TeamID], msg)

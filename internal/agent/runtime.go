@@ -86,6 +86,14 @@ type MCPToolProvider interface {
 	ToolSchemas(names []string) []types.JSONSchema
 }
 
+// ToolSchemaProvider exposes the schema of an executable Tool. custom tools are
+// registered in the tool registry but have no entry in builtinSchemas, so
+// without this the config field `tools.custom` was accepted and then silently
+// ignored: the executor could run the tool, the model was never told it exists.
+type ToolSchemaProvider interface {
+	ToolSchema(name string) (types.JSONSchema, bool)
+}
+
 // RenderContext holds the collaboration context visible to an Agent.
 type RenderContext struct {
 	Variables     map[string]string
@@ -467,7 +475,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				}
 			}
 			content := toolResultContent(approvedResult)
-			if addErr := contextManager.AddMessage(types.Message{
+			if addErr := contextManager.AddMessageContext(ctx, types.Message{
 				Role: "tool", ToolCallID: pending.ToolCallID, Content: content,
 			}); addErr != nil {
 				return nil, addErr
@@ -515,7 +523,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			if task.Result != nil {
 				content = toolResultContent(task.Result)
 			}
-			if addErr := contextManager.AddMessage(types.Message{
+			if addErr := contextManager.AddMessageContext(ctx, types.Message{
 				Role: "tool", ToolCallID: checkpoint.PendingTool.ToolCallID, Content: content,
 			}); addErr != nil {
 				return nil, addErr
@@ -538,7 +546,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			}
 		}
 		if strings.TrimSpace(inputText) != "" {
-			if addErr := contextManager.AddMessage(types.Message{
+			if addErr := contextManager.AddMessageContext(ctx, types.Message{
 				Role: "user", Content: inputText, Parts: contextBlockParts(req.ContextBlocks, "input"),
 			}); addErr != nil {
 				t.emitErrorHook(ctx, agent, req, startRound, addErr)
@@ -547,7 +555,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		}
 	} else {
 		for _, message := range messages {
-			if addErr := contextManager.AddMessage(message); addErr != nil {
+			if addErr := contextManager.AddMessageContext(ctx, message); addErr != nil {
 				t.emitErrorHook(ctx, agent, req, 0, addErr)
 				return nil, addErr
 			}
@@ -601,6 +609,25 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			}
 		}
 
+		// Compact before the request is assembled. AddMessage deliberately does
+		// not compact on its own: it has no context to cancel the compactor
+		// with, so a stalled provider could hold it past the turn deadline.
+		// This is the once-per-round point where the threshold is acted on,
+		// and it runs on the turn's context — a cancelled turn cancels the
+		// summarisation call with it.
+		if contextManager.NeedsCompaction() {
+			if compactErr := contextManager.Compact(ctx); compactErr != nil {
+				// Not fatal: the request below may still fit, and a provider
+				// that rejects it triggers the CompactForce path, which is the
+				// stronger recovery.
+				logging.Warn("context compaction failed", map[string]any{
+					"call_id":  req.CallID,
+					"agent_id": req.AgentID,
+					"round":    round,
+					"error":    compactErr.Error(),
+				})
+			}
+		}
 		modelConfig := structuredModelConfig(agent)
 		var resp *types.ChatResponse
 		var chatErr error
@@ -664,7 +691,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				if isEmptyModelResponse(resp) && !isStructuredOutputTruncated(resp.FinishReason) && modelRetries < maxRetries {
 					modelRetries++
 					hint := emptyResponseRetryHint(agent.Structured != nil)
-					if addErr := contextManager.AddMessage(types.Message{Role: "user", Content: hint}); addErr != nil {
+					if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "user", Content: hint}); addErr != nil {
 						return nil, addErr
 					}
 					t.emitAgentEvent(ctx, req, round, types.EventAgentFeedback, map[string]any{
@@ -786,13 +813,13 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			truncatedErr := errors.New("structured output truncated: model stopped at the output token limit")
 			if structuredRetries < 1 && round+1 < maxRounds {
 				structuredRetries++
-				if addErr := contextManager.AddMessage(types.Message{
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{
 					Role: "assistant", Content: resp.Text,
 				}); addErr != nil {
 					return nil, addErr
 				}
 				truncatedMsg := "The previous JSON response was truncated. Return one complete JSON object only, with every required field, and no explanation or Markdown."
-				if addErr := contextManager.AddMessage(types.Message{
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{
 					Role:    "user",
 					Content: truncatedMsg,
 				}); addErr != nil {
@@ -872,13 +899,13 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				if err != nil {
 					if structuredRetries < 1 && round+1 < maxRounds {
 						structuredRetries++
-						if addErr := contextManager.AddMessage(types.Message{
+						if addErr := contextManager.AddMessageContext(ctx, types.Message{
 							Role: "assistant", Content: resp.Text,
 						}); addErr != nil {
 							return nil, addErr
 						}
 						invalidMsg := "The previous response was not valid JSON for the required schema. Return one complete JSON object only; do not explain, use Markdown, or omit required fields."
-						if addErr := contextManager.AddMessage(types.Message{
+						if addErr := contextManager.AddMessageContext(ctx, types.Message{
 							Role:    "user",
 							Content: invalidMsg,
 						}); addErr != nil {
@@ -915,11 +942,11 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 						round+1, resp.Text, workspaceOps, toolCalls, types.TurnFailed,
 						errors.New(feedback), nil, loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
 				}
-				if addErr := contextManager.AddMessage(types.Message{Role: "assistant", Content: resp.Text}); addErr != nil {
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "assistant", Content: resp.Text}); addErr != nil {
 					return nil, addErr
 				}
 				feedbackMsg := "## Completion Feedback\n" + feedback
-				if addErr := contextManager.AddMessage(types.Message{Role: "user", Content: feedbackMsg}); addErr != nil {
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "user", Content: feedbackMsg}); addErr != nil {
 					return nil, addErr
 				}
 				t.emitAgentEvent(ctx, req, round, types.EventAgentFeedback, map[string]any{
@@ -943,6 +970,12 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage, round, resp.Text, workspaceOps, toolCalls, types.TurnFailed, budgetErr, nil,
 				loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
 		}
+		// Fill in any missing Tool call ids before they reach the transcript, the
+		// events and the Tool messages. A model that omits an id used to get one
+		// synthesised inside executeToolCalls (for the event pairing) while the
+		// assistant message recorded an empty id, so a replay could not pair the
+		// tool result back to its call and strict providers rejected the request.
+		resp.ToolCalls = ensureToolCallIDs(resp.ToolCalls, round)
 		toolCalls += len(resp.ToolCalls)
 		// Charge the model-requested Tool calls before any policy gate. An
 		// approval wait or a denied call must not bypass MaxToolCalls.
@@ -957,7 +990,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			sameToolCalls = 1
 			lastToolSignature = signature
 		}
-		if addErr := contextManager.AddMessage(types.Message{Role: "assistant", Content: resp.Text, ToolCalls: resp.ToolCalls}); addErr != nil {
+		if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "assistant", Content: resp.Text, ToolCalls: resp.ToolCalls}); addErr != nil {
 			t.emitErrorHook(ctx, agent, req, round, addErr)
 			return nil, addErr
 		}
@@ -1059,7 +1092,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			if toolResult.Next != nil && toolResult.Next.Action == types.NextWaitApproval {
 				continue
 			}
-			if addErr := contextManager.AddMessage(types.Message{Role: "tool", ToolCallID: call.ID, Content: content}); addErr != nil {
+			if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "tool", ToolCallID: call.ID, Content: content}); addErr != nil {
 				t.emitErrorHook(ctx, agent, req, round, addErr)
 				return nil, addErr
 			}
@@ -1083,7 +1116,6 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		} else {
 			noProgressRounds++
 		}
-		waitingForContinuation := false
 		for _, toolResult := range results {
 			if toolResult == nil {
 				continue
@@ -1118,31 +1150,34 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			}
 			return agentResult, nil
 		}
-		if !waitingForContinuation {
-			if stuckReason := stuckReason(agent.Loop, sameToolCalls, noProgressRounds, sameModelTexts); stuckReason != "" {
-				if agent.Loop.StuckAction == "ask_user" {
-					waiting := &types.AgentResult{
-						Status: types.TurnWaitingInput,
-						Reply:  "Agent appears stuck: " + stuckReason,
-						Next:   &types.Route{Action: types.NextProceed, Reason: stuckReason},
-						Usage:  totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls,
-					}
-					return t.saveWaitingCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
-						round+1, lastText, workspaceOps, toolCalls, waiting,
-						loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools))
+		if stuckReason := stuckReason(agent.Loop, sameToolCalls, noProgressRounds, sameModelTexts); stuckReason != "" {
+			if agent.Loop.StuckAction == "ask_user" {
+				waiting := &types.AgentResult{
+					Status: types.TurnWaitingInput,
+					Reply:  "Agent appears stuck: " + stuckReason,
+					Next:   &types.Route{Action: types.NextProceed, Reason: stuckReason},
+					Usage:  totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls,
 				}
-				return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
-					round+1, lastText, workspaceOps, toolCalls, types.TurnFailed,
-					errors.New("agent stuck: "+stuckReason), nil,
-					loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
+				return t.saveWaitingCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
+					round+1, lastText, workspaceOps, toolCalls, waiting,
+					loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools))
 			}
+			return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
+				round+1, lastText, workspaceOps, toolCalls, types.TurnFailed,
+				errors.New("agent stuck: "+stuckReason), nil,
+				loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
 		}
 	}
 
-	// Reaching the round limit ends the turn with the last model text as the
-	// reply. That text came from a Tool round and never went through the
-	// no-tool_calls branch above, so check it here before it becomes an
-	// Agent answer.
+	// Reaching the round limit ends the turn as a failure, not a completion.
+	// The loop only exits here when the model never produced a tool-free final
+	// answer: every round asked for another Tool call. Reporting that as
+	// TurnCompleted handed the Flow a successful Team result with the last
+	// tool-round text as the reply, so a runaway agent looked like a finished
+	// one — no coordinate, no failure, nothing to see in the logs. The budget
+	// path (max_model_rounds) already fails the same way; this is the same
+	// condition reached through the loop's own bound.
+	limitErr := fmt.Errorf("agent loop reached the round limit (%d) without a final answer", maxRounds)
 	if t.guardrail != nil {
 		if guardErr := t.guardrail.CheckOutput(lastText); guardErr != nil {
 			logging.Warn("guardrail blocked output", map[string]any{
@@ -1156,32 +1191,18 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			return &types.AgentResult{Status: types.TurnFailed, Reply: lastText, Error: guardErr.Error(), Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls, Next: &types.Route{Action: types.NextCoordinate, Reason: guardErr.Error()}}, nil
 		}
 	}
-
-	action, cleanText := t.routeParser.ParseWithMode(lastText, true)
-	if feedback := completionFeedback(agent.Completion, agent.Structured, nil, usedTools, successfulTools, toolCalls, workspaceOps); feedback != "" {
-		return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
-			maxRounds, lastText, workspaceOps, toolCalls, types.TurnFailed,
-			errors.New(feedback), nil,
-			loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
-	}
-	if agent.Structured != nil {
-		parsed, parseErr := NewStructuredOutputManager().ParseAndValidate(cleanText, agent.Structured)
-		if parseErr != nil {
-			t.emitErrorHook(ctx, agent, req, maxRounds, parseErr)
-			return &types.AgentResult{Status: types.TurnFailed, Reply: cleanText, Error: fmt.Sprintf("structured output: %v", parseErr), Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls, Next: &types.Route{Action: types.NextCoordinate, Reason: parseErr.Error()}}, nil
-		}
-		route := routeFromAction(action)
-		if parsedRoute := routeFromParsed(parsed); parsedRoute != nil {
-			route = parsedRoute
-		}
-		route = normalizeStructuredRoute(agent.Structured, route)
-		reply := cleanText
-		if parsedReply := stringFromParsed(parsed, "reply"); parsedReply != "" {
-			reply = parsedReply
-		}
-		return &types.AgentResult{Status: types.TurnCompleted, Reply: reply, Parsed: parsed, Next: route, Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls}, nil
-	}
-	return &types.AgentResult{Status: types.TurnCompleted, Reply: cleanText, Next: &types.Route{Action: action, Reason: "agent loop limit reached"}, Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls}, nil
+	logging.Warn("agent loop reached the round limit", map[string]any{
+		"call_id":    req.CallID,
+		"agent_id":   req.AgentID,
+		"team_id":    req.TeamID,
+		"max_rounds": maxRounds,
+		"tool_calls": toolCalls,
+	})
+	t.emitErrorHook(ctx, agent, req, maxRounds, limitErr)
+	return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
+		maxRounds, lastText, workspaceOps, toolCalls, types.TurnFailed,
+		limitErr, nil,
+		loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
 }
 
 func isStructuredOutputTruncated(reason string) bool {
@@ -1581,7 +1602,7 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 		parallelIndexes := make([]int, 0, len(filtered))
 		for i, call := range filtered {
 			if call.Name == "" {
-				results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, "tool is not allowed for this Agent")
+				results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, rejectionReason(call))
 				continue
 			}
 			if err := t.executeHook(ctx, HookOnToolStart, hookPayload(agent, req, round, &call, nil)); err != nil {
@@ -1627,7 +1648,7 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 	results := make([]*types.ToolResult, len(filtered))
 	for i, call := range filtered {
 		if call.Name == "" {
-			results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, "tool is not allowed for this Agent")
+			results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, rejectionReason(call))
 			continue
 		}
 		if t.toolExecutor == nil {
@@ -1736,6 +1757,17 @@ func (t *TurnLoop) toolDecision(ctx context.Context, agent types.AgentConfig, re
 	return decision, reason, nil
 }
 
+// approvalResults ends a Tool batch at an approval gate. The call at index is
+// the one waiting for a human; every other call in the same model response is
+// left unexecuted.
+//
+// Those untouched calls still need a result, and it has to be a real one:
+// the assistant message already carries all N tool_calls, and the request the
+// provider validates pairs them with N tool messages. Returning nil here made
+// Run skip them (it treats a nil result as "nothing to report"), so a resumed
+// turn sent N tool_calls with one tool reply and strict providers rejected the
+// whole request with 400. The resumed turn only ever fills in the approval, so
+// nothing else would ever have produced those messages.
 func approvalResults(calls []types.ToolCall, index int, req types.AgentRequest, reason string) []*types.ToolResult {
 	results := make([]*types.ToolResult, len(calls))
 	call := calls[index]
@@ -1754,6 +1786,22 @@ func approvalResults(calls []types.ToolCall, index int, req types.AgentRequest, 
 		Error:           "tool approval required",
 		Next:            &types.Route{Action: types.NextWaitApproval, Reason: reason},
 		PendingApproval: pending,
+	}
+	// NextProceed, not nil: it keeps the loop's outcome scan from mistaking
+	// these for the turn's routing decision, while still producing the tool
+	// message the pairing requires.
+	for i := range results {
+		if i == index {
+			continue
+		}
+		results[i] = &types.ToolResult{
+			Success: false,
+			Error: fmt.Sprintf(
+				"not executed: another Tool call in this batch (%q) is waiting for human approval",
+				call.Name,
+			),
+			Next: &types.Route{Action: types.NextProceed},
+		}
 	}
 	return results
 }
@@ -1777,6 +1825,21 @@ func (t *TurnLoop) contextConfig(agent types.AgentConfig) types.ContextConfig {
 		}
 	}
 	return config
+}
+
+// rejectionReason reports why a Tool call never reached the executor. The
+// allowlist and the policy layer both blank the name before handing the call
+// over, so the reason has to come from the arguments they left behind: the
+// model used to be told "tool is not allowed for this Agent" even when the real
+// reason was a policy denial, and a wrong reason is what it acts on next.
+func rejectionReason(call types.ToolCall) string {
+	if reason, ok := call.Arguments["_policy_error"].(string); ok && strings.TrimSpace(reason) != "" {
+		return reason
+	}
+	if reason, ok := call.Arguments["_rejected"].(string); ok && strings.TrimSpace(reason) != "" {
+		return reason
+	}
+	return "tool is not allowed for this Agent"
 }
 
 // rejectToolCall records a tool invocation that never reached the executor
@@ -2072,6 +2135,18 @@ func sortedBoolKeys(values map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// ensureToolCallIDs gives every call a stable id. The loop's event pairing and
+// the provider's tool_call/tool message pairing both key on this value, so it has
+// to be assigned exactly once, before either sees it.
+func ensureToolCallIDs(calls []types.ToolCall, round int) []types.ToolCall {
+	for i := range calls {
+		if calls[i].ID == "" {
+			calls[i].ID = fmt.Sprintf("tc-%d-%d", round, i)
+		}
+	}
+	return calls
 }
 
 func toolCallSignature(calls []types.ToolCall) string {
@@ -2540,6 +2615,22 @@ func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.Agent
 	// exactly as with builtin. Withheld names are dropped for the same reason
 	// they are dropped above — a tool the policy layer will refuse has no
 	// place in the schema.
+	// Custom tools: registered and executable, but with no hand-written schema
+	// entry, so the schema has to come from the Tool itself.
+	if provider, ok := t.toolExecutor.(ToolSchemaProvider); ok && len(agent.Tools.Custom) > 0 {
+		for _, toolName := range agent.Tools.Custom {
+			if _, hidden := withheld[toolName]; hidden {
+				continue
+			}
+			if _, dup := seen[toolName]; dup {
+				continue
+			}
+			if schema, ok := provider.ToolSchema(toolName); ok && schema.Name != "" {
+				seen[toolName] = struct{}{}
+				schemas = append(schemas, schema)
+			}
+		}
+	}
 	if t.mcpTools != nil && len(agent.Tools.MCP) > 0 {
 		for _, schema := range t.mcpTools.ToolSchemas(agent.Tools.MCP) {
 			if schema.Name == "" {

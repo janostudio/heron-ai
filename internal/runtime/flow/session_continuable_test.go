@@ -98,7 +98,7 @@ func TestRunningTeamBlocksNewTurnUntilItDrains(t *testing.T) {
 		Payload: map[string]any{},
 	}))
 	runtime.dispatchMu.Lock()
-	runtime.busyTeams["slow-team"] = true
+	runtime.busyTeams[teamKey{sessionID: first.Session.ID, teamID: "slow-team"}] = true
 	runtime.dispatchMu.Unlock()
 
 	_, err = runtime.HandleInputWithContext(ctx, first.Session.ID, "next", nil)
@@ -107,7 +107,7 @@ func TestRunningTeamBlocksNewTurnUntilItDrains(t *testing.T) {
 
 	// Once it drains, the conversation continues normally.
 	runtime.dispatchMu.Lock()
-	delete(runtime.busyTeams, "slow-team")
+	delete(runtime.busyTeams, teamKey{sessionID: first.Session.ID, teamID: "slow-team"})
 	runtime.dispatchMu.Unlock()
 	require.NoError(t, runtime.appendSessionEvent(ctx, first.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{

@@ -174,3 +174,17 @@ func (e *ToolExecutor) ExecuteWithApproval(ctx context.Context, name string, arg
 
 	return e.Execute(ctx, name, args)
 }
+
+// ToolSchema returns the schema of a registered Tool, so an Agent can advertise
+// a tool it never hard-coded (tools.custom). It reports false for a name the
+// registry does not know, which keeps a typo from inventing an empty schema.
+func (e *ToolExecutor) ToolSchema(name string) (types.JSONSchema, bool) {
+	if e == nil || e.registry == nil {
+		return types.JSONSchema{}, false
+	}
+	tool, err := e.registry.Lookup(name)
+	if err != nil {
+		return types.JSONSchema{}, false
+	}
+	return GenerateSchema(tool), true
+}

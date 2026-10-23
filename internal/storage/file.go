@@ -54,6 +54,14 @@ func (fs *FileStoreImpl) Read(path string) ([]byte, error) {
 	return data, nil
 }
 
+// Write replaces a file atomically.
+//
+// os.WriteFile truncates first and writes second, so a crash (or a concurrent
+// reader) can observe an empty or half-written file. That matters most for the
+// documents the engine overwrites in place: state.md is parsed on every read, and
+// a torn write made the parse fail permanently — every later state operation
+// returned "parse state ..." for that Agent. Temp file + rename makes the swap
+// atomic on POSIX, so a reader sees either the old file or the new one.
 func (fs *FileStoreImpl) Write(path string, data []byte) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -63,7 +71,36 @@ func (fs *FileStoreImpl) Write(path string, data []byte) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(fullPath, data, 0644)
+	return writeFileAtomic(fullPath, data, 0644)
+}
+
+// writeFileAtomic writes data to a sibling temp file and renames it over path.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, ".heron-write-*")
+	if err != nil {
+		return err
+	}
+	tempName := temp.Name()
+	// Best effort: after a successful rename this removes nothing.
+	defer func() { _ = os.Remove(tempName) }()
+
+	if err := temp.Chmod(mode); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempName, path)
 }
 
 func (fs *FileStoreImpl) Append(path string, data []byte) error {

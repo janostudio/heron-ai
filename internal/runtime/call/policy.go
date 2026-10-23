@@ -85,10 +85,21 @@ func resolveTemplate(value string, req types.CallRequest) (string, error) {
 	return value, nil
 }
 
+// maxRecordTemplateExpansions bounds one expansion pass. A record's Summary and
+// Data are model-authored, so they can contain a ${records....} placeholder of
+// their own: "${records.A}" whose summary is literally "${records.A}" expands to
+// itself forever. The bound turns that (and a two-record cycle) into a
+// configuration error instead of a goroutine pinned at 100% CPU that no context
+// cancellation can reach.
+const maxRecordTemplateExpansions = 64
+
 // expandRecordTemplates resolves every ${records....} placeholder against the
 // given records.
 func expandRecordTemplates(value string, records []types.SharedRecord) (string, error) {
-	for {
+	for expansions := 0; ; expansions++ {
+		if expansions >= maxRecordTemplateExpansions {
+			return "", fmt.Errorf("record placeholders did not converge after %d expansions: %q", maxRecordTemplateExpansions, value)
+		}
 		start := strings.Index(value, "${records.")
 		if start < 0 {
 			return value, nil
@@ -103,7 +114,13 @@ func expandRecordTemplates(value string, records []types.SharedRecord) (string, 
 		if err != nil {
 			return "", err
 		}
-		value = value[:start] + resolved + value[end+1:]
+		expanded := value[:start] + resolved + value[end+1:]
+		if expanded == value {
+			// The placeholder resolved to itself: the record echoes the template
+			// it was substituted into. No number of retries changes the answer.
+			return "", fmt.Errorf("record placeholder %q resolves to itself", placeholder)
+		}
+		value = expanded
 	}
 }
 

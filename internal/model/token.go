@@ -13,11 +13,27 @@ func NewTokenCounter() *TokenCounter {
 	return &TokenCounter{}
 }
 
-// EstimateTokens provides a rough token count estimate (4 chars ≈ 1 token for English)
+// EstimateTokens provides a rough token count estimate: 4 ASCII characters per
+// token, one token per non-ASCII rune.
+//
+// The second half matters: CJK text is roughly one token per character, so the
+// flat 4:1 ratio under-reported Chinese prompts by three to four times. This
+// mirrors estimateContextText in internal/agent, which is what the compaction
+// budget is built on.
 func (c *TokenCounter) EstimateTokens(text string) int {
-	charCount := utf8.RuneCountInString(text)
-	// Rough approximation: 4 characters per token for English text
-	return (charCount + 3) / 4
+	if text == "" {
+		return 0
+	}
+	ascii := 0
+	other := 0
+	for _, r := range text {
+		if r < utf8.RuneSelf {
+			ascii++
+			continue
+		}
+		other++
+	}
+	return (ascii+3)/4 + other
 }
 
 // EstimateMessages estimates total tokens for a message list

@@ -109,8 +109,8 @@ func TestNextWakingTeamSkipsBusyTeam(t *testing.T) {
 	require.Equal(t, "worktree", target)
 
 	// Once its round is running, the wake-up must not pick it again.
-	require.True(t, rt.tryMarkTeamBusy("worktree"))
-	defer rt.clearTeamBusy("worktree")
+	require.True(t, rt.tryMarkTeamBusy(session.ID, "worktree"))
+	defer rt.clearTeamBusy(session.ID, "worktree")
 	target, messages, err := rt.nextWakingTeam(ctx, session.ID)
 	require.NoError(t, err)
 	require.Empty(t, target, "a busy team must not be woken")

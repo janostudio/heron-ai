@@ -236,10 +236,15 @@ func (l *RotatingLogger) syncDate() error {
 	if date == l.curDate {
 		return nil
 	}
+	previousDate, previousSeq, previousName := l.curDate, l.curSeq, l.fileName
 	l.curDate = date
 	l.curSeq = 0
 	l.fileName = fileNameFor(l.curDate, l.curSeq)
 	if err := l.openFile(); err != nil {
+		// Roll back: leaving curDate advanced made the next call take the
+		// "same date" early return, so a transient failure (permissions, disk
+		// full) meant every later write was dropped for the rest of the day.
+		l.curDate, l.curSeq, l.fileName = previousDate, previousSeq, previousName
 		return err
 	}
 	l.pruneOld()
@@ -384,9 +389,19 @@ func (l *RotatingLogger) write(level Level, msg string, fields map[string]any) {
 			return
 		}
 	}
+	if l.curFile == nil {
+		// openFile failed and left no handle. Writing would panic on the nil
+		// *os.File; retrying once recovers from a transient failure, and the
+		// stderr line keeps the loss visible instead of silent.
+		if err := l.openFile(); err != nil || l.curFile == nil {
+			fmt.Fprintf(os.Stderr, "heron: log write skipped, cannot open log file: %v\n", err)
+			return
+		}
+	}
 
 	n, err := l.curFile.Write(data)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "heron: log write failed: %v\n", err)
 		return
 	}
 	l.curSize += int64(n)

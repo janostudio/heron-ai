@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -52,6 +53,10 @@ type SessionReplay struct {
 	SessionID string
 	Events    []SessionEvent
 	LastSeq   int64
+	// Skipped counts lines that could not be decoded and were dropped. A
+	// non-zero value means the log has a damaged line (a torn write, a manual
+	// edit); the rest of the session stays readable and appendable.
+	Skipped int
 }
 
 // SessionWriter appends ordered session events and replays them. Append routes
@@ -87,8 +92,10 @@ func (w *JSONLSessionWriter) Append(ctx context.Context, sessionID string, layer
 	if err := contextErr(ctx); err != nil {
 		return SessionEvent{}, err
 	}
-	if strings.TrimSpace(sessionID) == "" {
-		return SessionEvent{}, errors.New("session id is required")
+	// The session id becomes a directory name; reject anything that is not a
+	// single path segment before it reaches filepath.Join.
+	if err := ValidatePathSegment("session id", sessionID); err != nil {
+		return SessionEvent{}, err
 	}
 	if strings.TrimSpace(event.Type) == "" {
 		return SessionEvent{}, errors.New("event type is required")
@@ -133,8 +140,8 @@ func (w *JSONLSessionWriter) Append(ctx context.Context, sessionID string, layer
 }
 
 func (w *JSONLSessionWriter) Subscribe(ctx context.Context, sessionID string, afterSeq int64) (<-chan SessionEvent, error) {
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, errors.New("session id is required")
+	if err := ValidatePathSegment("session id", sessionID); err != nil {
+		return nil, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -205,8 +212,10 @@ func (w *JSONLSessionWriter) Replay(ctx context.Context, sessionID string) (*Ses
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, errors.New("session id is required")
+	// A bad id must not be readable either: Replay opens the same paths
+	// Append writes, so the same segment rule applies.
+	if err := ValidatePathSegment("session id", sessionID); err != nil {
+		return nil, err
 	}
 
 	w.mu.Lock()
@@ -239,12 +248,33 @@ func (w *JSONLSessionWriter) replayLocked(sessionID string) (*SessionReplay, err
 	if !found || len(replay.Events) == 0 {
 		return nil, ErrNotFound
 	}
+	if replay.Skipped > 0 {
+		// Visible, not silent: the session still works, but whoever reads the
+		// log should know a line is missing from it.
+		logging.Warn("session event log has undecodable lines", map[string]any{
+			"session_id": sessionID,
+			"skipped":    replay.Skipped,
+			"last_seq":   replay.LastSeq,
+		})
+	}
 	sort.SliceStable(replay.Events, func(i, j int) bool {
 		return replay.Events[i].Seq < replay.Events[j].Seq
 	})
 	return replay, nil
 }
 
+// decodeEventLines fills replay from one layer file.
+//
+// A line that cannot be decoded is counted and skipped, not returned as an
+// error: one damaged line used to make the whole session unreadable, and since
+// the first Append initialises its sequence counter from a replay, it also made
+// the session permanently unwritable — the conversation died from a single bad
+// byte. sessionlist already skips bad lines when it lists sessions, so the two
+// readers now agree.
+//
+// The torn final line is handled separately above (a file that does not end in
+// "\n" has a partial write), because that is a normal crash artefact rather than
+// damage.
 func decodeEventLines(data []byte, replay *SessionReplay) error {
 	content := string(data)
 	lines := strings.Split(content, "\n")
@@ -261,7 +291,8 @@ func decodeEventLines(data []byte, replay *SessionReplay) error {
 
 		var event SessionEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return fmt.Errorf("decode session event: %w", err)
+			replay.Skipped++
+			continue
 		}
 		replay.Events = append(replay.Events, event)
 		if event.Seq > replay.LastSeq {

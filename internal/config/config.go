@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
@@ -19,11 +20,56 @@ type ConfigLoader struct {
 	fileStore storage.FileStore
 }
 
+// settingsCache keeps the parsed-once bytes of .agents/settings.json per base
+// directory.
+//
+// Every Load* method used to read and unmarshal the same file independently —
+// seven reads and seven parses for one startup, and one per call site because
+// ConfigLoader is constructed per caller. The settings file is read once when the
+// runtime is built and is not re-read while the process lives (a changed runtime
+// needs a restart either way), so a package-level cache changes no behaviour
+// while removing the repeated IO.
+var (
+	settingsCacheMu sync.Mutex
+	settingsCache   = map[string]settingsEntry{}
+)
+
+type settingsEntry struct {
+	data    []byte
+	present bool
+}
+
+// settingsBytes returns the settings file contents, reading it at most once per
+// base directory. present is false when the file does not exist, which is a
+// legal state (every section falls back to its defaults).
+func (l *ConfigLoader) settingsBytes() (data []byte, present bool) {
+	key := l.baseDir
+	settingsCacheMu.Lock()
+	defer settingsCacheMu.Unlock()
+	if entry, ok := settingsCache[key]; ok {
+		return entry.data, entry.present
+	}
+	raw, err := l.fileStore.Read(filepath.Join(".agents", "settings.json"))
+	if err != nil {
+		settingsCache[key] = settingsEntry{}
+		return nil, false
+	}
+	settingsCache[key] = settingsEntry{data: raw, present: true}
+	return raw, true
+}
+
+// InvalidateSettingsCache drops the cached settings so the next Load* re-reads
+// them. Used by long-lived hosts that reload configuration in place.
+func InvalidateSettingsCache() {
+	settingsCacheMu.Lock()
+	defer settingsCacheMu.Unlock()
+	settingsCache = map[string]settingsEntry{}
+}
+
 func (l *ConfigLoader) LoadRuntimeLimits() types.RuntimeLimits {
 	limits := types.RuntimeLimits{}.WithDefaults()
-	path := filepath.Join(".agents", "settings.json")
-	data, err := l.fileStore.Read(path)
-	if err != nil {
+	data, present := l.settingsBytes()
+	if !present {
 		return limits
 	}
 	var raw struct {
@@ -39,9 +85,8 @@ func (l *ConfigLoader) LoadRuntimeLimits() types.RuntimeLimits {
 // 文件缺失/字段缺失时返回零值 LoggingConfig（各字段为空字符串/0）。
 func (l *ConfigLoader) LoadLoggingSettings() types.LoggingConfig {
 	var cfg types.LoggingConfig
-	path := filepath.Join(".agents", "settings.json")
-	data, err := l.fileStore.Read(path)
-	if err != nil {
+	data, present := l.settingsBytes()
+	if !present {
 		return cfg
 	}
 	var raw struct {
@@ -56,9 +101,8 @@ func (l *ConfigLoader) LoadLoggingSettings() types.LoggingConfig {
 // LoadToolPolicyPhrases 读取 .agents/settings.json 的 tools.restricted_bash_phrases。
 // 这些短语会与内置安全底线合并，只增不减；文件缺失时返回 nil。
 func (l *ConfigLoader) LoadToolPolicyPhrases() []string {
-	path := filepath.Join(".agents", "settings.json")
-	data, err := l.fileStore.Read(path)
-	if err != nil {
+	data, present := l.settingsBytes()
+	if !present {
 		return nil
 	}
 	var raw struct {
@@ -76,9 +120,8 @@ func (l *ConfigLoader) LoadToolPolicyPhrases() []string {
 // 文件缺失/字段缺失时返回零值 KnowledgeConfig（SummaryModel=""）。
 func (l *ConfigLoader) LoadKnowledgeSettings() types.KnowledgeConfig {
 	var cfg types.KnowledgeConfig
-	path := filepath.Join(".agents", "settings.json")
-	data, err := l.fileStore.Read(path)
-	if err != nil {
+	data, present := l.settingsBytes()
+	if !present {
 		return cfg
 	}
 	var raw struct {
@@ -102,7 +145,7 @@ func (l *ConfigLoader) LoadKnowledgeSettings() types.KnowledgeConfig {
 // 进程的语义，由 app 层处理。
 func (l *ConfigLoader) LoadWebSettings() types.WebConfig {
 	var cfg types.WebConfig
-	if data, err := l.fileStore.Read(filepath.Join(".agents", "settings.json")); err == nil {
+	if data, present := l.settingsBytes(); present {
 		var raw struct {
 			Web types.WebConfig `json:"web"`
 		}
@@ -125,9 +168,8 @@ func (l *ConfigLoader) LoadWebSettings() types.WebConfig {
 //
 // 文件或 env 段缺失是合法状态，返回 nil。
 func (l *ConfigLoader) LoadGlobalEnv() map[string]string {
-	path := filepath.Join(".agents", "settings.json")
-	data, err := l.fileStore.Read(path)
-	if err != nil {
+	data, present := l.settingsBytes()
+	if !present {
 		return nil
 	}
 	var raw struct {
@@ -164,16 +206,15 @@ func (l *ConfigLoader) LoadGlobalEnv() map[string]string {
 // 没配会让用户以为工具不可用是别的原因。
 // 文件不存在（err != nil）不算错误：没有 .agents/settings.json 是合法状态。
 func (l *ConfigLoader) LoadMCPServers() ([]types.MCPServerConfig, error) {
-	path := filepath.Join(".agents", "settings.json")
-	data, err := l.fileStore.Read(path)
-	if err != nil {
+	data, present := l.settingsBytes()
+	if !present {
 		return nil, nil
 	}
 	var raw struct {
 		MCP []types.MCPServerConfig `json:"mcp"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse .agents/settings.json: %w", err)
 	}
 	return raw.MCP, nil
 }

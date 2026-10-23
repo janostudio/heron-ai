@@ -78,3 +78,27 @@ func TestFileStore_ReadAbsolutePath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "absolute", string(data))
 }
+
+// TestWriteIsAtomicAndLeavesNoTempFiles covers the in-place document writes the
+// engine relies on (state.md, settings, indexes): os.WriteFile truncated first,
+// so a crash left a file that no longer parsed. The atomic swap leaves either
+// the old content or the new one, and no temp files behind.
+func TestWriteIsAtomicAndLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+	path := filepath.Join(".agents", "data", "agents", "a", "state", "state.md")
+
+	require.NoError(t, store.Write(path, []byte("first")))
+	require.NoError(t, store.Write(path, []byte("second version, longer than the first")))
+
+	data, err := store.Read(path)
+	require.NoError(t, err)
+	require.Equal(t, "second version, longer than the first", string(data))
+
+	entries, err := os.ReadDir(filepath.Join(dir, ".agents", "data", "agents", "a", "state"))
+	require.NoError(t, err)
+	for _, entry := range entries {
+		require.NotContains(t, entry.Name(), ".heron-write-",
+			"the atomic write must not leave temp files behind")
+	}
+}

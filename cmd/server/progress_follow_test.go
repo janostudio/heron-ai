@@ -85,7 +85,7 @@ func TestSessionHasBackgroundWork(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, sessionHasBackgroundWork(tc.events))
+			require.Equal(t, tc.want, backgroundWorkFromEvents(tc.events).pending())
 		})
 	}
 }
@@ -100,13 +100,13 @@ func TestSessionHasBackgroundWorkAcceptsTypedPayloads(t *testing.T) {
 			"turn": types.FlowTurn{Next: &types.Route{Action: types.NextActivate}},
 		},
 	}
-	require.True(t, sessionHasBackgroundWork([]storage.SessionEvent{typedTurn}))
+	require.True(t, backgroundWorkFromEvents([]storage.SessionEvent{typedTurn}).pending())
 
 	typedMail := storage.SessionEvent{
 		EventHeader: types.EventHeader{Type: types.EventMailboxMessageEnqueued},
 		Payload:     map[string]any{"message": types.MailboxMessage{MessageID: "mb_typed"}},
 	}
-	require.True(t, sessionHasBackgroundWork([]storage.SessionEvent{typedMail}))
+	require.True(t, backgroundWorkFromEvents([]storage.SessionEvent{typedMail}).pending())
 }
 
 // A second turn on a session that is still streaming must attach to the

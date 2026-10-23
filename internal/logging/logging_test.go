@@ -416,3 +416,33 @@ func TestSetDefaultNil(t *testing.T) {
 	Info("x", nil)
 	Debug("y", nil)
 }
+
+// TestSyncDateRollsBackOnOpenFailure covers the "silent for the rest of the day"
+// failure: syncDate advanced curDate before opening the file, so a failed open
+// left the date already updated and every later call took the same-date early
+// return — writes were dropped without a retry and without a word.
+func TestSyncDateRollsBackOnOpenFailure(t *testing.T) {
+	dir := t.TempDir()
+	logger := NewRotatingLogger(dir, Config{Dir: "logs", MaxFileSize: "1MB"})
+
+	// Make the next open fail: replace the log directory with a regular file.
+	if err := os.RemoveAll(filepath.Join(dir, "logs")); err != nil {
+		t.Fatalf("remove logs dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "logs"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("replace logs dir: %v", err)
+	}
+
+	logger.mu.Lock()
+	logger.curDate = "1999-01-01" // force a date change
+	openErr := logger.syncDate()
+	gotDate := logger.curDate
+	logger.mu.Unlock()
+
+	if openErr == nil {
+		t.Fatal("syncDate must report the failed open")
+	}
+	if gotDate != "1999-01-01" {
+		t.Fatalf("curDate = %q, want the pre-attempt value: a failed open must not advance the date", gotDate)
+	}
+}

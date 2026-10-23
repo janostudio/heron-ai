@@ -284,12 +284,7 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 		// A brand-new session has no id until Start returns, so there was no
 		// subscription window to stream from: replay the turn's events as one
 		// ordered snapshot instead.
-		pump = &eventPump{
-			sessions:   s.sessions,
-			emit:       s.writeProgress,
-			flowTurnID: result.Turn.ID,
-			done:       make(chan struct{}),
-		}
+		pump = newSnapshotPump(s.sessions, s.writeProgress, result.Turn.ID)
 		pump.replayEventsSnapshot(ctx, result.Session.ID)
 		// Following needs a live subscription, not a one-shot snapshot: the
 		// background turns happen after this response is written.
@@ -691,6 +686,30 @@ func runJSONRPC(flowPath string, o cliOverrides) {
 	server := newJSONRPCServer(bundle.Flow, bundle.Definitions.Flow.ID, writer).withSessions(bundle.Sessions)
 	if err := server.Serve(ctx, os.Stdin); err != nil {
 		fmt.Fprintf(os.Stderr, "JSON-RPC server error: %v\n", err)
-		os.Exit(1)
+		shutdownAndExit(bundle, 1)
 	}
+	// A normal return is stdin EOF — the documented shutdown for a bridge
+	// client. It has to close the runtime like every other exit path does
+	// (main.go's shutdownAndExit contract): an MCP server started with
+	// transport=stdio is a child process, and leaving it behind leaves an
+	// orphan that keeps running with no owner.
+	if err := closeJSONRPCBundle(bundle); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: error shutting down runtime: %v\n", err)
+	}
+}
+
+// runtimeCloser is the part of the built runtime that has to be released on
+// exit. Narrowed to an interface so the shutdown contract is testable without
+// building a whole bundle.
+type runtimeCloser interface {
+	Close() error
+}
+
+// closeJSONRPCBundle is the normal-exit half of shutdownAndExit: same close,
+// without the os.Exit that would skip the caller's own return.
+func closeJSONRPCBundle(bundle runtimeCloser) error {
+	if bundle == nil {
+		return nil
+	}
+	return bundle.Close()
 }

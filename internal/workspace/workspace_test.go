@@ -241,3 +241,22 @@ func TestWorkspaceOperationKindIsDocumented(t *testing.T) {
 	operation := types.WorkspaceOperation{Kind: "read"}
 	require.Equal(t, "read", operation.Kind)
 }
+
+// TestDefaultExcludedDirOnlyAtBuildLocations covers a search silently skipping
+// real source: the rule used to match the name at any depth, so a package at
+// src/build/ or a directory named target/ two levels down disappeared from
+// results with no sign that anything had been skipped.
+func TestDefaultExcludedDirOnlyAtBuildLocations(t *testing.T) {
+	excluded := []string{"build", "dist", "target", ".git", "a/b/node_modules"}
+	for _, path := range excluded {
+		if !isDefaultExcludedDir(path) {
+			t.Errorf("isDefaultExcludedDir(%q) = false, want true", path)
+		}
+	}
+	kept := []string{"src/build", "internal/target", "docs/build", "frontend/dist", "a/b/c/dist", "buildtools"}
+	for _, path := range kept {
+		if isDefaultExcludedDir(path) {
+			t.Errorf("isDefaultExcludedDir(%q) = true, want false: real source must stay searchable", path)
+		}
+	}
+}

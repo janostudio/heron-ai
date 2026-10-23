@@ -20,7 +20,10 @@ import (
 )
 
 const (
-	defaultWebMaxBytes          = 256 * 1024
+	defaultWebMaxBytes = 256 * 1024
+	// hardWebMaxBytes caps a model-supplied max_bytes: the config default is a
+	// budget, not a guarantee about what the caller may ask for.
+	hardWebMaxBytes             = 5 * 1024 * 1024
 	defaultWebSearchMaxResults  = 10
 	defaultWebSearchTimeoutMs   = 30000
 	defaultWebFetchTimeoutMs    = 45000
@@ -665,6 +668,12 @@ func (t *WebFetchTool) Execute(ctx context.Context, params map[string]any) (*typ
 	maxBytes := intParam(params, "max_bytes")
 	if maxBytes <= 0 {
 		maxBytes = t.config.MaxResponseBytes
+	}
+	// The model supplies this value, so it has to be clamped: readLimitedBody
+	// honours whatever it is given, and "max_bytes: 2000000000" is otherwise a
+	// one-call out-of-memory.
+	if maxBytes > hardWebMaxBytes {
+		maxBytes = hardWebMaxBytes
 	}
 	outcome, err := provider.Fetch(ctx, t.client, t.config, fetchRequest{
 		Target:       parsed.String(),

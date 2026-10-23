@@ -25,8 +25,17 @@ import (
 // moment the dispatching turn returns, and a background team must not be killed
 // by that. A panic is contained with recover() so a misbehaving team cannot
 // take down the process; the message is then marked dead.
+// teamKey identifies a Team's execution slot. The session is part of the key
+// because Teams are shared definitions: two conversations running the same
+// Team are two independent execution units, and keying on the Team alone made
+// one session's running round look like the other's.
+type teamKey struct {
+	sessionID string
+	teamID    string
+}
+
 func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, targetTeam string, msg types.MailboxMessage) {
-	if !r.tryMarkTeamBusy(targetTeam) {
+	if !r.tryMarkTeamBusy(session.ID, targetTeam) {
 		// The silent path: the Team is mid-round, so the message stays
 		// pending and drainTeamInbox picks it up when that round ends.
 		// Without this line a backlog looks like a lost message.
@@ -80,7 +89,7 @@ func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, ta
 			}
 			// Free the slot before draining, so the drain can take the next
 			// message for this Team.
-			r.clearTeamBusy(targetTeam)
+			r.clearTeamBusy(session.ID, targetTeam)
 			r.drainTeamInbox(ctx, session, targetTeam)
 		}()
 
@@ -119,47 +128,64 @@ func (r *Runtime) drainTeamInbox(ctx context.Context, session types.FlowSession,
 	r.launchAsyncDispatch(session, messages[0].CauseFlowTurnID, teamID, messages[0])
 }
 
-// tryMarkTeamBusy claims the Team's execution slot, returning false when the
-// Team is already running. It is the concurrency guard that keeps a Team from
-// running two rounds at once.
-func (r *Runtime) tryMarkTeamBusy(teamID string) bool {
+// tryMarkTeamBusy claims one session's execution slot for a Team, returning
+// false when that Team is already running in that session. It is the
+// concurrency guard that keeps a Team from running two rounds at once; another
+// session running the same Team is a different slot (see teamKey).
+func (r *Runtime) tryMarkTeamBusy(sessionID, teamID string) bool {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
 	if r.busyTeams == nil {
-		r.busyTeams = make(map[string]bool)
+		r.busyTeams = make(map[teamKey]bool)
 	}
-	if r.busyTeams[teamID] {
+	key := teamKey{sessionID: sessionID, teamID: teamID}
+	if r.busyTeams[key] {
 		return false
 	}
-	r.busyTeams[teamID] = true
+	r.busyTeams[key] = true
 	return true
 }
 
-func (r *Runtime) clearTeamBusy(teamID string) {
+func (r *Runtime) clearTeamBusy(sessionID, teamID string) {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
-	delete(r.busyTeams, teamID)
+	delete(r.busyTeams, teamKey{sessionID: sessionID, teamID: teamID})
 }
 
-// teamBusy reports whether a Team is executing in this process right now. The
+// teamBusy reports whether a Team is executing in one session right now. The
 // scheduler uses it to keep from starting a second round for a Team whose
 // first round the background dispatcher already owns.
-func (r *Runtime) teamBusy(teamID string) bool {
+func (r *Runtime) teamBusy(sessionID, teamID string) bool {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
-	return r.busyTeams[teamID]
+	return r.busyTeams[teamKey{sessionID: sessionID, teamID: teamID}]
 }
 
-// liveTeams returns a snapshot of the Teams executing in this process. Recovery
-// uses it to tell a Team that is still running from one a crash left behind:
-// both look like "started with no completion" in the event stream, and only the
-// former must not be reported as interrupted.
+// liveTeamsFor returns the Teams executing in one session. Recovery and the
+// running-team check read it: a Team running in another session must neither
+// be reported as interrupted in this one nor block its input.
+func (r *Runtime) liveTeamsFor(sessionID string) map[string]bool {
+	r.dispatchMu.Lock()
+	defer r.dispatchMu.Unlock()
+	live := make(map[string]bool, len(r.busyTeams))
+	for key := range r.busyTeams {
+		if key.sessionID == sessionID {
+			live[key.teamID] = true
+		}
+	}
+	return live
+}
+
+// liveTeams returns a snapshot of the Teams executing anywhere in this process.
+// Recovery uses it to tell a Team that is still running from one a crash left
+// behind: both look like "started with no completion" in the event stream, and
+// only the former must not be reported as interrupted.
 func (r *Runtime) liveTeams() map[string]bool {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
 	live := make(map[string]bool, len(r.busyTeams))
-	for team := range r.busyTeams {
-		live[team] = true
+	for key := range r.busyTeams {
+		live[key.teamID] = true
 	}
 	return live
 }
@@ -193,11 +219,25 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 		"duration_ms":     time.Since(started).Milliseconds(),
 	})
 }
+
+// wakeRetry bounds the re-check of a session that was still running when the
+// wake-up arrived. The window covers the dispatching turn's own write-out: its
+// flow_session.updated lands before the background Team finishes, so a wake-up
+// that arrives in between has to wait rather than give up. One wait per session
+// at a time (pendingWakes), so several Teams finishing together do not stack
+// timers.
+var (
+	wakeRetryInterval = 500 * time.Millisecond
+	wakeRetryAttempts = 120 // ~1 minute at the default interval
+)
+
 // wakeIfIdle calls the injected waker only when the session is idle enough to
-// resume. A running session (including the dispatching turn itself, whose
-// flow_session.updated event lands before the background team finishes) is left
-// alone: its result message sits in the inbox and the next turn drains it.
+// resume.
 func (r *Runtime) wakeIfIdle(ctx context.Context, sessionID string) {
+	r.wakeIfIdleAttempt(ctx, sessionID, 1)
+}
+
+func (r *Runtime) wakeIfIdleAttempt(ctx context.Context, sessionID string, attempt int) {
 	if r.wakeFn == nil {
 		logging.Debug("wake skipped: no waker configured", map[string]any{
 			"flow_session_id": sessionID,
@@ -214,10 +254,12 @@ func (r *Runtime) wakeIfIdle(ctx context.Context, sessionID string) {
 		return
 	}
 	if session.Status == types.SessionRunning {
-		logging.Debug("wake skipped: session running", map[string]any{
-			"flow_session_id": sessionID,
-			"session_status":  string(session.Status),
-		})
+		// A running session is not "no work to deliver": the run may be the
+		// dispatching turn that has already ended, whose status write simply
+		// has not landed yet. Giving up here lost the wake-up for good — the
+		// result message sat in the inbox until the next user message, which
+		// for an unattended session means never. Re-check instead.
+		r.scheduleWakeRetry(sessionID, attempt)
 		return
 	}
 	switch session.Status {
@@ -238,6 +280,49 @@ func (r *Runtime) wakeIfIdle(ctx context.Context, sessionID string) {
 			"session_status":  string(session.Status),
 		})
 	}
+}
+
+// scheduleWakeRetry re-checks one session after a bounded delay. The goroutine
+// owns no resources beyond its timer and is capped by wakeRetryAttempts, so a
+// session that never becomes idle leaves nothing behind.
+func (r *Runtime) scheduleWakeRetry(sessionID string, attempt int) {
+	if attempt > wakeRetryAttempts {
+		logging.Warn("wake retry exhausted: session stayed running", map[string]any{
+			"flow_session_id": sessionID,
+			"attempts":        attempt - 1,
+		})
+		return
+	}
+	r.dispatchMu.Lock()
+	if r.pendingWakes == nil {
+		r.pendingWakes = make(map[string]bool)
+	}
+	if r.pendingWakes[sessionID] {
+		r.dispatchMu.Unlock()
+		logging.Debug("wake retry already pending", map[string]any{
+			"flow_session_id": sessionID,
+		})
+		return
+	}
+	r.pendingWakes[sessionID] = true
+	r.dispatchMu.Unlock()
+
+	delay := wakeRetryInterval
+	logging.Debug("wake deferred: session running", map[string]any{
+		"flow_session_id": sessionID,
+		"attempt":         attempt,
+		"retry_in_ms":     delay.Milliseconds(),
+	})
+	go func() {
+		time.Sleep(delay)
+		// Release before re-checking: the re-check schedules the next retry
+		// itself when the session is still running, and a marker still held
+		// here would make that call a no-op and end the chain after one hop.
+		r.dispatchMu.Lock()
+		delete(r.pendingWakes, sessionID)
+		r.dispatchMu.Unlock()
+		r.wakeIfIdleAttempt(context.Background(), sessionID, attempt+1)
+	}()
 }
 
 // recordBatchDispatched writes the end-of-turn EventMailboxBatchDispatched

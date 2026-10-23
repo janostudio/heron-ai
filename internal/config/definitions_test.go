@@ -529,50 +529,89 @@ func TestResolveWorkspace(t *testing.T) {
 	}
 
 	t.Run("agent wins over team and flow", func(t *testing.T) {
-		got := resolveWorkspace(
+		got, err := resolveWorkspace(
 			types.Flow{Workspace: ssh("flow")},
 			map[string]types.Team{"t": team(ssh("team"))},
 			map[string]types.AgentConfig{"a": agent(ssh("agent"))},
 		)
+		require.NoError(t, err)
 		require.NotNil(t, got)
 		require.Equal(t, "agent", got.SSH.Host)
 	})
 
 	t.Run("team wins over flow", func(t *testing.T) {
-		got := resolveWorkspace(
+		got, err := resolveWorkspace(
 			types.Flow{Workspace: ssh("flow")},
 			map[string]types.Team{"t": team(ssh("team"))},
 			map[string]types.AgentConfig{"a": agent(nil)},
 		)
+		require.NoError(t, err)
 		require.NotNil(t, got)
 		require.Equal(t, "team", got.SSH.Host)
 	})
 
 	t.Run("flow used when lower levels empty", func(t *testing.T) {
-		got := resolveWorkspace(
+		got, err := resolveWorkspace(
 			types.Flow{Workspace: ssh("flow")},
 			map[string]types.Team{"t": team(nil)},
 			map[string]types.AgentConfig{"a": agent(nil)},
 		)
+		require.NoError(t, err)
 		require.NotNil(t, got)
 		require.Equal(t, "flow", got.SSH.Host)
 	})
 
 	t.Run("nil when nothing configured", func(t *testing.T) {
-		got := resolveWorkspace(
+		got, err := resolveWorkspace(
 			types.Flow{},
 			map[string]types.Team{"t": team(nil)},
 			map[string]types.AgentConfig{"a": agent(nil)},
 		)
+		require.NoError(t, err)
 		require.Nil(t, got)
 	})
 
+	t.Run("agreeing declarations are accepted", func(t *testing.T) {
+		got, err := resolveWorkspace(
+			types.Flow{},
+			map[string]types.Team{"t": team(ssh("shared"))},
+			map[string]types.AgentConfig{"a": agent(ssh("shared")), "b": agent(ssh("shared"))},
+		)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, "shared", got.SSH.Host)
+	})
+
+	// Conflicting declarations used to be resolved by Go's map iteration order:
+	// the same config could pick a different backend on the next start.
+	t.Run("conflicting agent declarations are an error", func(t *testing.T) {
+		_, err := resolveWorkspace(
+			types.Flow{},
+			map[string]types.Team{"t": team(nil)},
+			map[string]types.AgentConfig{"a": agent(ssh("one")), "b": agent(ssh("two"))},
+		)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "conflicting agent-level workspaces")
+		require.Contains(t, err.Error(), "a")
+		require.Contains(t, err.Error(), "b")
+	})
+
+	t.Run("flow level resolves a lower-level conflict", func(t *testing.T) {
+		_, err := resolveWorkspace(
+			types.Flow{Workspace: ssh("flow")},
+			map[string]types.Team{"t": team(nil)},
+			map[string]types.AgentConfig{"a": agent(ssh("one")), "b": agent(ssh("two"))},
+		)
+		require.Error(t, err, "an explicit flow backend does not make the agent declarations agree")
+	})
+
 	t.Run("empty type treated as unset", func(t *testing.T) {
-		got := resolveWorkspace(
+		got, err := resolveWorkspace(
 			types.Flow{},
 			map[string]types.Team{"t": team(&types.WorkspaceConfig{})},
 			map[string]types.AgentConfig{"a": agent(nil)},
 		)
+		require.NoError(t, err)
 		require.Nil(t, got)
 	})
 }

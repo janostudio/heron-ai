@@ -15,9 +15,41 @@ import (
 )
 
 const (
-	defaultAnthropicVersion         = "2023-06-01"
-	defaultAnthropicMaxOutputTokens = 32768
+	defaultAnthropicVersion = "2023-06-01"
+	// defaultAnthropicMaxOutputTokens is the fallback when neither the profile
+	// nor the request says how many output tokens the model accepts. 8192 is the
+	// lowest documented output cap among the Claude models this engine targets;
+	// 32768 (the previous value) exceeded claude-3-5's cap and turned every turn
+	// into a 400 that the classifier refuses to retry.
+	defaultAnthropicMaxOutputTokens = 8192
+	// anthropicMaxTokensFloor bounds the downgrade retry below.
+	anthropicMaxTokensFloor = 1024
 )
+
+// anthropicMaxTokensDowngrade halves an oversized max_tokens after the provider
+// rejected it, once. Anthropic words that rejection as
+// "max_tokens: 32768 > 8192, which is the maximum allowed number of output
+// tokens for <model>", and it carries HTTP 400 — classified as bad request, so
+// nothing else in the retry path would ever see it.
+func anthropicMaxTokensDowngrade(req anthropicRequest, err error) (anthropicRequest, bool) {
+	if err == nil || req.MaxTokens <= anthropicMaxTokensFloor {
+		return req, false
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "max_tokens") {
+		return req, false
+	}
+	if !strings.Contains(message, "maximum") &&
+		!strings.Contains(message, "too large") &&
+		!strings.Contains(message, "exceed") {
+		return req, false
+	}
+	req.MaxTokens /= 2
+	if req.MaxTokens < anthropicMaxTokensFloor {
+		req.MaxTokens = anthropicMaxTokensFloor
+	}
+	return req, true
+}
 
 // AnthropicProvider speaks the native Anthropic Messages API. It converts the
 // engine's provider-neutral messages and tool calls into Anthropic content
@@ -171,6 +203,17 @@ func (p *AnthropicProvider) Chat(ctx context.Context, messages []types.Message, 
 
 	var wire anthropicResponse
 	if err := p.post(ctx, effective, req, &wire); err != nil {
+		// A max_tokens above the model's cap is a hard 400 that the error
+		// classifier treats as non-retryable, so one over-large default would
+		// fail every turn against that model. Halve it once and retry.
+		if downgraded, ok := anthropicMaxTokensDowngrade(req, err); ok {
+			req = downgraded
+			if retryErr := p.post(ctx, effective, req, &wire); retryErr == nil {
+				return withModel(convertAnthropicResponse(wire), modelName), nil
+			} else {
+				err = retryErr
+			}
+		}
 		if isUnsupportedParameterError(err) && hasAnthropicOptionalParameters(req) {
 			req = withoutAnthropicOptionalParameters(req)
 			if retryErr := p.post(ctx, effective, req, &wire); retryErr == nil {
