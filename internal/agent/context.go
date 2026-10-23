@@ -862,11 +862,31 @@ func (defaultContextTokenEstimator) EstimateTools(tools []types.JSONSchema) int 
 	return total
 }
 
+// estimateContextText approximates the token count of one string.
+//
+// "Four characters per token" holds for English and is wrong by a factor of
+// three to four for Chinese, Japanese and Korean: those are roughly one token
+// per character to the tokenizers the providers use. Dividing their rune count
+// by four under-reported the prompt size, so a CJK conversation hit the provider
+// with "prompt is too long" long before the local budget noticed — and the local
+// budget is what decides when to compact.
+//
+// ASCII keeps the 4:1 ratio; every other rune is charged one token. Over-
+// estimating is the safe direction here: it compacts sooner, never later.
 func estimateContextText(text string) int {
 	if text == "" {
 		return 0
 	}
-	return (utf8.RuneCountInString(text) + 3) / 4
+	ascii := 0
+	other := 0
+	for _, r := range text {
+		if r < utf8.RuneSelf {
+			ascii++
+			continue
+		}
+		other++
+	}
+	return (ascii+3)/4 + other
 }
 
 func truncateContextText(text string, maxChars int) string {

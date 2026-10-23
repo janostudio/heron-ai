@@ -169,8 +169,9 @@ func TestTokenCounter_EstimateTokens_Chinese(t *testing.T) {
 	c := NewTokenCounter()
 	text := "你好世界"
 	tokens := c.EstimateTokens(text)
-	// 4 runes, (4+3)/4 = 1 token (rough)
-	assert.Equal(t, 1, tokens)
+	// One token per CJK rune: the 4:1 rule under-reported Chinese by 3-4x,
+	// which is what let a prompt grow past the provider's limit unnoticed.
+	assert.Equal(t, 4, tokens)
 }
 
 func TestTokenCounter_EstimateMessages(t *testing.T) {
