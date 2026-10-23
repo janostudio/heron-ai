@@ -27,6 +27,7 @@ const (
 type ProviderError struct {
 	Kind       ProviderErrorKind
 	StatusCode int    // HTTP status code, 0 for non-HTTP failures
+	Code       string // provider error.code, when the body carries one
 	Message    string // original error text
 	Err        error  // underlying error (optional, surfaced via Unwrap)
 	// RetryAfter is the delay the provider asked for via the Retry-After
@@ -92,9 +93,44 @@ func (e *ProviderError) Retryable() bool {
 // the raw body text as Message; callers may override Message with a richer
 // formatted string.
 func ClassifyProviderError(statusCode int, errorType string, body []byte) *ProviderError {
-	kind := classifyKind(statusCode, errorType)
+	return ClassifyProviderErrorWithCode(statusCode, errorType, "", body)
+}
+
+// ClassifyProviderErrorWithCode also records the provider's error.code. OpenAI
+// compatible gateways put the machine-readable reason there
+// (context_length_exceeded, insufficient_quota, model_not_found, ...), which is
+// more reliable than matching the message text.
+func ClassifyProviderErrorWithCode(statusCode int, errorType, errorCode string, body []byte) *ProviderError {
+	kind := classifyKind(statusCode, errorType, errorCode)
 	message := strings.TrimSpace(string(body))
-	return &ProviderError{Kind: kind, StatusCode: statusCode, Message: message}
+	return &ProviderError{Kind: kind, StatusCode: statusCode, Code: strings.TrimSpace(errorCode), Message: message}
+}
+
+// IsContextLimit reports a request rejected for exceeding the context window.
+// Providers signal it through a code, a status, or free text; the code and
+// status are checked because the text differs per gateway.
+func (e *ProviderError) IsContextLimit() bool {
+	if e == nil {
+		return false
+	}
+	switch strings.ToLower(e.Code) {
+	case "context_length_exceeded", "context_window_exceeded", "input_too_long":
+		return true
+	}
+	return e.StatusCode == http.StatusRequestEntityTooLarge
+}
+
+// IsUnsupportedParameter reports a request rejected because a parameter is not
+// recognised, so the caller can retry without it.
+func (e *ProviderError) IsUnsupportedParameter() bool {
+	if e == nil {
+		return false
+	}
+	switch strings.ToLower(e.Code) {
+	case "unsupported_parameter", "unknown_parameter", "unrecognized_parameter", "invalid_parameter":
+		return true
+	}
+	return false
 }
 
 // classifyProviderError is kept as an unexported alias for tests within the
@@ -103,7 +139,16 @@ func classifyProviderError(statusCode int, errorType string, body []byte) *Provi
 	return ClassifyProviderError(statusCode, errorType, body)
 }
 
-func classifyKind(statusCode int, errorType string) ProviderErrorKind {
+func classifyKind(statusCode int, errorType, errorCode string) ProviderErrorKind {
+	// error.code is the machine-readable form; prefer it when present.
+	switch strings.ToLower(strings.TrimSpace(errorCode)) {
+	case "insufficient_quota", "billing_hard_limit_reached", "rate_limit_exceeded":
+		return KindRateLimit
+	case "model_not_found", "invalid_model", "context_length_exceeded":
+		return KindBadRequest
+	case "invalid_api_key", "invalid_organization":
+		return KindAuth
+	}
 	lower := strings.ToLower(strings.TrimSpace(errorType))
 	switch lower {
 	case "rate_limit_error", "rate_limit_exceeded", "rate_limited", "rate limit", "insufficient_quota", "quota_exceeded", "billing_error":

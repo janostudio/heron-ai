@@ -160,3 +160,40 @@ func TestParseRetryAfter(t *testing.T) {
 		}
 	})
 }
+
+// 行业约定的 error.code 比匹配措辞可靠：同一语义各家文案不同。
+func TestProviderErrorCodeIsAuthoritative(t *testing.T) {
+	ctxLimit := ClassifyProviderErrorWithCode(http.StatusBadRequest, "invalid_request_error", "context_length_exceeded", []byte("nope"))
+	if !ctxLimit.IsContextLimit() {
+		t.Fatal("context_length_exceeded must be recognised as a context limit")
+	}
+	if ctxLimit.Retryable() {
+		t.Fatal("a context limit is not retryable")
+	}
+
+	tooLarge := ClassifyProviderError(http.StatusRequestEntityTooLarge, "", []byte("payload too large"))
+	if !tooLarge.IsContextLimit() {
+		t.Fatal("HTTP 413 is a structural context-limit signal")
+	}
+
+	quota := ClassifyProviderErrorWithCode(http.StatusBadRequest, "", "insufficient_quota", []byte("no credit"))
+	if quota.Kind != KindRateLimit {
+		t.Fatalf("quota exhaustion must classify as rate limit, got %s", quota.Kind)
+	}
+
+	unsupported := ClassifyProviderErrorWithCode(http.StatusBadRequest, "", "unsupported_parameter", []byte("bad arg"))
+	if !unsupported.IsUnsupportedParameter() {
+		t.Fatal("unsupported_parameter must be recognised")
+	}
+}
+
+func TestProviderErrorFallsBackToStatusWithoutCode(t *testing.T) {
+	err := ClassifyProviderError(http.StatusTooManyRequests, "", []byte("slow down"))
+	if err.Kind != KindRateLimit || !err.Retryable() || err.IsContextLimit() {
+		t.Fatalf("unexpected classification: kind=%s retryable=%v", err.Kind, err.Retryable())
+	}
+	var target *ProviderError
+	if !errors.As(error(err), &target) {
+		t.Fatal("ProviderError must stay reachable via errors.As")
+	}
+}

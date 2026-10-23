@@ -53,6 +53,25 @@ func (l *ConfigLoader) LoadLoggingSettings() types.LoggingConfig {
 	return cfg
 }
 
+// LoadToolPolicyPhrases 读取 .agents/settings.json 的 tools.restricted_bash_phrases。
+// 这些短语会与内置安全底线合并，只增不减；文件缺失时返回 nil。
+func (l *ConfigLoader) LoadToolPolicyPhrases() []string {
+	path := filepath.Join(".agents", "settings.json")
+	data, err := l.fileStore.Read(path)
+	if err != nil {
+		return nil
+	}
+	var raw struct {
+		Tools struct {
+			RestrictedBashPhrases []string `json:"restricted_bash_phrases"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	return raw.Tools.RestrictedBashPhrases
+}
+
 // LoadKnowledgeSettings 读取 .agents/settings.json 的 knowledge 段。
 // 文件缺失/字段缺失时返回零值 KnowledgeConfig（SummaryModel=""）。
 func (l *ConfigLoader) LoadKnowledgeSettings() types.KnowledgeConfig {

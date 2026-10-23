@@ -60,8 +60,8 @@ var defaultModelClient = &http.Client{
 // classifyRejection builds the structured error for a non-2xx provider response
 // and carries the Retry-After hint so the agent loop can wait as long as the
 // provider asked instead of its own (shorter) backoff.
-func classifyRejection(statusCode int, errorType string, body []byte, header http.Header) *types.ProviderError {
-	providerErr := types.ClassifyProviderError(statusCode, errorType, body)
+func classifyRejection(statusCode int, errorType, errorCode string, body []byte, header http.Header) *types.ProviderError {
+	providerErr := types.ClassifyProviderErrorWithCode(statusCode, errorType, errorCode, body)
 	providerErr.RetryAfter = types.ParseRetryAfter(header.Get("Retry-After"))
 	return providerErr
 }

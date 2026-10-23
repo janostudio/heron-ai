@@ -92,6 +92,15 @@ type RenderContext struct {
 	ContextBlocks []types.ContextBlock
 }
 
+// WithToolPolicyPhrases rebuilds the default tool policy with additional
+// restricted Bash phrases from configuration. The built-in phrases always stay.
+func (t *TurnLoop) WithToolPolicyPhrases(extra []string) *TurnLoop {
+	if len(extra) > 0 {
+		t.toolPolicy = NewToolPolicy(extra)
+	}
+	return t
+}
+
 func NewTurnLoop(
 	model types.ModelProvider,
 	toolExecutor ToolExecutor,
@@ -1920,8 +1929,15 @@ func isContextLimitError(err error) bool {
 		return false
 	}
 	var providerErr *types.ProviderError
-	if errors.As(err, &providerErr) && !contextLimitStatuses[providerErr.StatusCode] {
-		return false
+	if errors.As(err, &providerErr) {
+		// 结构化信号优先：provider 的 error.code 与 HTTP 413 是行业约定的
+		// 超限标记，比匹配各家措辞可靠。
+		if providerErr.IsContextLimit() {
+			return true
+		}
+		if !contextLimitStatuses[providerErr.StatusCode] {
+			return false
+		}
 	}
 	message := strings.ToLower(err.Error())
 	for _, phrase := range contextLimitPhrases {

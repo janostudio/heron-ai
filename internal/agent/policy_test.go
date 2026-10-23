@@ -237,3 +237,33 @@ func TestTurnLoopStuckDetectionStopsRepeatedToolCalls(t *testing.T) {
 func TestIsContextLimitErrorDoesNotClassifyUnrelatedError(t *testing.T) {
 	require.False(t, isContextLimitError(errors.New("network unavailable")))
 }
+
+// 内置安全底线不能被配置清空；外部配置只能追加。
+func TestToolPolicyMergesDefaultsWithConfig(t *testing.T) {
+	policy := NewToolPolicy([]string{"kubectl delete ns", " RM -RF ", ""})
+
+	if decision, _, _ := policy.Check(context.Background(), ToolPolicyRequest{
+		Call: types.ToolCall{Name: "Bash", Arguments: map[string]any{"command": "git reset --hard HEAD"}},
+	}); decision != ToolRequireApproval {
+		t.Fatalf("built-in phrase must still apply, got %s", decision)
+	}
+	if decision, _, _ := policy.Check(context.Background(), ToolPolicyRequest{
+		Call: types.ToolCall{Name: "Bash", Arguments: map[string]any{"command": "kubectl delete ns prod"}},
+	}); decision != ToolRequireApproval {
+		t.Fatalf("configured phrase must apply, got %s", decision)
+	}
+	if decision, _, _ := policy.Check(context.Background(), ToolPolicyRequest{
+		Call: types.ToolCall{Name: "Bash", Arguments: map[string]any{"command": "go test ./..."}},
+	}); decision != ToolAllow {
+		t.Fatalf("ordinary command must pass, got %s", decision)
+	}
+}
+
+func TestDefaultToolPolicyIgnoresEmptyConfig(t *testing.T) {
+	policy := NewToolPolicy(nil)
+	if decision, _, _ := policy.Check(context.Background(), ToolPolicyRequest{
+		Call: types.ToolCall{Name: "Bash", Arguments: map[string]any{"command": "sudo reboot"}},
+	}); decision != ToolRequireApproval {
+		t.Fatalf("empty config must not disable defaults, got %s", decision)
+	}
+}

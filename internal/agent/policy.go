@@ -29,9 +29,37 @@ type ToolPolicy interface {
 	Check(ctx context.Context, req ToolPolicyRequest) (ToolDecision, string, error)
 }
 
-type DefaultToolPolicy struct{}
+// defaultRestrictedBashPhrases 是内置的安全底线，不随业务配置变化。
+var defaultRestrictedBashPhrases = []string{
+	"rm -rf", "sudo ", "shutdown", "mkfs", "git reset --hard",
+}
 
-func NewDefaultToolPolicy() *DefaultToolPolicy { return &DefaultToolPolicy{} }
+type DefaultToolPolicy struct {
+	restricted []string
+}
+
+// NewDefaultToolPolicy keeps the built-in list only.
+func NewDefaultToolPolicy() *DefaultToolPolicy { return NewToolPolicy(nil) }
+
+// NewToolPolicy merges the built-in list with externally configured phrases.
+// Extra entries only add restrictions; the defaults always apply so a missing
+// or empty config cannot silently disable the safety floor.
+func NewToolPolicy(extra []string) *DefaultToolPolicy {
+	merged := make([]string, 0, len(defaultRestrictedBashPhrases)+len(extra))
+	seen := make(map[string]struct{}, len(defaultRestrictedBashPhrases)+len(extra))
+	for _, phrase := range append(append([]string{}, defaultRestrictedBashPhrases...), extra...) {
+		normalized := strings.ToLower(strings.TrimSpace(phrase))
+		if normalized == "" {
+			continue
+		}
+		if _, duplicate := seen[normalized]; duplicate {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		merged = append(merged, normalized)
+	}
+	return &DefaultToolPolicy{restricted: merged}
+}
 
 func (p *DefaultToolPolicy) Check(_ context.Context, req ToolPolicyRequest) (ToolDecision, string, error) {
 	name := strings.TrimSpace(req.Call.Name)
@@ -41,7 +69,11 @@ func (p *DefaultToolPolicy) Check(_ context.Context, req ToolPolicyRequest) (Too
 	if name == "Bash" {
 		command, _ := req.Call.Arguments["command"].(string)
 		lower := strings.ToLower(command)
-		for _, phrase := range []string{"rm -rf", "sudo ", "shutdown", "mkfs", "git reset --hard"} {
+		restricted := p.restricted
+		if len(restricted) == 0 {
+			restricted = defaultRestrictedBashPhrases
+		}
+		for _, phrase := range restricted {
 			if strings.Contains(lower, phrase) {
 				return ToolRequireApproval, fmt.Sprintf("Bash command contains restricted operation %q", phrase), nil
 			}
