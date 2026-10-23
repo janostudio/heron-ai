@@ -332,6 +332,13 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	var selected []types.Message
 	selectedTokens := 0
 	dropped := make([][]types.Message, 0)
+	// The loop walks newest-first because the budget does (keep the tail), but
+	// `dropped` must come out oldest-first: every consumer reads it
+	// chronologically — the mechanical summary, the LLM compactor's
+	// "Errors / Current Work / Next Step" template, and the message the model
+	// finally reads. Prepending reverses the order for free, and unlike a
+	// post-hoc reverse it stays correct on the forced branch below, where
+	// dropped is filled by appending a prefix of groups.
 	for i := len(groups) - 1; i >= 0; i-- {
 		if err := contextErr(ctx); err != nil {
 			return err
@@ -343,7 +350,7 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 			selectedTokens += groupTokens
 			continue
 		}
-		dropped = append(dropped, group)
+		dropped = append([][]types.Message{group}, dropped...)
 	}
 
 	if forced && len(dropped) == 0 && len(groups) > m.config.RecentMessageGroups {
