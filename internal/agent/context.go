@@ -14,6 +14,11 @@ import (
 
 var ErrContextLimit = errors.New("agent context exceeds hard limit")
 
+// defaultSummaryTokenBudget bounds the compaction summary when the manager has
+// no configured input capacity to derive one from. Small on purpose: it is a
+// recap of what was dropped, not a replacement for the history.
+const defaultSummaryTokenBudget = 4096
+
 // ContextManager separates the complete Agent transcript from the bounded
 // message list sent to the model. CanonicalMessages is never compacted;
 // Messages returns the active model context.
@@ -357,11 +362,21 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	}
 	summary := mergeCompactionSummary(existingSummary, nextSummary)
 	if summary != "" {
+		// The summary budget follows the same rule as hardLimit below: with no
+		// configured capacity `target` is 0, and fitCompactionSummary treats a
+		// non-positive budget as "no room", silently dropping the summary
+		// while the messages it describes have already been dropped. Fall back
+		// to a fixed budget so a compression still hands the model an account
+		// of what it lost.
+		summaryBudget := target - m.estimator.EstimateTools(m.tools)
+		if summaryBudget <= 0 {
+			summaryBudget = defaultSummaryTokenBudget
+		}
 		if compacted := fitCompactionSummary(
 			summary,
 			prefix,
 			m.estimator,
-			target-m.estimator.EstimateTools(m.tools),
+			summaryBudget,
 		); compacted != nil {
 			candidate = append(candidate, *compacted)
 		}
@@ -372,17 +387,29 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	if hardLimit < 0 {
 		hardLimit = 0
 	}
-	if m.estimator.EstimateMessages(candidate) > hardLimit {
-		candidate, _ = trimToolMessagesToLimit(candidate, m.estimator, hardLimit)
-	}
-	if m.estimator.EstimateMessages(candidate) > hardLimit {
-		candidate, _ = trimCompactionSummaryToLimit(candidate, m.estimator, hardLimit)
-	}
-	if m.estimator.EstimateMessages(candidate) > hardLimit && hasCompactionSummary(candidate) {
-		// A summary is useful but never more important than preserving the
-		// current active messages. Remove its text once more before failing.
-		candidate = removeCompactionSummary(candidate)
-		candidate, _ = trimToolMessagesToLimit(candidate, m.estimator, hardLimit)
+	// hardLimit == 0 means the manager has no input capacity to budget
+	// against: contextConfig falls back to the provider's MaxInputTokens, and
+	// a provider that does not implement ModelContextSizer leaves it at zero.
+	// Trimming to a zero limit is not "make it fit" — trimToolMessagesToLimit
+	// would empty every tool result and then the summary would be removed
+	// too, producing a conversation with the history deleted. This is the path
+	// CompactForce takes after a provider reports the prompt is too large, so
+	// the degraded outcome is a silently emptied context followed by a retry
+	// of the same request. Drop what the window rule selected and keep the
+	// rest verbatim instead.
+	if hardLimit > 0 {
+		if m.estimator.EstimateMessages(candidate) > hardLimit {
+			candidate, _ = trimToolMessagesToLimit(candidate, m.estimator, hardLimit)
+		}
+		if m.estimator.EstimateMessages(candidate) > hardLimit {
+			candidate, _ = trimCompactionSummaryToLimit(candidate, m.estimator, hardLimit)
+		}
+		if m.estimator.EstimateMessages(candidate) > hardLimit && hasCompactionSummary(candidate) {
+			// A summary is useful but never more important than preserving the
+			// current active messages. Remove its text once more before failing.
+			candidate = removeCompactionSummary(candidate)
+			candidate, _ = trimToolMessagesToLimit(candidate, m.estimator, hardLimit)
+		}
 	}
 
 	m.active = candidate
