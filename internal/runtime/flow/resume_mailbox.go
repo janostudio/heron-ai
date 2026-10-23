@@ -103,12 +103,8 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		"caller_team":     wake.callerTeam,
 		"message_count":   len(messages),
 	})
-	result, err := r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
-		[]activation{wake}, turnOriginMailbox, mailboxScopeSince(messages))
-	if err != nil {
-		return result, err
-	}
-	return relayDeliveredResults(result, messages), nil
+	return r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
+		[]activation{wake}, turnOriginMailbox, mailboxScopeSince(messages), userDeliveries(messages))
 }
 
 // mailboxScopeSince bounds the records a woken Team may treat as current.
@@ -127,54 +123,38 @@ func mailboxScopeSince(messages []types.MailboxMessage) time.Time {
 	return earliest
 }
 
-// progressOnlyPhrases mark a reply that reports on work instead of relaying it.
-// A woken turn that ends with one of these while a result is sitting in the
-// inbox leaves the user with nothing, so the result is appended.
-var progressOnlyPhrases = []string{
-	"进行中", "尚未返回", "还没有返回", "暂无结论", "正在处理", "正在核实", "稍后给你", "稍后给结论",
-}
-
-func isProgressOnlyReply(reply string) bool {
-	trimmed := strings.TrimSpace(reply)
-	if trimmed == "" {
-		return true
-	}
-	for _, phrase := range progressOnlyPhrases {
-		if strings.Contains(trimmed, phrase) {
-			return true
-		}
-	}
-	return false
-}
-
-// relayDeliveredResults guarantees a woken turn surfaces what the dispatch
-// actually returned. The alternative — a "still running" reply with no follow
-// up — is indistinguishable from a lost result (s13).
-func relayDeliveredResults(result types.FlowTurnResult, messages []types.MailboxMessage) types.FlowTurnResult {
-	delivered := make([]string, 0, len(messages))
+// userDeliveries lists the results drained in this turn as user-facing
+// deliveries. Each drained message is delivered exactly once (the mailbox
+// claims it), so no extra bookkeeping is needed to avoid repeats.
+//
+// The engine does not look at the coordinating reply here: whether the model
+// said "done" or "still running" does not change that the result exists and
+// belongs to the user.
+func userDeliveries(messages []types.MailboxMessage) []types.UserDelivery {
+	deliveries := make([]types.UserDelivery, 0, len(messages))
 	for _, msg := range messages {
 		if msg.Kind == mailboxKindWork {
 			continue
 		}
-		if text := strings.TrimSpace(mailboxBodyText(msg)); text != "" {
-			delivered = append(delivered, text)
+		// 只交付真正有内容的结果；占位文案（如 "raw result unavailable"）
+		// 对模型是提示，对用户是噪音。
+		text := ""
+		if reply, ok := mailboxResultReply(msg.Payload); ok {
+			text = strings.TrimSpace(reply)
 		}
-	}
-	if len(delivered) == 0 {
-		return result
-	}
-	body := strings.Join(delivered, "\n\n")
-	if strings.Contains(result.Reply, body) {
-		return result
-	}
-	if isProgressOnlyReply(result.Reply) {
-		if strings.TrimSpace(result.Reply) == "" {
-			result.Reply = "执行侧返回：\n" + body
-		} else {
-			result.Reply = strings.TrimSpace(result.Reply) + "\n\n" + "执行侧返回：\n" + body
+		if text == "" {
+			text = strings.TrimSpace(mailboxResultSummary(msg.Payload))
 		}
+		if text == "" {
+			continue
+		}
+		deliveries = append(deliveries, types.UserDelivery{
+			MessageID: msg.MessageID,
+			TeamID:    mailboxSender(msg),
+			Text:      text,
+		})
 	}
-	return result
+	return deliveries
 }
 
 // taskInputFromMessages returns the task the woken Team is working on.

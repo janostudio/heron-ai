@@ -46,7 +46,7 @@ func TestResumeForMailboxWakesAndDrains(t *testing.T) {
 	// what the background dispatcher does.
 	_, err := runtime.enqueueResultMessage(ctx, session, types.FlowTurn{ID: newID("ft")},
 		types.MailboxAddress{TeamID: "default"},
-		map[string]any{"team_result": types.TeamTurnResult{Reply: "verification passed"}},
+		map[string]any{"team_result": types.TeamTurnResult{Reply: "verification passed", Turn: types.TeamTurn{TeamID: "owner"}}},
 	)
 	require.NoError(t, err)
 
@@ -55,6 +55,28 @@ func TestResumeForMailboxWakesAndDrains(t *testing.T) {
 	require.NotEmpty(t, result.Turn.ID, "a real turn must have run")
 	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
 	require.NotEmpty(t, result.TeamResults, "the coordinator must have been activated")
+	// 投递结果是用户可见的交付物，独立于协调方的回复。
+	require.Len(t, result.Deliveries, 1, "the delivered result must surface as a user delivery")
+	require.Equal(t, "verification passed", result.Deliveries[0].Text)
+	require.Equal(t, "owner", result.Deliveries[0].TeamID, "交付项归属产生它的团队")
+
+	// 交付项必须随回合事件落盘：调用方（连接器）是从事件里读的，
+	// 只在返回值里带着没有意义。
+	replay, err := sessionWriter.Replay(ctx, session.ID)
+	require.NoError(t, err)
+	var eventDeliveries int
+	for _, event := range replay.Events {
+		if event.Type != types.EventFlowTurnWaitingInput && event.Type != types.EventFlowTurnCompleted {
+			continue
+		}
+		switch items := event.Payload["deliveries"].(type) {
+		case []map[string]any:
+			eventDeliveries = len(items)
+		case []any:
+			eventDeliveries = len(items)
+		}
+	}
+	require.Equal(t, 1, eventDeliveries, "turn event must carry the deliveries")
 
 	// The inbox is drained: nothing is left pending.
 	inbox, err := runtime.listInbox(ctx, session.ID, types.MailboxAddress{TeamID: "default"})

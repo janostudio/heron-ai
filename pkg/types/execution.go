@@ -288,6 +288,13 @@ type StartFlowRequest struct {
 // jsonl-invisible and its field names become part of the published event
 // contract too. At that point re-check the frozen set: a new Usage field
 // needs a tag before that change ships, not after.
+// UserDelivery is one mailbox result addressed to the user.
+type UserDelivery struct {
+	MessageID string `json:"message_id,omitempty"`
+	TeamID    string `json:"team_id,omitempty"`
+	Text      string `json:"text"`
+}
+
 type FlowTurnResult struct {
 	Session          FlowSession            `json:"Session"`
 	Turn             FlowTurn               `json:"Turn"`
@@ -295,7 +302,12 @@ type FlowTurnResult struct {
 	PendingToolTasks []PendingToolTask      `json:"PendingToolTasks"`
 	PendingApprovals []AgentPendingApproval `json:"PendingApprovals"`
 	Records          []SharedRecord         `json:"Records"`
-	Reply            string                 `json:"Reply"`
+	// Deliveries are mailbox results that must reach the user as their own
+	// messages, attributed to the Team that produced them. The engine does not
+	// judge whether the coordinating reply already covered them: a result is a
+	// first-class delivery, and the model's reply is commentary on top of it.
+	Deliveries []UserDelivery `json:"Deliveries,omitempty"`
+	Reply      string         `json:"Reply"`
 	// FinalReply is the reply of the hop that ended the turn — the Team that
 	// handed the result back to nobody (no activator) or to the user. Reply
 	// is the concatenation of every Team's reply in the turn, which includes
