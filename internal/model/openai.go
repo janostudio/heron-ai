@@ -227,8 +227,12 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []types.Message, too
 	var wire openAIResponse
 	if err := p.post(ctx, effective, req, &wire); err != nil {
 		// response_format is an optional optimization. The structured-output
-		// validator remains authoritative when a compatible gateway omits it.
-		if len(req.ResponseFormat) > 0 {
+		// validator remains authoritative when a compatible gateway omits it,
+		// so dropping it and retrying is the right recovery — but only when the
+		// gateway actually rejected the parameter. Retrying on every error made
+		// a rate limit or an auth failure pay for two extra round trips, which
+		// tripled traffic exactly when the provider was already pushing back.
+		if len(req.ResponseFormat) > 0 && isUnsupportedParameterError(err) {
 			req.ResponseFormat = nil
 			if retryErr := p.post(ctx, effective, req, &wire); retryErr == nil {
 				return withModel(convertOpenAIResponse(wire), modelName), nil
