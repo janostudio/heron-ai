@@ -87,8 +87,10 @@ func (w *JSONLSessionWriter) Append(ctx context.Context, sessionID string, layer
 	if err := contextErr(ctx); err != nil {
 		return SessionEvent{}, err
 	}
-	if strings.TrimSpace(sessionID) == "" {
-		return SessionEvent{}, errors.New("session id is required")
+	// The session id becomes a directory name; reject anything that is not a
+	// single path segment before it reaches filepath.Join.
+	if err := ValidatePathSegment("session id", sessionID); err != nil {
+		return SessionEvent{}, err
 	}
 	if strings.TrimSpace(event.Type) == "" {
 		return SessionEvent{}, errors.New("event type is required")
@@ -133,8 +135,8 @@ func (w *JSONLSessionWriter) Append(ctx context.Context, sessionID string, layer
 }
 
 func (w *JSONLSessionWriter) Subscribe(ctx context.Context, sessionID string, afterSeq int64) (<-chan SessionEvent, error) {
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, errors.New("session id is required")
+	if err := ValidatePathSegment("session id", sessionID); err != nil {
+		return nil, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -205,8 +207,10 @@ func (w *JSONLSessionWriter) Replay(ctx context.Context, sessionID string) (*Ses
 	if err := contextErr(ctx); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, errors.New("session id is required")
+	// A bad id must not be readable either: Replay opens the same paths
+	// Append writes, so the same segment rule applies.
+	if err := ValidatePathSegment("session id", sessionID); err != nil {
+		return nil, err
 	}
 
 	w.mu.Lock()
