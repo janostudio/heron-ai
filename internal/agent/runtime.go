@@ -1102,7 +1102,6 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		} else {
 			noProgressRounds++
 		}
-		waitingForContinuation := false
 		for _, toolResult := range results {
 			if toolResult == nil {
 				continue
@@ -1137,24 +1136,22 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			}
 			return agentResult, nil
 		}
-		if !waitingForContinuation {
-			if stuckReason := stuckReason(agent.Loop, sameToolCalls, noProgressRounds, sameModelTexts); stuckReason != "" {
-				if agent.Loop.StuckAction == "ask_user" {
-					waiting := &types.AgentResult{
-						Status: types.TurnWaitingInput,
-						Reply:  "Agent appears stuck: " + stuckReason,
-						Next:   &types.Route{Action: types.NextProceed, Reason: stuckReason},
-						Usage:  totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls,
-					}
-					return t.saveWaitingCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
-						round+1, lastText, workspaceOps, toolCalls, waiting,
-						loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools))
+		if stuckReason := stuckReason(agent.Loop, sameToolCalls, noProgressRounds, sameModelTexts); stuckReason != "" {
+			if agent.Loop.StuckAction == "ask_user" {
+				waiting := &types.AgentResult{
+					Status: types.TurnWaitingInput,
+					Reply:  "Agent appears stuck: " + stuckReason,
+					Next:   &types.Route{Action: types.NextProceed, Reason: stuckReason},
+					Usage:  totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls,
 				}
-				return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
-					round+1, lastText, workspaceOps, toolCalls, types.TurnFailed,
-					errors.New("agent stuck: "+stuckReason), nil,
-					loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
+				return t.saveWaitingCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
+					round+1, lastText, workspaceOps, toolCalls, waiting,
+					loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools))
 			}
+			return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
+				round+1, lastText, workspaceOps, toolCalls, types.TurnFailed,
+				errors.New("agent stuck: "+stuckReason), nil,
+				loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
 		}
 	}
 
