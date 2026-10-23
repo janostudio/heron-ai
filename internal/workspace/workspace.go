@@ -901,14 +901,36 @@ func selectReadContent(text string, start, end, maxBytes int) (string, int, int,
 	return content, start, end, truncated, nil
 }
 
+// isDefaultExcludedDir reports whether a directory is build output that a
+// search should not descend into.
+//
+// Path shape matters, not just the name: excluding every directory called
+// "build" anywhere in the tree also hid real source, e.g. a Go package at
+// src/build/ or a doc directory named target/. Only the root-level form is
+// trusted ("build/", "dist/", "target/"); a nested "frontend/dist" is searched
+// too. That costs some noise but never hides source, which is the trade the
+// other way round was getting wrong. .git and node_modules are excluded at any
+// depth: neither is ever source.
 func isDefaultExcludedDir(relative string) bool {
-	base := filepath.Base(filepath.Clean(relative))
+	cleaned := filepath.Clean(relative)
+	base := filepath.Base(cleaned)
 	switch base {
-	case ".git", "node_modules", "dist", "build", "target":
+	case ".git", "node_modules":
 		return true
+	case "dist", "build", "target":
+		return directoryDepth(cleaned) == 1
 	default:
 		return false
 	}
+}
+
+// directoryDepth counts the segments in a workspace-relative directory path.
+func directoryDepth(relative string) int {
+	cleaned := filepath.Clean(relative)
+	if cleaned == "." || cleaned == string(filepath.Separator) || cleaned == "" {
+		return 0
+	}
+	return len(strings.Split(filepath.ToSlash(cleaned), "/"))
 }
 
 func compileGlob(pattern string) (*regexp.Regexp, error) {
