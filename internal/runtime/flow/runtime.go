@@ -778,6 +778,17 @@ func (r *Runtime) runTurnWithOrigin(
 		}
 	}
 
+	// Wait decisions accumulate across batches instead of being re-declared per
+	// batch. A Team that parks waiting for a Tool task or an approval keeps
+	// that state even when a later batch ends waiting for the user: the Tool
+	// task is still running, and only waiting_tool makes its completion
+	// callback resume the session. Per-batch locals let the last batch's
+	// decision overwrite the earlier one, so the session reported
+	// waiting_input while a Tool task was still outstanding.
+	hasWaitInput := false
+	hasWaitTool := false
+	hasWaitApproval := false
+
 	for len(queue) > 0 {
 		if err := contextErr(ctx); err != nil {
 			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, err)
@@ -882,9 +893,6 @@ func (r *Runtime) runTurnWithOrigin(
 		// Resolve all routes after the batch has finished. A parallel batch
 		// must not terminate on the first branch's wait decision and
 		// accidentally discard sibling results.
-		hasWaitInput := false
-		hasWaitTool := false
-		hasWaitApproval := false
 		var routeFailure error
 		var resolvedRoute *types.Route
 		// Several sibling Teams can report to the same Team in one batch. A Team
