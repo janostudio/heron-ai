@@ -2,6 +2,8 @@ package model
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -67,4 +69,42 @@ func TestOpenAIUnsupportedResponseFormatIsRetried(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ok", resp.Text)
 	assert.Equal(t, int32(2), atomic.LoadInt32(&calls))
+}
+
+// TestOpenAIStreamRequestsAndReadsUsage is the regression guard for usage being
+// lost in stream mode: OpenAI sends usage in a final chunk whose choices array
+// is empty, and the parser skipped empty-choice chunks before reading it. Every
+// token counter, including the Agent budget that stops runaway turns, read zero.
+func TestOpenAIStreamRequestsAndReadsUsage(t *testing.T) {
+	var request map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		for _, line := range []string{
+			`data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":""}],"usage":null}` + "\n\n",
+			`data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}` + "\n\n",
+			"data: [DONE]\n\n",
+		} {
+			_, _ = io.WriteString(w, line)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	profile := types.ModelProfile{ID: "p", Name: "gpt-test", BaseURL: server.URL, Stream: true}
+	provider := NewOpenAIProviderWithProfile("key", server.URL, profile.Name, profile)
+
+	resp, err := provider.Chat(context.Background(), []types.Message{{Role: "user", Content: "hi"}}, nil,
+		types.ModelConfig{Model: profile.Name})
+	require.NoError(t, err)
+	assert.Equal(t, 11, resp.Usage.PromptTokens)
+	assert.Equal(t, 4, resp.Usage.CompletionTokens)
+	assert.Equal(t, 15, resp.Usage.TotalTokens)
+
+	options, ok := request["stream_options"].(map[string]any)
+	require.True(t, ok, "stream requests must ask for usage: %v", request["stream_options"])
+	assert.Equal(t, true, options["include_usage"])
 }

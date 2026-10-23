@@ -76,6 +76,15 @@ type openAIRequest struct {
 	ReasoningEffort     string          `json:"reasoning_effort,omitempty"`
 	ResponseFormat      map[string]any  `json:"response_format,omitempty"`
 	Stream              bool            `json:"stream,omitempty"`
+	// StreamOptions asks the provider to emit a final usage-only chunk. Without
+	// it the SSE stream carries no usage at all, and every token counter —
+	// including the Agent budget that stops runaway turns — reads zero.
+	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
+}
+
+// openAIStreamOptions is the subset of stream_options this engine sends.
+type openAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 type openAIMessage struct {
@@ -286,6 +295,9 @@ func (p *OpenAIProvider) buildRequest(
 		Messages: converted,
 		Stream:   stream,
 	}
+	if stream {
+		req.StreamOptions = &openAIStreamOptions{IncludeUsage: true}
+	}
 
 	if profileAllowsToolCalls(p.profile, len(tools) > 0) {
 		req.Tools = convertOpenAITools(tools)
@@ -461,6 +473,13 @@ func (p *OpenAIProvider) postStream(ctx context.Context, effective types.ModelCo
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
 		}
+		// Usage arrives in its own final chunk with an empty choices array, so
+		// it has to be read before the choices check skips this chunk.
+		if chunk.Usage != nil {
+			result.Usage.PromptTokens = chunk.Usage.PromptTokens
+			result.Usage.CompletionTokens = chunk.Usage.CompletionTokens
+			result.Usage.TotalTokens = chunk.Usage.TotalTokens
+		}
 		if len(chunk.Choices) == 0 {
 			continue
 		}
@@ -495,11 +514,6 @@ func (p *OpenAIProvider) postStream(ctx context.Context, effective types.ModelCo
 		}
 		if chunk.Choices[0].FinishReason != "" {
 			finishReason = chunk.Choices[0].FinishReason
-		}
-		if chunk.Usage != nil {
-			result.Usage.PromptTokens = chunk.Usage.PromptTokens
-			result.Usage.CompletionTokens = chunk.Usage.CompletionTokens
-			result.Usage.TotalTokens = chunk.Usage.TotalTokens
 		}
 	}
 	if err := scanner.Err(); err != nil {
