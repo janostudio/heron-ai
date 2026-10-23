@@ -769,3 +769,33 @@ func response(req *http.Request, contentType, body string) *http.Response {
 		Request:    req,
 	}
 }
+
+// TestWebFetchClampsModelSuppliedMaxBytes keeps a model-supplied max_bytes from
+// becoming an out-of-memory switch: readLimitedBody honours whatever it is
+// given, so the value has to be capped before it gets there.
+func TestWebFetchClampsModelSuppliedMaxBytes(t *testing.T) {
+	var served int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		chunk := make([]byte, 1024)
+		for i := range chunk {
+			chunk[i] = 'a'
+		}
+		for served < hardWebMaxBytes+4096 {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+			served += len(chunk)
+		}
+	}))
+	defer server.Close()
+
+	fetcher := NewWebFetchTool(nil, WebFetchConfig{Provider: "direct", Format: "markdown", MaxResponseBytes: defaultWebMaxBytes, AllowPrivateHosts: true})
+	result, err := fetcher.Execute(context.Background(), map[string]any{
+		"url":       server.URL,
+		"max_bytes": 2_000_000_000,
+	})
+	require.NoError(t, err)
+	require.True(t, result.Success, "fetch must succeed within the clamp: %s", result.Error)
+	require.LessOrEqual(t, len(result.Content), hardWebMaxBytes+2*1024,
+		"the response must be clamped, not read to the requested size")
+}

@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -112,18 +113,25 @@ func (t *CodeNavTool) Execute(ctx context.Context, params map[string]any) (*type
 		cmd.Env = t.env
 	}
 	// Own process group + a group kill on cancel: the helper may fork, and a
-	// forked child holding the captured stdout would keep CombinedOutput
-	// blocked past the deadline (the same trap fixed for Bash in
+	// forked child holding the captured stdout would keep the wait blocked past
+	// the deadline (the same trap fixed for Bash in
 	// ISSUE-bash-timeout-grandchild-hang).
 	workspace.SetProcessGroup(cmd)
 	cmd.Cancel = func() error { return workspace.KillProcessGroup(cmd) }
 	cmd.WaitDelay = 2 * time.Second
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	// Bounded capture: CombinedOutput reads whatever the helper prints, and a
+	// whole-workspace symbol query can print hundreds of megabytes. The cap is
+	// the memory backstop; the tool result is truncated separately.
+	captured := &boundedOutput{limit: codenavMaxOutputBytes}
+	cmd.Stdout = captured
+	cmd.Stderr = captured
+	runErr := cmd.Run()
+	output := captured.bytes()
+	if runErr != nil {
 		if ctx.Err() != nil {
 			return &types.ToolResult{Success: false, Error: ctx.Err().Error()}, nil
 		}
-		return &types.ToolResult{Success: false, Error: fmt.Sprintf("codenav failed: %v: %s", err, strings.TrimSpace(string(output)))}, nil
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("codenav failed: %v: %s", runErr, strings.TrimSpace(string(output)))}, nil
 	}
 	var value any
 	content := strings.TrimSpace(string(output))
@@ -154,3 +162,31 @@ func formatJSON(value any) string {
 	}
 	return string(data)
 }
+
+// codenavMaxOutputBytes bounds how much of the helper's output is held in
+// memory. A symbol query without a file indexes the whole workspace, so the
+// output size is not bounded by anything the caller chose.
+const codenavMaxOutputBytes = 8 * 1024 * 1024
+
+// boundedOutput is an io.Writer that keeps at most limit bytes and discards the
+// rest, so a runaway child cannot OOM the engine. Whitespace is appended to the
+// kept prefix on truncation so the JSON formatter sees an obviously incomplete
+// document rather than a plausible-looking one.
+type boundedOutput struct {
+	limit int
+	buf   bytes.Buffer
+}
+
+func (b *boundedOutput) Write(p []byte) (int, error) {
+	remaining := b.limit - b.buf.Len()
+	if remaining <= 0 {
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		_, _ = b.buf.Write(p[:remaining])
+		return len(p), nil
+	}
+	return b.buf.Write(p)
+}
+
+func (b *boundedOutput) bytes() []byte { return b.buf.Bytes() }

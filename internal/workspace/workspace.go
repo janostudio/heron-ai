@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +44,11 @@ const (
 	// pipe could block Wait indefinitely. See setProcessGroup in
 	// exec_process_unix.go for the group mechanics.
 	commandWaitDelay = 500 * time.Millisecond
+
+	// hardReadLimitBytes bounds how much of a file is loaded into memory at
+	// all. The caller-facing max_bytes decides what is returned; this is the
+	// backstop that keeps a huge file (or a device node) from being read whole.
+	hardReadLimitBytes = 16 * 1024 * 1024
 )
 
 // localWorkspace is the concrete local-filesystem backend. It implements the
@@ -163,12 +169,26 @@ func (s *localWorkspace) Read(ctx context.Context, req ReadRequest) (ReadResult,
 		// reports what a caller without access can see.
 		return ReadResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, relative)
 	}
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		if os.IsNotExist(err) {
+	// Bounded read: os.ReadFile loads the whole file into memory before any
+	// limit applies, so reading a multi-GB log (or a device node) OOMed the
+	// engine. Read up to hardReadLimit and let the existing truncation report
+	// the rest; TotalBytes still reports the real size from the file stat.
+	info, statErr := os.Stat(fullPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
 			return ReadResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, relative)
 		}
-		return ReadResult{}, err
+		return ReadResult{}, statErr
+	}
+	if info.IsDir() {
+		return ReadResult{}, fmt.Errorf("%w: %s is a directory", ErrFileNotFound, relative)
+	}
+	data, readErr := readBounded(fullPath, hardReadLimitBytes)
+	if readErr != nil {
+		if os.IsNotExist(readErr) {
+			return ReadResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, relative)
+		}
+		return ReadResult{}, readErr
 	}
 	revision := revisionOf(data)
 	maxBytes := req.MaxBytes
@@ -184,6 +204,11 @@ func (s *localWorkspace) Read(ctx context.Context, req ReadRequest) (ReadResult,
 	if err != nil {
 		return ReadResult{}, err
 	}
+	// A file larger than the bounded read is truncated by definition, even when
+	// the requested window fits inside what was read.
+	if int64(len(data)) < info.Size() {
+		truncated = true
+	}
 	return ReadResult{
 		Content:    content,
 		Revision:   revision,
@@ -191,7 +216,7 @@ func (s *localWorkspace) Read(ctx context.Context, req ReadRequest) (ReadResult,
 		LineStart:  lineStart,
 		LineEnd:    lineEnd,
 		TotalLines: countLines(string(data)),
-		TotalBytes: len(data),
+		TotalBytes: int(info.Size()),
 		Operation: types.WorkspaceOperation{
 			OperationID: newOperationID(),
 			TurnID:      req.TurnID,
@@ -966,4 +991,20 @@ func contextErr(ctx context.Context) error {
 	default:
 		return nil
 	}
+}
+
+// readBounded reads at most limit bytes from path. It replaces os.ReadFile in
+// the Read path, where the whole file used to be loaded before any max_bytes
+// applied.
+func readBounded(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, limit))
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
