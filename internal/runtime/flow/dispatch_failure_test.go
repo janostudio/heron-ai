@@ -195,7 +195,7 @@ func TestDispatchWorkRecoversPanicAndMarksDead(t *testing.T) {
 
 	// The slot was released in the deferred cleanup, otherwise every later
 	// dispatch to this Team would be silently skipped forever.
-	require.False(t, runtime.teamBusy("verify"))
+	require.False(t, runtime.teamBusy(session.ID, "verify"))
 }
 
 // TestLaunchAsyncDispatchDefersWhenTeamBusy covers the tryMarkTeamBusy guard:
@@ -218,7 +218,7 @@ func TestLaunchAsyncDispatchDefersWhenTeamBusy(t *testing.T) {
 	require.NoError(t, err)
 
 	// Hold the Team's slot, then dispatch: the launch must be dropped.
-	require.True(t, runtime.tryMarkTeamBusy("verify"))
+	require.True(t, runtime.tryMarkTeamBusy(session.ID, "verify"))
 	runtime.launchAsyncDispatch(session, turn.ID, "verify", msg)
 
 	require.Equal(t, 0, fake.verifyRuns(), "a busy team must not be run again")
@@ -226,9 +226,9 @@ func TestLaunchAsyncDispatchDefersWhenTeamBusy(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.MailboxPending, box[msg.MessageID].Status,
 		"a deferred message must stay pending")
-	require.True(t, runtime.teamBusy("verify"), "the running team keeps its slot")
+	require.True(t, runtime.teamBusy(session.ID, "verify"), "the running team keeps its slot")
 
-	runtime.clearTeamBusy("verify")
+	runtime.clearTeamBusy(session.ID, "verify")
 }
 
 // TestDispatchWorkFillsMissingRoutingFields covers the two defaulting branches

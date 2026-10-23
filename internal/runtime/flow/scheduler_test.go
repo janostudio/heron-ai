@@ -128,8 +128,10 @@ func TestConcurrentDispatchRunsTeamsInParallel(t *testing.T) {
 // to the same Team never run concurrently, because a Team is one execution unit.
 func TestSameTeamDoesNotRunTwoRoundsAtOnce(t *testing.T) {
 	rt, _ := newMailboxTestRuntime(t)
-	require.True(t, rt.tryMarkTeamBusy("owner"), "first claim wins")
-	require.False(t, rt.tryMarkTeamBusy("owner"), "a busy team cannot be claimed again")
-	rt.clearTeamBusy("owner")
-	require.True(t, rt.tryMarkTeamBusy("owner"), "the slot is reusable after release")
+	require.True(t, rt.tryMarkTeamBusy("fs_1", "owner"), "first claim wins")
+	require.False(t, rt.tryMarkTeamBusy("fs_1", "owner"), "a busy team cannot be claimed again")
+	require.True(t, rt.tryMarkTeamBusy("fs_2", "owner"), "the same team in another session is a different slot")
+	rt.clearTeamBusy("fs_1", "owner")
+	require.True(t, rt.tryMarkTeamBusy("fs_1", "owner"), "the slot is reusable after release")
+	require.True(t, rt.teamBusy("fs_2", "owner"), "releasing one session must not free another")
 }

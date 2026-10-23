@@ -47,7 +47,10 @@ type Runtime struct {
 	// the live counterpart of the persisted TeamSession.Status a scheduler
 	// reads after a restart.
 	dispatchMu sync.Mutex
-	busyTeams  map[string]bool
+	busyTeams  map[teamKey]bool
+	// pendingWakes de-duplicates wake retries for sessions that were still
+	// running when their wake-up arrived.
+	pendingWakes map[string]bool
 
 	// asyncDispatch opts the runtime into P0 mailbox dispatch: when the entry
 	// team activates a team, the work is handed to a background goroutine and
@@ -70,12 +73,13 @@ func NewRuntime(
 	evidenceStore storage.EvidenceStore,
 ) *Runtime {
 	return &Runtime{
-		definitions: definitions,
-		teams:       teamRuntime,
-		sessions:    sessionWriter,
-		evidence:    evidenceStore,
-		limits:      types.RuntimeLimits{}.WithDefaults(),
-		busyTeams:   make(map[string]bool),
+		definitions:  definitions,
+		teams:        teamRuntime,
+		sessions:     sessionWriter,
+		evidence:     evidenceStore,
+		limits:       types.RuntimeLimits{}.WithDefaults(),
+		busyTeams:    make(map[teamKey]bool),
+		pendingWakes: make(map[string]bool),
 	}
 }
 
@@ -424,7 +428,7 @@ func (r *Runtime) RecoveryStatus(ctx context.Context, sessionID string) (types.R
 	if err != nil {
 		return types.RecoveryStatus{}, err
 	}
-	interrupted := interruptedExecutions(replay.Events, r.liveTeams())
+	interrupted := interruptedExecutions(replay.Events, r.liveTeamsFor(sessionID))
 	history := recoveryHistory(replay.Events)
 	if len(interrupted) > 0 &&
 		session.Status != types.SessionCompleted &&
@@ -1637,7 +1641,7 @@ func (r *Runtime) runningTeams(ctx context.Context, sessionID string) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	live := r.liveTeams()
+	live := r.liveTeamsFor(sessionID)
 	started := make(map[string]bool)
 	finished := make(map[string]bool)
 	for _, event := range replay.Events {

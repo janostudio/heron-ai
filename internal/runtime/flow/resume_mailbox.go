@@ -208,7 +208,7 @@ func (r *Runtime) nextWakingTeam(ctx context.Context, sessionID string) (string,
 		if msg.Status != types.MailboxPending || msg.To.TeamID == "" {
 			continue
 		}
-		if r.teamBusy(msg.To.TeamID) {
+		if r.teamBusy(sessionID, msg.To.TeamID) {
 			continue
 		}
 		byTeam[msg.To.TeamID] = append(byTeam[msg.To.TeamID], msg)
