@@ -137,6 +137,22 @@ func copyTurnAnnouncement(base map[string]any, payload map[string]any) {
 	if intermediate, ok := payload["intermediate"].(bool); ok && intermediate {
 		base["intermediate"] = true
 	}
+	// Deliveries are mailbox results the user must receive verbatim. They are
+	// hoisted like reply so a caller can relay them without decoding the turn.
+	if deliveries, ok := payload["deliveries"].([]types.UserDelivery); ok && len(deliveries) > 0 {
+		hoisted := make([]map[string]any, 0, len(deliveries))
+		for _, delivery := range deliveries {
+			item := map[string]any{"text": truncateUTF8(delivery.Text, progressMaxTextBytes)}
+			if delivery.TeamID != "" {
+				item["team_id"] = delivery.TeamID
+			}
+			if delivery.MessageID != "" {
+				item["message_id"] = delivery.MessageID
+			}
+			hoisted = append(hoisted, item)
+		}
+		base["deliveries"] = hoisted
+	}
 }
 
 // waitingEventStatus maps the flow_turn.waiting_* event to the session status

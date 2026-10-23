@@ -1574,6 +1574,9 @@ func (r *Runtime) finishTurn(
 			"reply":        replyForCaller,
 			"origin":       result.Turn.Origin,
 			"intermediate": result.Turn.Intermediate,
+			// Deliveries travel with the turn event: they are results the user
+			// must see as their own messages, independent of the reply above.
+			"deliveries": result.Deliveries,
 		},
 	}); err != nil {
 		return result, err

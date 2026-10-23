@@ -37,57 +37,25 @@ func TestSelectFlowRecordsKeepsUnscopedRecordsWhenNoBoundary(t *testing.T) {
 	require.Len(t, selectFlowRecords([]types.SharedRecord{record}, spec, time.Time{}), 1)
 }
 
-func TestIsProgressOnlyReply(t *testing.T) {
-	for _, reply := range []string{
-		"",
-		"   ",
-		"任务正在进行中：已派给执行侧，目前还没有返回结论。",
-		"已转给执行侧核实，稍后给你结论。",
-	} {
-		require.True(t, isProgressOnlyReply(reply), "should be treated as progress-only: %q", reply)
+// 结果是一等交付物：引擎不看协调方的回复写了什么，只把投递结果原样交给用户。
+func TestUserDeliveriesCarryProducedText(t *testing.T) {
+	messages := []types.MailboxMessage{
+		{MessageID: "mb-1", Kind: mailboxKindWork, Payload: map[string]any{"input": "查看cls日志"}},
+		{MessageID: "mb-2", Kind: "result", Payload: map[string]any{"team_result": map[string]any{"Reply": "缺 CLS 索引/地域/时间范围"}}},
 	}
-	for _, reply := range []string{
-		"workbuddy.host 的流量在 14:20 后归零。",
-		"genie-agent 的主分支是 main。",
-	} {
-		require.False(t, isProgressOnlyReply(reply), "real answer must not be replaced: %q", reply)
-	}
+
+	deliveries := userDeliveries(messages)
+
+	require.Len(t, deliveries, 1)
+	require.Equal(t, "mb-2", deliveries[0].MessageID)
+	require.Contains(t, deliveries[0].Text, "缺 CLS 索引")
 }
 
-// 被唤醒的回合只回"进行中"时，用户拿不到任何结果，且回合已经结束、不会再
-// 有后续推送（s13）。兜底把执行侧的原话补上。
-func TestRelayDeliveredResultsAppendsWhenReplyOnlyReportsProgress(t *testing.T) {
+func TestUserDeliveriesSkipEmptyResult(t *testing.T) {
 	messages := []types.MailboxMessage{
-		{Kind: mailboxKindWork, Payload: map[string]any{"input": "查看cls日志"}},
-		{Kind: "result", Payload: map[string]any{"team_result": map[string]any{"Reply": "14:20 之后流量归零"}}},
+		{MessageID: "mb-3", Kind: "result", Payload: map[string]any{}},
 	}
-	result := types.FlowTurnResult{Reply: "任务正在进行中，稍后给你结论。"}
-
-	got := relayDeliveredResults(result, messages)
-
-	require.Contains(t, got.Reply, "任务正在进行中")
-	require.Contains(t, got.Reply, "执行侧返回")
-	require.Contains(t, got.Reply, "14:20 之后流量归零")
-}
-
-func TestRelayDeliveredResultsKeepsRealAnswer(t *testing.T) {
-	messages := []types.MailboxMessage{
-		{Kind: "result", Payload: map[string]any{"team_result": map[string]any{"Reply": "14:20 之后流量归零"}}},
-	}
-	result := types.FlowTurnResult{Reply: "结论：workbuddy.host 流量已于 14:20 归零。"}
-
-	require.Equal(t, result.Reply, relayDeliveredResults(result, messages).Reply)
-}
-
-func TestRelayDeliveredResultsFillsEmptyReply(t *testing.T) {
-	messages := []types.MailboxMessage{
-		{Kind: "result", Payload: map[string]any{"team_result": map[string]any{"Reply": "主分支是 main"}}},
-	}
-
-	got := relayDeliveredResults(types.FlowTurnResult{}, messages)
-
-	require.Contains(t, got.Reply, "执行侧返回")
-	require.Contains(t, got.Reply, "主分支是 main")
+	require.Empty(t, userDeliveries(messages))
 }
 
 func TestMailboxScopeSinceUsesOldestMessage(t *testing.T) {
