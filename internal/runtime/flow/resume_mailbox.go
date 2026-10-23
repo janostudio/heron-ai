@@ -113,7 +113,7 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 	result, runErr := r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
 		[]activation{wake}, turnOriginMailbox,
 		r.taskChainSince(ctx, sessionID, mailboxScopeSince(messages)),
-		userDeliveries(messages))
+		userDeliveries(messages, defs.Flow.EntryTeamID))
 
 	// Bookkeeping failures stay logged, never escalated: they must not turn a
 	// completed turn into a failed one.
@@ -228,17 +228,33 @@ func mailboxScopeSince(messages []types.MailboxMessage) time.Time {
 	return earliest
 }
 
-// userDeliveries lists the results drained in this turn as user-facing
-// deliveries. Each drained message is delivered exactly once (the mailbox
-// claims it), so no extra bookkeeping is needed to avoid repeats.
+// maxDeliveryChars caps a single user-facing delivery. A Team's reply is
+// written for its activator, and the activator may be another Team that wants
+// the whole structured document; the user only needs a readable summary, and a
+// message long enough to swamp the transcript is worse than a truncation note.
+const maxDeliveryChars = 4000
+
+// userDeliveries lists the results drained in this turn that belong to the
+// user. Each drained message is delivered exactly once (the mailbox claims
+// it), so no extra bookkeeping is needed to avoid repeats.
+//
+// Only results addressed to the Flow entry Team are user-facing. The entry
+// Team is the one the user talks to; a result addressed to an intermediate
+// Team is an internal hand-over that the receiving Team still has to turn into
+// an answer. Relaying those verbatim is how s16 showed the user 11832
+// characters of `@decision status: needs_input` protocol instead of a
+// conclusion.
 //
 // The engine does not look at the coordinating reply here: whether the model
 // said "done" or "still running" does not change that the result exists and
 // belongs to the user.
-func userDeliveries(messages []types.MailboxMessage) []types.UserDelivery {
+func userDeliveries(messages []types.MailboxMessage, entryTeamID string) []types.UserDelivery {
 	deliveries := make([]types.UserDelivery, 0, len(messages))
 	for _, msg := range messages {
 		if msg.Kind == mailboxKindWork {
+			continue
+		}
+		if entryTeamID != "" && msg.To.TeamID != "" && msg.To.TeamID != entryTeamID {
 			continue
 		}
 		// 只交付真正有内容的结果；占位文案（如 "raw result unavailable"）
@@ -256,10 +272,20 @@ func userDeliveries(messages []types.MailboxMessage) []types.UserDelivery {
 		deliveries = append(deliveries, types.UserDelivery{
 			MessageID: msg.MessageID,
 			TeamID:    mailboxSender(msg),
-			Text:      text,
+			Text:      truncateDelivery(text, maxDeliveryChars),
 		})
 	}
 	return deliveries
+}
+
+// truncateDelivery keeps a delivery readable without dropping the fact that it
+// was cut. Truncation is a length decision; it never interprets the text.
+func truncateDelivery(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "\n\n…（结果过长，已截断；完整内容见会话记录）"
 }
 
 // taskInputFromMessages returns the task the woken Team is working on.

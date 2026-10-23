@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -41,21 +42,50 @@ func TestSelectFlowRecordsKeepsUnscopedRecordsWhenNoBoundary(t *testing.T) {
 func TestUserDeliveriesCarryProducedText(t *testing.T) {
 	messages := []types.MailboxMessage{
 		{MessageID: "mb-1", Kind: mailboxKindWork, Payload: map[string]any{"input": "查看cls日志"}},
-		{MessageID: "mb-2", Kind: "result", Payload: map[string]any{"team_result": map[string]any{"Reply": "缺 CLS 索引/地域/时间范围"}}},
+		{MessageID: "mb-2", Kind: "result", To: types.MailboxAddress{TeamID: "default"},
+			Payload: map[string]any{"team_result": map[string]any{"Reply": "缺 CLS 索引/地域/时间范围"}}},
 	}
 
-	deliveries := userDeliveries(messages)
+	deliveries := userDeliveries(messages, "default")
 
 	require.Len(t, deliveries, 1)
 	require.Equal(t, "mb-2", deliveries[0].MessageID)
 	require.Contains(t, deliveries[0].Text, "缺 CLS 索引")
 }
 
+// s16：diagnose 把 11832 字的 @decision 协议交给 owner，中间层之间的交接不是
+// 给用户的答复，不能原样透传。判据只看收件人是不是入口团队。
+func TestUserDeliveriesSkipIntermediateHandOver(t *testing.T) {
+	messages := []types.MailboxMessage{
+		{MessageID: "mb-4", Kind: "result", To: types.MailboxAddress{TeamID: "owner"},
+			Payload: map[string]any{"team_result": map[string]any{"Reply": "@decision\nstatus: needs_input"}}},
+	}
+
+	require.Empty(t, userDeliveries(messages, "default"),
+		"投递给中间团队的结果由该团队转述，不能直达用户")
+	require.Len(t, userDeliveries(messages, "owner"), 1,
+		"收件人就是入口团队时仍然交付")
+}
+
+// 超长结果截断并标注，避免一条消息淹没整个会话记录。
+func TestUserDeliveriesTruncateLongResult(t *testing.T) {
+	long := strings.Repeat("证据", maxDeliveryChars)
+	messages := []types.MailboxMessage{
+		{MessageID: "mb-5", Kind: "result", To: types.MailboxAddress{TeamID: "default"},
+			Payload: map[string]any{"team_result": map[string]any{"Reply": long}}},
+	}
+
+	deliveries := userDeliveries(messages, "default")
+	require.Len(t, deliveries, 1)
+	require.LessOrEqual(t, len([]rune(deliveries[0].Text)), maxDeliveryChars+64)
+	require.Contains(t, deliveries[0].Text, "已截断")
+}
+
 func TestUserDeliveriesSkipEmptyResult(t *testing.T) {
 	messages := []types.MailboxMessage{
 		{MessageID: "mb-3", Kind: "result", Payload: map[string]any{}},
 	}
-	require.Empty(t, userDeliveries(messages))
+	require.Empty(t, userDeliveries(messages, "default"))
 }
 
 func TestMailboxScopeSinceUsesOldestMessage(t *testing.T) {
