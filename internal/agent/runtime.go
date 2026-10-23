@@ -895,6 +895,10 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			reply := cleanText
 			if parsedReply := stringFromParsed(parsed, "reply"); parsedReply != "" {
 				reply = parsedReply
+			} else if summary := structuredSummary(parsed); summary != "" {
+				// schema 里没有 reply 字段时，cleanText 就是整段 JSON。它会被当成
+				// 答复转述出去（repo-info 曾把 {"status":"done",...} 直接给到用户）。
+				reply = summary
 			}
 			if feedback := completionFeedback(agent.Completion, agent.Structured, parsed, usedTools, successfulTools, toolCalls, workspaceOps); feedback != "" {
 				if round+1 >= maxRounds {
@@ -2179,6 +2183,94 @@ func normalizeRouteAction(action string) types.NextAction {
 		return types.NextProceed
 	default:
 		return types.NextAction(action)
+	}
+}
+
+// structuredSummary renders a structured result that declares no reply field.
+// Returning the raw JSON would leak the envelope into the conversation, so the
+// fields are flattened into one readable line instead.
+func structuredSummary(parsed any) string {
+	object, ok := parsed.(map[string]any)
+	if !ok || len(object) == 0 {
+		return ""
+	}
+	for _, key := range []string{"summary", "message", "text", "conclusion", "answer", "result"} {
+		if value, isString := object[key].(string); isString && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		switch value := object[key].(type) {
+		case string:
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				parts = append(parts, key+"="+trimmed)
+			}
+		case bool, float64, int, int64:
+			parts = append(parts, fmt.Sprintf("%s=%v", key, value))
+		case []any:
+			items := make([]string, 0, len(value))
+			for i, item := range value {
+				if i >= 3 {
+					items = append(items, "…")
+					break
+				}
+				if text := summarizeArrayItem(item); text != "" {
+					items = append(items, text)
+				}
+			}
+			if len(items) > 0 {
+				parts = append(parts, key+"="+strings.Join(items, "; "))
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	line := strings.Join(parts, " ")
+	if runes := []rune(line); len(runes) > 300 {
+		line = string(runes[:300]) + " …"
+	}
+	return line
+}
+
+// summarizeArrayItem renders one structured array element. Elements are often
+// {question, answer} pairs (repo-info's checks), and %v would leak Go's
+// map[...] syntax into the reply.
+func summarizeArrayItem(item any) string {
+	switch typed := item.(type) {
+	case string:
+		return typed
+	case map[string]any:
+		if answer, ok := typed["answer"].(string); ok && strings.TrimSpace(answer) != "" {
+			if question, hasQuestion := typed["question"].(string); hasQuestion && strings.TrimSpace(question) != "" {
+				return strings.TrimSpace(question) + "→" + strings.TrimSpace(answer)
+			}
+			return strings.TrimSpace(answer)
+		}
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		pairs := make([]string, 0, len(keys))
+		for _, key := range keys {
+			if text, isString := typed[key].(string); isString && strings.TrimSpace(text) != "" {
+				pairs = append(pairs, key+"="+strings.TrimSpace(text))
+			}
+		}
+		return strings.Join(pairs, ",")
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", typed)
 	}
 }
 
