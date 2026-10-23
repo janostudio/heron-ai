@@ -722,43 +722,65 @@ func (s *localWorkspace) resolve(path string) (string, string, error) {
 		return "", "", err
 	}
 	clean := filepath.Clean(absolute)
-	relative, err := filepath.Rel(s.root, clean)
+	// Resolve symlinks here, not just as a "did it escape" check: the denial
+	// rule downstream matches path prefixes, and a link inside the workspace
+	// whose target is a denied directory would otherwise pass under its own
+	// name ("link/private.md" is not under ".agents/agents"), while the actual
+	// open() followed the link. Returning the resolved path keeps the permission
+	// decision and the IO on the same file.
+	resolved, err := s.resolveWithinWorkspace(clean)
+	if err != nil {
+		return "", "", err
+	}
+	root, err := filepath.EvalSymlinks(s.root)
+	if err != nil {
+		return "", "", err
+	}
+	relative, err := filepath.Rel(root, resolved)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", "", fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
 	}
-	if err := s.ensureResolvedWithinWorkspace(clean); err != nil {
-		return "", "", err
-	}
-	return clean, filepath.ToSlash(relative), nil
+	return resolved, filepath.ToSlash(relative), nil
 }
 
-func (s *localWorkspace) ensureResolvedWithinWorkspace(path string) error {
+// resolveWithinWorkspace returns path with every symlink resolved, and reports
+// an error when the result leaves the workspace.
+//
+// A path that does not exist yet (a Write creating a file) is resolved as far as
+// it goes: the deepest existing ancestor is resolved and the missing tail is
+// appended, so a new file cannot be placed through a link that points outside.
+func (s *localWorkspace) resolveWithinWorkspace(path string) (string, error) {
 	root, err := filepath.EvalSymlinks(s.root)
 	if err != nil {
-		return err
+		return "", err
 	}
-	candidate := path
+	existing := path
+	var missing []string
 	for {
-		if _, statErr := os.Lstat(candidate); statErr == nil {
+		if _, statErr := os.Lstat(existing); statErr == nil {
 			break
 		} else if !os.IsNotExist(statErr) {
-			return statErr
+			return "", statErr
 		}
-		parent := filepath.Dir(candidate)
-		if parent == candidate {
-			return fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return "", fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
 		}
-		candidate = parent
+		missing = append([]string{filepath.Base(existing)}, missing...)
+		existing = parent
 	}
-	resolved, err := filepath.EvalSymlinks(candidate)
+	resolved, err := filepath.EvalSymlinks(existing)
 	if err != nil {
-		return err
+		return "", err
+	}
+	for _, segment := range missing {
+		resolved = filepath.Join(resolved, segment)
 	}
 	relative, err := filepath.Rel(root, filepath.Clean(resolved))
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
+		return "", fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
 	}
-	return nil
+	return filepath.Clean(resolved), nil
 }
 
 func revisionOf(data []byte) string {
