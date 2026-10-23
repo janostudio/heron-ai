@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
@@ -53,7 +54,11 @@ type eventPump struct {
 	afterSeq   int64
 	// lastSeq is the highest seq handed to emit. Notifications are strictly
 	// increasing so a client can drop duplicates.
-	lastSeq int64
+	//
+	// atomic because two goroutines touch it: the subscription loop stores it,
+	// and waitForIdle / subscribe read it while reporting and reconnecting. A
+	// plain int64 there was a data race the race detector reports.
+	lastSeq atomic.Int64
 
 	cancel  context.CancelFunc
 	done    chan struct{}
@@ -79,9 +84,9 @@ func startEventPump(
 		emit:       emit,
 		flowTurnID: flowTurnID,
 		afterSeq:   afterSeq,
-		lastSeq:    afterSeq,
 		done:       make(chan struct{}),
 	}
+	pump.lastSeq.Store(afterSeq)
 	ctx, cancel := context.WithCancel(parent)
 	pump.cancel = cancel
 	go pump.run(ctx, sessionID)
@@ -112,7 +117,7 @@ func (p *eventPump) run(ctx context.Context, sessionID string) {
 			logging.Warn("progress pump: giving up after subscriber drops", map[string]any{
 				"session_id":   sessionID,
 				"flow_turn_id": p.flowTurnID,
-				"last_seq":     p.lastSeq,
+				"last_seq":     p.lastSeq.Load(),
 			})
 			return
 		}
@@ -123,7 +128,7 @@ func (p *eventPump) run(ctx context.Context, sessionID string) {
 // so a reconnect never loses the events that arrived while storage had
 // dropped us.
 func (p *eventPump) subscribe(ctx context.Context, sessionID string) (<-chan storage.SessionEvent, error) {
-	return p.sessions.Subscribe(ctx, sessionID, p.lastSeq)
+	return p.sessions.Subscribe(ctx, sessionID, p.lastSeq.Load())
 }
 
 // consume drains one subscription until the subscription context is
@@ -163,7 +168,7 @@ func (p *eventPump) handle(event storage.SessionEvent) {
 	// Track before the turn filter: the follower asks about the whole session,
 	// and events belonging to other turns still change whether work is left.
 	p.track(event)
-	if event.Seq <= p.lastSeq {
+	if event.Seq <= p.lastSeq.Load() {
 		return
 	}
 	if p.flowTurnID != "" && event.FlowTurnID != p.flowTurnID {
@@ -177,7 +182,7 @@ func (p *eventPump) handle(event storage.SessionEvent) {
 	// Advance the cursor even when emit fails: a reconnect replays from
 	// lastSeq, and retrying the same broken event forever would wedge the
 	// drain loop.
-	p.lastSeq = event.Seq
+	p.lastSeq.Store(event.Seq)
 	if err := p.emit(params); err != nil {
 		logging.Warn("progress pump: emit failed", map[string]any{
 			"session_id": event.FlowSessionID,
@@ -218,7 +223,7 @@ func (p *eventPump) waitForIdle(ctx context.Context, sessionID string, maxWait t
 		if time.Now().After(deadline) {
 			logging.Warn("progress pump: follow_async timed out", map[string]any{
 				"session_id": sessionID,
-				"last_seq":   p.lastSeq,
+				"last_seq":   p.lastSeq.Load(),
 			})
 			return
 		}
@@ -390,7 +395,7 @@ func (p *eventPump) Stop() {
 	case <-time.After(progressPumpDrainTimeout):
 		logging.Warn("progress pump: drain timed out", map[string]any{
 			"flow_turn_id": p.flowTurnID,
-			"last_seq":     p.lastSeq,
+			"last_seq":     p.lastSeq.Load(),
 		})
 	}
 }
