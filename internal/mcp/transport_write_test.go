@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,4 +46,26 @@ func TestWriteWithContextReturnsWriteError(t *testing.T) {
 	close(writer.release)
 
 	require.NoError(t, transport.writeWithContext(context.Background(), writer, []byte("{}\n")))
+}
+
+// TestReadSSEMessageWaitsForMatchingID covers the stream carrying a
+// server-initiated notification before the reply: taking the first parseable
+// message returned a Response with no Result, and the call failed while decoding
+// a payload that was never an answer.
+func TestReadSSEMessageWaitsForMatchingID(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info"}}`,
+		"",
+		`data: {"jsonrpc":"2.0","id":7,"result":{"ok":true}}`,
+		"",
+	}, "\n")
+
+	msg, err := readSSEMessage(strings.NewReader(body), 7)
+	require.NoError(t, err)
+	require.Equal(t, int64(7), msg.ID)
+	require.JSONEq(t, `{"ok":true}`, string(msg.Result))
+
+	_, err = readSSEMessage(strings.NewReader(body), 8)
+	require.Error(t, err, "a reply for another id must not be returned")
+	require.Contains(t, err.Error(), "request 8")
 }

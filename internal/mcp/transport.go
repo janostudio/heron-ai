@@ -444,7 +444,7 @@ func (t *HTTPTransport) Send(ctx context.Context, req Request) (*Response, error
 			req.Method, t.URL, res.Status, readSnippet(res.Body))
 	}
 	t.rememberSession(res)
-	msg, err := readResponseMessage(res)
+	msg, err := readResponseMessage(res, req.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -525,10 +525,10 @@ func (t *HTTPTransport) isClosed() bool {
 
 // readResponseMessage decodes one JSON-RPC message from a response body,
 // accepting either a plain JSON body or an SSE-framed one.
-func readResponseMessage(res *http.Response) (*Response, error) {
+func readResponseMessage(res *http.Response, expectedID int64) (*Response, error) {
 	body := io.LimitReader(res.Body, maxHTTPBodyBytes)
 	if strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "text/event-stream") {
-		return readSSEMessage(body)
+		return readSSEMessage(body, expectedID)
 	}
 	var msg Response
 	if err := json.NewDecoder(body).Decode(&msg); err != nil {
@@ -545,7 +545,7 @@ func readResponseMessage(res *http.Response) (*Response, error) {
 // streamable-HTTP rule that a POST may answer `Content-Type:
 // text/event-stream` with one or more `data:` events, which every server
 // built on the current SDKs does.
-func readSSEMessage(r io.Reader) (*Response, error) {
+func readSSEMessage(r io.Reader, expectedID int64) (*Response, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxHTTPBodyBytes)
 	var event bytes.Buffer
@@ -556,9 +556,13 @@ func readSSEMessage(r io.Reader) (*Response, error) {
 				continue
 			}
 			var msg Response
-			if err := json.Unmarshal(event.Bytes(), &msg); err == nil {
+			if err := json.Unmarshal(event.Bytes(), &msg); err == nil && msg.ID == expectedID {
 				return &msg, nil
 			}
+			// Not the reply to this request: a server-initiated notification or
+			// request on the same stream. Handing its empty Result back as the
+			// response made the call fail while decoding a payload that was
+			// never an answer.
 			event.Reset()
 			continue
 		}
@@ -569,11 +573,11 @@ func readSSEMessage(r io.Reader) (*Response, error) {
 	}
 	if event.Len() > 0 {
 		var msg Response
-		if err := json.Unmarshal(event.Bytes(), &msg); err == nil {
+		if err := json.Unmarshal(event.Bytes(), &msg); err == nil && msg.ID == expectedID {
 			return &msg, nil
 		}
 	}
-	return nil, errors.New("mcp http transport: no JSON-RPC message in SSE response")
+	return nil, fmt.Errorf("mcp http transport: no JSON-RPC response for request %d in SSE body", expectedID)
 }
 
 // readSnippet returns a short prefix of an error body so an HTTP failure
