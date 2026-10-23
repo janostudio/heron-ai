@@ -284,12 +284,7 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 		// A brand-new session has no id until Start returns, so there was no
 		// subscription window to stream from: replay the turn's events as one
 		// ordered snapshot instead.
-		pump = &eventPump{
-			sessions:   s.sessions,
-			emit:       s.writeProgress,
-			flowTurnID: result.Turn.ID,
-			done:       make(chan struct{}),
-		}
+		pump = newSnapshotPump(s.sessions, s.writeProgress, result.Turn.ID)
 		pump.replayEventsSnapshot(ctx, result.Session.ID)
 		// Following needs a live subscription, not a one-shot snapshot: the
 		// background turns happen after this response is written.

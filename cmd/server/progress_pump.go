@@ -357,6 +357,25 @@ func turnRoutesToActivation(payload map[string]any) bool {
 	}
 }
 
+// newSnapshotPump builds a pump for a turn whose events are already written.
+// It has no goroutine: replayEventsSnapshot emits synchronously, so the pump is
+// finished the moment it returns and done must start closed.
+//
+// It used to start open, and Stop waits progressPumpDrainTimeout (5s) on a done
+// that nothing would ever close. That made every new session block the serial
+// JSON-RPC read loop for five seconds after its response was written, and emit a
+// "drain timed out" warning on the way out.
+func newSnapshotPump(sessions storage.SessionWriter, emit func(map[string]any) error, flowTurnID string) *eventPump {
+	done := make(chan struct{})
+	close(done)
+	return &eventPump{
+		sessions:   sessions,
+		emit:       emit,
+		flowTurnID: flowTurnID,
+		done:       done,
+	}
+}
+
 // Stop terminates the pump and waits for it to drain. It never returns an
 // error to the caller: a stuck pump must not fail the turn.
 func (p *eventPump) Stop() {

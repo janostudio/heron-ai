@@ -75,3 +75,17 @@ func TestBackgroundWorkTracksIncrementally(t *testing.T) {
 	})
 	require.False(t, state.pending())
 }
+
+// TestSnapshotPumpStopsImmediately is the regression guard for the 5s stall: a
+// snapshot pump has no goroutine, so a done channel that starts open makes Stop
+// wait out progressPumpDrainTimeout. Every new session paid that on the serial
+// JSON-RPC read loop right after its response was written.
+func TestSnapshotPumpStopsImmediately(t *testing.T) {
+	pump := newSnapshotPump(storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir())),
+		func(map[string]any) error { return nil }, "ft_1")
+
+	started := time.Now()
+	pump.Stop()
+	require.Less(t, time.Since(started), 100*time.Millisecond,
+		"a finished snapshot pump must not wait for a drain that will never happen")
+}
