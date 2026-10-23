@@ -89,3 +89,23 @@ func TestSnapshotPumpStopsImmediately(t *testing.T) {
 	require.Less(t, time.Since(started), 100*time.Millisecond,
 		"a finished snapshot pump must not wait for a drain that will never happen")
 }
+
+type recordingCloser struct {
+	closed bool
+	err    error
+}
+
+func (r *recordingCloser) Close() error {
+	r.closed = true
+	return r.err
+}
+
+// TestJSONRPCNormalExitClosesTheRuntime guards the shutdown contract: a bridge
+// client closes stdin as its way of stopping heron, and that normal return used
+// to skip the bundle close that every other exit path performs, leaving stdio
+// MCP child processes running with no owner.
+func TestJSONRPCNormalExitClosesTheRuntime(t *testing.T) {
+	closer := &recordingCloser{}
+	require.NoError(t, closeJSONRPCBundle(closer))
+	require.True(t, closer.closed, "stdin EOF must close the runtime")
+}
