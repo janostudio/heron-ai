@@ -30,11 +30,14 @@ type streamJSONInput struct {
 	Input      string          `json:"input,omitempty"`
 	Message    json.RawMessage `json:"message,omitempty"`
 	ApprovalID string          `json:"approval_id,omitempty"`
-	Approved   bool            `json:"approved,omitempty"`
-	Reason     string          `json:"reason,omitempty"`
-	ApproverID string          `json:"approver_id,omitempty"`
-	Approver   string          `json:"approver,omitempty"`
-	Channel    string          `json:"channel,omitempty"`
+	// Approved is a pointer so "the field was missing" stays distinguishable
+	// from "the approver said no". A plain bool made a caller that forgot the
+	// field silently deny a pending approval.
+	Approved   *bool  `json:"approved,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	ApproverID string `json:"approver_id,omitempty"`
+	Approver   string `json:"approver,omitempty"`
+	Channel    string `json:"channel,omitempty"`
 }
 
 func runStreamJSONClient(flowPath, serverURL string) {
@@ -122,8 +125,11 @@ func (c *streamJSONClient) Serve(reader io.Reader) error {
 			if c.session == "" || input.ApprovalID == "" {
 				return c.write(map[string]any{"type": "error", "subtype": "invalid_approval", "error": "session_id and approval_id are required"})
 			}
+			if input.Approved == nil {
+				return c.write(map[string]any{"type": "error", "subtype": "invalid_approval", "error": "approved is required: true to approve, false to deny"})
+			}
 			result, err := c.post("/api/approvals?session_id="+urlQueryEscape(c.session), map[string]any{
-				"approval_id": input.ApprovalID, "approved": input.Approved,
+				"approval_id": input.ApprovalID, "approved": *input.Approved,
 				"reason": input.Reason, "approver_id": input.ApproverID,
 				"approver": input.Approver, "channel": input.Channel,
 			})
