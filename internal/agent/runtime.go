@@ -1736,6 +1736,17 @@ func (t *TurnLoop) toolDecision(ctx context.Context, agent types.AgentConfig, re
 	return decision, reason, nil
 }
 
+// approvalResults ends a Tool batch at an approval gate. The call at index is
+// the one waiting for a human; every other call in the same model response is
+// left unexecuted.
+//
+// Those untouched calls still need a result, and it has to be a real one:
+// the assistant message already carries all N tool_calls, and the request the
+// provider validates pairs them with N tool messages. Returning nil here made
+// Run skip them (it treats a nil result as "nothing to report"), so a resumed
+// turn sent N tool_calls with one tool reply and strict providers rejected the
+// whole request with 400. The resumed turn only ever fills in the approval, so
+// nothing else would ever have produced those messages.
 func approvalResults(calls []types.ToolCall, index int, req types.AgentRequest, reason string) []*types.ToolResult {
 	results := make([]*types.ToolResult, len(calls))
 	call := calls[index]
@@ -1754,6 +1765,22 @@ func approvalResults(calls []types.ToolCall, index int, req types.AgentRequest, 
 		Error:           "tool approval required",
 		Next:            &types.Route{Action: types.NextWaitApproval, Reason: reason},
 		PendingApproval: pending,
+	}
+	// NextProceed, not nil: it keeps the loop's outcome scan from mistaking
+	// these for the turn's routing decision, while still producing the tool
+	// message the pairing requires.
+	for i := range results {
+		if i == index {
+			continue
+		}
+		results[i] = &types.ToolResult{
+			Success: false,
+			Error: fmt.Sprintf(
+				"not executed: another Tool call in this batch (%q) is waiting for human approval",
+				call.Name,
+			),
+			Next: &types.Route{Action: types.NextProceed},
+		}
 	}
 	return results
 }
