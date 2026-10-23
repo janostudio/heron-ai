@@ -249,10 +249,7 @@ func (t *StdioTransport) Send(ctx context.Context, req Request) (*Response, erro
 		return nil, fmt.Errorf("mcp stdio transport: encode request: %w", err)
 	}
 	line = append(line, '\n')
-	t.writeMu.Lock()
-	_, writeErr := stdin.Write(line)
-	t.writeMu.Unlock()
-	if writeErr != nil {
+	if writeErr := t.writeWithContext(ctx, stdin, line); writeErr != nil {
 		t.forget(req.ID)
 		return nil, fmt.Errorf("mcp stdio transport: write to %q: %w", t.Command, writeErr)
 	}
@@ -269,6 +266,37 @@ func (t *StdioTransport) Send(ctx context.Context, req Request) (*Response, erro
 	case <-ctx.Done():
 		t.forget(req.ID)
 		return nil, ctx.Err()
+	}
+}
+
+// writeWithContext bounds the write by ctx. A child process that stops reading
+// its stdin (npx still installing, a wedged server) blocks Write forever, and
+// the request path had no deadline on this side even though the read loop did:
+// the whole AgentTurn hung behind a pipe that nobody was draining.
+//
+// The write itself runs on its own goroutine because os.File.Write is not
+// cancelable. When ctx expires the caller gets the error and the goroutine
+// finishes whenever the pipe drains; writeMu keeps a second write from
+// interleaving with it.
+func (t *StdioTransport) writeWithContext(ctx context.Context, stdin io.Writer, line []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	written := make(chan error, 1)
+	go func() {
+		t.writeMu.Lock()
+		defer t.writeMu.Unlock()
+		_, err := stdin.Write(line)
+		written <- err
+	}()
+	select {
+	case err := <-written:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
