@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/workspace"
@@ -409,10 +410,41 @@ func (t *GlobTool) Execute(ctx context.Context, params map[string]any) (*types.T
 	}, nil
 }
 
-// TodoWriteTool writes todo list
-type TodoWriteTool struct{}
+// TodoStore holds one Agent process's todo list.
+//
+// The tools used to accept everything and answer "Todos updated" / "No todos"
+// without storing anything: the model believed it had recorded a plan and moved
+// on, while the list it read back was always empty. A leftover stub that reports
+// success is worse than a missing tool — the model cannot tell it apart from a
+// working one.
+type TodoStore struct {
+	mu    sync.Mutex
+	items []string
+}
 
-func NewTodoWriteTool() *TodoWriteTool       { return &TodoWriteTool{} }
+func NewTodoStore() *TodoStore { return &TodoStore{} }
+
+func (s *TodoStore) Replace(items []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.items = append([]string(nil), items...)
+}
+
+func (s *TodoStore) Items() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.items...)
+}
+
+// TodoWriteTool writes todo list
+type TodoWriteTool struct{ store *TodoStore }
+
+func NewTodoWriteTool(store *TodoStore) *TodoWriteTool {
+	if store == nil {
+		store = NewTodoStore()
+	}
+	return &TodoWriteTool{store: store}
+}
 func (t *TodoWriteTool) Name() string        { return "TodoWrite" }
 func (t *TodoWriteTool) Description() string { return "Write todo items" }
 func (t *TodoWriteTool) NeedsApproval() bool { return false }
@@ -425,13 +457,31 @@ func (t *TodoWriteTool) Parameters() map[string]any {
 	}
 }
 func (t *TodoWriteTool) Execute(ctx context.Context, params map[string]any) (*types.ToolResult, error) {
-	return &types.ToolResult{Success: true, Content: "Todos updated"}, nil
+	raw, ok := params["items"]
+	if !ok {
+		return &types.ToolResult{Success: false, Error: "items is required"}, nil
+	}
+	items, err := toStringSlice(raw)
+	if err != nil {
+		return &types.ToolResult{Success: false, Error: fmt.Sprintf("items: %v", err)}, nil
+	}
+	t.store.Replace(items)
+	return &types.ToolResult{
+		Success:  true,
+		Content:  fmt.Sprintf("Todos updated: %d item(s)\n%s", len(items), strings.Join(items, "\n")),
+		Metadata: map[string]any{"items": len(items)},
+	}, nil
 }
 
 // TodoReadTool reads todo list
-type TodoReadTool struct{}
+type TodoReadTool struct{ store *TodoStore }
 
-func NewTodoReadTool() *TodoReadTool        { return &TodoReadTool{} }
+func NewTodoReadTool(store *TodoStore) *TodoReadTool {
+	if store == nil {
+		store = NewTodoStore()
+	}
+	return &TodoReadTool{store: store}
+}
 func (t *TodoReadTool) Name() string        { return "TodoRead" }
 func (t *TodoReadTool) Description() string { return "Read todo items" }
 func (t *TodoReadTool) NeedsApproval() bool { return false }
@@ -442,7 +492,38 @@ func (t *TodoReadTool) Parameters() map[string]any {
 	return map[string]any{}
 }
 func (t *TodoReadTool) Execute(ctx context.Context, params map[string]any) (*types.ToolResult, error) {
-	return &types.ToolResult{Success: true, Content: "No todos"}, nil
+	items := t.store.Items()
+	if len(items) == 0 {
+		return &types.ToolResult{Success: true, Content: "No todos", Metadata: map[string]any{"items": 0}}, nil
+	}
+	return &types.ToolResult{
+		Success:  true,
+		Content:  strings.Join(items, "\n"),
+		Metadata: map[string]any{"items": len(items)},
+	}, nil
+}
+
+// toStringSlice converts the decoded JSON array into strings, rejecting shapes
+// the model is likely to send by mistake (a bare string, nested objects).
+func toStringSlice(raw any) ([]string, error) {
+	switch value := raw.(type) {
+	case []string:
+		return value, nil
+	case []any:
+		items := make([]string, 0, len(value))
+		for index, entry := range value {
+			text, ok := entry.(string)
+			if !ok {
+				return nil, fmt.Errorf("item %d is %T, want a string", index, entry)
+			}
+			items = append(items, text)
+		}
+		return items, nil
+	case string:
+		return []string{value}, nil
+	default:
+		return nil, fmt.Errorf("want an array of strings, got %T", raw)
+	}
 }
 
 // Helper functions

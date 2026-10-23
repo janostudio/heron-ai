@@ -127,8 +127,11 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	}))
 	toolRegistry.Register(tool.NewCodeNavTool(workspaceService, "codels", injectEnv))
 	toolRegistry.Register(tool.NewAskUserQuestionTool())
-	toolRegistry.Register(tool.NewTodoWriteTool())
-	toolRegistry.Register(tool.NewTodoReadTool())
+	// One store shared by the pair: TodoWrite and TodoRead must see the same
+	// list, or the model writes a plan it can never read back.
+	todoStore := tool.NewTodoStore()
+	toolRegistry.Register(tool.NewTodoWriteTool(todoStore))
+	toolRegistry.Register(tool.NewTodoReadTool(todoStore))
 	toolExecutor := tool.NewToolExecutor(toolRegistry)
 
 	promptRenderer := promptAdapter{renderer: prompt.NewPromptRenderer(nil)}

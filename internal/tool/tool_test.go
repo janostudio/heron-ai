@@ -570,16 +570,31 @@ func TestBashToolContextCancellation(t *testing.T) {
 }
 
 func TestTodoWriteTool(t *testing.T) {
-	tool := NewTodoWriteTool()
-	result, err := tool.Execute(context.Background(), map[string]any{
+	store := NewTodoStore()
+	writer := NewTodoWriteTool(store)
+	reader := NewTodoReadTool(store)
+
+	result, err := writer.Execute(context.Background(), map[string]any{
 		"items": []string{"task1", "task2"},
 	})
 	require.NoError(t, err)
-	assert.True(t, result.Success)
+	require.True(t, result.Success)
+
+	// The write has to be visible to the read: the stub used to answer
+	// "Todos updated" and "No todos" without storing anything.
+	read, err := reader.Execute(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "task1\ntask2", read.Content)
+
+	// A malformed payload is a failure, not a silent success.
+	bad, err := writer.Execute(context.Background(), map[string]any{"items": map[string]any{"task": "x"}})
+	require.NoError(t, err)
+	assert.False(t, bad.Success)
+	assert.Contains(t, bad.Error, "array of strings")
 }
 
 func TestTodoReadTool(t *testing.T) {
-	tool := NewTodoReadTool()
+	tool := NewTodoReadTool(nil)
 	result, err := tool.Execute(context.Background(), nil)
 	require.NoError(t, err)
 	assert.True(t, result.Success)
