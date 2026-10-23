@@ -962,6 +962,12 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage, round, resp.Text, workspaceOps, toolCalls, types.TurnFailed, budgetErr, nil,
 				loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
 		}
+		// Fill in any missing Tool call ids before they reach the transcript, the
+		// events and the Tool messages. A model that omits an id used to get one
+		// synthesised inside executeToolCalls (for the event pairing) while the
+		// assistant message recorded an empty id, so a replay could not pair the
+		// tool result back to its call and strict providers rejected the request.
+		resp.ToolCalls = ensureToolCallIDs(resp.ToolCalls, round)
 		toolCalls += len(resp.ToolCalls)
 		// Charge the model-requested Tool calls before any policy gate. An
 		// approval wait or a denied call must not bypass MaxToolCalls.
@@ -2121,6 +2127,18 @@ func sortedBoolKeys(values map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// ensureToolCallIDs gives every call a stable id. The loop's event pairing and
+// the provider's tool_call/tool message pairing both key on this value, so it has
+// to be assigned exactly once, before either sees it.
+func ensureToolCallIDs(calls []types.ToolCall, round int) []types.ToolCall {
+	for i := range calls {
+		if calls[i].ID == "" {
+			calls[i].ID = fmt.Sprintf("tc-%d-%d", round, i)
+		}
+	}
+	return calls
 }
 
 func toolCallSignature(calls []types.ToolCall) string {

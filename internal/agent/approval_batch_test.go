@@ -126,3 +126,41 @@ func TestPolicyDenialReportsItsOwnReason(t *testing.T) {
 	require.Contains(t, rejectionReason(call), "restricted operation")
 	require.Contains(t, rejectionReason(types.ToolCall{Arguments: map[string]any{}}), "not allowed")
 }
+
+// TestMissingToolCallIDIsSharedByTranscriptAndResult covers the id that used to
+// exist only in the events: executeToolCalls synthesised one for pairing while
+// the assistant message kept the empty id, so the transcript could not pair the
+// tool message back to its call.
+func TestMissingToolCallIDIsSharedByTranscriptAndResult(t *testing.T) {
+	model := &mockModelProvider{responses: []types.ChatResponse{
+		{
+			Text:      "one call without an id",
+			ToolCalls: []types.ToolCall{{Name: "Read", Arguments: map[string]any{"file": "a.txt"}}},
+		},
+		{Text: "done"},
+	}}
+	loop := NewTurnLoop(model, &mockToolExecutor{}, nil, NewRouteParser(), nil, NewHookExecutor(),
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hi"}}},
+	)
+	result, err := loop.Run(context.Background(), types.AgentConfig{
+		Name:  "tester",
+		Model: types.ModelConfig{Model: "test"},
+		Tools: types.ToolConfig{Builtin: []string{"Read"}},
+	}, types.AgentRequest{CallID: "c1", AgentID: "tester", FlowSessionID: "fs_id"})
+	require.NoError(t, err)
+	require.Equal(t, types.TurnCompleted, result.Status)
+
+	// The transcript the loop sent on the second round must pair the call and
+	// its result by the same non-empty id.
+	var assistantID, toolID string
+	for _, message := range model.lastMessages {
+		if message.Role == "assistant" && len(message.ToolCalls) > 0 {
+			assistantID = message.ToolCalls[0].ID
+		}
+		if message.Role == "tool" {
+			toolID = message.ToolCallID
+		}
+	}
+	require.NotEmpty(t, assistantID, "the assistant message must carry the synthesised id")
+	require.Equal(t, assistantID, toolID)
+}
