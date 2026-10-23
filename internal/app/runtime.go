@@ -140,7 +140,7 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 		agent.NewHITLGate(0),
 		agent.NewHookExecutorWithEnv(injectEnv),
 		promptRenderer,
-	)
+	).WithToolPolicyPhrases(config.NewConfigLoader(workspaceRoot).LoadToolPolicyPhrases())
 
 	executors := call.NewRegistry()
 	if err := executors.Register(call.NewAgentExecutor(turnLoop)); err != nil {

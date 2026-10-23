@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
@@ -146,6 +148,23 @@ type openAIResponse struct {
 			ReasoningTokens int `json:"reasoning_tokens"`
 		} `json:"completion_tokens_details"`
 	} `json:"usage"`
+}
+
+// errorCodeString renders the provider's error.code, which may be a string or a
+// number depending on the vendor.
+func errorCodeString(code any) string {
+	switch typed := code.(type) {
+	case string:
+		return typed
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(typed)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", typed)
+	}
 }
 
 type openAIErrorResponse struct {
@@ -349,13 +368,13 @@ func (p *OpenAIProvider) post(ctx context.Context, effective types.ModelConfig, 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var apiErr openAIErrorResponse
 		if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
-			pe := classifyRejection(resp.StatusCode, apiErr.Error.Type, body, resp.Header)
+			pe := classifyRejection(resp.StatusCode, apiErr.Error.Type, errorCodeString(apiErr.Error.Code), body, resp.Header)
 			pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
 			logRejectedRequest("model request rejected", resp.StatusCode, req, body)
 			return pe
 		}
 		logRejectedRequest("model request rejected", resp.StatusCode, req, body)
-		return classifyRejection(resp.StatusCode, "", body, resp.Header)
+		return classifyRejection(resp.StatusCode, "", "", body, resp.Header)
 	}
 	if err := json.Unmarshal(body, output); err != nil {
 		return fmt.Errorf("decode response: %w", err)
@@ -407,13 +426,13 @@ func (p *OpenAIProvider) postStream(ctx context.Context, effective types.ModelCo
 		}
 		var apiErr openAIErrorResponse
 		if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
-			pe := classifyRejection(resp.StatusCode, apiErr.Error.Type, body, resp.Header)
+			pe := classifyRejection(resp.StatusCode, apiErr.Error.Type, errorCodeString(apiErr.Error.Code), body, resp.Header)
 			pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
 			logRejectedRequest("model request rejected", resp.StatusCode, req, body)
 			return nil, pe
 		}
 		logRejectedRequest("model request rejected", resp.StatusCode, req, body)
-		return nil, classifyRejection(resp.StatusCode, "", body, resp.Header)
+		return nil, classifyRejection(resp.StatusCode, "", "", body, resp.Header)
 	}
 
 	result := &openAIResponse{}
@@ -898,6 +917,10 @@ func withoutOptionalGenerationParameters(req openAIRequest) openAIRequest {
 func isUnsupportedParameterError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var providerErr *types.ProviderError
+	if errors.As(err, &providerErr) && providerErr.IsUnsupportedParameter() {
+		return true
 	}
 	message := strings.ToLower(err.Error())
 	for _, phrase := range []string{

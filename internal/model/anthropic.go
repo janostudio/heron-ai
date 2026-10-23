@@ -312,11 +312,11 @@ func (p *AnthropicProvider) post(ctx context.Context, effective types.ModelConfi
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var apiErr anthropicErrorResponse
 		if json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
-			pe := classifyRejection(resp.StatusCode, apiErr.Error.Type, body, resp.Header)
+			pe := classifyRejection(resp.StatusCode, apiErr.Error.Type, "", body, resp.Header)
 			pe.Message = apiErr.Error.Type + ": " + apiErr.Error.Message
 			return pe
 		}
-		return classifyRejection(resp.StatusCode, "", body, resp.Header)
+		return classifyRejection(resp.StatusCode, "", "", body, resp.Header)
 	}
 	if err := json.Unmarshal(body, output); err != nil {
 		return fmt.Errorf("decode response: %w", err)
