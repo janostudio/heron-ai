@@ -86,6 +86,14 @@ type MCPToolProvider interface {
 	ToolSchemas(names []string) []types.JSONSchema
 }
 
+// ToolSchemaProvider exposes the schema of an executable Tool. custom tools are
+// registered in the tool registry but have no entry in builtinSchemas, so
+// without this the config field `tools.custom` was accepted and then silently
+// ignored: the executor could run the tool, the model was never told it exists.
+type ToolSchemaProvider interface {
+	ToolSchema(name string) (types.JSONSchema, bool)
+}
+
 // RenderContext holds the collaboration context visible to an Agent.
 type RenderContext struct {
 	Variables     map[string]string
@@ -2607,6 +2615,22 @@ func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.Agent
 	// exactly as with builtin. Withheld names are dropped for the same reason
 	// they are dropped above — a tool the policy layer will refuse has no
 	// place in the schema.
+	// Custom tools: registered and executable, but with no hand-written schema
+	// entry, so the schema has to come from the Tool itself.
+	if provider, ok := t.toolExecutor.(ToolSchemaProvider); ok && len(agent.Tools.Custom) > 0 {
+		for _, toolName := range agent.Tools.Custom {
+			if _, hidden := withheld[toolName]; hidden {
+				continue
+			}
+			if _, dup := seen[toolName]; dup {
+				continue
+			}
+			if schema, ok := provider.ToolSchema(toolName); ok && schema.Name != "" {
+				seen[toolName] = struct{}{}
+				schemas = append(schemas, schema)
+			}
+		}
+	}
 	if t.mcpTools != nil && len(agent.Tools.MCP) > 0 {
 		for _, schema := range t.mcpTools.ToolSchemas(agent.Tools.MCP) {
 			if schema.Name == "" {
