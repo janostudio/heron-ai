@@ -111,7 +111,9 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		"message_count":   len(messages),
 	})
 	result, runErr := r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
-		[]activation{wake}, turnOriginMailbox, mailboxScopeSince(messages), userDeliveries(messages))
+		[]activation{wake}, turnOriginMailbox,
+		r.taskChainSince(ctx, sessionID, mailboxScopeSince(messages)),
+		userDeliveries(messages))
 
 	// Bookkeeping failures stay logged, never escalated: they must not turn a
 	// completed turn into a failed one.
@@ -137,6 +139,77 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		}
 	}
 	return result, runErr
+}
+
+// taskChainSince returns where the task the woken Team is working on started:
+// the most recent user-originated FlowTurn.
+//
+// The mailbox timestamp is not a safe boundary on its own. A result message is
+// enqueued a millisecond or two after the record it announces is published
+// (s15: OwnerReply at 05:47:17.234, the result message at 05:47:17.235), so
+// the record that just arrived fell outside the window, the coordinator saw
+// only the user's original question, and re-dispatched the task instead of
+// relaying the answer. The user's turn is where the current question started,
+// which is exactly what "produced for an earlier question" must be measured
+// against: records from the previous question stay out, everything produced
+// while answering this one stays in.
+func (r *Runtime) taskChainSince(ctx context.Context, sessionID string, fallback time.Time) time.Time {
+	replay, err := r.sessions.Replay(ctx, sessionID)
+	if err != nil {
+		return fallback
+	}
+	var latest time.Time
+	for _, event := range replay.Events {
+		if event.Type != types.EventFlowTurnStarted {
+			continue
+		}
+		origin, startedAt := turnOriginAndStart(event.Payload)
+		if origin != turnOriginUser || startedAt.IsZero() {
+			continue
+		}
+		if startedAt.After(latest) {
+			latest = startedAt
+		}
+	}
+	if latest.IsZero() {
+		return fallback
+	}
+	return latest
+}
+
+// turnOriginAndStart reads origin and start time out of a turn.started payload.
+// The payload carries a typed value when the event is still in memory and a
+// decoded map after a JSONL round-trip; both shapes must work.
+func turnOriginAndStart(payload map[string]any) (string, time.Time) {
+	if payload == nil {
+		return "", time.Time{}
+	}
+	switch turn := payload["turn"].(type) {
+	case types.FlowTurn:
+		return turn.Origin, turn.StartedAt
+	case map[string]any:
+		origin, _ := turn["origin"].(string)
+		return origin, payloadTime(turn["started_at"])
+	default:
+		return "", time.Time{}
+	}
+}
+
+// payloadTime decodes a timestamp that may still be typed or already be a JSON
+// string after a replay.
+func payloadTime(value any) time.Time {
+	switch typed := value.(type) {
+	case time.Time:
+		return typed
+	case string:
+		if at, err := time.Parse(time.RFC3339Nano, typed); err == nil {
+			return at
+		}
+		if at, err := time.Parse(time.RFC3339, typed); err == nil {
+			return at
+		}
+	}
+	return time.Time{}
 }
 
 // mailboxScopeSince bounds the records a woken Team may treat as current.
