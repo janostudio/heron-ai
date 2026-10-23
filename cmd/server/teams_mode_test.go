@@ -2,8 +2,8 @@ package main
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"testing"

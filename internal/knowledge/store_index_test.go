@@ -3,8 +3,8 @@ package knowledge
 import (
 	"context"
 	"fmt"
-	"sync"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
