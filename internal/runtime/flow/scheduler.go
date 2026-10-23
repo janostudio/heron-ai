@@ -3,10 +3,11 @@ package flow
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
-	"time"
 )
 
 // This file is the session-level scheduler for the execution-state model: a
@@ -151,6 +152,18 @@ func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession,
 		})
 	}
 
+	// A round that stopped for a Tool task or an approval has nobody to route
+	// to (see postRoutes): it parked, and the session has to say so, because
+	// that status is what the completion callback looks for before resuming.
+	if parkErr := r.parkDispatchedSession(ctx, session, flowTurn, execution); parkErr != nil {
+		logging.Error("park dispatched session", map[string]any{
+			"flow_session_id": session.ID,
+			"flow_turn_id":    flowTurn.ID,
+			"team_id":         target,
+			"error":           parkErr.Error(),
+		})
+	}
+
 	r.wakeIfIdle(ctx, session.ID)
 
 	logging.Info("async dispatch finished", map[string]any{
@@ -186,6 +199,11 @@ func (r *Runtime) postRoutes(
 	}
 
 	switch next.Action {
+	case types.NextWaitTool, types.NextWaitApproval:
+		// Nothing to route: the round stopped to wait for a user, a Tool task
+		// or an approval. The parked status is written by parkDispatchedSession
+		// so the matching resume path can find the session again.
+		return nil
 	case types.NextActivate:
 		if len(execution.binding.CanActivate) == 0 {
 			return fmt.Errorf("team %q cannot activate other teams", execution.activation.teamID)
@@ -234,6 +252,48 @@ func (r *Runtime) postRoutes(
 	default:
 		return fmt.Errorf("unsupported next action %q from dispatched team %q", next.Action, execution.activation.teamID)
 	}
+}
+
+// parkDispatchedSession records the waiting status a dispatched round stopped
+// in.
+//
+// A background round has no FlowTurn to finish, so nothing wrote the session
+// state after the Team parked. The session therefore kept whatever status it
+// had when it was dispatched — usually waiting_input — while the Agent
+// checkpoint and the Team waiting-tool event said otherwise. That mismatch is
+// not cosmetic: appendWakingTeam (app/runtime.go) only consumes a completed
+// Tool task's wake-up when the session is in waiting_tool, so the wake-up was
+// dropped after a minute and the result was never collected. The session simply
+// stopped answering.
+//
+// Only the three waiting states are written: completed and failed rounds still
+// have routing to do (postRoutes posts their result), and their status is
+// decided by whoever consumes that result.
+func (r *Runtime) parkDispatchedSession(
+	ctx context.Context,
+	session types.FlowSession,
+	flowTurn types.FlowTurn,
+	execution teamExecution,
+) error {
+	status := sessionStatusForTurn(execution.result.Turn.Status)
+	switch status {
+	case types.SessionWaitingInput, types.SessionWaitingTool, types.SessionWaitingApproval:
+	default:
+		return nil
+	}
+	if session.Status == status {
+		return nil
+	}
+	session.Status = status
+	session.UpdatedAt = time.Now().UTC()
+	return r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+		EventHeader: types.EventHeader{
+			Type:          types.EventFlowSessionUpdated,
+			FlowSessionID: session.ID,
+			FlowTurnID:    flowTurn.ID,
+		},
+		Payload: map[string]any{"session": session},
+	})
 }
 
 // postResult enqueues a result message to target carrying the Team's outcome.
