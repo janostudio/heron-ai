@@ -303,7 +303,7 @@ func extractTarGz(archive, dst string) error {
 			if total > maxPackageTotalSize {
 				return fmt.Errorf("archive expands to over %d bytes", maxPackageTotalSize)
 			}
-			if err := writeExtractedFile(target, tr, hdr.Size); err != nil {
+			if err := writeExtractedFile(target, tr, hdr.Size, packageFileMode(hdr.Mode)); err != nil {
 				return err
 			}
 		default:
@@ -313,11 +313,25 @@ func extractTarGz(archive, dst string) error {
 	return nil
 }
 
-func writeExtractedFile(target string, r io.Reader, size int64) error {
+// packageFileMode maps a tar entry's mode onto a safe local file mode.
+//
+// The executable bit is preserved (a packaged skill may ship a run.sh that is
+// only usable when executable) and write permission for group/other is not:
+// a package comes from the network, and honouring its 0777 would let it place
+// world-writable files in the workspace.
+func packageFileMode(mode int64) os.FileMode {
+	perm := os.FileMode(0o644)
+	if mode&0o111 != 0 {
+		perm = 0o755
+	}
+	return perm
+}
+
+func writeExtractedFile(target string, r io.Reader, size int64, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
-	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
@@ -639,7 +653,13 @@ func copyPackageTree(srcDir, dstDir string) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(target, data, 0o644)
+		// Carry the source file's executable bit through the copy: dropping it
+		// made an installed package's scripts unrunnable.
+		mode := os.FileMode(0o644)
+		if info, statErr := d.Info(); statErr == nil && info.Mode()&0o111 != 0 {
+			mode = 0o755
+		}
+		return os.WriteFile(target, data, mode)
 	})
 }
 
