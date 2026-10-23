@@ -2,6 +2,8 @@ package knowledge
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"strings"
 	"testing"
 
@@ -37,4 +39,35 @@ func TestRebuildIndexListsOnlyCurrentVersions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, strings.Count(string(index), "[entry]"),
 		"the index must list the entry once, not once per version:\n%s", index)
+}
+
+// TestConcurrentSavesAreSerialised covers the per-instance mutex: stores are
+// constructed per call site, so two writers held different locks and could
+// interleave on the same tree.
+func TestConcurrentSavesAreSerialised(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	ctx := context.Background()
+
+	var wait sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			// A fresh instance per writer, exactly like the production call
+			// sites do.
+			store := NewMarkdownStore(files, ".agents/knowledge")
+			_ = store.Save(ctx, types.KnowledgeEntry{
+				ID:      fmt.Sprintf("entry-%d", index),
+				Title:   "concurrent",
+				Content: "body",
+				Scope:   types.Scope{Type: "flow"},
+			})
+		}(i)
+	}
+	wait.Wait()
+
+	store := NewMarkdownStore(files, ".agents/knowledge")
+	entries, err := store.Load(ctx)
+	require.NoError(t, err)
+	require.Len(t, entries, 8, "every concurrent save must survive: %+v", entries)
 }

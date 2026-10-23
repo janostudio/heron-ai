@@ -19,8 +19,16 @@ import (
 type MarkdownStore struct {
 	files storage.FileStore
 	root  string
-	mu    sync.Mutex
 }
+
+// markdownWriteMu serialises writes across every MarkdownStore instance.
+//
+// The mutex used to be a field, but stores are constructed per call site
+// (pointer.go, bash_gate.go, app/runtime.go all call NewMarkdownStore), so two
+// concurrent writers held different locks and could interleave read-modify-write
+// on the same files — version bumps read the entry, then both write it. One
+// package-level lock is the smallest thing that actually excludes them.
+var markdownWriteMu sync.Mutex
 
 func NewMarkdownStore(files storage.FileStore, root string) *MarkdownStore {
 	return &MarkdownStore{files: files, root: filepath.Clean(root)}
@@ -156,8 +164,8 @@ func (s *MarkdownStore) Save(ctx context.Context, entry types.KnowledgeEntry) er
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	markdownWriteMu.Lock()
+	defer markdownWriteMu.Unlock()
 	return s.files.Write(entry.Path, data)
 }
 
