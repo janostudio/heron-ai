@@ -124,6 +124,41 @@ func projectSessionEvent(event storage.SessionEvent) map[string]any {
 //
 // Keys are omitted when unset so an older caller decoding a newer engine (or
 // the reverse) sees no change in shape for turns that have nothing to relay.
+// hoistDeliveries normalises the delivery list whether it arrives as typed
+// values or as maps decoded from a replayed event.
+func hoistDeliveries(value any) []map[string]any {
+	items := make([]map[string]any, 0, 2)
+	switch typed := value.(type) {
+	case []types.UserDelivery:
+		for _, delivery := range typed {
+			items = append(items, map[string]any{
+				"text":       truncateUTF8(delivery.Text, progressMaxTextBytes),
+				"team_id":    delivery.TeamID,
+				"message_id": delivery.MessageID,
+			})
+		}
+	case []map[string]any:
+		for _, item := range typed {
+			hoisted := map[string]any{}
+			for key, raw := range item {
+				if text, ok := raw.(string); ok {
+					hoisted[key] = truncateUTF8(text, progressMaxTextBytes)
+				} else {
+					hoisted[key] = raw
+				}
+			}
+			items = append(items, hoisted)
+		}
+	case []any:
+		for _, raw := range typed {
+			if item, ok := raw.(map[string]any); ok {
+				items = append(items, item)
+			}
+		}
+	}
+	return items
+}
+
 func copyTurnAnnouncement(base map[string]any, payload map[string]any) {
 	if payload == nil {
 		return
@@ -139,18 +174,7 @@ func copyTurnAnnouncement(base map[string]any, payload map[string]any) {
 	}
 	// Deliveries are mailbox results the user must receive verbatim. They are
 	// hoisted like reply so a caller can relay them without decoding the turn.
-	if deliveries, ok := payload["deliveries"].([]types.UserDelivery); ok && len(deliveries) > 0 {
-		hoisted := make([]map[string]any, 0, len(deliveries))
-		for _, delivery := range deliveries {
-			item := map[string]any{"text": truncateUTF8(delivery.Text, progressMaxTextBytes)}
-			if delivery.TeamID != "" {
-				item["team_id"] = delivery.TeamID
-			}
-			if delivery.MessageID != "" {
-				item["message_id"] = delivery.MessageID
-			}
-			hoisted = append(hoisted, item)
-		}
+	if hoisted := hoistDeliveries(payload["deliveries"]); len(hoisted) > 0 {
 		base["deliveries"] = hoisted
 	}
 }

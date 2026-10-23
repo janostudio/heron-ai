@@ -298,7 +298,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 			attempt:       pendingTeam.Attempt + 1,
 			resumeResults: resumeResults,
 			resumeCalls:   resumeCalls,
-		}}, turnOriginResume, time.Time{})
+		}}, turnOriginResume, time.Time{}, nil)
 	}
 	if !ok {
 		return r.runTurnWithContext(ctx, session, input, persistedBlocks)
@@ -313,7 +313,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 		resumeInput:        input,
 		resumeCallTurnID:   pending.CallTurnID,
 		resumeTaskID:       pending.TaskID,
-	}}, turnOriginResume, time.Time{})
+	}}, turnOriginResume, time.Time{}, nil)
 }
 
 func (r *Runtime) ResumeApproval(ctx context.Context, sessionID, approvalID string, approved bool, reason string) (types.FlowTurnResult, error) {
@@ -601,7 +601,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	blocks []types.ContextBlock,
 	initial []activation,
 ) (types.FlowTurnResult, error) {
-	return r.runTurnWithOrigin(ctx, defs, session, input, blocks, initial, turnOriginUser, time.Time{})
+	return r.runTurnWithOrigin(ctx, defs, session, input, blocks, initial, turnOriginUser, time.Time{}, nil)
 }
 
 // Turn origin values recorded on FlowTurn.Origin.
@@ -629,6 +629,7 @@ func (r *Runtime) runTurnWithOrigin(
 	initial []activation,
 	origin string,
 	scopeSince time.Time,
+	deliveries []types.UserDelivery,
 ) (types.FlowTurnResult, error) {
 	if err := r.validateDependencies(session.FlowID); err != nil {
 		return types.FlowTurnResult{}, err
@@ -757,7 +758,7 @@ func (r *Runtime) runTurnWithOrigin(
 			"flow_turn_id":    turn.ID,
 			"error":           err.Error(),
 		})
-		return r.finishTurn(ctx, result, types.SessionFailed, err)
+		return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, err)
 	}
 	teamTurns := 0
 	// finalReply is the reply of the hop that ends this turn: the Team whose
@@ -779,7 +780,7 @@ func (r *Runtime) runTurnWithOrigin(
 
 	for len(queue) > 0 {
 		if err := contextErr(ctx); err != nil {
-			return r.finishTurn(ctx, result, types.SessionFailed, err)
+			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, err)
 		}
 
 		ready, blocked := takeReadyActivations(queue, completedTeams, failedTeams, defs.Flow)
@@ -800,7 +801,7 @@ func (r *Runtime) runTurnWithOrigin(
 				"flow_turn_id":    turn.ID,
 				"error":           progressErr.Error(),
 			})
-			return r.finishTurn(ctx, result, types.SessionFailed, progressErr)
+			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, progressErr)
 		}
 		if teamTurns+len(ready) > r.limits.MaxTeamTurns {
 			limitErr := fmt.Errorf("flow turn exceeded max team turns: %d", r.limits.MaxTeamTurns)
@@ -809,7 +810,7 @@ func (r *Runtime) runTurnWithOrigin(
 				"flow_turn_id":    turn.ID,
 				"error":           limitErr.Error(),
 			})
-			return r.finishTurn(ctx, result, types.SessionFailed, limitErr)
+			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, limitErr)
 		}
 		teamTurns += len(ready)
 
@@ -849,7 +850,7 @@ func (r *Runtime) runTurnWithOrigin(
 				"flow_turn_id":    turn.ID,
 				"error":           firstErr.Error(),
 			})
-			return r.finishTurn(ctx, result, types.SessionFailed, firstErr)
+			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, firstErr)
 		}
 
 		for _, execution := range executions {
@@ -873,7 +874,7 @@ func (r *Runtime) runTurnWithOrigin(
 				allRecords = append(allRecords, *teamFailure)
 				result.Records = append(result.Records, *teamFailure)
 				if err := r.publishFlowRecord(ctx, session, turn, *teamFailure); err != nil {
-					return r.finishTurn(ctx, result, types.SessionFailed, err)
+					return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, err)
 				}
 			}
 		}
@@ -1040,7 +1041,7 @@ func (r *Runtime) runTurnWithOrigin(
 				"flow_turn_id":    turn.ID,
 				"error":           routeFailure.Error(),
 			})
-			return r.finishTurn(ctx, result, types.SessionFailed, routeFailure)
+			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, routeFailure)
 		}
 		result.Turn.Next = resolvedRoute
 		if len(queue) == 0 {
@@ -1054,11 +1055,11 @@ func (r *Runtime) runTurnWithOrigin(
 			recordDispatched()
 			switch {
 			case hasWaitApproval:
-				return r.finishTurn(ctx, result, types.SessionWaitingApproval, nil)
+				return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionWaitingApproval, nil)
 			case hasWaitTool:
-				return r.finishTurn(ctx, result, types.SessionWaitingTool, nil)
+				return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionWaitingTool, nil)
 			case hasWaitInput:
-				return r.finishTurn(ctx, result, types.SessionWaitingInput, nil)
+				return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionWaitingInput, nil)
 			}
 		}
 	}
@@ -1067,7 +1068,7 @@ func (r *Runtime) runTurnWithOrigin(
 	recordDispatched()
 	// A normally finished FlowTurn stays continuable: the session lifecycle
 	// is a runtime decision, not a Flow configuration.
-	return r.finishTurn(ctx, result, types.SessionWaitingInput, nil)
+	return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionWaitingInput, nil)
 }
 
 // callerTeamOf returns the caller that dispatched the work a wake-up drains,
@@ -1513,6 +1514,35 @@ func teamFailureRecord(flowTurn types.FlowTurn, execution teamExecution) *types.
 	}
 }
 
+// withDeliveries attaches the user-facing mailbox results to the turn result
+// before the turn event is written, so callers relaying the event see them.
+func withDeliveries(result types.FlowTurnResult, deliveries []types.UserDelivery) types.FlowTurnResult {
+	if len(deliveries) > 0 {
+		result.Deliveries = deliveries
+	}
+	return result
+}
+
+// deliveryPayload renders deliveries as plain maps so the event survives a JSONL
+// round-trip without changing shape for the caller.
+func deliveryPayload(deliveries []types.UserDelivery) []map[string]any {
+	if len(deliveries) == 0 {
+		return nil
+	}
+	items := make([]map[string]any, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		item := map[string]any{"text": delivery.Text}
+		if delivery.TeamID != "" {
+			item["team_id"] = delivery.TeamID
+		}
+		if delivery.MessageID != "" {
+			item["message_id"] = delivery.MessageID
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
 func (r *Runtime) finishTurn(
 	ctx context.Context,
 	result types.FlowTurnResult,
@@ -1576,7 +1606,7 @@ func (r *Runtime) finishTurn(
 			"intermediate": result.Turn.Intermediate,
 			// Deliveries travel with the turn event: they are results the user
 			// must see as their own messages, independent of the reply above.
-			"deliveries": result.Deliveries,
+			"deliveries": deliveryPayload(result.Deliveries),
 		},
 	}); err != nil {
 		return result, err

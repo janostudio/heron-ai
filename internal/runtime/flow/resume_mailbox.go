@@ -103,13 +103,8 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 		"caller_team":     wake.callerTeam,
 		"message_count":   len(messages),
 	})
-	result, err := r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
-		[]activation{wake}, turnOriginMailbox, mailboxScopeSince(messages))
-	if err != nil {
-		return result, err
-	}
-	result.Deliveries = userDeliveries(messages)
-	return result, nil
+	return r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
+		[]activation{wake}, turnOriginMailbox, mailboxScopeSince(messages), userDeliveries(messages))
 }
 
 // mailboxScopeSince bounds the records a woken Team may treat as current.
