@@ -467,7 +467,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				}
 			}
 			content := toolResultContent(approvedResult)
-			if addErr := contextManager.AddMessage(types.Message{
+			if addErr := contextManager.AddMessageContext(ctx, types.Message{
 				Role: "tool", ToolCallID: pending.ToolCallID, Content: content,
 			}); addErr != nil {
 				return nil, addErr
@@ -515,7 +515,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			if task.Result != nil {
 				content = toolResultContent(task.Result)
 			}
-			if addErr := contextManager.AddMessage(types.Message{
+			if addErr := contextManager.AddMessageContext(ctx, types.Message{
 				Role: "tool", ToolCallID: checkpoint.PendingTool.ToolCallID, Content: content,
 			}); addErr != nil {
 				return nil, addErr
@@ -538,7 +538,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			}
 		}
 		if strings.TrimSpace(inputText) != "" {
-			if addErr := contextManager.AddMessage(types.Message{
+			if addErr := contextManager.AddMessageContext(ctx, types.Message{
 				Role: "user", Content: inputText, Parts: contextBlockParts(req.ContextBlocks, "input"),
 			}); addErr != nil {
 				t.emitErrorHook(ctx, agent, req, startRound, addErr)
@@ -547,7 +547,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		}
 	} else {
 		for _, message := range messages {
-			if addErr := contextManager.AddMessage(message); addErr != nil {
+			if addErr := contextManager.AddMessageContext(ctx, message); addErr != nil {
 				t.emitErrorHook(ctx, agent, req, 0, addErr)
 				return nil, addErr
 			}
@@ -601,6 +601,25 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			}
 		}
 
+		// Compact before the request is assembled. AddMessage deliberately does
+		// not compact on its own: it has no context to cancel the compactor
+		// with, so a stalled provider could hold it past the turn deadline.
+		// This is the once-per-round point where the threshold is acted on,
+		// and it runs on the turn's context — a cancelled turn cancels the
+		// summarisation call with it.
+		if contextManager.NeedsCompaction() {
+			if compactErr := contextManager.Compact(ctx); compactErr != nil {
+				// Not fatal: the request below may still fit, and a provider
+				// that rejects it triggers the CompactForce path, which is the
+				// stronger recovery.
+				logging.Warn("context compaction failed", map[string]any{
+					"call_id":  req.CallID,
+					"agent_id": req.AgentID,
+					"round":    round,
+					"error":    compactErr.Error(),
+				})
+			}
+		}
 		modelConfig := structuredModelConfig(agent)
 		var resp *types.ChatResponse
 		var chatErr error
@@ -664,7 +683,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				if isEmptyModelResponse(resp) && !isStructuredOutputTruncated(resp.FinishReason) && modelRetries < maxRetries {
 					modelRetries++
 					hint := emptyResponseRetryHint(agent.Structured != nil)
-					if addErr := contextManager.AddMessage(types.Message{Role: "user", Content: hint}); addErr != nil {
+					if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "user", Content: hint}); addErr != nil {
 						return nil, addErr
 					}
 					t.emitAgentEvent(ctx, req, round, types.EventAgentFeedback, map[string]any{
@@ -786,13 +805,13 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			truncatedErr := errors.New("structured output truncated: model stopped at the output token limit")
 			if structuredRetries < 1 && round+1 < maxRounds {
 				structuredRetries++
-				if addErr := contextManager.AddMessage(types.Message{
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{
 					Role: "assistant", Content: resp.Text,
 				}); addErr != nil {
 					return nil, addErr
 				}
 				truncatedMsg := "The previous JSON response was truncated. Return one complete JSON object only, with every required field, and no explanation or Markdown."
-				if addErr := contextManager.AddMessage(types.Message{
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{
 					Role:    "user",
 					Content: truncatedMsg,
 				}); addErr != nil {
@@ -872,13 +891,13 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				if err != nil {
 					if structuredRetries < 1 && round+1 < maxRounds {
 						structuredRetries++
-						if addErr := contextManager.AddMessage(types.Message{
+						if addErr := contextManager.AddMessageContext(ctx, types.Message{
 							Role: "assistant", Content: resp.Text,
 						}); addErr != nil {
 							return nil, addErr
 						}
 						invalidMsg := "The previous response was not valid JSON for the required schema. Return one complete JSON object only; do not explain, use Markdown, or omit required fields."
-						if addErr := contextManager.AddMessage(types.Message{
+						if addErr := contextManager.AddMessageContext(ctx, types.Message{
 							Role:    "user",
 							Content: invalidMsg,
 						}); addErr != nil {
@@ -915,11 +934,11 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 						round+1, resp.Text, workspaceOps, toolCalls, types.TurnFailed,
 						errors.New(feedback), nil, loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
 				}
-				if addErr := contextManager.AddMessage(types.Message{Role: "assistant", Content: resp.Text}); addErr != nil {
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "assistant", Content: resp.Text}); addErr != nil {
 					return nil, addErr
 				}
 				feedbackMsg := "## Completion Feedback\n" + feedback
-				if addErr := contextManager.AddMessage(types.Message{Role: "user", Content: feedbackMsg}); addErr != nil {
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "user", Content: feedbackMsg}); addErr != nil {
 					return nil, addErr
 				}
 				t.emitAgentEvent(ctx, req, round, types.EventAgentFeedback, map[string]any{
@@ -957,7 +976,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			sameToolCalls = 1
 			lastToolSignature = signature
 		}
-		if addErr := contextManager.AddMessage(types.Message{Role: "assistant", Content: resp.Text, ToolCalls: resp.ToolCalls}); addErr != nil {
+		if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "assistant", Content: resp.Text, ToolCalls: resp.ToolCalls}); addErr != nil {
 			t.emitErrorHook(ctx, agent, req, round, addErr)
 			return nil, addErr
 		}
@@ -1059,7 +1078,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			if toolResult.Next != nil && toolResult.Next.Action == types.NextWaitApproval {
 				continue
 			}
-			if addErr := contextManager.AddMessage(types.Message{Role: "tool", ToolCallID: call.ID, Content: content}); addErr != nil {
+			if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "tool", ToolCallID: call.ID, Content: content}); addErr != nil {
 				t.emitErrorHook(ctx, agent, req, round, addErr)
 				return nil, addErr
 			}

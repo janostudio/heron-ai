@@ -78,9 +78,24 @@ func NewContextManagerWithCompactor(config types.ContextConfig, estimator Contex
 	}
 }
 
+// AddMessage appends one message and compacts when the threshold is crossed.
+// It is AddMessageContext without a cancellation scope; callers inside a turn
+// pass the turn's context instead, so a compaction cannot outlive the turn.
 func (m *MessageContextManager) AddMessage(message types.Message) error {
+	return m.AddMessageContext(context.Background(), message)
+}
+
+// AddMessageContext is AddMessage with a context that bounds the compaction.
+//
+// The compaction can call the model (LLM compactor). Running it on a
+// context.Background() meant a stalled provider held the manager — and the
+// turn waiting on it — past the turn's own deadline, with nothing able to stop
+// it. Passing the turn context bounds it.
+func (m *MessageContextManager) AddMessageContext(ctx context.Context, message types.Message) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	message = cloneMessage(message)
 	m.canonical = append(m.canonical, cloneMessage(message))
@@ -91,15 +106,30 @@ func (m *MessageContextManager) AddMessage(message types.Message) error {
 	m.active = append(m.active, message)
 	m.applyMicrocompactLocked()
 
+	var (
+		summary    string
+		dropped    int
+		compactErr error
+		hardErr    error
+	)
 	if m.needsCompactionLocked() {
-		if err := m.compactLocked(context.Background()); err != nil {
-			return err
-		}
+		summary, dropped, compactErr = m.compactLocked(ctx)
 	}
-	if m.exceedsHardLimitLocked() {
-		return fmt.Errorf("%w: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
+	if compactErr == nil && m.exceedsHardLimitLocked() {
+		hardErr = fmt.Errorf("%w: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
 	}
-	return nil
+	hook := m.compactHook
+	m.mu.Unlock()
+
+	// Outside the lock: the hook writes a session event, and holding the
+	// manager mutex across that append serialised every reader behind disk IO.
+	if compactErr == nil && summary != "" && hook != nil {
+		hook(summary, dropped)
+	}
+	if compactErr != nil {
+		return compactErr
+	}
+	return hardErr
 }
 
 func (m *MessageContextManager) Messages() []types.Message {
@@ -161,8 +191,16 @@ func (m *MessageContextManager) Compact(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.compactLocked(ctx)
+	summary, dropped, err := m.compactLocked(ctx)
+	hook := m.compactHook
+	m.mu.Unlock()
+	// Outside the lock: the hook writes a session event, and doing that while
+	// holding the manager mutex serialised every other reader (Messages, Stats)
+	// behind a disk append.
+	if err == nil && summary != "" && hook != nil {
+		hook(summary, dropped)
+	}
+	return err
 }
 
 // CompactForce performs one deterministic compaction even when the local
@@ -173,8 +211,13 @@ func (m *MessageContextManager) CompactForce(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.compactLocked(ctx, true)
+	summary, dropped, err := m.compactLocked(ctx, true)
+	hook := m.compactHook
+	m.mu.Unlock()
+	if err == nil && summary != "" && hook != nil {
+		hook(summary, dropped)
+	}
+	return err
 }
 
 func (m *MessageContextManager) Reset() error {
@@ -299,16 +342,20 @@ func (m *MessageContextManager) toolOutputLimitChars() int {
 	return 64 * 1024
 }
 
-func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool) error {
+// compactLocked rewrites the active context and reports what it dropped. It
+// returns the summary and the number of dropped groups instead of invoking the
+// hook itself: the hook is caller-facing state (a session write) and must not
+// run under m.mu. Callers hold the lock.
+func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool) (string, int, error) {
 	if err := contextErr(ctx); err != nil {
-		return err
+		return "", 0, err
 	}
 	forced := len(force) > 0 && force[0]
 	if !forced && !m.needsCompactionLocked() {
 		if m.exceedsHardLimitLocked() {
-			return fmt.Errorf("%w: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
+			return "", 0, fmt.Errorf("%w: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
 		}
-		return nil
+		return "", 0, nil
 	}
 
 	system, anchor, existingSummary, groups := splitContextLayers(m.active)
@@ -341,7 +388,7 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	// dropped is filled by appending a prefix of groups.
 	for i := len(groups) - 1; i >= 0; i-- {
 		if err := contextErr(ctx); err != nil {
-			return err
+			return "", 0, err
 		}
 		group := groups[i]
 		groupTokens := m.estimator.EstimateMessages(group)
@@ -421,13 +468,10 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 
 	m.active = candidate
 	m.compactions++
-	if m.compactHook != nil {
-		m.compactHook(summary, len(dropped))
-	}
 	if m.exceedsHardLimitLocked() {
-		return fmt.Errorf("%w after compaction: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
+		return summary, len(dropped), fmt.Errorf("%w after compaction: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
 	}
-	return nil
+	return summary, len(dropped), nil
 }
 
 func (m *MessageContextManager) applyMicrocompactLocked() {
