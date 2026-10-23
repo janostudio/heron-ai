@@ -1158,10 +1158,15 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		}
 	}
 
-	// Reaching the round limit ends the turn with the last model text as the
-	// reply. That text came from a Tool round and never went through the
-	// no-tool_calls branch above, so check it here before it becomes an
-	// Agent answer.
+	// Reaching the round limit ends the turn as a failure, not a completion.
+	// The loop only exits here when the model never produced a tool-free final
+	// answer: every round asked for another Tool call. Reporting that as
+	// TurnCompleted handed the Flow a successful Team result with the last
+	// tool-round text as the reply, so a runaway agent looked like a finished
+	// one — no coordinate, no failure, nothing to see in the logs. The budget
+	// path (max_model_rounds) already fails the same way; this is the same
+	// condition reached through the loop's own bound.
+	limitErr := fmt.Errorf("agent loop reached the round limit (%d) without a final answer", maxRounds)
 	if t.guardrail != nil {
 		if guardErr := t.guardrail.CheckOutput(lastText); guardErr != nil {
 			logging.Warn("guardrail blocked output", map[string]any{
@@ -1175,32 +1180,18 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			return &types.AgentResult{Status: types.TurnFailed, Reply: lastText, Error: guardErr.Error(), Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls, Next: &types.Route{Action: types.NextCoordinate, Reason: guardErr.Error()}}, nil
 		}
 	}
-
-	action, cleanText := t.routeParser.ParseWithMode(lastText, true)
-	if feedback := completionFeedback(agent.Completion, agent.Structured, nil, usedTools, successfulTools, toolCalls, workspaceOps); feedback != "" {
-		return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
-			maxRounds, lastText, workspaceOps, toolCalls, types.TurnFailed,
-			errors.New(feedback), nil,
-			loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
-	}
-	if agent.Structured != nil {
-		parsed, parseErr := NewStructuredOutputManager().ParseAndValidate(cleanText, agent.Structured)
-		if parseErr != nil {
-			t.emitErrorHook(ctx, agent, req, maxRounds, parseErr)
-			return &types.AgentResult{Status: types.TurnFailed, Reply: cleanText, Error: fmt.Sprintf("structured output: %v", parseErr), Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls, Next: &types.Route{Action: types.NextCoordinate, Reason: parseErr.Error()}}, nil
-		}
-		route := routeFromAction(action)
-		if parsedRoute := routeFromParsed(parsed); parsedRoute != nil {
-			route = parsedRoute
-		}
-		route = normalizeStructuredRoute(agent.Structured, route)
-		reply := cleanText
-		if parsedReply := stringFromParsed(parsed, "reply"); parsedReply != "" {
-			reply = parsedReply
-		}
-		return &types.AgentResult{Status: types.TurnCompleted, Reply: reply, Parsed: parsed, Next: route, Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls}, nil
-	}
-	return &types.AgentResult{Status: types.TurnCompleted, Reply: cleanText, Next: &types.Route{Action: action, Reason: "agent loop limit reached"}, Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls}, nil
+	logging.Warn("agent loop reached the round limit", map[string]any{
+		"call_id":    req.CallID,
+		"agent_id":   req.AgentID,
+		"team_id":    req.TeamID,
+		"max_rounds": maxRounds,
+		"tool_calls": toolCalls,
+	})
+	t.emitErrorHook(ctx, agent, req, maxRounds, limitErr)
+	return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
+		maxRounds, lastText, workspaceOps, toolCalls, types.TurnFailed,
+		limitErr, nil,
+		loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
 }
 
 func isStructuredOutputTruncated(reason string) bool {

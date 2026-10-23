@@ -1303,7 +1303,12 @@ func TestTurnLoop_Run_MaxAgentRoundsLimit(t *testing.T) {
 		MaxAgentRounds: 3,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, types.NextProceed, result.Next.Action)
+	// Running out of rounds without a final answer is a failed turn: the
+	// Agent never answered, and reporting NextProceed made the Flow treat the
+	// last Tool-round text as a finished result.
+	assert.Equal(t, types.TurnFailed, result.Status)
+	assert.Equal(t, types.NextFail, result.Next.Action)
+	assert.Contains(t, result.Error, "round limit")
 	assert.Equal(t, 30, result.Usage.TotalTokens)
 }
 
