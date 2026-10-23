@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -57,6 +58,8 @@ func main() {
 	serverURL := flag.String("server", "", "HTTP Heron server URL for stream-json client mode")
 	port := flag.String("port", "", "HTTP server port (default: 8080)")
 	serve := flag.Bool("serve", false, "Start HTTP server mode")
+	serveHost := flag.String("host", "", "HTTP server bind host (default: 127.0.0.1)")
+	authToken := flag.String("auth-token", "", "Bearer token required by --serve (default: $HERON_SERVE_TOKEN)")
 	listFlag := flag.Bool("list", false, "List sessions; pick one interactively to resume it")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	flag.Usage = usage
@@ -116,7 +119,7 @@ func main() {
 	}
 
 	if *serve {
-		startServer(flowPath, *port, overrides)
+		startServer(flowPath, serveBindAddress(*serveHost), *port, serveAuthToken(*authToken), overrides)
 		return
 	}
 	if flowPath == "" {
@@ -147,9 +150,16 @@ func resolveFlowPath(flowPath string) string {
 	return ""
 }
 
-func startServer(flowPath, port string, o cliOverrides) {
+func startServer(flowPath, host, port, token string, o cliOverrides) {
 	if flowPath == "" {
 		fmt.Fprintln(os.Stderr, "Error: --serve requires a new-format Flow config")
+		os.Exit(1)
+	}
+	// Exposure is decided before the runtime is built: a refused bind must
+	// not leave a half-started engine behind.
+	if err := validateServeExposure(host, token); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Pass --auth-token (or HERON_SERVE_TOKEN) to require a bearer token, or keep the default --host 127.0.0.1.")
 		os.Exit(1)
 	}
 
@@ -188,8 +198,17 @@ func startServer(flowPath, port string, o cliOverrides) {
 		port = "8080"
 	}
 
-	fmt.Printf("Heron AI FlowRuntime server listening on :%s\n", port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
+	// Every route of this server can start an Agent turn, which runs Bash on
+	// this host. A token is mandatory once the listener leaves loopback; on
+	// loopback it is optional, so the local TUI/bridge keeps working
+	// unchanged.
+	api := requireBearerToken(token, mux)
+
+	fmt.Printf("Heron AI FlowRuntime server listening on %s:%s\n", host, port)
+	if !isLoopbackHost(host) {
+		fmt.Printf("Authentication: bearer token required\n")
+	}
+	if err := http.ListenAndServe(net.JoinHostPort(host, port), api); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 		shutdownAndExit(bundle, 1)
 	}

@@ -95,6 +95,31 @@ heron --serve --port 8080 --flow .agents/flows/default.yml
 `.agents/flows/default.yml` in the working directory) the process prints
 `--serve requires a new-format Flow config` and exits 1.
 
+### Bind address and authentication
+
+The server binds `127.0.0.1` by default. Every route on this server can start
+an Agent turn, and an Agent turn runs Bash and Write on the host, so exposing
+it is a deliberate act:
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--host` | `127.0.0.1` | Interface to bind. Any non-loopback value requires a token. |
+| `--auth-token` | `$HERON_SERVE_TOKEN` | Bearer token every request must present. |
+
+A non-loopback `--host` without a token is refused at startup
+(`refusing to serve on a non-loopback interface without --auth-token`, exit 1)
+rather than warned about. With a token, requests need
+`Authorization: Bearer <token>`; a missing or wrong token returns 401.
+
+```bash
+# local only (no token needed)
+heron --serve --port 8080 --flow .agents/flows/default.yml
+
+# reachable from the network, token required
+HERON_SERVE_TOKEN=$(openssl rand -hex 24) \
+  heron --serve --host 0.0.0.0 --port 8080 --flow .agents/flows/default.yml
+```
+
 Endpoints (registered in `cmd/server/main.go`):
 
 | Method | Path | Purpose |
