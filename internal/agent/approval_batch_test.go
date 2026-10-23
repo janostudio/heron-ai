@@ -111,3 +111,18 @@ func TestApprovalBatchResumePairsEveryToolCall(t *testing.T) {
 	require.Equal(t, 2, pendingCalls)
 	require.Equal(t, 2, toolReplies, "each tool_call needs its own tool message after resume")
 }
+
+// TestPolicyDenialReportsItsOwnReason covers the rejection message: a policy
+// denial blanks the Tool name before the call reaches rejectToolCall, so the
+// reason has to travel in the arguments. The model used to be told the call was
+// "not allowed for this Agent" even when Bash had been refused for a restricted
+// command, and that is the message it reasons from on the next round.
+func TestPolicyDenialReportsItsOwnReason(t *testing.T) {
+	call := types.ToolCall{
+		ID:        "call-1",
+		Name:      "",
+		Arguments: map[string]any{"_policy_error": `Bash command contains restricted operation "rm -rf"`},
+	}
+	require.Contains(t, rejectionReason(call), "restricted operation")
+	require.Contains(t, rejectionReason(types.ToolCall{Arguments: map[string]any{}}), "not allowed")
+}

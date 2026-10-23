@@ -1588,7 +1588,7 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 		parallelIndexes := make([]int, 0, len(filtered))
 		for i, call := range filtered {
 			if call.Name == "" {
-				results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, "tool is not allowed for this Agent")
+				results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, rejectionReason(call))
 				continue
 			}
 			if err := t.executeHook(ctx, HookOnToolStart, hookPayload(agent, req, round, &call, nil)); err != nil {
@@ -1634,7 +1634,7 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 	results := make([]*types.ToolResult, len(filtered))
 	for i, call := range filtered {
 		if call.Name == "" {
-			results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, "tool is not allowed for this Agent")
+			results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, rejectionReason(call))
 			continue
 		}
 		if t.toolExecutor == nil {
@@ -1811,6 +1811,21 @@ func (t *TurnLoop) contextConfig(agent types.AgentConfig) types.ContextConfig {
 		}
 	}
 	return config
+}
+
+// rejectionReason reports why a Tool call never reached the executor. The
+// allowlist and the policy layer both blank the name before handing the call
+// over, so the reason has to come from the arguments they left behind: the
+// model used to be told "tool is not allowed for this Agent" even when the real
+// reason was a policy denial, and a wrong reason is what it acts on next.
+func rejectionReason(call types.ToolCall) string {
+	if reason, ok := call.Arguments["_policy_error"].(string); ok && strings.TrimSpace(reason) != "" {
+		return reason
+	}
+	if reason, ok := call.Arguments["_rejected"].(string); ok && strings.TrimSpace(reason) != "" {
+		return reason
+	}
+	return "tool is not allowed for this Agent"
 }
 
 // rejectToolCall records a tool invocation that never reached the executor
