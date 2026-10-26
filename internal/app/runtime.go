@@ -300,6 +300,10 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	asyncDispatcher := agent.NewTeamTaskDispatcher(teamTool, agent.NewSpawnTaskDispatcher(spawnTool, toolExecutor))
 	taskRunner := agent.NewAsyncToolExecutor(taskStore, asyncDispatcher)
 	teamTool.SetTaskRunner(taskRunner)
+	// Registered here, not after the flow runtime exists: the tool registry is
+	// snapshotted into every Agent's schema when the runtime is built, and a
+	// registration after that point never reaches a model.
+	toolRegistry.Register(teamTool)
 	spawnTool.SetTaskRunner(taskRunner)
 	spawnTool.SetSessionWriter(sessionWriter)
 	toolRegistry.Register(agent.NewCollectTool(taskRunner))
@@ -358,7 +362,6 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// bindings and how to persist a Team turn, so it is the Team tool's
 	// executor. It is built after the tool registry, hence the late wiring.
 	teamTool.SetRunner(flowRuntime)
-	toolRegistry.Register(teamTool)
 	// A finished Team call enters the conversation that made it as a tool
 	// result. The flow needs the store directly: the caller's transcript is the
 	// only place the answer belongs.
