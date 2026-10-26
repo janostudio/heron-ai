@@ -2,8 +2,10 @@ package flow
 
 import (
 	"context"
+
 	"encoding/json"
 	"fmt"
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"sort"
 	"strings"
 	"time"
@@ -68,6 +70,18 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 		input, nil, now, nil)
 	if runErr != nil {
 		return types.TeamCallOutcome{Status: "failed", Error: runErr.Error()}, nil
+	}
+	// A caller wants the callee's answer, not its process. When the callee hands
+	// work further down, its first turn ends with "I dispatched it" — returning
+	// that reads as a result and invites the caller to dispatch again. Wait for
+	// the callee to settle, then report what it actually concluded.
+	if teamCallStatus(execution) == "dispatched" {
+		if settled := r.awaitTeamSettlement(ctx, session.ID, spec.TeamID); settled != nil {
+			execution.result.Reply = settled.Reply
+			execution.result.Error = settled.Error
+
+			execution.next = nil
+		}
 	}
 	outcome := types.TeamCallOutcome{
 		Status: teamCallStatus(execution),
@@ -184,4 +198,82 @@ func teamResponsibility(team types.Team) string {
 		}
 	}
 	return ""
+}
+
+// teamSettleLimit bounds how long a call waits for its callee to conclude after
+// the callee has itself handed work further down.
+const teamSettleLimit = 5 * time.Minute
+
+// awaitTeamSettlement waits until the callee stops dispatching and returns what
+// it finally concluded.
+//
+// The callee's follow-up turns are started by the result callback, not by this
+// goroutine, so there is nothing to join on: poll the callee's own pending calls
+// and read its last conclusion from the event stream when they clear.
+func (r *Runtime) awaitTeamSettlement(ctx context.Context, sessionID, teamID string) *types.TeamCallOutcome {
+	deadline := time.Now().Add(teamSettleLimit)
+	for {
+		if !r.hasPendingTeamCallFrom(ctx, sessionID, teamID) {
+			if reply, ok := r.lastTeamReply(ctx, sessionID, teamID); ok {
+				return &types.TeamCallOutcome{Status: "done", Reply: reply}
+			}
+			return nil
+		}
+		if time.Now().After(deadline) {
+			logging.Info("team call settled by timeout", map[string]any{
+				"flow_session_id": sessionID,
+				"team_id":         teamID,
+			})
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// hasPendingTeamCallFrom reports whether this Team still has a call in flight.
+func (r *Runtime) hasPendingTeamCallFrom(ctx context.Context, sessionID, callerTeam string) bool {
+	if r.tasks == nil || sessionID == "" {
+		return false
+	}
+	tasks, err := r.tasks.List(ctx)
+	if err != nil {
+		return false
+	}
+	for _, task := range tasks {
+		if task.FlowSessionID != sessionID || task.ToolName != types.ToolNameTeamRun {
+			continue
+		}
+		if task.Status != types.ToolTaskQueued && task.Status != types.ToolTaskRunning {
+			continue
+		}
+		if caller, _ := task.Arguments["caller_team"].(string); caller == callerTeam {
+			return true
+		}
+	}
+	return false
+}
+
+// lastTeamReply reads the Team's most recent conclusion from the event stream.
+func (r *Runtime) lastTeamReply(ctx context.Context, sessionID, teamID string) (string, bool) {
+	events, err := r.replayFlowEvents(ctx, sessionID)
+	if err != nil {
+		return "", false
+	}
+	reply := ""
+	for _, event := range events {
+		switch event.Type {
+		case types.EventFlowTurnWaitingInput, types.EventFlowTurnCompleted:
+			if event.TeamID != "" && event.TeamID != teamID {
+				continue
+			}
+			if text := payloadString(event.Payload, "reply"); strings.TrimSpace(text) != "" {
+				reply = text
+			}
+		}
+	}
+	return reply, reply != ""
 }
