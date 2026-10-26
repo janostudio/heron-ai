@@ -71,6 +71,19 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 	if runErr != nil {
 		return types.TeamCallOutcome{Status: "failed", Error: runErr.Error()}, nil
 	}
+	// A Team that called no tool did nothing: it did not look anything up, did
+	// not hand work on, did not write. Its reply is a sentence about work it is
+	// not doing — s19's "已转给执行侧核实…" arrived this way, in eight seconds,
+	// with the task never leaving the caller.
+	if spec.CallerTeam != "" && totalToolCalls(execution.result) == 0 {
+		return types.TeamCallOutcome{
+			Status: "failed",
+			Error: fmt.Sprintf(
+				"team %q finished without calling any tool, so it did not do the work",
+				spec.TeamID),
+		}, nil
+	}
+
 	// A caller wants the callee's answer, not its process. When the callee hands
 	// work further down, its first turn ends with "I dispatched it" — returning
 	// that reads as a result and invites the caller to dispatch again. Wait for
@@ -312,4 +325,13 @@ func logTeamCallFrame(event, caller, callee string, extra map[string]any) {
 		fields[key] = value
 	}
 	logging.Info(event, fields)
+}
+
+// totalToolCalls counts the tool calls a Team made across its calls.
+func totalToolCalls(result types.TeamTurnResult) int {
+	total := 0
+	for _, call := range result.CallResults {
+		total += call.ToolCalls
+	}
+	return total
 }

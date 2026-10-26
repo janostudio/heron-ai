@@ -165,3 +165,39 @@ func TestIntermediateTurnPublishesNoReply(t *testing.T) {
 	require.Equal(t, "主分支是 master", replyPayloadField("主分支是 master", false),
 		"结论回合照常发布")
 }
+
+// 被派活的团队一个工具都没调用，说明它什么也没做。它那句"已转给执行侧"不能
+// 当结论交回去——s19 第二问就是这样：8 秒、tools=0、任务从没离开调用方。
+func TestRunTeamRejectsIdleCallee(t *testing.T) {
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	rt := newTestRuntime(testDefinitions(), &inputRecordingTeamRuntime{}, writer, nil)
+	session := seedMailboxSession(t, rt, "fs-idle", types.SessionWaitingInput)
+
+	outcome, err := rt.RunTeam(context.Background(), types.TeamCallSpec{
+		FlowSessionID: session.ID,
+		CallerTeam:    "default",
+		TeamID:        "verify",
+		Item:          "核实主分支",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "failed", outcome.Status, "空转的回合不能算完成")
+	require.Contains(t, outcome.Error, "without calling any tool")
+}
+
+// 入口团队接收用户消息时不适用这条：它是被用户唤醒的，不是被别的团队派活，
+// 回一句"你好"是合法结果。
+func TestRunTeamIdleCheckOnlyAppliesToTeamCalls(t *testing.T) {
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	rt := newTestRuntime(testDefinitions(), &inputRecordingTeamRuntime{}, writer, nil)
+	session := seedMailboxSession(t, rt, "fs-idle-entry", types.SessionWaitingInput)
+
+	outcome, err := rt.RunTeam(context.Background(), types.TeamCallSpec{
+		FlowSessionID: session.ID,
+		TeamID:        "verify",
+		Item:          "核实主分支",
+	})
+
+	require.NoError(t, err)
+	require.NotEqual(t, "failed", outcome.Status, "没有调用方时不判空转")
+}
