@@ -317,8 +317,13 @@ type FlowTurnResult struct {
 	// nobody to hand the result to — the entry Team answering the user. A
 	// mailbox turn whose intermediate hops end up dispatching the entry Team
 	// is still an answer, even though the turn itself was woken by a mailbox.
-	FinalReplyFromEntry bool   `json:"-"`
-	Error               string `json:"Error"`
+	FinalReplyFromEntry bool `json:"-"`
+	// FinalReplyTeam is the Team whose reply became FinalReply. Consumers that
+	// attribute a message to its producer need this: the turn's Origin only says
+	// how the turn was woken ("mailbox" means a mailbox message woke it), never
+	// who produced the text.
+	FinalReplyTeam string `json:"final_reply_team,omitempty"`
+	Error          string `json:"Error"`
 }
 
 // RuntimeLimits bounds one FlowSession. These are safety defaults, not a new

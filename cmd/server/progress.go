@@ -169,6 +169,11 @@ func copyTurnAnnouncement(base map[string]any, payload map[string]any) {
 	if origin := payloadString(payload, "origin"); origin != "" {
 		base["origin"] = origin
 	}
+	// origin is how the turn was woken (a mailbox message), not who wrote the
+	// text. team carries the producer, so a caller can attribute the reply.
+	if team := payloadString(payload, "team"); team != "" {
+		base["team"] = team
+	}
 	if intermediate, ok := payload["intermediate"].(bool); ok && intermediate {
 		base["intermediate"] = true
 	}
