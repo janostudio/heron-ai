@@ -201,3 +201,29 @@ func TestRunTeamIdleCheckOnlyAppliesToTeamCalls(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, "failed", outcome.Status, "没有调用方时不判空转")
 }
+
+// 中间回合的答复不能在任何一个出口留下：事件 payload 和 JSON-RPC 响应都要为空。
+// 只清 payload 时，客户端从响应里仍然拿得到"已转给执行侧"，照样渲染成消息。
+func TestIntermediateTurnClearsResponseReply(t *testing.T) {
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	recorder := &inputRecordingTeamRuntime{}
+	rt := newTestRuntime(testDefinitions(), recorder, writer, nil)
+	session := seedMailboxSession(t, rt, "fs-resp", types.SessionWaitingInput)
+
+	// 这个会话里还有一个 Team 调用在跑，所以本轮结束后它仍是"等待中"。
+	store := &memoryTaskStore{tasks: []types.ToolTask{{
+		ID:            "t1",
+		FlowSessionID: session.ID,
+		ToolName:      types.ToolNameTeamRun,
+		Status:        types.ToolTaskRunning,
+		Arguments:     map[string]any{"caller_team": "default"},
+	}}}
+	rt.SetTaskStore(store)
+
+	result, err := rt.HandleInput(context.Background(), session.ID, "再查一个仓库")
+
+	require.NoError(t, err)
+	require.True(t, result.Turn.Intermediate, "还有调用在跑，本轮是进度")
+	require.Empty(t, result.Reply, "响应里也不能带过程话术")
+	require.Empty(t, result.FinalReply)
+}

@@ -1589,6 +1589,13 @@ func (r *Runtime) finishTurn(
 	if status == types.SessionWaitingInput && r.hasPendingTeamCall(ctx, result.Session.ID) {
 		result.Turn.Intermediate = true
 	}
+	// An intermediate turn has no answer, so it must not carry one in *any* shape.
+	// Clearing only the event payload left the JSON-RPC response still holding
+	// the progress line — that is the copy s20's client rendered as a message.
+	if result.Turn.Intermediate {
+		result.Reply = ""
+		result.FinalReply = ""
+	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          eventType,
