@@ -51,6 +51,12 @@ type Runtime struct {
 	// reads after a restart.
 	dispatchMu sync.Mutex
 	busyTeams  map[teamKey]bool
+	// turnMu guards runningTurns: the sessions this process is executing a turn
+	// for right now. It is what tells "the turn is still working" apart from
+	// "a crash left the session marked running" — the event stream cannot, and
+	// getting it wrong means either refusing a live turn or resuming a dead one.
+	turnMu       sync.Mutex
+	runningTurns map[string]bool
 	// pendingWakes de-duplicates wake retries for sessions that were still
 	// running when their wake-up arrived.
 	pendingWakes map[string]bool
@@ -209,6 +215,11 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 			session.ID,
 		)
 	}
+	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
+		// The turn in flight cannot be interrupted, but the message must not be
+		// lost either: store it and let the running turn start it when it ends.
+		return r.queueUserInput(ctx, session, input)
+	}
 	if running, err := r.runningTeams(ctx, sessionID); err != nil {
 		return types.FlowTurnResult{}, err
 	} else if len(running) > 0 {
@@ -241,6 +252,9 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 	}
 	if session.Status == types.SessionWaitingApproval {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is waiting for approval; approval resume is not configured", session.ID)
+	}
+	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
+		return r.queueUserInput(ctx, session, input)
 	}
 	if session.Status != types.SessionWaitingInput &&
 		session.Status != types.SessionWaitingTool {
@@ -638,6 +652,10 @@ func (r *Runtime) runTurnWithOrigin(
 	scopeSince time.Time,
 	deliveries []types.UserDelivery,
 ) (types.FlowTurnResult, error) {
+	// Publish that this process owns a live turn for the session, so a message
+	// arriving mid-turn is queued rather than mistaken for a crash leftover.
+	clearRunning := r.markTurnRunning(session.ID)
+	defer clearRunning()
 	if err := r.validateDependencies(session.FlowID); err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -1603,6 +1621,10 @@ func (r *Runtime) finishTurn(
 	}); err != nil {
 		return result, err
 	}
+	// A message that arrived while this turn was running is waiting in the
+	// mailbox. Start it now, in its own goroutine: this turn still holds the
+	// caller's lock, and running it inline would either recurse or deadlock.
+	go r.drainQueuedInput(context.Background(), result.Session.ID)
 	return result, runErr
 }
 
@@ -2316,6 +2338,31 @@ func (r *Runtime) hasPendingTeamCall(ctx context.Context, sessionID string) bool
 		}
 	}
 	return false
+}
+
+// markTurnRunning records that this process is executing a turn for a session.
+func (r *Runtime) markTurnRunning(sessionID string) func() {
+	if sessionID == "" {
+		return func() {}
+	}
+	r.turnMu.Lock()
+	if r.runningTurns == nil {
+		r.runningTurns = make(map[string]bool)
+	}
+	r.runningTurns[sessionID] = true
+	r.turnMu.Unlock()
+	return func() {
+		r.turnMu.Lock()
+		delete(r.runningTurns, sessionID)
+		r.turnMu.Unlock()
+	}
+}
+
+// isTurnRunning reports whether this process has a live turn for the session.
+func (r *Runtime) isTurnRunning(sessionID string) bool {
+	r.turnMu.Lock()
+	defer r.turnMu.Unlock()
+	return r.runningTurns[sessionID]
 }
 
 func sessionStatusAfterTurn(status types.SessionStatus) types.SessionStatus {

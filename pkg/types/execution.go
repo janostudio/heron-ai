@@ -315,7 +315,12 @@ type FlowTurnResult struct {
 	// judge whether the coordinating reply already covered them: a result is a
 	// first-class delivery, and the model's reply is commentary on top of it.
 	Deliveries []UserDelivery `json:"Deliveries,omitempty"`
-	Reply      string         `json:"Reply"`
+	// Queued is set when the message arrived while the session was still
+	// running: it was stored, not executed, and the current turn will start it
+	// as soon as it finishes. The caller should tell the user it was received
+	// rather than treat this as the answer.
+	Queued bool   `json:"Queued,omitempty"`
+	Reply  string `json:"Reply"`
 	// FinalReply is the reply of the hop that ended the turn — the Team that
 	// handed the result back to nobody (no activator) or to the user. Reply
 	// is the concatenation of every Team's reply in the turn, which includes
