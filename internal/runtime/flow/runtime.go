@@ -736,7 +736,6 @@ func (r *Runtime) runTurnWithOrigin(
 	completedTeams := make(map[string]bool)
 	failedTeams := make(map[string]bool)
 	coordinateRetries := make(map[string]int)
-	activationRetries := make(map[string]int)
 	// asyncDispatched records whether this turn handed work to the background
 	// mailbox dispatcher, and the IDs of the work messages it posted. It only
 	// changes the end-of-turn bookkeeping (an extra batch-dispatched event);
@@ -950,55 +949,15 @@ func (r *Runtime) runTurnWithOrigin(
 					enqueueBatchRoute(routeTo(target, execution.activation.teamID))
 				}
 			case types.NextActivate:
-				if len(execution.binding.CanActivate) == 0 {
-					routeFailure = fmt.Errorf("team %q cannot activate other teams", execution.activation.teamID)
-					continue
-				}
-				if err := validateActivation(execution.binding, defs.Flow, next.Teams); err != nil {
-					routeFailure = err
-					continue
-				}
-				activationKey := execution.activation.teamID + "->" + strings.Join(sortedStrings(next.Teams), ",")
-				if activationRetries[activationKey] >= r.limits.MaxActivationRetries {
-					routeFailure = fmt.Errorf(
-						"repeated Flow activation %q exceeded retry limit (%d)",
-						activationKey,
-						r.limits.MaxActivationRetries,
-					)
-					continue
-				}
-				activationRetries[activationKey]++
-				for _, target := range next.Teams {
-					activators[target] = execution.activation.teamID
-					// Execution-state dispatch: any Team's activate hands the
-					// work to the target's mailbox and lets this turn end,
-					// instead of running the target inline. The target is a
-					// peer execution unit, so it may itself activate others;
-					// its own round routes them the same way (see
-					// runMessageTurn). The result comes back as a mailbox
-					// message to whoever dispatched it.
-					if r.asyncDispatch {
-						msg, err := r.enqueueWorkMessage(ctx, session, turn,
-							types.MailboxAddress{TeamID: target},
-							map[string]any{
-								"caller_team": execution.activation.teamID,
-								// The target runs later, with no user input
-								// of its own; without the task it can only
-								// repeat its previous verdict.
-								"input": turn.Input,
-							},
-						)
-						if err != nil {
-							routeFailure = fmt.Errorf("enqueue mailbox work for team %q: %w", target, err)
-							continue
-						}
-						asyncDispatched = true
-						asyncMessageIDs = append(asyncMessageIDs, msg.MessageID)
-						r.launchAsyncDispatch(session, turn.ID, target, msg)
-						continue
-					}
-					enqueueBatchRoute(routeTo(target, execution.activation.teamID))
-				}
+				// Collaboration is an asynchronous tool now: a Team hands work to
+				// another Team by calling the Team tool, which returns a task handle
+				// and delivers the answer as a tool result. Keeping the routing
+				// protocol as a second dispatch path would reintroduce the turn
+				// rebuild this whole change removes.
+				routeFailure = fmt.Errorf(
+					"team %q asked to activate %v: routing dispatch is retired, call the Team tool instead",
+					execution.activation.teamID, next.Teams)
+				continue
 			case types.NextReturn:
 				target := next.CallerTeam
 				if target == "" {
@@ -2297,12 +2256,6 @@ func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.Flo
 	return selectFlowRecords(records, binding.Inputs, since)
 }
 
-func sortedStrings(values []string) []string {
-	result := append([]string(nil), values...)
-	sort.Strings(result)
-	return result
-}
-
 func recordIDs(records []types.SharedRecord) []string {
 	ids := make([]string, 0, len(records))
 	for _, record := range records {
@@ -2311,22 +2264,6 @@ func recordIDs(records []types.SharedRecord) []string {
 		}
 	}
 	return ids
-}
-
-func validateActivation(binding types.FlowTeamBinding, flow types.Flow, targets []string) error {
-	allowed := make(map[string]struct{}, len(binding.CanActivate))
-	for _, target := range binding.CanActivate {
-		allowed[target] = struct{}{}
-	}
-	for _, target := range targets {
-		if _, ok := flow.Teams[target]; !ok {
-			return fmt.Errorf("team %q activation target %q is not in Flow", binding.ID, target)
-		}
-		if _, ok := allowed[target]; !ok {
-			return fmt.Errorf("team %q cannot activate %q", binding.ID, target)
-		}
-	}
-	return nil
 }
 
 func turnStatusForSession(status types.SessionStatus) types.TurnStatus {

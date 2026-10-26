@@ -94,46 +94,7 @@ func TestMessageTurnFeedsDispatchedTaskToTeam(t *testing.T) {
 
 // A Team that dispatches further down the chain has no user input of its own
 // either, so the task has to keep travelling with the messages.
-func TestDispatchedTeamForwardsTaskToItsOwnDispatch(t *testing.T) {
-	recorder := &inputRecordingTeamRuntime{
-		next: &types.Route{Action: types.NextActivate, Teams: []string{"default"}},
-	}
-	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
-	defs := testDefinitions()
-	defs.Flow.Teams["verify"] = types.FlowTeamBinding{
-		ID:          "verify",
-		TeamID:      "verify-team",
-		CanActivate: []string{"default"},
-		Inputs:      types.InputSpec{UserMessage: true},
-	}
-	rt := newTestRuntime(defs, recorder, writer, nil)
-	rt.SetAsyncDispatch(true)
 
-	session, turn := mailboxTestSession(t)
-	const task = "查看仓库 heron-connect，目前主分支是什么"
-	msg, err := rt.enqueueWorkMessage(context.Background(), session, turn,
-		addr("verify", ""),
-		map[string]any{"caller_team": "default", "input": task},
-	)
-	require.NoError(t, err)
-
-	rt.runMessageTurn(context.Background(), session, msg)
-
-	box, err := rt.loadMailbox(context.Background(), session.ID)
-	require.NoError(t, err)
-	forwarded := 0
-	for _, m := range box {
-		if m.Kind == mailboxKindWork && m.To.TeamID == "default" {
-			forwarded++
-			require.Equal(t, task, m.Payload["input"],
-				"a downstream dispatch must carry the original task")
-		}
-	}
-	require.Equal(t, 1, forwarded, "verify must dispatch once to default")
-}
-
-// The entry Team is woken to answer the user, so the result message has to
-// carry the question along with the result it is relaying.
 func TestPostResultCarriesTaskInput(t *testing.T) {
 	rt, _ := newMailboxTestRuntime(t)
 	session, turn := mailboxTestSession(t)

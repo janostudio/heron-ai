@@ -127,8 +127,8 @@ func TestFoldMailboxSkipsUndecodableEvents(t *testing.T) {
 	})
 
 	box := foldMailbox([]storage.SessionEvent{
-		event(2, types.EventFlowSessionCreated, map[string]any{"session": "x"}),          // wrong type
-		event(3, types.EventMailboxMessageEnqueued, map[string]any{"other": "x"}),         // no message key
+		event(2, types.EventFlowSessionCreated, map[string]any{"session": "x"}),            // wrong type
+		event(3, types.EventMailboxMessageEnqueued, map[string]any{"other": "x"}),          // no message key
 		event(4, types.EventMailboxMessageClaimed, map[string]any{mailboxPayloadKey: 42}),  // undecodable
 		event(5, types.EventMailboxMessageEnqueued, nil),                                   // nil payload
 		event(7, types.EventMailboxMessageClaimed, map[string]any{mailboxPayloadKey: nil}), // null message

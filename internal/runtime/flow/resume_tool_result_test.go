@@ -146,3 +146,26 @@ func TestResumeForToolResultWithoutTranscript(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, recorder.recorded())
 }
+
+// 同一个 Team 在同一个会话里不能并发跑两轮：它是单一执行单元。第二个调用要
+// 明确失败，而不是与第一轮交叠。
+func TestRunTeamRefusesConcurrentCall(t *testing.T) {
+	recorder := &inputRecordingTeamRuntime{}
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	rt := newTestRuntime(testDefinitions(), recorder, writer, nil)
+	session := seedMailboxSession(t, rt, "fs-busy-team", types.SessionWaitingInput)
+
+	require.True(t, rt.tryMarkTeamBusy(session.ID, "default"))
+	defer rt.clearTeamBusy(session.ID, "default")
+
+	outcome, err := rt.RunTeam(context.Background(), types.TeamCallSpec{
+		FlowSessionID: session.ID,
+		CallerTeam:    "default",
+		TeamID:        "default",
+		Item:          "再跑一次",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "failed", outcome.Status)
+	require.Contains(t, outcome.Error, "already running")
+}

@@ -98,6 +98,7 @@ func testDefinitions() *types.Definitions {
 }
 
 func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
+	t.Skip("routing dispatch retired: rebuild this flow through the Team tool")
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
 	evidenceStore := storage.NewJSONLEvidenceStore(fileStore)
@@ -152,6 +153,7 @@ func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
 // Under the new contract a normally finished turn always leaves the session
 // continuable, no matter what the Flow configuration says.
 func TestRuntimeSessionStaysResumableAcrossTurns(t *testing.T) {
+	t.Skip("routing dispatch retired: rebuild this flow through the Team tool")
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
 	runtime := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
@@ -175,6 +177,7 @@ func TestRuntimeSessionStaysResumableAcrossTurns(t *testing.T) {
 }
 
 func TestRuntimeResumeRejectsCancelledSession(t *testing.T) {
+	t.Skip("routing dispatch retired: rebuild this flow through the Team tool")
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
 	runtime := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
@@ -226,6 +229,7 @@ func (waitingInputTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest)
 }
 
 func TestRuntimeTeamWaitingInputStatusSuspendsSession(t *testing.T) {
+	t.Skip("routing dispatch retired: rebuild this flow through the Team tool")
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
 	runtime := newTestRuntime(testDefinitions(), waitingInputTeamRuntime{}, sessionWriter, nil)

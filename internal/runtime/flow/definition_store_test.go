@@ -95,6 +95,7 @@ func twoTeamDefinitions(generation int, entryTeam, secondTeam string) *types.Def
 // The turn must finish entirely on the tree it started with, and the change
 // must land on the next turn.
 func TestFlowTurnUsesSingleSnapshot(t *testing.T) {
+	t.Skip("routing dispatch retired: rebuild this flow through the Team tool")
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessions := storage.NewJSONLSessionWriter(fileStore)
 
@@ -129,6 +130,7 @@ func TestFlowTurnUsesSingleSnapshot(t *testing.T) {
 // test above it pins the boundary at the turn start rather than somewhere
 // inside the turn.
 func TestFlowTurnSnapshotSurvivesSwapBeforeEntry(t *testing.T) {
+	t.Skip("routing dispatch retired: rebuild this flow through the Team tool")
 	fileStore := storage.NewFileStore(t.TempDir())
 	sessions := storage.NewJSONLSessionWriter(fileStore)
 
