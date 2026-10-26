@@ -95,10 +95,15 @@ type jsonRPCTurnResult struct {
 	// Team is the Team that wrote Reply. Callers that attribute a message to
 	// its producer need it: an unattended turn can carry several Teams' results
 	// and the reply is only the last hop's text.
-	Team    string                 `json:"team,omitempty"`
-	Records []jsonRPCRecordSummary `json:"records,omitempty"`
-	Usage   types.TokenUsage       `json:"usage,omitempty"`
-	Error   string                 `json:"error,omitempty"`
+	Team string `json:"team,omitempty"`
+	// Intermediate marks a turn that is still waiting for work it dispatched,
+	// so its Reply is a progress line rather than an answer. A caller must not
+	// render an empty Reply from such a turn as "the turn produced nothing":
+	// the conclusion arrives on a later turn.
+	Intermediate bool                   `json:"intermediate,omitempty"`
+	Records      []jsonRPCRecordSummary `json:"records,omitempty"`
+	Usage        types.TokenUsage       `json:"usage,omitempty"`
+	Error        string                 `json:"error,omitempty"`
 	// PendingApprovals is how a caller learns the approval_id it must pass to
 	// "approve". Without it, a JSON-RPC-only bridge parked at an approval
 	// gate has no way to advance the session.
@@ -577,6 +582,7 @@ func jsonRPCTurnResultFrom(result types.FlowTurnResult) jsonRPCTurnResult {
 		Status:           result.Session.Status,
 		Reply:            replyForCaller(result),
 		Team:             finalReplyTeam(result),
+		Intermediate:     result.Turn.Intermediate,
 		Records:          records,
 		Usage:            aggregateTeamUsage(result.TeamResults),
 		Error:            result.Error,
