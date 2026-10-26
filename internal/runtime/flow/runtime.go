@@ -775,10 +775,11 @@ func (r *Runtime) runTurnWithOrigin(
 	// Team ran out of things to hand off": both end the turn, but only the
 	// first is an answer. A mailbox turn can start with an activator and
 	// still end at the entry Team, which makes it the user-facing hop.
-	recordFinalReply := func(reply string, fromEntry bool) {
+	recordFinalReply := func(reply string, fromEntry bool, teamID string) {
 		if strings.TrimSpace(reply) != "" {
 			result.FinalReply = reply
 			result.FinalReplyFromEntry = fromEntry
+			result.FinalReplyTeam = teamID
 		}
 	}
 
@@ -925,7 +926,7 @@ func (r *Runtime) runTurnWithOrigin(
 				// The Team paused mid-execution for user input. Do not route
 				// it onward; the FlowTurn ends resumable instead.
 				hasWaitInput = true
-				recordFinalReply(execution.result.Reply, execution.activation.activator == "")
+				recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
 				continue
 			}
 			switch next.Action {
@@ -937,7 +938,7 @@ func (r *Runtime) runTurnWithOrigin(
 					// FlowTurn ends and waits for the user.
 					if execution.activation.activator == "" {
 						hasWaitInput = true
-						recordFinalReply(execution.result.Reply, execution.activation.activator == "")
+						recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
 						continue
 					}
 					targets = []string{execution.activation.activator}
@@ -1002,7 +1003,7 @@ func (r *Runtime) runTurnWithOrigin(
 				}
 				if target == "" {
 					hasWaitInput = true
-					recordFinalReply(execution.result.Reply, execution.activation.activator == "")
+					recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
 					continue
 				}
 				enqueueBatchRoute(routeTo(target, execution.activation.teamID))
@@ -1022,7 +1023,7 @@ func (r *Runtime) runTurnWithOrigin(
 				// no activator the user is the one to decide.
 				if execution.activation.activator == "" {
 					hasWaitInput = true
-					recordFinalReply(execution.result.Reply, execution.activation.activator == "")
+					recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
 					continue
 				}
 				enqueueBatchRoute(routeTo(execution.activation.activator, execution.activation.teamID))
@@ -1036,7 +1037,7 @@ func (r *Runtime) runTurnWithOrigin(
 				// orchestration. The current lifecycle leaves a normal Flow
 				// turn resumable, so do not enqueue another Team here.
 				// The turn ends on this hop, so its reply is the answer.
-				recordFinalReply(execution.result.Reply, execution.activation.activator == "")
+				recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
 			case types.NextFail:
 				if routeFailure == nil {
 					routeFailure = errors.New(next.Reason)
@@ -1613,8 +1614,17 @@ func (r *Runtime) finishTurn(
 			// reply and origin are hoisted to the top level because a caller
 			// relaying the answer of an unattended turn reads them without
 			// decoding the turn record.
-			"reply":        replyForCaller,
-			"origin":       result.Turn.Origin,
+			"reply":  replyForCaller,
+			"origin": result.Turn.Origin,
+			// origin says how the turn was woken (a mailbox message), not who
+			// wrote the text. Consumers attributing a message to its producer
+			// must read team.
+			"team": result.FinalReplyTeam,
+			// Contributors is the turn's provenance: which Team said what, and
+			// which Team asked it. A reply written by the coordinating Team is a
+			// restatement of other Teams' results; without this a consumer can
+			// only see the writer and has to guess the source.
+			"contributors": contributorPayload(result.TeamResults),
 			"intermediate": result.Turn.Intermediate,
 			// Deliveries travel with the turn event: they are results the user
 			// must see as their own messages, independent of the reply above.
@@ -1624,6 +1634,39 @@ func (r *Runtime) finishTurn(
 		return result, err
 	}
 	return result, runErr
+}
+
+// contributorPayload lists what each Team in the turn said, in completion order.
+// Replies are capped: this is provenance for display, not a transcript.
+//
+// CallerTeam is deliberately not included. It is whatever the Team wrote into
+// its route as "return the result here", filled by the model and often naming
+// the Team it just called — so it reads as both upstream and downstream
+// depending on the turn. Exposing it as lineage would state a relationship the
+// engine never recorded. The activation edge is engine-owned and belongs in
+// TeamTurn if it is ever needed.
+func contributorPayload(results []types.TeamTurnResult) []map[string]any {
+	items := make([]map[string]any, 0, len(results))
+	for _, result := range results {
+		reply := strings.TrimSpace(result.Reply)
+		if reply == "" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"team":  result.Turn.TeamID,
+			"reply": truncateRunes(reply, 300),
+		})
+	}
+	return items
+}
+
+// truncateRunes caps text by rune count, marking the cut.
+func truncateRunes(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "…"
 }
 
 // runningTeams lists Teams of this session that are still executing in this
