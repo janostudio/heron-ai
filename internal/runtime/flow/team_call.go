@@ -75,7 +75,11 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 	// work further down, its first turn ends with "I dispatched it" — returning
 	// that reads as a result and invites the caller to dispatch again. Wait for
 	// the callee to settle, then report what it actually concluded.
-	if teamCallStatus(execution) == "dispatched" {
+	// Dispatching is a tool call now, so the callee's route stays "proceed" even
+	// when it handed work further down. What proves it has not finished is its
+	// own pending call, not the route: the route-based test never fired and the
+	// callee's "I dispatched it" was handed back as the answer.
+	if r.hasPendingTeamCallFrom(ctx, session.ID, spec.TeamID) {
 		if settled := r.awaitTeamSettlement(ctx, session.ID, spec.TeamID); settled != nil {
 			execution.result.Reply = settled.Reply
 			execution.result.Error = settled.Error
