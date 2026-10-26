@@ -51,6 +51,12 @@ type Runtime struct {
 	// reads after a restart.
 	dispatchMu sync.Mutex
 	busyTeams  map[teamKey]bool
+	// turnMu guards runningTurns: the sessions this process is executing a turn
+	// for right now. It is what tells "the turn is still working" apart from
+	// "a crash left the session marked running" — the event stream cannot, and
+	// getting it wrong means either refusing a live turn or resuming a dead one.
+	turnMu       sync.Mutex
+	runningTurns map[string]bool
 	// pendingWakes de-duplicates wake retries for sessions that were still
 	// running when their wake-up arrived.
 	pendingWakes map[string]bool
@@ -209,6 +215,11 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 			session.ID,
 		)
 	}
+	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
+		// The turn in flight cannot be interrupted, but the message must not be
+		// lost either: store it and let the running turn start it when it ends.
+		return r.queueUserInput(ctx, session, input)
+	}
 	if running, err := r.runningTeams(ctx, sessionID); err != nil {
 		return types.FlowTurnResult{}, err
 	} else if len(running) > 0 {
@@ -241,6 +252,9 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 	}
 	if session.Status == types.SessionWaitingApproval {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is waiting for approval; approval resume is not configured", session.ID)
+	}
+	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
+		return r.queueUserInput(ctx, session, input)
 	}
 	if session.Status != types.SessionWaitingInput &&
 		session.Status != types.SessionWaitingTool {
@@ -638,6 +652,10 @@ func (r *Runtime) runTurnWithOrigin(
 	scopeSince time.Time,
 	deliveries []types.UserDelivery,
 ) (types.FlowTurnResult, error) {
+	// Publish that this process owns a live turn for the session, so a message
+	// arriving mid-turn is queued rather than mistaken for a crash leftover.
+	clearRunning := r.markTurnRunning(session.ID)
+	defer clearRunning()
 	if err := r.validateDependencies(session.FlowID); err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -1571,6 +1589,19 @@ func (r *Runtime) finishTurn(
 	if status == types.SessionWaitingInput && r.hasPendingTeamCall(ctx, result.Session.ID) {
 		result.Turn.Intermediate = true
 	}
+	// An intermediate turn has no answer, so it must not carry one in *any* shape.
+	// Clearing only the event payload left the JSON-RPC response still holding
+	// the progress line — that is the copy s20's client rendered as a message.
+	if result.Turn.Intermediate {
+		result.Reply = ""
+		result.FinalReply = ""
+		// Each Team's reply is a copy of the same progress line. Keeping them
+		// "for diagnostics" is what let the text escape three times; the turn and
+		// team records still carry it for anyone debugging from the event stream.
+		for index := range result.TeamResults {
+			result.TeamResults[index].Reply = ""
+		}
+	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          eventType,
@@ -1584,7 +1615,7 @@ func (r *Runtime) finishTurn(
 			// reply and origin are hoisted to the top level because a caller
 			// relaying the answer of an unattended turn reads them without
 			// decoding the turn record.
-			"reply":  replyForCaller,
+			"reply":  replyPayloadField(replyForCaller, result.Turn.Intermediate),
 			"origin": result.Turn.Origin,
 			// origin says how the turn was woken (a mailbox message), not who
 			// wrote the text. Consumers attributing a message to its producer
@@ -1594,7 +1625,7 @@ func (r *Runtime) finishTurn(
 			// which Team asked it. A reply written by the coordinating Team is a
 			// restatement of other Teams' results; without this a consumer can
 			// only see the writer and has to guess the source.
-			"contributors": contributorPayload(result.TeamResults),
+			"contributors": contributorPayload(result.TeamResults, result.Turn.Intermediate),
 			"intermediate": result.Turn.Intermediate,
 			// Deliveries travel with the turn event: they are results the user
 			// must see as their own messages, independent of the reply above.
@@ -1603,6 +1634,10 @@ func (r *Runtime) finishTurn(
 	}); err != nil {
 		return result, err
 	}
+	// A message that arrived while this turn was running is waiting in the
+	// mailbox. Start it now, in its own goroutine: this turn still holds the
+	// caller's lock, and running it inline would either recurse or deadlock.
+	go r.drainQueuedInput(context.Background(), result.Session.ID)
 	return result, runErr
 }
 
@@ -1615,7 +1650,13 @@ func (r *Runtime) finishTurn(
 // depending on the turn. Exposing it as lineage would state a relationship the
 // engine never recorded. The activation edge is engine-owned and belongs in
 // TeamTurn if it is ever needed.
-func contributorPayload(results []types.TeamTurnResult) []map[string]any {
+func contributorPayload(results []types.TeamTurnResult, intermediate bool) []map[string]any {
+	// An intermediate turn has no answer to attribute. Its contributors carry the
+	// same progress lines as its reply — s20's payload had reply="" and still
+	// shipped "已转给执行侧…" here, which is all a client needs to render it.
+	if intermediate {
+		return nil
+	}
 	items := make([]map[string]any, 0, len(results))
 	for _, result := range results {
 		reply := strings.TrimSpace(result.Reply)
@@ -2296,6 +2337,23 @@ func turnStatusForSession(status types.SessionStatus) types.TurnStatus {
 // waiting_input so the next user message starts a new turn, while the turn
 // itself keeps the failed status and the error callers display. SessionFailed
 // stays in the enum for old session data; nothing new writes it.
+// replyPayloadField is what a turn publishes as its text.
+//
+// A turn that is still waiting for a Team has no answer yet: its text is a
+// progress line ("已转给执行侧…"). Publishing it invites every client to render
+// it as the reply, and a client that does so twice — as s19 did — leaves the
+// user with two identical progress lines and no conclusion. The intermediate
+// flag alone is not enough: it only works if the client reads it.
+//
+// So an intermediate turn publishes no reply at all. The conclusion arrives on
+// the turn that actually has one.
+func replyPayloadField(reply string, intermediate bool) string {
+	if intermediate {
+		return ""
+	}
+	return reply
+}
+
 // hasPendingTeamCall reports whether this session still has a Team call running.
 // It is the only signal that tells "this turn answered the user" apart from
 // "this turn handed work over and is waiting", and only the engine has it.
@@ -2316,6 +2374,31 @@ func (r *Runtime) hasPendingTeamCall(ctx context.Context, sessionID string) bool
 		}
 	}
 	return false
+}
+
+// markTurnRunning records that this process is executing a turn for a session.
+func (r *Runtime) markTurnRunning(sessionID string) func() {
+	if sessionID == "" {
+		return func() {}
+	}
+	r.turnMu.Lock()
+	if r.runningTurns == nil {
+		r.runningTurns = make(map[string]bool)
+	}
+	r.runningTurns[sessionID] = true
+	r.turnMu.Unlock()
+	return func() {
+		r.turnMu.Lock()
+		delete(r.runningTurns, sessionID)
+		r.turnMu.Unlock()
+	}
+}
+
+// isTurnRunning reports whether this process has a live turn for the session.
+func (r *Runtime) isTurnRunning(sessionID string) bool {
+	r.turnMu.Lock()
+	defer r.turnMu.Unlock()
+	return r.runningTurns[sessionID]
 }
 
 func sessionStatusAfterTurn(status types.SessionStatus) types.SessionStatus {

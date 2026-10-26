@@ -2,8 +2,10 @@ package flow
 
 import (
 	"context"
+
 	"encoding/json"
 	"fmt"
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"sort"
 	"strings"
 	"time"
@@ -68,6 +70,42 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 		input, nil, now, nil)
 	if runErr != nil {
 		return types.TeamCallOutcome{Status: "failed", Error: runErr.Error()}, nil
+	}
+	// A Team that called no tool did nothing: it did not look anything up, did
+	// not hand work on, did not write. Its reply is a sentence about work it is
+	// not doing — s19's "已转给执行侧核实…" arrived this way, in eight seconds,
+	// with the task never leaving the caller.
+	if spec.CallerTeam != "" && totalToolCalls(execution.result) == 0 {
+		return types.TeamCallOutcome{
+			Status: "failed",
+			Error: fmt.Sprintf(
+				"team %q finished without calling any tool, so it did not do the work",
+				spec.TeamID),
+		}, nil
+	}
+
+	// A caller wants the callee's answer, not its process. When the callee hands
+	// work further down, its first turn ends with "I dispatched it" — returning
+	// that reads as a result and invites the caller to dispatch again. Wait for
+	// the callee to settle, then report what it actually concluded.
+	// Dispatching is a tool call now, so the callee's route stays "proceed" even
+	// when it handed work further down. What proves it has not finished is its
+	// own pending call, not the route: the route-based test never fired and the
+	// callee's "I dispatched it" was handed back as the answer.
+	logTeamCallFrame("team call entered", spec.CallerTeam, spec.TeamID, map[string]any{"pending_downstream": r.hasPendingTeamCallFrom(ctx, session.ID, spec.TeamID)})
+	if r.hasPendingTeamCallFrom(ctx, session.ID, spec.TeamID) {
+		if settled := r.awaitTeamSettlement(ctx, session.ID, spec.TeamID); settled != nil {
+			settledState := "settled"
+			if settled == nil {
+				settledState = "unsettled"
+			}
+			logTeamCallFrame("team call waited", spec.CallerTeam, spec.TeamID,
+				map[string]any{"outcome": settledState})
+			execution.result.Reply = settled.Reply
+			execution.result.Error = settled.Error
+
+			execution.next = nil
+		}
 	}
 	outcome := types.TeamCallOutcome{
 		Status: teamCallStatus(execution),
@@ -184,4 +222,116 @@ func teamResponsibility(team types.Team) string {
 		}
 	}
 	return ""
+}
+
+// teamSettleLimit bounds how long a call waits for its callee to conclude after
+// the callee has itself handed work further down.
+const teamSettleLimit = 5 * time.Minute
+
+// awaitTeamSettlement waits until the callee stops dispatching and returns what
+// it finally concluded.
+//
+// The callee's follow-up turns are started by the result callback, not by this
+// goroutine, so there is nothing to join on: poll the callee's own pending calls
+// and read its last conclusion from the event stream when they clear.
+func (r *Runtime) awaitTeamSettlement(ctx context.Context, sessionID, teamID string) *types.TeamCallOutcome {
+	deadline := time.Now().Add(teamSettleLimit)
+	// What the callee had said before we started waiting. Clearing its pending
+	// call is not enough: that happens the instant the downstream task finishes,
+	// and the callee still has to run the turn that concludes. Comparing against
+	// this baseline is how we tell "it answered" from "it is about to answer".
+	baseline, _ := r.lastTeamReply(ctx, sessionID, teamID)
+	for {
+		if !r.hasPendingTeamCallFrom(ctx, sessionID, teamID) {
+			reply, ok := r.lastTeamReply(ctx, sessionID, teamID)
+			if ok && reply != baseline {
+				return &types.TeamCallOutcome{Status: "done", Reply: reply}
+			}
+			if !ok && baseline == "" {
+				return nil
+			}
+			// Pending cleared but the conclusion has not landed yet: the callee
+			// is running its follow-up turn. Keep waiting instead of handing back
+			// the dispatch receipt.
+		}
+		if time.Now().After(deadline) {
+			logging.Info("team call settled by timeout", map[string]any{
+				"flow_session_id": sessionID,
+				"team_id":         teamID,
+			})
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// hasPendingTeamCallFrom reports whether this Team still has a call in flight.
+func (r *Runtime) hasPendingTeamCallFrom(ctx context.Context, sessionID, callerTeam string) bool {
+	if r.tasks == nil || sessionID == "" {
+		return false
+	}
+	tasks, err := r.tasks.List(ctx)
+	if err != nil {
+		return false
+	}
+	for _, task := range tasks {
+		if task.FlowSessionID != sessionID || task.ToolName != types.ToolNameTeamRun {
+			continue
+		}
+		if task.Status != types.ToolTaskQueued && task.Status != types.ToolTaskRunning {
+			continue
+		}
+		if caller, _ := task.Arguments["caller_team"].(string); caller == callerTeam {
+			return true
+		}
+	}
+	return false
+}
+
+// lastTeamReply reads the Team's most recent conclusion from the event stream.
+func (r *Runtime) lastTeamReply(ctx context.Context, sessionID, teamID string) (string, bool) {
+	events, err := r.replayFlowEvents(ctx, sessionID)
+	if err != nil {
+		return "", false
+	}
+	reply := ""
+	for _, event := range events {
+		switch event.Type {
+		case types.EventFlowTurnWaitingInput, types.EventFlowTurnCompleted:
+			if event.TeamID != "" && event.TeamID != teamID {
+				continue
+			}
+			if text := payloadString(event.Payload, "reply"); strings.TrimSpace(text) != "" {
+				reply = text
+			}
+		}
+	}
+	return reply, reply != ""
+}
+
+// logTeamCallFrame records one step of a call's lifecycle.
+//
+// The settle-wait is invisible from the outside: a caller cannot tell "the
+// callee is still working" from "the callee answered immediately". Without these
+// lines the only way to diagnose it is to guess and re-run a four-minute
+// conversation.
+func logTeamCallFrame(event, caller, callee string, extra map[string]any) {
+	fields := map[string]any{"caller": caller, "callee": callee}
+	for key, value := range extra {
+		fields[key] = value
+	}
+	logging.Info(event, fields)
+}
+
+// totalToolCalls counts the tool calls a Team made across its calls.
+func totalToolCalls(result types.TeamTurnResult) int {
+	total := 0
+	for _, call := range result.CallResults {
+		total += call.ToolCalls
+	}
+	return total
 }

@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,15 +12,20 @@ import (
 
 // memoryTaskStore is the minimum the pending-call check needs.
 type memoryTaskStore struct {
+	mu    sync.Mutex
 	tasks []types.ToolTask
 }
 
 func (s *memoryTaskStore) Save(_ context.Context, task types.ToolTask) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.tasks = append(s.tasks, task)
 	return nil
 }
 
 func (s *memoryTaskStore) Load(_ context.Context, id string) (*types.ToolTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := range s.tasks {
 		if s.tasks[i].ID == id {
 			task := s.tasks[i]
@@ -30,7 +36,9 @@ func (s *memoryTaskStore) Load(_ context.Context, id string) (*types.ToolTask, e
 }
 
 func (s *memoryTaskStore) List(_ context.Context) ([]types.ToolTask, error) {
-	return s.tasks, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]types.ToolTask(nil), s.tasks...), nil
 }
 
 func (s *memoryTaskStore) Delete(_ context.Context, _ string) error { return nil }
@@ -62,4 +70,25 @@ func TestHasPendingTeamCall(t *testing.T) {
 	}
 	require.False(t, rt.hasPendingTeamCall(context.Background(), "fs-1"),
 		"别的会话的任务不影响本会话")
+}
+
+// 调用方只关心被调用方给的结果，不关心它让谁干活。所以"它派下去了"这个中间
+// 事实不能作为结果返回；判断"它是否还在派"必须按发起方过滤，否则会把别的
+// Team 的调用算进来，永远等不到收口。
+func TestHasPendingTeamCallFromFiltersByCaller(t *testing.T) {
+	store := &memoryTaskStore{tasks: []types.ToolTask{
+		{ID: "t1", FlowSessionID: "fs-1", ToolName: types.ToolNameTeamRun,
+			Status: types.ToolTaskRunning, Arguments: map[string]any{"caller_team": "owner"}},
+		{ID: "t2", FlowSessionID: "fs-1", ToolName: types.ToolNameTeamRun,
+			Status: types.ToolTaskCompleted, Arguments: map[string]any{"caller_team": "default"}},
+	}}
+	rt := &Runtime{}
+	rt.SetTaskStore(store)
+
+	require.True(t, rt.hasPendingTeamCallFrom(context.Background(), "fs-1", "owner"),
+		"owner 自己的调用还在跑")
+	require.False(t, rt.hasPendingTeamCallFrom(context.Background(), "fs-1", "default"),
+		"default 的调用已完成，不能算作 owner 的未完成")
+	require.False(t, rt.hasPendingTeamCallFrom(context.Background(), "fs-other", "owner"),
+		"别的会话不影响本会话")
 }

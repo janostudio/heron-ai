@@ -39,8 +39,8 @@ func TestTeamToolRunsInlineWithoutTaskRunner(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, result.Success)
-	require.Contains(t, result.Content, "主分支是 master")
-	require.Contains(t, result.Content, "done")
+	// 子代理工具返回的是正文本身，不是状态包——模型据此判断"这是答案"。
+	require.Equal(t, "主分支是 master", result.Content)
 	require.Len(t, runner.specs, 1)
 	require.Equal(t, "owner", runner.specs[0].TeamID)
 }
@@ -80,7 +80,7 @@ func TestTeamToolReportsRunnerError(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, result.Success)
-	require.Contains(t, result.Content, "blocked")
+	require.Contains(t, result.Content, "owner could not complete the task")
 	require.Contains(t, result.Content, "缺少日志索引")
 }
 
