@@ -1563,6 +1563,14 @@ func (r *Runtime) finishTurn(
 	if result.FinalReplyFromEntry {
 		result.Turn.Intermediate = false
 	}
+	// A turn that ends while a Team it dispatched is still running is a progress
+	// report, not an answer: the result coming back is where the user-visible
+	// conclusion appears. Saying so keeps a client from presenting "已转给执行侧…"
+	// as if it were the outcome — the shape that made multi-hop work look like
+	// three repeated non-answers.
+	if status == types.SessionWaitingInput && r.hasPendingTeamCall(ctx, result.Session.ID) {
+		result.Turn.Intermediate = true
+	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          eventType,
@@ -2288,6 +2296,28 @@ func turnStatusForSession(status types.SessionStatus) types.TurnStatus {
 // waiting_input so the next user message starts a new turn, while the turn
 // itself keeps the failed status and the error callers display. SessionFailed
 // stays in the enum for old session data; nothing new writes it.
+// hasPendingTeamCall reports whether this session still has a Team call running.
+// It is the only signal that tells "this turn answered the user" apart from
+// "this turn handed work over and is waiting", and only the engine has it.
+func (r *Runtime) hasPendingTeamCall(ctx context.Context, sessionID string) bool {
+	if r.tasks == nil || sessionID == "" {
+		return false
+	}
+	tasks, err := r.tasks.List(ctx)
+	if err != nil {
+		return false
+	}
+	for _, task := range tasks {
+		if task.FlowSessionID != sessionID || task.ToolName != types.ToolNameTeamRun {
+			continue
+		}
+		if task.Status == types.ToolTaskQueued || task.Status == types.ToolTaskRunning {
+			return true
+		}
+	}
+	return false
+}
+
 func sessionStatusAfterTurn(status types.SessionStatus) types.SessionStatus {
 	if status == types.SessionFailed {
 		return types.SessionWaitingInput

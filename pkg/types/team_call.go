@@ -2,6 +2,12 @@ package types
 
 import "context"
 
+// ToolNameTeamRun is the internal tool name of the durable task that runs one
+// Team call. It is never registered for models: only a task created by the Team
+// tool reaches it. Shared so the flow can recognise such a task without
+// importing the agent package.
+const ToolNameTeamRun = "TeamRun"
+
 // TeamCallSpec is one Agent's request to another Team.
 //
 // Collaboration is modelled as an asynchronous tool call: the caller hands over

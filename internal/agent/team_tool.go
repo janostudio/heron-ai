@@ -21,7 +21,7 @@ const TeamToolName = "Team"
 // TeamRunToolName is the internal durable task that actually runs the Team. It
 // is never registered in the tool registry, so a model cannot call it: only a
 // task created by TeamTool reaches this name.
-const TeamRunToolName = "TeamRun"
+const TeamRunToolName = types.ToolNameTeamRun
 
 // TeamTool exposes Team calls to the model.
 type TeamTool struct {
