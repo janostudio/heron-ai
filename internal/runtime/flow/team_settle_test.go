@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -226,4 +227,56 @@ func TestIntermediateTurnClearsResponseReply(t *testing.T) {
 	require.True(t, result.Turn.Intermediate, "还有调用在跑，本轮是进度")
 	require.Empty(t, result.Reply, "响应里也不能带过程话术")
 	require.Empty(t, result.FinalReply)
+}
+
+// progressTextTeamRuntime 说一句"已转给执行侧"，什么也不做——就是 s20 里那轮。
+type progressTextTeamRuntime struct{}
+
+const progressLine = "已转给执行侧核实 heron-ai 的主分支，稍后给你结论。"
+
+func (progressTextTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
+	return types.TeamTurnResult{
+		Turn:  req.TeamTurn,
+		Reply: progressLine,
+		Next:  &types.Route{Action: types.NextProceed},
+	}, nil
+}
+
+// 中间回合的进度话术不能从任何出口漏出去。
+//
+// s19/s20 连续两轮都栽在这里：先把 payload.reply 清了，客户端从 JSON-RPC 响应里
+// 拿到；再把响应清了，客户端从 contributors 里拿到。所以这条断言不看单个字段，
+// 而是把整个响应和整个事件 payload 序列化后搜那句话——任何新字段带它出来都会失败。
+func TestIntermediateTurnLeaksNoProgressText(t *testing.T) {
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	rt := newTestRuntime(testDefinitions(), progressTextTeamRuntime{}, writer, nil)
+	session := seedMailboxSession(t, rt, "fs-leak", types.SessionWaitingInput)
+
+	// 这个会话里还有一个 Team 调用在跑 → 本轮结束后仍是"等待中"。
+	store := &memoryTaskStore{tasks: []types.ToolTask{{
+		ID:            "t1",
+		FlowSessionID: session.ID,
+		ToolName:      types.ToolNameTeamRun,
+		Status:        types.ToolTaskRunning,
+		Arguments:     map[string]any{"caller_team": "default"},
+	}}}
+	rt.SetTaskStore(store)
+
+	result, err := rt.HandleInput(context.Background(), session.ID, "再查一个仓库")
+	require.NoError(t, err)
+	require.True(t, result.Turn.Intermediate, "前提：这一轮是进度")
+
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "已转给执行侧",
+		"响应里不能有任何字段带出进度话术")
+
+	events, err := rt.replayFlowEvents(context.Background(), session.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, events)
+	last := events[len(events)-1]
+	payload, err := json.Marshal(last.Payload)
+	require.NoError(t, err)
+	require.NotContains(t, string(payload), "已转给执行侧",
+		"事件 payload 里也不能有任何字段带出进度话术")
 }
