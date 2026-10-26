@@ -2423,7 +2423,7 @@ func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema 
 // walk, not a per-token cost) and both enforcement points read the same answer.
 // A nil set withholds nothing, which is what keeps the ~30 test call sites that
 // use the public buildToolSchemas unaffected.
-func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.AgentConfig, withheld map[string]string) []types.JSONSchema {
+func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.AgentConfig, withheld map[string]string) []types.JSONSchema {
 	var schemas []types.JSONSchema
 
 	// builtinSchemas is what makes a builtin tool VISIBLE to the model; the
@@ -2679,6 +2679,23 @@ func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.Agent
 			}
 			seen[schema.Name] = struct{}{}
 			schemas = append(schemas, schema)
+		}
+	}
+	// A Team may hand work only to the targets its Flow binding declares. That
+	// is a property of where the Team sits in the Flow, not of its Agent
+	// definition: the same Agent is granted different reach in different Flows.
+	// Projecting it into the schema keeps the list in configuration instead of
+	// in a prompt that goes stale.
+	if identity := spawnIdentityFromContext(ctx); identity != nil && len(identity.req.AllowedTeams) > 0 {
+		allowed := append([]string(nil), identity.req.AllowedTeams...)
+		for index := range schemas {
+			if schemas[index].Name != TeamToolName {
+				continue
+			}
+			if param, ok := schemas[index].Properties["team_id"]; ok {
+				param.Enum = allowed
+				schemas[index].Properties["team_id"] = param
+			}
 		}
 	}
 	return schemas

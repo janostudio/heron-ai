@@ -90,6 +90,17 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 	if !ok || item == nil {
 		return teamError("Team requires an item describing the task"), nil
 	}
+	// Reach is the Flow's decision, not the model's: a Team may hand work only
+	// to the targets its binding declares. The schema narrows the choice; this
+	// check is the enforcement behind it, because a model can still write a
+	// name the schema never offered.
+	if identity := spawnIdentityFromContext(ctx); identity != nil && len(identity.req.AllowedTeams) > 0 {
+		if !containsTeam(identity.req.AllowedTeams, teamID) {
+			return teamError(fmt.Sprintf(
+				"team %q is not reachable from %q; this Team may hand work to: %s",
+				teamID, identity.req.TeamID, strings.Join(identity.req.AllowedTeams, ", "))), nil
+		}
+	}
 	spec := teamCallSpecFromContext(ctx, teamID, item)
 
 	if t.tasks == nil {
@@ -208,6 +219,15 @@ func teamTaskID(spec types.TeamCallSpec) string {
 		base = "team"
 	}
 	return fmt.Sprintf("%s:team:%s:%d", base, spec.TeamID, spawnTurnSeq.Add(1))
+}
+
+func containsTeam(teams []string, target string) bool {
+	for _, team := range teams {
+		if team == target {
+			return true
+		}
+	}
+	return false
 }
 
 func teamError(message string) *types.ToolResult {

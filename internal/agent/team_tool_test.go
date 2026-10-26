@@ -122,3 +122,69 @@ func (e *teamForwardExecutor) Execute(_ context.Context, name string, _ map[stri
 	e.names = append(e.names, name)
 	return &types.ToolResult{Success: true}, nil
 }
+
+// 可达性是 flow 的决定：Team 只能派给它所在 binding 声明的目标。模型可以绕开
+// schema 硬写一个名字，所以执行时必须校验。
+func TestTeamToolRejectsUnreachableTeam(t *testing.T) {
+	runner := &stubTeamRunner{answer: types.TeamCallOutcome{Status: "done", Reply: "x"}}
+	tool := NewTeamTool(runner)
+	ctx := withSpawnIdentity(context.Background(), types.AgentConfig{}, types.AgentRequest{
+		TeamID:       "default",
+		CallID:       "coordinator",
+		AllowedTeams: []string{"owner"},
+	})
+
+	outside, err := tool.Execute(ctx, map[string]any{"team_id": "sandbox", "item": "查日志"})
+
+	require.NoError(t, err)
+	require.False(t, outside.Success)
+	require.Contains(t, outside.Error, "not reachable")
+	require.Contains(t, outside.Error, "owner", "错误要说明可以派给谁")
+	require.Empty(t, runner.specs, "越界调用不能真的派出去")
+
+	inside, err := tool.Execute(ctx, map[string]any{"team_id": "owner", "item": "查日志"})
+	require.NoError(t, err)
+	require.True(t, inside.Success)
+	require.Len(t, runner.specs, 1)
+}
+
+// Team 工具的 team_id 枚举来自当前 binding 的 can_activate：同一份 Agent 定义
+// 在不同 flow 里能派的 Team 不同，这个范围属于配置，不该写进提示词。
+func TestToolSchemasProjectAllowedTeams(t *testing.T) {
+	agent := types.AgentConfig{
+		Tools: types.ToolConfig{Builtin: []string{TeamToolName}},
+	}
+	loop := &TurnLoop{}
+
+	open := loop.buildToolSchemasFiltered(context.Background(), agent, nil)
+	require.True(t, hasTeamSchema(open), "没有身份时仍给出工具定义")
+
+	ctx := withSpawnIdentity(context.Background(), agent, types.AgentRequest{
+		TeamID:       "default",
+		AllowedTeams: []string{"owner"},
+	})
+	narrowed := loop.buildToolSchemasFiltered(ctx, agent, nil)
+	teamSchema := findTeamSchema(t, narrowed)
+	require.Equal(t, []string{"owner"}, teamSchema.Properties["team_id"].Enum,
+		"枚举必须是这张 binding 的出边")
+}
+
+func hasTeamSchema(schemas []types.JSONSchema) bool {
+	for _, schema := range schemas {
+		if schema.Name == TeamToolName {
+			return true
+		}
+	}
+	return false
+}
+
+func findTeamSchema(t *testing.T, schemas []types.JSONSchema) types.JSONSchema {
+	t.Helper()
+	for _, schema := range schemas {
+		if schema.Name == TeamToolName {
+			return schema
+		}
+	}
+	t.Fatalf("schema for %q not found", TeamToolName)
+	return types.JSONSchema{}
+}
