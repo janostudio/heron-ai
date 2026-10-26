@@ -32,8 +32,9 @@ func TestTeamToolRunsInlineWithoutTaskRunner(t *testing.T) {
 	tool := NewTeamTool(runner)
 
 	result, err := tool.Execute(context.Background(), map[string]any{
-		"team_id": "owner",
-		"item":    "查 heron-ai 的主分支",
+		"subagent_type": "owner",
+		"prompt":        "查 heron-ai 的主分支",
+		"description":   "查主分支",
 	})
 
 	require.NoError(t, err)
@@ -48,22 +49,22 @@ func TestTeamToolRunsInlineWithoutTaskRunner(t *testing.T) {
 func TestTeamToolRejectsMissingArguments(t *testing.T) {
 	tool := NewTeamTool(&stubTeamRunner{})
 
-	missingTeam, err := tool.Execute(context.Background(), map[string]any{"item": "x"})
+	missingTeam, err := tool.Execute(context.Background(), map[string]any{"prompt": "x"})
 	require.NoError(t, err)
 	require.False(t, missingTeam.Success)
-	require.Contains(t, missingTeam.Error, "team_id")
+	require.Contains(t, missingTeam.Error, "subagent_type")
 
-	missingItem, err := tool.Execute(context.Background(), map[string]any{"team_id": "owner"})
+	missingItem, err := tool.Execute(context.Background(), map[string]any{"subagent_type": "owner"})
 	require.NoError(t, err)
 	require.False(t, missingItem.Success)
-	require.Contains(t, missingItem.Error, "item")
+	require.Contains(t, missingItem.Error, "prompt")
 }
 
 // 没有注入执行器时不能假装接受了调用。
 func TestTeamToolWithoutRunner(t *testing.T) {
 	tool := NewTeamTool(nil)
 
-	result, err := tool.Execute(context.Background(), map[string]any{"team_id": "owner", "item": "x"})
+	result, err := tool.Execute(context.Background(), map[string]any{"subagent_type": "owner", "prompt": "x", "description": "d"})
 
 	require.NoError(t, err)
 	require.False(t, result.Success)
@@ -75,7 +76,7 @@ func TestTeamToolReportsRunnerError(t *testing.T) {
 	runner := &stubTeamRunner{answer: types.TeamCallOutcome{Status: "blocked", Error: "缺少日志索引"}}
 	tool := NewTeamTool(runner)
 
-	result, err := tool.Execute(context.Background(), map[string]any{"team_id": "owner", "item": "x"})
+	result, err := tool.Execute(context.Background(), map[string]any{"subagent_type": "owner", "prompt": "x", "description": "d"})
 
 	require.NoError(t, err)
 	require.False(t, result.Success)
@@ -134,7 +135,7 @@ func TestTeamToolRejectsUnreachableTeam(t *testing.T) {
 		AllowedTeams: []string{"owner"},
 	})
 
-	outside, err := tool.Execute(ctx, map[string]any{"team_id": "sandbox", "item": "查日志"})
+	outside, err := tool.Execute(ctx, map[string]any{"subagent_type": "sandbox", "prompt": "查日志", "description": "查日志"})
 
 	require.NoError(t, err)
 	require.False(t, outside.Success)
@@ -142,7 +143,7 @@ func TestTeamToolRejectsUnreachableTeam(t *testing.T) {
 	require.Contains(t, outside.Error, "owner", "错误要说明可以派给谁")
 	require.Empty(t, runner.specs, "越界调用不能真的派出去")
 
-	inside, err := tool.Execute(ctx, map[string]any{"team_id": "owner", "item": "查日志"})
+	inside, err := tool.Execute(ctx, map[string]any{"subagent_type": "owner", "prompt": "查日志", "description": "查日志"})
 	require.NoError(t, err)
 	require.True(t, inside.Success)
 	require.Len(t, runner.specs, 1)
@@ -165,7 +166,7 @@ func TestToolSchemasProjectAllowedTeams(t *testing.T) {
 	})
 	narrowed := loop.buildToolSchemasFiltered(ctx, agent, nil)
 	teamSchema := findTeamSchema(t, narrowed)
-	require.Equal(t, []string{"owner"}, teamSchema.Properties["team_id"].Enum,
+	require.Equal(t, []string{"owner"}, teamSchema.Properties["subagent_type"].Enum,
 		"枚举必须是这张 binding 的出边")
 }
 

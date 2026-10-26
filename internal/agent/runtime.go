@@ -2554,12 +2554,14 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 		},
 		"Team": {
 			Name: "Team", Type: "object",
-			Description: "Hand work to another Team and return immediately with a task handle. The Team's answer arrives later as this call's result.",
+			Description: "Hand work to another Team. Runs in the background and returns a task handle immediately; the Team's answer arrives later as this call's result.",
 			Properties: map[string]types.JSONProperty{
-				"team_id": {Type: "string", Description: "Target Team id from the flow definition"},
-				"item":    {Type: "any", Description: "The task handed to that Team: what to find out or do, with the context it needs"},
+				"description":       {Type: "string", Description: "A short (3-5 word) description of the task, shown to the user while it runs"},
+				"prompt":            {Type: "string", Description: "The task for the Team to perform: goal, evidence, scope, acceptance criteria, authorization"},
+				"subagent_type":     {Type: "string", Description: "The Team to hand the work to"},
+				"run_in_background": {Type: "boolean", Description: "Run the Team without blocking this turn (default true)"},
 			},
-			Required: []string{"team_id", "item"},
+			Required: []string{"description", "prompt", "subagent_type"},
 		},
 		"Collect": {
 			Name: "Collect", Type: "object",
@@ -2697,9 +2699,9 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 			if schemas[index].Name != TeamToolName {
 				continue
 			}
-			if param, ok := schemas[index].Properties["team_id"]; ok {
+			if param, ok := schemas[index].Properties["subagent_type"]; ok {
 				param.Enum = allowed
-				schemas[index].Properties["team_id"] = param
+				schemas[index].Properties["subagent_type"] = param
 			}
 		}
 	}

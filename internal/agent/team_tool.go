@@ -52,20 +52,28 @@ func (t *TeamTool) SetTaskRunner(runner *AsyncToolExecutor) {
 func (t *TeamTool) Name() string { return TeamToolName }
 
 func (t *TeamTool) Description() string {
-	return "Hand work to another Team and return immediately with a task handle. " +
-		"The Team runs in the background; its answer arrives later as the result of this call. " +
+	return "Hand work to another Team. Runs in the background and returns a task handle immediately; " +
+		"the Team's answer arrives later as the result of this call. " +
 		"Use it for work that belongs to another Team's responsibility instead of doing it yourself."
 }
 
 func (t *TeamTool) Parameters() map[string]any {
 	return map[string]any{
-		"team_id": map[string]any{
+		"description": map[string]any{
 			"type":        "string",
-			"description": "Target Team id from the flow definition",
+			"description": "A short (3-5 word) description of the task, shown to the user while it runs",
 		},
-		"item": map[string]any{
-			"type":        "any",
-			"description": "The task handed to that Team: what to find out or do, with the context it needs",
+		"prompt": map[string]any{
+			"type":        "string",
+			"description": "The task for the Team to perform: goal, evidence, scope, acceptance criteria, authorization",
+		},
+		"subagent_type": map[string]any{
+			"type":        "string",
+			"description": "The Team to hand the work to",
+		},
+		"run_in_background": map[string]any{
+			"type":        "boolean",
+			"description": "Run the Team without blocking this turn (default true)",
 		},
 	}
 }
@@ -82,14 +90,16 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 	if t == nil || t.runner == nil {
 		return teamError("Team tool is not configured"), nil
 	}
-	teamID := strings.TrimSpace(stringParam(params, "team_id"))
+	teamID := strings.TrimSpace(stringParam(params, "subagent_type"))
 	if teamID == "" {
-		return teamError("Team requires a team_id"), nil
+		return teamError("Team requires a subagent_type (the Team to hand the work to)"), nil
 	}
-	item, ok := params["item"]
-	if !ok || item == nil {
-		return teamError("Team requires an item describing the task"), nil
+	promptText := strings.TrimSpace(stringParam(params, "prompt"))
+	if promptText == "" {
+		return teamError("Team requires a prompt describing the task"), nil
 	}
+	summary := strings.TrimSpace(stringParam(params, "description"))
+	item := any(promptText)
 	// Reach is the Flow's decision, not the model's: a Team may hand work only
 	// to the targets its binding declares. The schema narrows the choice; this
 	// check is the enforcement behind it, because a model can still write a
@@ -102,6 +112,7 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 		}
 	}
 	spec := teamCallSpecFromContext(ctx, teamID, item)
+	spec.Summary = summary
 
 	if t.tasks == nil {
 		// No durable task runner (unit tests, or an engine built without one):
@@ -129,9 +140,10 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 		return teamError(fmt.Sprintf("start Team call: %v", err)), nil
 	}
 	content, _ := json.Marshal(map[string]any{
-		"status":  "accepted",
-		"task_id": task.ID,
-		"team_id": spec.TeamID,
+		"status":        "accepted",
+		"task_id":       task.ID,
+		"subagent_type": spec.TeamID,
+		"description":   spec.Summary,
 	})
 	return &types.ToolResult{
 		Success: true,

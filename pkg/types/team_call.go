@@ -21,6 +21,8 @@ type TeamCallSpec struct {
 	AgentTurnID string
 	// Item is the task handed to the callee.
 	Item any
+	// Summary is a short description of the task, for display while it runs.
+	Summary string
 }
 
 // TeamCallOutcome is what the caller receives as the tool result.
@@ -50,7 +52,7 @@ type TeamRunner interface {
 // from. Configuration stays the source of truth; the catalog is a read-only
 // view of it, scoped to one caller.
 type TeamCatalogEntry struct {
-	TeamID string `json:"team_id"`
+	TeamID string `json:"subagent_type"`
 	// Responsibility is the Team's own statement of what it does, taken from its
 	// entry call. It is what the model reasons about when choosing.
 	Responsibility string `json:"responsibility,omitempty"`
