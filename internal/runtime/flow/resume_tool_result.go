@@ -52,32 +52,25 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	r.resumeMu.Lock()
 	defer r.resumeMu.Unlock()
 
-	session, err := r.loadSession(ctx, sessionID)
-	if err != nil {
+	if _, err := r.loadSession(ctx, sessionID); err != nil {
 		return err
-	}
-	switch session.Status {
-	case types.SessionWaitingInput, types.SessionCreated:
-	default:
-		logging.Debug("resume for tool result skipped: session not idle", map[string]any{
-			"flow_session_id": sessionID,
-			"session_status":  string(session.Status),
-		})
-		return nil
 	}
 
 	transcriptID := callerTranscriptID(sessionID, signal.CallerTeam, signal.CallID)
 	transcript, loadErr := r.transcripts.Load(ctx, transcriptID)
 	if loadErr != nil || transcript == nil {
-		logging.Debug("resume for tool result skipped: no transcript", map[string]any{
+		logging.Info("resume for tool result skipped: no transcript", map[string]any{
 			"flow_session_id": sessionID,
 			"transcript_id":   transcriptID,
 		})
 		return nil
 	}
 
-	// The result is appended in the protocol's own shape: a tool call for the
-	// handle the model already holds, then its result.
+	// Write the answer first, whatever the session is doing. A busy session
+	// cannot run the turn now, but dropping the answer would lose it for good:
+	// the completion callback fires once. Persisting it means the next turn —
+	// the current one finishing, or the user's next message — reads it from the
+	// conversation instead of waiting for an event that already happened.
 	toolCallID := newID("call")
 	payload := map[string]any{"status": signal.Status, "reply": signal.Reply}
 	if len(signal.Records) > 0 {
@@ -107,6 +100,21 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 		return saveErr
 	}
 
+	// Wait for the session to become idle, up to the limit. A Team's answer
+	// often lands while the caller's own wake-up turn is still running; giving
+	// up there is what made the result disappear intermittently.
+	if waitErr := r.waitForIdle(ctx, sessionID, toolResultWaitLimit); waitErr != nil {
+		logging.Info("resume for tool result deferred", map[string]any{
+			"flow_session_id": sessionID,
+			"error":           waitErr.Error(),
+		})
+		return nil
+	}
+	session, err := r.loadSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+
 	activator := signal.CallerTeam
 	if activator == "" {
 		activator = transcript.TeamID
@@ -131,4 +139,33 @@ func callerTranscriptID(flowSessionID, teamID, callID string) string {
 		call = "agent"
 	}
 	return fmt.Sprintf("%s:%s:%s", flowSessionID, team, call)
+}
+
+// toolResultWaitLimit bounds how long a finished Team call waits for the
+// session to become idle. A caller's own wake-up turn is usually short; waiting
+// past this means something else is running, and the answer stays in the
+// transcript for the next turn to pick up.
+const toolResultWaitLimit = 45 * time.Second
+
+// waitForIdle polls until the session can accept a turn again.
+func (r *Runtime) waitForIdle(ctx context.Context, sessionID string, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
+	for {
+		session, err := r.loadSession(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		switch session.Status {
+		case types.SessionWaitingInput, types.SessionCreated:
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("session still %s after %s", session.Status, limit)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }

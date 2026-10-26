@@ -119,14 +119,18 @@ func TestResumeForToolResultSkipsBusySession(t *testing.T) {
 		},
 	}))
 
-	err := rt.ResumeForToolResult(context.Background(), session.ID, TeamResultSignal{
+	// 会话忙时用短超时退出等待，验证"落盘但不跑回合"。
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	err := rt.ResumeForToolResult(ctx, session.ID, TeamResultSignal{
 		TaskID: "task-1", CallerTeam: "default", CallID: "coordinator", Status: "done", Reply: "x",
 	})
 
 	require.NoError(t, err)
 	stored, _ := transcripts.Load(context.Background(), id)
-	require.Len(t, stored.Messages, 2, "忙的时候不注入")
-	require.Empty(t, recorder.recorded(), "也不启动回合")
+	require.Len(t, stored.Messages, 4, "忙的时候也要落盘：回调只触发一次，丢了就永远丢了")
+	require.Equal(t, "tool", stored.Messages[3].Role)
+	require.Empty(t, recorder.recorded(), "但不启动回合")
 }
 
 // 没有转录就无处可写：不静默创建一份空对话。
