@@ -249,3 +249,37 @@ func TestRenderKeepsDeliveredResultWhenRecordIsIntermediate(t *testing.T) {
 	require.Contains(t, ownerText, "已派事实查询", "the intermediate record is kept")
 	require.Contains(t, ownerText, finalAnswer, "the delivered answer must survive")
 }
+
+// 被上游结果唤醒的回合是继续，不是新提问：用户原话保持它原来的位置（在
+// 报告之前），最后一条不能又是那句问题。否则模型看到末尾是提问，会把刚
+// 回来的结果当成背景，重新判断这一轮该做什么，于是重复派发同一个任务。
+func TestRenderPutsContinuedTaskBeforeCollaborators(t *testing.T) {
+	const task = "查看cls线上日志，workbuddy.host的流量一天请求数有多少"
+
+	messages, err := NewPromptRenderer(nil).Render(
+		types.AgentConfig{Persona: types.PersonaConfig{Role: "Coordinator"}},
+		types.AgentRequest{TeamID: "default"},
+		RenderContext{ContextBlocks: []types.ContextBlock{
+			{Kind: "user_task", Text: task, Placement: "user", Source: "user"},
+			{Kind: "mailbox_result", Text: "缺日志索引与时间范围，无法取证", Placement: "user", Source: "owner"},
+		}})
+	require.NoError(t, err)
+	require.Len(t, messages, 4)
+
+	require.Equal(t, "system", messages[0].Role)
+
+	require.Equal(t, "user", messages[1].Role,
+		"the question comes first, where the user said it")
+	require.Equal(t, task, messages[1].Content)
+
+	require.Equal(t, "assistant", messages[2].Role,
+		"a Team's report is a message from that Team, not from the user")
+	require.Equal(t, "owner", messages[2].TeamID)
+	require.Contains(t, messages[2].Content, "缺日志索引")
+
+	require.Equal(t, "user", messages[3].Role)
+	require.NotContains(t, messages[3].Content, task,
+		"the old question must not come back as this turn's request")
+	require.Contains(t, messages[3].Content, "owner has reported back",
+		"the trailing turn states what happened instead of saying \"continue\"")
+}

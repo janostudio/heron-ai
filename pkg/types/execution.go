@@ -36,6 +36,11 @@ type AgentRequest struct {
 	// allowed inside this one AgentTurn.
 	MaxAgentRounds   int
 	MaxParallelTools int
+	// AllowedTeams is the set of Teams this Agent may hand work to, projected
+	// from its Flow binding's can_activate. It is the visibility rule: an Agent
+	// sees only the edges leaving its own node, so one Agent definition is
+	// granted different reach in different Flows.
+	AllowedTeams []string
 }
 
 // AgentResult is the result of one Agent execution.
@@ -106,6 +111,9 @@ type CallRequest struct {
 	ResumeApprovalID   string
 	ResumeApproval     *HITLResponse
 	Limits             RuntimeLimits
+	// AllowedTeams is this Team's can_activate: what the calls in it may hand
+	// work to.
+	AllowedTeams []string
 }
 
 // CallResult is the normalized result returned by an Agent, Command, or

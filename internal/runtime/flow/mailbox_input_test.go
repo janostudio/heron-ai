@@ -17,12 +17,14 @@ type inputRecordingTeamRuntime struct {
 	mu      sync.Mutex
 	inputs  []string
 	records []string
+	blocks  []types.ContextBlock
 	next    *types.Route
 }
 
 func (r *inputRecordingTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
 	r.mu.Lock()
 	r.inputs = append(r.inputs, req.Input)
+	r.blocks = append(r.blocks, req.ContextBlocks...)
 	for _, record := range req.Records {
 		r.records = append(r.records, record.Name)
 	}
@@ -40,6 +42,26 @@ func (r *inputRecordingTeamRuntime) recorded() []string {
 	out := make([]string, len(r.inputs))
 	copy(out, r.inputs)
 	return out
+}
+
+// recordedBlocks returns the context blocks the Team turn was given.
+func (r *inputRecordingTeamRuntime) recordedBlocks() []types.ContextBlock {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]types.ContextBlock, len(r.blocks))
+	copy(out, r.blocks)
+	return out
+}
+
+// blockOfKind returns the first recorded block of the given kind, or nil.
+func (r *inputRecordingTeamRuntime) blockOfKind(kind string) *types.ContextBlock {
+	for _, block := range r.recordedBlocks() {
+		if block.Kind == kind {
+			found := block
+			return &found
+		}
+	}
+	return nil
 }
 
 // A Team woken by a mailbox has no user input of its own. The task has to ride
@@ -72,46 +94,7 @@ func TestMessageTurnFeedsDispatchedTaskToTeam(t *testing.T) {
 
 // A Team that dispatches further down the chain has no user input of its own
 // either, so the task has to keep travelling with the messages.
-func TestDispatchedTeamForwardsTaskToItsOwnDispatch(t *testing.T) {
-	recorder := &inputRecordingTeamRuntime{
-		next: &types.Route{Action: types.NextActivate, Teams: []string{"default"}},
-	}
-	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
-	defs := testDefinitions()
-	defs.Flow.Teams["verify"] = types.FlowTeamBinding{
-		ID:          "verify",
-		TeamID:      "verify-team",
-		CanActivate: []string{"default"},
-		Inputs:      types.InputSpec{UserMessage: true},
-	}
-	rt := newTestRuntime(defs, recorder, writer, nil)
-	rt.SetAsyncDispatch(true)
 
-	session, turn := mailboxTestSession(t)
-	const task = "查看仓库 heron-connect，目前主分支是什么"
-	msg, err := rt.enqueueWorkMessage(context.Background(), session, turn,
-		addr("verify", ""),
-		map[string]any{"caller_team": "default", "input": task},
-	)
-	require.NoError(t, err)
-
-	rt.runMessageTurn(context.Background(), session, msg)
-
-	box, err := rt.loadMailbox(context.Background(), session.ID)
-	require.NoError(t, err)
-	forwarded := 0
-	for _, m := range box {
-		if m.Kind == mailboxKindWork && m.To.TeamID == "default" {
-			forwarded++
-			require.Equal(t, task, m.Payload["input"],
-				"a downstream dispatch must carry the original task")
-		}
-	}
-	require.Equal(t, 1, forwarded, "verify must dispatch once to default")
-}
-
-// The entry Team is woken to answer the user, so the result message has to
-// carry the question along with the result it is relaying.
 func TestPostResultCarriesTaskInput(t *testing.T) {
 	rt, _ := newMailboxTestRuntime(t)
 	session, turn := mailboxTestSession(t)
@@ -236,6 +219,16 @@ func TestResumeForMailboxFeedsDispatchedTask(t *testing.T) {
 	_, err = rt.ResumeForMailbox(context.Background(), session.ID)
 	require.NoError(t, err)
 
-	require.Contains(t, recorder.recorded(), task,
-		"the woken Team must receive the task, not an empty input")
+	// The task must still reach the woken Team — but as the statement the
+	// continuation belongs to, not as this turn's input. A result message is a
+	// report coming back, not a new assignment: rendering the old question as
+	// the trailing user turn made the Team answer it from scratch and dispatch
+	// the same job again (s17).
+	for _, input := range recorder.recorded() {
+		require.NotEqual(t, task, input,
+			"a result message must not become the turn's input")
+	}
+	block := recorder.blockOfKind("user_task")
+	require.NotNil(t, block, "the continued task statement must be carried")
+	require.Equal(t, task, block.Text)
 }

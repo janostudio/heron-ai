@@ -205,29 +205,13 @@ func (r *Runtime) postRoutes(
 		// so the matching resume path can find the session again.
 		return nil
 	case types.NextActivate:
-		if len(execution.binding.CanActivate) == 0 {
-			return fmt.Errorf("team %q cannot activate other teams", execution.activation.teamID)
-		}
-		if err := validateActivation(execution.binding, defs.Flow, next.Teams); err != nil {
-			return err
-		}
-		// Activation is counted across the whole session, not per turn: a
-		// dispatched Team starts a new turn each time, so a Team that keeps
-		// re-activating the same target would otherwise loop until the much
-		// larger session budget stops it. The bound has to see the repetition.
-		source := execution.activation.teamID
-		for _, target := range next.Teams {
-			if err := r.checkActivationBudget(ctx, session.ID, source, target); err != nil {
-				return err
-			}
-			if _, err := r.enqueueWorkMessage(ctx, session, flowTurn,
-				types.MailboxAddress{TeamID: target},
-				map[string]any{"caller_team": source, "input": flowTurn.Input},
-			); err != nil {
-				return fmt.Errorf("enqueue work for team %q: %w", target, err)
-			}
-		}
-		return nil
+		// A Team hands work to another Team by calling the Team tool, not by
+		// asking the scheduler to start one. The mailbox dispatcher is gone with
+		// it: an answer returns as a tool result in the caller's conversation,
+		// so there is no second turn to wake.
+		return fmt.Errorf(
+			"team %q asked to activate %v: routing dispatch is retired, call the Team tool instead",
+			execution.activation.teamID, next.Teams)
 	case types.NextProceed:
 		targets := fixedTargets(execution.binding)
 		if len(targets) == 0 {
@@ -310,7 +294,10 @@ func (r *Runtime) postResult(ctx context.Context,
 	}
 	payload := map[string]any{"team_result": execution.result}
 	// The entry Team is woken to answer the user, so it needs the question —
-	// not just the result it is relaying.
+	// not just the result it is relaying. It travels as the statement this
+	// continuation belongs to, not as the woken turn's input: as input it
+	// renders as the trailing user turn, and a report coming back then reads
+	// as a fresh request (see continuedTaskStatement).
 	if flowTurn.Input != "" {
 		payload["input"] = flowTurn.Input
 	}

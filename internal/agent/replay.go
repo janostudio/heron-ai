@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -29,6 +30,12 @@ func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentReques
 
 	current := cloneMessages(initial)
 	initialLen := len(current)
+	// The task boundary is the most recent user turn, not the current flow
+	// turn. Filtering by the current turn alone drops everything the agent did
+	// earlier in the same task: a Team woken by a result cannot see that it
+	// already dispatched this task and answers the same way again (s17: three
+	// identical dispatch replies in one minute).
+	chain := currentTaskChain(replay.Events)
 	// pendingCallIDs tracks the ids of the most recent assistant tool_calls, in
 	// order, so a tool result whose event predates the tool_call_id field can be
 	// paired back to its call. Without this, replayed tool messages carry no id
@@ -39,11 +46,18 @@ func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentReques
 		if event.CallID != req.CallID {
 			continue
 		}
-		// 跨回合不重放。历史事件里带着这个 call 上一轮的输出，重放后模型看到
-		// 自己上次的结论，会把新问题当成旧任务继续答（s13：问 cls 日志，回了
-		// 上一轮 genie-agent 的主分支）。同一回合内的重放（断点续跑）不受影响。
-		if req.FlowTurnID != "" && event.FlowTurnID != "" && event.FlowTurnID != req.FlowTurnID {
-			continue
+		// 只重放当前任务链内的事件。上一轮问题的结论不能进来——模型看到自己
+		// 上次的答案，会把新问题当成旧任务继续答（s13：问 cls 日志，回了上一轮
+		// genie-agent 的主分支）。但同一条任务链内的历史必须留下：被结果唤醒的
+		// Team 需要看到自己上一轮做过什么，否则会重复同一个动作。
+		if req.FlowTurnID != "" && event.FlowTurnID != "" {
+			inChain := chain != nil && chain[event.FlowTurnID]
+			if chain == nil {
+				inChain = event.FlowTurnID == req.FlowTurnID
+			}
+			if !inChain {
+				continue
+			}
 		}
 		switch event.Type {
 		case types.EventAgentModelResponse:
@@ -78,6 +92,45 @@ func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentReques
 		}
 	}
 	return current
+}
+
+// currentTaskChain collects the flow turns that belong to the task being worked
+// on: the most recent user-originated turn and every turn after it.
+//
+// Turn ids are opaque, so membership is decided by walking the event log
+// backwards to the newest user turn rather than by comparing ids.
+func currentTaskChain(events []storage.SessionEvent) map[string]bool {
+	chain := make(map[string]bool, 4)
+	found := false
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		if event.FlowTurnID != "" {
+			chain[event.FlowTurnID] = true
+		}
+		if replayedTurnOrigin(event.Payload) == "user" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		// No user turn in the log (older recordings, or events that never
+		// carried the turn record). Fall back to the previous behaviour —
+		// replay this turn only — instead of replaying everything.
+		return nil
+	}
+	return chain
+}
+
+// replayedTurnOrigin reads the turn origin out of a recorded event payload.
+func replayedTurnOrigin(payload map[string]any) string {
+	switch turn := payload["turn"].(type) {
+	case map[string]any:
+		origin, _ := turn["origin"].(string)
+		return origin
+	case types.FlowTurn:
+		return turn.Origin
+	}
+	return ""
 }
 
 // foldCompacted replaces the oldest droppedCount message groups with the

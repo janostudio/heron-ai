@@ -33,10 +33,13 @@ type TurnLoop struct {
 	hooks          *HookExecutor
 	promptRenderer PromptRenderer
 	checkpoints    types.AgentCheckpointStore
-	taskRunner     *AsyncToolExecutor
-	toolPolicy     ToolPolicy
-	contextPolicy  ContextPolicy
-	sessionWriter  storage.SessionWriter
+	// transcripts is the per-session conversation this Agent continues across
+	// turns. Optional: without it every turn rebuilds from recorded events.
+	transcripts   types.AgentTranscriptStore
+	taskRunner    *AsyncToolExecutor
+	toolPolicy    ToolPolicy
+	contextPolicy ContextPolicy
+	sessionWriter storage.SessionWriter
 	// files is the workspace file store the knowledge trees live in. It is
 	// needed by the Bash gate (bash_gate.go), which asks whether the agent has
 	// a private knowledge tree before letting it run a shell. Optional: a
@@ -360,19 +363,39 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 
 	var messages []types.Message
 	inputText := contextBlockText(req.ContextBlocks, "input")
+	var (
+		transcript *types.AgentTranscript
+		promptBase []types.Message
+	)
 	if req.ResumeCheckpointID == "" {
-		messages, err = t.promptRenderer.Render(agent, req, RenderContext{
+		rendered, renderErr := t.promptRenderer.Render(agent, req, RenderContext{
 			Variables:     req.Variables,
 			ContextBlocks: t.contextPolicy.Build(req),
 		})
-		if err != nil {
-			t.emitErrorHook(ctx, agent, req, 0, err)
-			return nil, fmt.Errorf("render prompt: %w", err)
+		promptBase = rendered
+		if renderErr != nil {
+			t.emitErrorHook(ctx, agent, req, 0, renderErr)
+			return nil, fmt.Errorf("render prompt: %w", renderErr)
 		}
-		// Replay the previous execution's agent-internal events so a
-		// normally-completed turn can be continued with its prior context,
-		// rather than restarting from a blank transcript.
-		messages = t.replayAgentContext(ctx, req, messages)
+		// Continue this Agent's conversation when one exists. The rendered
+		// prompt is the turn's own input, not a replacement for history: it is
+		// appended to what the Agent already said and heard in this session.
+		messages, transcript = t.continueTranscript(ctx, req, rendered)
+		if transcript == nil {
+			// No conversation to continue (first turn, or the Agent definition
+			// changed). Fall back to replaying this turn's recorded events so a
+			// retried turn does not start from a blank transcript.
+			messages = t.replayAgentContext(ctx, req, messages)
+		}
+	}
+
+	// The conversation is written when the turn ends, whatever its outcome: a
+	// failed turn's partial reasoning is still what the next turn continues
+	// from, and losing it would hand the model a stale history.
+	if t.transcripts != nil {
+		defer func() {
+			t.saveTranscript(context.Background(), req, contextManager.Messages(), transcript, promptBase)
+		}()
 	}
 
 	totalUsage := types.TokenUsage{}
@@ -2400,7 +2423,7 @@ func (t *TurnLoop) buildToolSchemas(agent types.AgentConfig) []types.JSONSchema 
 // walk, not a per-token cost) and both enforcement points read the same answer.
 // A nil set withholds nothing, which is what keeps the ~30 test call sites that
 // use the public buildToolSchemas unaffected.
-func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.AgentConfig, withheld map[string]string) []types.JSONSchema {
+func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.AgentConfig, withheld map[string]string) []types.JSONSchema {
 	var schemas []types.JSONSchema
 
 	// builtinSchemas is what makes a builtin tool VISIBLE to the model; the
@@ -2523,6 +2546,22 @@ func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.Agent
 				"deliver": {Type: "string", Enum: []string{"parent", "downstream"}, Description: "parent: results return to you; downstream: results are published as records of your call (downstream calls wait for you and all your spawned children)"},
 				"key":     {Type: "string", Description: "Instance key to reuse a given instance number (with its state); only valid with a single item"},
 			},
+		},
+		"ListTeams": {
+			Name: "ListTeams", Type: "object",
+			Description: "List the Teams you may hand work to: what each is for, what it can read, what record it produces.",
+			Properties:  map[string]types.JSONProperty{},
+		},
+		"Team": {
+			Name: "Team", Type: "object",
+			Description: "Hand work to another Team. Runs in the background and returns a task handle immediately; the Team's answer arrives later as this call's result.",
+			Properties: map[string]types.JSONProperty{
+				"description":       {Type: "string", Description: "A short (3-5 word) description of the task, shown to the user while it runs"},
+				"prompt":            {Type: "string", Description: "The task for the Team to perform: goal, evidence, scope, acceptance criteria, authorization"},
+				"subagent_type":     {Type: "string", Description: "The Team to hand the work to"},
+				"run_in_background": {Type: "boolean", Description: "Run the Team without blocking this turn (default true)"},
+			},
+			Required: []string{"description", "prompt", "subagent_type"},
 		},
 		"Collect": {
 			Name: "Collect", Type: "object",
@@ -2647,6 +2686,23 @@ func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.Agent
 			}
 			seen[schema.Name] = struct{}{}
 			schemas = append(schemas, schema)
+		}
+	}
+	// A Team may hand work only to the targets its Flow binding declares. That
+	// is a property of where the Team sits in the Flow, not of its Agent
+	// definition: the same Agent is granted different reach in different Flows.
+	// Projecting it into the schema keeps the list in configuration instead of
+	// in a prompt that goes stale.
+	if identity := spawnIdentityFromContext(ctx); identity != nil && len(identity.req.AllowedTeams) > 0 {
+		allowed := append([]string(nil), identity.req.AllowedTeams...)
+		for index := range schemas {
+			if schemas[index].Name != TeamToolName {
+				continue
+			}
+			if param, ok := schemas[index].Properties["subagent_type"]; ok {
+				param.Enum = allowed
+				schemas[index].Properties["subagent_type"] = param
+			}
 		}
 	}
 	return schemas

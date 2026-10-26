@@ -38,6 +38,9 @@ type Runtime struct {
 	limits      types.RuntimeLimits
 	tasks       types.ToolTaskStore
 	media       types.MediaStore
+	// transcripts is the per-Agent conversation store. A finished Team call
+	// enters the caller's conversation through it as a tool result.
+	transcripts types.AgentTranscriptStore
 	resumeMu    sync.Mutex
 
 	// dispatchMu guards busyTeams, the in-process record of which Teams are
@@ -733,7 +736,6 @@ func (r *Runtime) runTurnWithOrigin(
 	completedTeams := make(map[string]bool)
 	failedTeams := make(map[string]bool)
 	coordinateRetries := make(map[string]int)
-	activationRetries := make(map[string]int)
 	// asyncDispatched records whether this turn handed work to the background
 	// mailbox dispatcher, and the IDs of the work messages it posted. It only
 	// changes the end-of-turn bookkeeping (an extra batch-dispatched event);
@@ -947,55 +949,15 @@ func (r *Runtime) runTurnWithOrigin(
 					enqueueBatchRoute(routeTo(target, execution.activation.teamID))
 				}
 			case types.NextActivate:
-				if len(execution.binding.CanActivate) == 0 {
-					routeFailure = fmt.Errorf("team %q cannot activate other teams", execution.activation.teamID)
-					continue
-				}
-				if err := validateActivation(execution.binding, defs.Flow, next.Teams); err != nil {
-					routeFailure = err
-					continue
-				}
-				activationKey := execution.activation.teamID + "->" + strings.Join(sortedStrings(next.Teams), ",")
-				if activationRetries[activationKey] >= r.limits.MaxActivationRetries {
-					routeFailure = fmt.Errorf(
-						"repeated Flow activation %q exceeded retry limit (%d)",
-						activationKey,
-						r.limits.MaxActivationRetries,
-					)
-					continue
-				}
-				activationRetries[activationKey]++
-				for _, target := range next.Teams {
-					activators[target] = execution.activation.teamID
-					// Execution-state dispatch: any Team's activate hands the
-					// work to the target's mailbox and lets this turn end,
-					// instead of running the target inline. The target is a
-					// peer execution unit, so it may itself activate others;
-					// its own round routes them the same way (see
-					// runMessageTurn). The result comes back as a mailbox
-					// message to whoever dispatched it.
-					if r.asyncDispatch {
-						msg, err := r.enqueueWorkMessage(ctx, session, turn,
-							types.MailboxAddress{TeamID: target},
-							map[string]any{
-								"caller_team": execution.activation.teamID,
-								// The target runs later, with no user input
-								// of its own; without the task it can only
-								// repeat its previous verdict.
-								"input": turn.Input,
-							},
-						)
-						if err != nil {
-							routeFailure = fmt.Errorf("enqueue mailbox work for team %q: %w", target, err)
-							continue
-						}
-						asyncDispatched = true
-						asyncMessageIDs = append(asyncMessageIDs, msg.MessageID)
-						r.launchAsyncDispatch(session, turn.ID, target, msg)
-						continue
-					}
-					enqueueBatchRoute(routeTo(target, execution.activation.teamID))
-				}
+				// Collaboration is an asynchronous tool now: a Team hands work to
+				// another Team by calling the Team tool, which returns a task handle
+				// and delivers the answer as a tool result. Keeping the routing
+				// protocol as a second dispatch path would reintroduce the turn
+				// rebuild this whole change removes.
+				routeFailure = fmt.Errorf(
+					"team %q asked to activate %v: routing dispatch is retired, call the Team tool instead",
+					execution.activation.teamID, next.Teams)
+				continue
 			case types.NextReturn:
 				target := next.CallerTeam
 				if target == "" {
@@ -1600,6 +1562,14 @@ func (r *Runtime) finishTurn(
 	// an intermediate step after all.
 	if result.FinalReplyFromEntry {
 		result.Turn.Intermediate = false
+	}
+	// A turn that ends while a Team it dispatched is still running is a progress
+	// report, not an answer: the result coming back is where the user-visible
+	// conclusion appears. Saying so keeps a client from presenting "已转给执行侧…"
+	// as if it were the outcome — the shape that made multi-hop work look like
+	// three repeated non-answers.
+	if status == types.SessionWaitingInput && r.hasPendingTeamCall(ctx, result.Session.ID) {
+		result.Turn.Intermediate = true
 	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
@@ -2294,12 +2264,6 @@ func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.Flo
 	return selectFlowRecords(records, binding.Inputs, since)
 }
 
-func sortedStrings(values []string) []string {
-	result := append([]string(nil), values...)
-	sort.Strings(result)
-	return result
-}
-
 func recordIDs(records []types.SharedRecord) []string {
 	ids := make([]string, 0, len(records))
 	for _, record := range records {
@@ -2308,22 +2272,6 @@ func recordIDs(records []types.SharedRecord) []string {
 		}
 	}
 	return ids
-}
-
-func validateActivation(binding types.FlowTeamBinding, flow types.Flow, targets []string) error {
-	allowed := make(map[string]struct{}, len(binding.CanActivate))
-	for _, target := range binding.CanActivate {
-		allowed[target] = struct{}{}
-	}
-	for _, target := range targets {
-		if _, ok := flow.Teams[target]; !ok {
-			return fmt.Errorf("team %q activation target %q is not in Flow", binding.ID, target)
-		}
-		if _, ok := allowed[target]; !ok {
-			return fmt.Errorf("team %q cannot activate %q", binding.ID, target)
-		}
-	}
-	return nil
 }
 
 func turnStatusForSession(status types.SessionStatus) types.TurnStatus {
@@ -2348,6 +2296,28 @@ func turnStatusForSession(status types.SessionStatus) types.TurnStatus {
 // waiting_input so the next user message starts a new turn, while the turn
 // itself keeps the failed status and the error callers display. SessionFailed
 // stays in the enum for old session data; nothing new writes it.
+// hasPendingTeamCall reports whether this session still has a Team call running.
+// It is the only signal that tells "this turn answered the user" apart from
+// "this turn handed work over and is waiting", and only the engine has it.
+func (r *Runtime) hasPendingTeamCall(ctx context.Context, sessionID string) bool {
+	if r.tasks == nil || sessionID == "" {
+		return false
+	}
+	tasks, err := r.tasks.List(ctx)
+	if err != nil {
+		return false
+	}
+	for _, task := range tasks {
+		if task.FlowSessionID != sessionID || task.ToolName != types.ToolNameTeamRun {
+			continue
+		}
+		if task.Status == types.ToolTaskQueued || task.Status == types.ToolTaskRunning {
+			return true
+		}
+	}
+	return false
+}
+
 func sessionStatusAfterTurn(status types.SessionStatus) types.SessionStatus {
 	if status == types.SessionFailed {
 		return types.SessionWaitingInput

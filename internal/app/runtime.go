@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -280,17 +281,38 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	teamRuntime.SetKnowledgePointer(knowledge.NewKnowledgePointer(files, ".agents/knowledge", ".agents"))
 	sessionWriter := storage.NewJSONLSessionWriter(files)
 	checkpointStore := agent.NewFileCheckpointStore(files)
+	// Transcripts are the running conversation of one Agent inside one Flow
+	// session: a later turn appends to it instead of rebuilding history from
+	// events. Checkpoints stay separate — they are resume points of a single
+	// interrupted turn.
+	transcriptStore := agent.NewFileTranscriptStore(files)
 	taskStore := agent.NewFileToolTaskStore(files)
 	turnLoop.SetSessionWriter(sessionWriter)
 	// Durable SpawnChild tasks (asynchronous Spawn, batch B) route through the
 	// dispatcher into the Spawn tool; every other async tool keeps its normal
 	// execution path. The shared executor gives spawned children the same
 	// persistence, progress and recovery as ordinary async tool tasks.
-	taskRunner := agent.NewAsyncToolExecutor(taskStore, agent.NewSpawnTaskDispatcher(spawnTool, toolExecutor))
+	// Collaboration is an asynchronous tool: Team calls join the same durable
+	// task system as spawned children, so they get persistence, progress and
+	// recovery for free. TeamRun is internal — only a task created by TeamTool
+	// reaches it.
+	teamTool := agent.NewTeamTool(nil)
+	// The catalog is the model's view of the Flow's edges: what it may hand work
+	// to, and why it would pick each one.
+	listTeamsTool := agent.NewListTeamsTool(nil)
+	asyncDispatcher := agent.NewTeamTaskDispatcher(teamTool, agent.NewSpawnTaskDispatcher(spawnTool, toolExecutor))
+	taskRunner := agent.NewAsyncToolExecutor(taskStore, asyncDispatcher)
+	teamTool.SetTaskRunner(taskRunner)
+	// Registered here, not after the flow runtime exists: the tool registry is
+	// snapshotted into every Agent's schema when the runtime is built, and a
+	// registration after that point never reaches a model.
+	toolRegistry.Register(teamTool)
+	toolRegistry.Register(listTeamsTool)
 	spawnTool.SetTaskRunner(taskRunner)
 	spawnTool.SetSessionWriter(sessionWriter)
 	toolRegistry.Register(agent.NewCollectTool(taskRunner))
 	turnLoop.SetCheckpointStore(checkpointStore)
+	turnLoop.SetTranscriptStore(transcriptStore)
 	turnLoop.SetTaskRunner(taskRunner)
 	// MCP (design 04E): servers are declared in .agents/settings.json under
 	// "mcp" and connected once at startup. Three separate wirings are needed
@@ -340,6 +362,15 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 		sessionWriter,
 		evidenceStore,
 	)
+	// The flow runtime is the only place that knows the session, the Team
+	// bindings and how to persist a Team turn, so it is the Team tool's
+	// executor. It is built after the tool registry, hence the late wiring.
+	teamTool.SetRunner(flowRuntime)
+	listTeamsTool.SetCatalog(flowRuntime)
+	// A finished Team call enters the conversation that made it as a tool
+	// result. The flow needs the store directly: the caller's transcript is the
+	// only place the answer belongs.
+	flowRuntime.SetTranscriptStore(transcriptStore)
 	flowRuntime.SetLimits(definitions.Limits)
 	flowRuntime.SetTaskStore(taskStore)
 	flowRuntime.SetMediaStore(mediaStore)
@@ -361,6 +392,28 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 		}()
 	})
 	onTaskDone := func(doneCtx context.Context, task types.ToolTask) {
+		if task.ToolName == agent.TeamRunToolName {
+			// The startup re-scan replays every terminal task so an answer
+			// finished just before a restart is not lost. Past this window the
+			// replay is noise: the conversation has moved on, or the session is
+			// long gone and would sit in "still running" until the wait limit.
+			if task.FinishedAt != nil && time.Since(*task.FinishedAt) > teamResultReplayWindow {
+				return
+			}
+			// The caller already returned a handle to the model and its loop
+			// ended; the answer re-enters as a tool result and runs the loop
+			// again. Failures here are logged, never panic: the task record
+			// keeps the answer for a later turn.
+			signal := teamResultSignal(task)
+			if err := flowRuntime.ResumeForToolResult(doneCtx, task.FlowSessionID, signal); err != nil {
+				execLogger.Error("resume for team result", map[string]any{
+					"flow_session_id": task.FlowSessionID,
+					"task_id":         task.ID,
+					"error":           err.Error(),
+				})
+			}
+			return
+		}
 		if task.ToolName == agent.SpawnChildToolName {
 			// Spawned children deliver their results through Collect handles
 			// (durable task store), not through the Flow waiting-tool wake-up:
@@ -492,6 +545,56 @@ var toolWakeupWaitLimit = 60 * time.Second
 // durable store, so the wake-up is re-driven by the startup re-scan on the
 // next start rather than being lost for good — but an operator has to be able
 // to see that it happened, which is the whole point of the log.
+// teamResultReplayWindow bounds how old a finished Team task may be for the
+// startup re-scan to deliver it.
+const teamResultReplayWindow = 10 * time.Minute
+
+// teamResultSignal reconstructs what a Team call returned from its task record.
+func teamResultSignal(task types.ToolTask) flow.TeamResultSignal {
+	signal := flow.TeamResultSignal{
+		TaskID:     task.ID,
+		TeamID:     stringFromAny(task.Arguments["team_id"]),
+		CallerTeam: stringFromAny(task.Arguments["caller_team"]),
+		CallID:     stringFromAny(task.Arguments["call_id"]),
+		Error:      task.Error,
+	}
+	if task.Result != nil {
+		var payload struct {
+			Status  string   `json:"status"`
+			Reply   string   `json:"reply"`
+			Records []string `json:"records"`
+			Error   string   `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(task.Result.Content), &payload); err == nil {
+			signal.Status = payload.Status
+			signal.Reply = payload.Reply
+			signal.Records = payload.Records
+			if payload.Error != "" {
+				signal.Error = payload.Error
+			}
+		} else {
+			// A result the caller cannot parse still has to reach the model:
+			// hand the raw text over rather than an empty answer.
+			signal.Reply = task.Result.Content
+		}
+	}
+	if signal.Status == "" {
+		if signal.Error != "" {
+			signal.Status = "failed"
+		} else {
+			signal.Status = "done"
+		}
+	}
+	return signal
+}
+
+func stringFromAny(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
 func wakeFlowOnToolTaskDone(
 	ctx context.Context,
 	flowRuntime types.FlowRuntime,

@@ -357,11 +357,14 @@ func (r *Runtime) runBatch(
 
 			spec, isSpawned := state.specOf(configured.ID)
 			callReq := types.CallRequest{
-				FlowSession:        req.FlowSession,
-				FlowTurn:           req.FlowTurn,
-				TeamSession:        req.TeamSession,
-				TeamTurn:           req.TeamTurn,
-				Call:               configured,
+				FlowSession: req.FlowSession,
+				FlowTurn:    req.FlowTurn,
+				TeamSession: req.TeamSession,
+				TeamTurn:    req.TeamTurn,
+				Call:        configured,
+				// Visibility is the Flow's decision: a Team may hand work only
+				// to the targets its binding declares.
+				AllowedTeams:       req.Binding.CanActivate,
 				Input:              buildCallInput(req.Input, req.Records, previous, configured),
 				ContextBlocks:      append([]types.ContextBlock(nil), req.ContextBlocks...),
 				Records:            selectCallRecords(req.Records, previous, configured, state),

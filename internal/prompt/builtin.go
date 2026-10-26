@@ -85,6 +85,19 @@ func (p *PromptRenderer) Render(agent types.AgentConfig, req types.AgentRequest,
 		})
 	}
 
+	// The statement a continuation belongs to keeps the position it had when
+	// the user said it: ahead of the collaborators who are now reporting back.
+	// Rendering it as the trailing user turn would present a report coming in
+	// as a fresh request, and the model would answer it from scratch.
+	for _, block := range rctx.ContextBlocks {
+		if block.Kind != "user_task" || strings.TrimSpace(block.Text) == "" {
+			continue
+		}
+		messages = append(messages, types.Message{
+			Role: "user", Content: strings.TrimSpace(block.Text), Injected: true,
+		})
+	}
+
 	for _, block := range rctx.ContextBlocks {
 		if !isMemoryKind(block.Kind) || strings.TrimSpace(block.Text) == "" {
 			continue
@@ -95,11 +108,13 @@ func (p *PromptRenderer) Render(agent types.AgentConfig, req types.AgentRequest,
 	}
 
 	unattributed := make([]string, 0, 2)
+	reportedBy := make([]string, 0, 2)
 	for _, group := range collaboratorGroups(rctx.ContextBlocks) {
 		if group.source == "" {
 			unattributed = append(unattributed, group.text)
 			continue
 		}
+		reportedBy = append(reportedBy, group.source)
 		messages = append(messages, types.Message{
 			Role: "assistant", TeamID: group.source, Content: group.text, Injected: true,
 		})
@@ -122,7 +137,18 @@ func (p *PromptRenderer) Render(agent types.AgentConfig, req types.AgentRequest,
 		// A Team that receives no user input still needs a user turn to answer;
 		// otherwise the request ends on an assistant message and the model
 		// continues its own text instead of responding.
-		userPrompt = "Continue with the task above."
+		//
+		// Name what happened rather than saying "continue": a generic prompt
+		// leaves the model unsure whether the job it handed over is still
+		// running, and it dispatches it again (s17, and the same shape one
+		// level down when a Team re-dispatched after its own sub-Team
+		// answered).
+		if len(reportedBy) > 0 {
+			userPrompt = fmt.Sprintf("%s has reported back; the report is the message above.",
+				strings.Join(reportedBy, ", "))
+		} else {
+			userPrompt = types.ContinuePrompt
+		}
 	}
 	messages = append(messages, types.Message{
 		Role: userRole(userPrompt, userParts), Content: userPrompt, Parts: userParts, Injected: true,
@@ -198,6 +224,12 @@ func (p *PromptRenderer) BuildUserPrompt(_ types.AgentConfig, req types.AgentReq
 			// them here would duplicate content and lose the role that carries
 			// the source.
 			if isCollaboratorKind(block.Kind) || isMemoryKind(block.Kind) || block.Kind == "knowledge" {
+				continue
+			}
+			// The continued task statement is a message of its own, placed
+			// ahead of the reports; repeating it here would put the old
+			// question back in the trailing turn.
+			if block.Kind == "user_task" {
 				continue
 			}
 			parts = append(parts, renderContextBlock(block))

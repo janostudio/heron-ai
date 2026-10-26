@@ -88,13 +88,17 @@ type jsonRPCTurnParams struct {
 }
 
 type jsonRPCTurnResult struct {
-	SessionID  string                 `json:"session_id"`
-	FlowTurnID string                 `json:"flow_turn_id,omitempty"`
-	Status     types.SessionStatus    `json:"status"`
-	Reply      string                 `json:"reply,omitempty"`
-	Records    []jsonRPCRecordSummary `json:"records,omitempty"`
-	Usage      types.TokenUsage       `json:"usage,omitempty"`
-	Error      string                 `json:"error,omitempty"`
+	SessionID  string              `json:"session_id"`
+	FlowTurnID string              `json:"flow_turn_id,omitempty"`
+	Status     types.SessionStatus `json:"status"`
+	Reply      string              `json:"reply,omitempty"`
+	// Team is the Team that wrote Reply. Callers that attribute a message to
+	// its producer need it: an unattended turn can carry several Teams' results
+	// and the reply is only the last hop's text.
+	Team    string                 `json:"team,omitempty"`
+	Records []jsonRPCRecordSummary `json:"records,omitempty"`
+	Usage   types.TokenUsage       `json:"usage,omitempty"`
+	Error   string                 `json:"error,omitempty"`
 	// PendingApprovals is how a caller learns the approval_id it must pass to
 	// "approve". Without it, a JSON-RPC-only bridge parked at an approval
 	// gate has no way to advance the session.
@@ -572,11 +576,20 @@ func jsonRPCTurnResultFrom(result types.FlowTurnResult) jsonRPCTurnResult {
 		FlowTurnID:       result.Turn.ID,
 		Status:           result.Session.Status,
 		Reply:            replyForCaller(result),
+		Team:             finalReplyTeam(result),
 		Records:          records,
 		Usage:            aggregateTeamUsage(result.TeamResults),
 		Error:            result.Error,
 		PendingApprovals: pending,
 	}
+}
+
+// finalReplyTeam names the Team behind Reply.
+func finalReplyTeam(result types.FlowTurnResult) string {
+	if result.FinalReplyTeam != "" {
+		return result.FinalReplyTeam
+	}
+	return ""
 }
 
 // replyForCaller picks the text a caller relays to the user: the hop that

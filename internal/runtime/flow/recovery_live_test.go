@@ -12,10 +12,10 @@ import (
 func teamTurnStartedEvent(flowTurnID, teamTurnID, teamID string) storage.SessionEvent {
 	return storage.SessionEvent{
 		EventHeader: types.EventHeader{
-			Type:        types.EventTeamTurnStarted,
-			FlowTurnID:  flowTurnID,
-			TeamTurnID:  teamTurnID,
-			TeamID:      teamID,
+			Type:       types.EventTeamTurnStarted,
+			FlowTurnID: flowTurnID,
+			TeamTurnID: teamTurnID,
+			TeamID:     teamID,
 		},
 		Payload: map[string]any{"input": "go"},
 	}
@@ -48,11 +48,11 @@ func TestInterruptedExecutionsSkipsCallsUnderLiveTeams(t *testing.T) {
 	events := []storage.SessionEvent{
 		{
 			EventHeader: types.EventHeader{
-				Type:        types.EventAgentTurnStarted,
-				FlowTurnID:  "ft_1",
-				TeamTurnID:  "tt_owner",
-				TeamID:      "owner",
-				CallTurnID:  "ct_1",
+				Type:       types.EventAgentTurnStarted,
+				FlowTurnID: "ft_1",
+				TeamTurnID: "tt_owner",
+				TeamID:     "owner",
+				CallTurnID: "ct_1",
 			},
 			Payload: map[string]any{"input": "go"},
 		},
