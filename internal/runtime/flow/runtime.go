@@ -1602,7 +1602,7 @@ func (r *Runtime) finishTurn(
 			// reply and origin are hoisted to the top level because a caller
 			// relaying the answer of an unattended turn reads them without
 			// decoding the turn record.
-			"reply":  replyForCaller,
+			"reply":  replyPayloadField(replyForCaller, result.Turn.Intermediate),
 			"origin": result.Turn.Origin,
 			// origin says how the turn was woken (a mailbox message), not who
 			// wrote the text. Consumers attributing a message to its producer
@@ -2318,6 +2318,23 @@ func turnStatusForSession(status types.SessionStatus) types.TurnStatus {
 // waiting_input so the next user message starts a new turn, while the turn
 // itself keeps the failed status and the error callers display. SessionFailed
 // stays in the enum for old session data; nothing new writes it.
+// replyPayloadField is what a turn publishes as its text.
+//
+// A turn that is still waiting for a Team has no answer yet: its text is a
+// progress line ("已转给执行侧…"). Publishing it invites every client to render
+// it as the reply, and a client that does so twice — as s19 did — leaves the
+// user with two identical progress lines and no conclusion. The intermediate
+// flag alone is not enough: it only works if the client reads it.
+//
+// So an intermediate turn publishes no reply at all. The conclusion arrives on
+// the turn that actually has one.
+func replyPayloadField(reply string, intermediate bool) string {
+	if intermediate {
+		return ""
+	}
+	return reply
+}
+
 // hasPendingTeamCall reports whether this session still has a Team call running.
 // It is the only signal that tells "this turn answered the user" apart from
 // "this turn handed work over and is waiting", and only the engine has it.

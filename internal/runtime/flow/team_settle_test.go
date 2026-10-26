@@ -153,3 +153,15 @@ func TestAwaitTeamSettlementWaitsForConclusionNotReceipt(t *testing.T) {
 	require.Equal(t, "主分支是 main", outcome.Reply,
 		"要等结论落地，不能把派发回执当成答复")
 }
+
+// 中间回合没有答案，就不该对外发布正文。
+//
+// s19 页面上的两条"已转给执行侧"就是这么来的：引擎在 intermediate 的回合里
+// 也带了 reply，客户端不认 intermediate 标记时就会把它当答复渲染。让 reply 为空，
+// 任何客户端都不会再犯这个错——过程话术没有第二个来源。
+func TestIntermediateTurnPublishesNoReply(t *testing.T) {
+	require.Equal(t, "", replyPayloadField("已转给执行侧核实主分支，稍后给结论", true),
+		"中间回合不发布正文")
+	require.Equal(t, "主分支是 master", replyPayloadField("主分支是 master", false),
+		"结论回合照常发布")
+}
