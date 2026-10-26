@@ -121,7 +121,7 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 		if err != nil {
 			return teamError(err.Error()), nil
 		}
-		return teamOutcomeResult(outcome), nil
+		return teamOutcomeResult(spec.TeamID, outcome), nil
 	}
 
 	task := types.ToolTask{
@@ -139,12 +139,15 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 	if err := t.tasks.Start(ctx, task); err != nil {
 		return teamError(fmt.Sprintf("start Team call: %v", err)), nil
 	}
-	content, _ := json.Marshal(map[string]any{
-		"status":        "accepted",
-		"task_id":       task.ID,
-		"subagent_type": spec.TeamID,
-		"description":   spec.Summary,
-	})
+	// Say what happens next in the same terms mature subagent tools use: the
+	// caller is notified, it must not wait. "Its answer will arrive" read as
+	// "this call is still open", and the caller sat in `sleep` loops waiting
+	// for it instead of ending the turn.
+	content := fmt.Sprintf(
+		"Handed to %s. It runs in the background; you will be notified when it finishes. "+
+			"Do not wait for it and do not re-dispatch the same task.",
+		spec.TeamID,
+	)
 	return &types.ToolResult{
 		Success: true,
 		Content: string(content),
@@ -179,23 +182,33 @@ func (t *TeamTool) executeRunTask(ctx context.Context, args map[string]any) (*ty
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: err.Error()}, nil
 	}
-	return teamOutcomeResult(outcome), nil
+	return teamOutcomeResult(spec.TeamID, outcome), nil
 }
 
-func teamOutcomeResult(outcome types.TeamCallOutcome) *types.ToolResult {
-	payload := map[string]any{"status": outcome.Status, "reply": outcome.Reply}
+// teamOutcomeResult returns the Team's answer as text.
+//
+// A subagent tool's result is the subagent's final message, not a status
+// envelope. Wrapping it in {"status":...,"reply":...} made the model read a
+// finished answer as a task state and keep dispatching ("wait for the result",
+// "get the final conclusion") — six calls for one question in one session.
+func teamOutcomeResult(teamID string, outcome types.TeamCallOutcome) *types.ToolResult {
+	content := strings.TrimSpace(outcome.Reply)
+	switch {
+	case outcome.Error != "":
+		content = fmt.Sprintf("%s could not complete the task: %s", teamID, outcome.Error)
+	case content == "":
+		content = fmt.Sprintf("%s finished without a written answer.", teamID)
+	}
+	// Record names stay visible as a short footer: a caller quoting its evidence
+	// reads them, while the body remains an answer.
 	if len(outcome.Records) > 0 {
-		payload["records"] = outcome.Records
+		content += fmt.Sprintf("\n\n(records: %s)", strings.Join(outcome.Records, ", "))
 	}
-	if outcome.Error != "" {
-		payload["error"] = outcome.Error
-	}
-	content, _ := json.Marshal(payload)
 	return &types.ToolResult{
 		Success:  outcome.Error == "",
-		Content:  string(content),
+		Content:  content,
 		Error:    outcome.Error,
-		Metadata: map[string]any{"team_id": outcome.Status},
+		Metadata: map[string]any{"status": outcome.Status, "team_id": teamID},
 	}
 }
 

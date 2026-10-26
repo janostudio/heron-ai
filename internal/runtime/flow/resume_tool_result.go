@@ -2,8 +2,8 @@ package flow
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
@@ -81,14 +81,19 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	// the current one finishing, or the user's next message — reads it from the
 	// conversation instead of waiting for an event that already happened.
 	toolCallID := newID("call")
-	payload := map[string]any{"status": signal.Status, "reply": signal.Reply}
+	// The tool result is the Team's answer as text, matching what the Team tool
+	// itself returns. A status envelope here reads as "task updated" and invites
+	// the model to keep dispatching for the real answer.
+	content := strings.TrimSpace(signal.Reply)
+	switch {
+	case signal.Error != "":
+		content = signal.Error
+	case content == "":
+		content = "The team finished without a written answer."
+	}
 	if len(signal.Records) > 0 {
-		payload["records"] = signal.Records
+		content += fmt.Sprintf("\n\n(records: %s)", strings.Join(signal.Records, ", "))
 	}
-	if signal.Error != "" {
-		payload["error"] = signal.Error
-	}
-	content, _ := json.Marshal(payload)
 	transcript.Messages = append(transcript.Messages,
 		types.Message{
 			Role: "assistant",
@@ -101,7 +106,7 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 		types.Message{
 			Role:       "tool",
 			ToolCallID: toolCallID,
-			Content:    string(content),
+			Content:    content,
 		},
 	)
 	transcript.UpdatedAt = time.Now().UTC()
