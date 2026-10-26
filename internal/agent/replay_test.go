@@ -484,3 +484,70 @@ func TestStructuredSummaryRendersArrayItemsReadably(t *testing.T) {
 	require.Contains(t, got, "checks=主分支→main; 当前分支→main")
 	require.NotContains(t, got, "map[")
 }
+
+// 同一条任务链内的历史必须完整重放：被结果唤醒的 Team 要能看到自己上一轮
+// 做过什么、上游交回了什么，否则它会重新判断该做什么，重复同一个动作
+// （s17：一分钟内三次相同的派发话术）。
+func TestReplayKeepsWholeTaskChain(t *testing.T) {
+	w := &fakeSessionWriter{}
+	loop := newReplayTurnLoop(w)
+
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1", FlowTurnID: "ft-user"},
+		Payload: map[string]any{
+			"text": "已转给执行侧，让它去查 cls 线上日志",
+			"turn": map[string]any{"origin": "user"},
+		},
+	})
+	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+		EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1", FlowTurnID: "ft-mailbox"},
+		Payload: map[string]any{
+			"text": "owner 交回：缺日志索引与时间范围",
+			"turn": map[string]any{"origin": "mailbox"},
+		},
+	})
+
+	req := reqFor("call-1")
+	req.FlowTurnID = "ft-mailbox"
+	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看cls线上日志"}}
+
+	got := loop.replayAgentContext(context.Background(), req, initial)
+
+	require.Len(t, got, 4, "同一任务链的两个回合都要重放")
+	assert.Equal(t, "已转给执行侧，让它去查 cls 线上日志", got[2].Content)
+	assert.Equal(t, "owner 交回：缺日志索引与时间范围", got[3].Content)
+}
+
+// 上一个问题的历史不能进来：模型看到自己上次的答案，会把新问题当成旧任务
+// 继续答（s13）。
+func TestReplayDropsPreviousTaskChain(t *testing.T) {
+	w := &fakeSessionWriter{}
+	loop := newReplayTurnLoop(w)
+
+	appendEvent := func(turnID, origin, text string) {
+		_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
+			EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1", FlowTurnID: turnID},
+			Payload: map[string]any{
+				"text": text,
+				"turn": map[string]any{"origin": origin},
+			},
+		})
+	}
+	appendEvent("ft-a1", "user", "旧问题：genie-agent 主分支是 main")
+	appendEvent("ft-a2", "mailbox", "旧问题：已确认 main")
+	appendEvent("ft-b1", "user", "新问题：查 cls 请求数")
+	appendEvent("ft-b2", "mailbox", "owner 交回：缺日志信息")
+
+	req := reqFor("call-1")
+	req.FlowTurnID = "ft-b2"
+	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看cls线上日志"}}
+
+	got := loop.replayAgentContext(context.Background(), req, initial)
+
+	require.Len(t, got, 4, "只重放新任务链的事件")
+	assert.Equal(t, "新问题：查 cls 请求数", got[2].Content)
+	assert.Equal(t, "owner 交回：缺日志信息", got[3].Content)
+	for _, msg := range got {
+		assert.NotContains(t, msg.Content, "genie-agent", "旧任务的结论不能进入本轮")
+	}
+}
