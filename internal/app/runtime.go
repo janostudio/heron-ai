@@ -280,17 +280,30 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	teamRuntime.SetKnowledgePointer(knowledge.NewKnowledgePointer(files, ".agents/knowledge", ".agents"))
 	sessionWriter := storage.NewJSONLSessionWriter(files)
 	checkpointStore := agent.NewFileCheckpointStore(files)
+	// Transcripts are the running conversation of one Agent inside one Flow
+	// session: a later turn appends to it instead of rebuilding history from
+	// events. Checkpoints stay separate — they are resume points of a single
+	// interrupted turn.
+	transcriptStore := agent.NewFileTranscriptStore(files)
 	taskStore := agent.NewFileToolTaskStore(files)
 	turnLoop.SetSessionWriter(sessionWriter)
 	// Durable SpawnChild tasks (asynchronous Spawn, batch B) route through the
 	// dispatcher into the Spawn tool; every other async tool keeps its normal
 	// execution path. The shared executor gives spawned children the same
 	// persistence, progress and recovery as ordinary async tool tasks.
-	taskRunner := agent.NewAsyncToolExecutor(taskStore, agent.NewSpawnTaskDispatcher(spawnTool, toolExecutor))
+	// Collaboration is an asynchronous tool: Team calls join the same durable
+	// task system as spawned children, so they get persistence, progress and
+	// recovery for free. TeamRun is internal — only a task created by TeamTool
+	// reaches it.
+	teamTool := agent.NewTeamTool(nil)
+	asyncDispatcher := agent.NewTeamTaskDispatcher(teamTool, agent.NewSpawnTaskDispatcher(spawnTool, toolExecutor))
+	taskRunner := agent.NewAsyncToolExecutor(taskStore, asyncDispatcher)
+	teamTool.SetTaskRunner(taskRunner)
 	spawnTool.SetTaskRunner(taskRunner)
 	spawnTool.SetSessionWriter(sessionWriter)
 	toolRegistry.Register(agent.NewCollectTool(taskRunner))
 	turnLoop.SetCheckpointStore(checkpointStore)
+	turnLoop.SetTranscriptStore(transcriptStore)
 	turnLoop.SetTaskRunner(taskRunner)
 	// MCP (design 04E): servers are declared in .agents/settings.json under
 	// "mcp" and connected once at startup. Three separate wirings are needed
@@ -340,6 +353,11 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 		sessionWriter,
 		evidenceStore,
 	)
+	// The flow runtime is the only place that knows the session, the Team
+	// bindings and how to persist a Team turn, so it is the Team tool's
+	// executor. It is built after the tool registry, hence the late wiring.
+	teamTool.SetRunner(flowRuntime)
+	toolRegistry.Register(teamTool)
 	flowRuntime.SetLimits(definitions.Limits)
 	flowRuntime.SetTaskStore(taskStore)
 	flowRuntime.SetMediaStore(mediaStore)

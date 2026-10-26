@@ -33,10 +33,13 @@ type TurnLoop struct {
 	hooks          *HookExecutor
 	promptRenderer PromptRenderer
 	checkpoints    types.AgentCheckpointStore
-	taskRunner     *AsyncToolExecutor
-	toolPolicy     ToolPolicy
-	contextPolicy  ContextPolicy
-	sessionWriter  storage.SessionWriter
+	// transcripts is the per-session conversation this Agent continues across
+	// turns. Optional: without it every turn rebuilds from recorded events.
+	transcripts   types.AgentTranscriptStore
+	taskRunner    *AsyncToolExecutor
+	toolPolicy    ToolPolicy
+	contextPolicy ContextPolicy
+	sessionWriter storage.SessionWriter
 	// files is the workspace file store the knowledge trees live in. It is
 	// needed by the Bash gate (bash_gate.go), which asks whether the agent has
 	// a private knowledge tree before letting it run a shell. Optional: a
@@ -360,19 +363,39 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 
 	var messages []types.Message
 	inputText := contextBlockText(req.ContextBlocks, "input")
+	var (
+		transcript *types.AgentTranscript
+		promptBase []types.Message
+	)
 	if req.ResumeCheckpointID == "" {
-		messages, err = t.promptRenderer.Render(agent, req, RenderContext{
+		rendered, renderErr := t.promptRenderer.Render(agent, req, RenderContext{
 			Variables:     req.Variables,
 			ContextBlocks: t.contextPolicy.Build(req),
 		})
-		if err != nil {
-			t.emitErrorHook(ctx, agent, req, 0, err)
-			return nil, fmt.Errorf("render prompt: %w", err)
+		promptBase = rendered
+		if renderErr != nil {
+			t.emitErrorHook(ctx, agent, req, 0, renderErr)
+			return nil, fmt.Errorf("render prompt: %w", renderErr)
 		}
-		// Replay the previous execution's agent-internal events so a
-		// normally-completed turn can be continued with its prior context,
-		// rather than restarting from a blank transcript.
-		messages = t.replayAgentContext(ctx, req, messages)
+		// Continue this Agent's conversation when one exists. The rendered
+		// prompt is the turn's own input, not a replacement for history: it is
+		// appended to what the Agent already said and heard in this session.
+		messages, transcript = t.continueTranscript(ctx, req, rendered)
+		if transcript == nil {
+			// No conversation to continue (first turn, or the Agent definition
+			// changed). Fall back to replaying this turn's recorded events so a
+			// retried turn does not start from a blank transcript.
+			messages = t.replayAgentContext(ctx, req, messages)
+		}
+	}
+
+	// The conversation is written when the turn ends, whatever its outcome: a
+	// failed turn's partial reasoning is still what the next turn continues
+	// from, and losing it would hand the model a stale history.
+	if t.transcripts != nil {
+		defer func() {
+			t.saveTranscript(context.Background(), req, contextManager.Messages(), transcript, promptBase)
+		}()
 	}
 
 	totalUsage := types.TokenUsage{}
@@ -2523,6 +2546,15 @@ func (t *TurnLoop) buildToolSchemasFiltered(_ context.Context, agent types.Agent
 				"deliver": {Type: "string", Enum: []string{"parent", "downstream"}, Description: "parent: results return to you; downstream: results are published as records of your call (downstream calls wait for you and all your spawned children)"},
 				"key":     {Type: "string", Description: "Instance key to reuse a given instance number (with its state); only valid with a single item"},
 			},
+		},
+		"Team": {
+			Name: "Team", Type: "object",
+			Description: "Hand work to another Team and return immediately with a task handle. The Team's answer arrives later as this call's result.",
+			Properties: map[string]types.JSONProperty{
+				"team_id": {Type: "string", Description: "Target Team id from the flow definition"},
+				"item":    {Type: "any", Description: "The task handed to that Team: what to find out or do, with the context it needs"},
+			},
+			Required: []string{"team_id", "item"},
 		},
 		"Collect": {
 			Name: "Collect", Type: "object",

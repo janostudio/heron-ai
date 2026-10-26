@@ -159,6 +159,46 @@ type ToolTask struct {
 	UpdatedAt     time.Time      `json:"updated_at"`
 }
 
+// AgentTranscript is the running conversation of one Agent inside one Flow
+// session.
+//
+// It differs from AgentCheckpoint in both lifetime and granularity: a checkpoint
+// is a resume point of a single turn and is only written when a turn stops
+// mid-flight; a transcript is the conversation itself, written when a turn
+// finishes and read back by the next one. Its ID is stable for the whole
+// session, so a wake-up appends to the same message list the previous turn
+// wrote instead of rebuilding a transcript from events.
+type AgentTranscript struct {
+	Version int    `json:"version"`
+	ID      string `json:"id"`
+	// FlowSessionID scopes the conversation to one session.
+	FlowSessionID string `json:"flow_session_id"`
+	// TeamID and CallID name the Agent inside the session: a Team may run
+	// several calls, each with its own conversation.
+	TeamID      string `json:"team_id,omitempty"`
+	CallID      string `json:"call_id,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+	AgentTurnID string `json:"agent_turn_id,omitempty"`
+	// SystemHash detects an Agent definition change between turns. A transcript
+	// written under a different system prompt is not continued: the messages
+	// above it were produced under rules that no longer apply.
+	SystemHash string    `json:"system_hash,omitempty"`
+	Messages   []Message `json:"messages"`
+	// LastTurnID is the turn that last appended to this transcript, so a retry
+	// of the same turn does not append its input twice.
+	LastTurnID string `json:"last_turn_id,omitempty"`
+	// Appended records which messages were already folded into the transcript,
+	// so a record handed over again on a later turn is not repeated.
+	Appended  map[string]bool `json:"appended,omitempty"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+// AgentTranscriptStore persists one Agent's conversation per Flow session.
+type AgentTranscriptStore interface {
+	Save(ctx context.Context, transcript AgentTranscript) error
+	Load(ctx context.Context, id string) (*AgentTranscript, error)
+}
+
 type ToolTaskStore interface {
 	Save(ctx context.Context, task ToolTask) error
 	Load(ctx context.Context, id string) (*ToolTask, error)
