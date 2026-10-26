@@ -285,6 +285,12 @@ type ModelProfile struct {
 }
 
 // Message represents a chat message
+// ContinuePrompt closes an Agent turn that has no input of its own: a turn
+// started only to let the model act on something already in its conversation.
+// It is a placeholder, not a question, and a consumer that recognises it must
+// not treat it as new input.
+const ContinuePrompt = "Continue with the task above."
+
 type Message struct {
 	ID         string        `json:"id,omitempty"`
 	RoundNum   int           `json:"round_num,omitempty"`

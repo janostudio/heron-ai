@@ -147,7 +147,7 @@ func (p *PromptRenderer) Render(agent types.AgentConfig, req types.AgentRequest,
 			userPrompt = fmt.Sprintf("%s has reported back; the report is the message above.",
 				strings.Join(reportedBy, ", "))
 		} else {
-			userPrompt = "Continue with the task above."
+			userPrompt = types.ContinuePrompt
 		}
 	}
 	messages = append(messages, types.Message{

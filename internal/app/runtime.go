@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -358,6 +359,10 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// executor. It is built after the tool registry, hence the late wiring.
 	teamTool.SetRunner(flowRuntime)
 	toolRegistry.Register(teamTool)
+	// A finished Team call enters the conversation that made it as a tool
+	// result. The flow needs the store directly: the caller's transcript is the
+	// only place the answer belongs.
+	flowRuntime.SetTranscriptStore(transcriptStore)
 	flowRuntime.SetLimits(definitions.Limits)
 	flowRuntime.SetTaskStore(taskStore)
 	flowRuntime.SetMediaStore(mediaStore)
@@ -379,6 +384,21 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 		}()
 	})
 	onTaskDone := func(doneCtx context.Context, task types.ToolTask) {
+		if task.ToolName == agent.TeamRunToolName {
+			// The caller already returned a handle to the model and its loop
+			// ended; the answer re-enters as a tool result and runs the loop
+			// again. Failures here are logged, never panic: the task record
+			// keeps the answer for a later turn.
+			signal := teamResultSignal(task)
+			if err := flowRuntime.ResumeForToolResult(doneCtx, task.FlowSessionID, signal); err != nil {
+				execLogger.Error("resume for team result", map[string]any{
+					"flow_session_id": task.FlowSessionID,
+					"task_id":         task.ID,
+					"error":           err.Error(),
+				})
+			}
+			return
+		}
 		if task.ToolName == agent.SpawnChildToolName {
 			// Spawned children deliver their results through Collect handles
 			// (durable task store), not through the Flow waiting-tool wake-up:
@@ -510,6 +530,52 @@ var toolWakeupWaitLimit = 60 * time.Second
 // durable store, so the wake-up is re-driven by the startup re-scan on the
 // next start rather than being lost for good — but an operator has to be able
 // to see that it happened, which is the whole point of the log.
+// teamResultSignal reconstructs what a Team call returned from its task record.
+func teamResultSignal(task types.ToolTask) flow.TeamResultSignal {
+	signal := flow.TeamResultSignal{
+		TaskID:     task.ID,
+		TeamID:     stringFromAny(task.Arguments["team_id"]),
+		CallerTeam: stringFromAny(task.Arguments["caller_team"]),
+		CallID:     stringFromAny(task.Arguments["call_id"]),
+		Error:      task.Error,
+	}
+	if task.Result != nil {
+		var payload struct {
+			Status  string   `json:"status"`
+			Reply   string   `json:"reply"`
+			Records []string `json:"records"`
+			Error   string   `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(task.Result.Content), &payload); err == nil {
+			signal.Status = payload.Status
+			signal.Reply = payload.Reply
+			signal.Records = payload.Records
+			if payload.Error != "" {
+				signal.Error = payload.Error
+			}
+		} else {
+			// A result the caller cannot parse still has to reach the model:
+			// hand the raw text over rather than an empty answer.
+			signal.Reply = task.Result.Content
+		}
+	}
+	if signal.Status == "" {
+		if signal.Error != "" {
+			signal.Status = "failed"
+		} else {
+			signal.Status = "done"
+		}
+	}
+	return signal
+}
+
+func stringFromAny(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
 func wakeFlowOnToolTaskDone(
 	ctx context.Context,
 	flowRuntime types.FlowRuntime,

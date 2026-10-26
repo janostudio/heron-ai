@@ -38,6 +38,9 @@ type Runtime struct {
 	limits      types.RuntimeLimits
 	tasks       types.ToolTaskStore
 	media       types.MediaStore
+	// transcripts is the per-Agent conversation store. A finished Team call
+	// enters the caller's conversation through it as a tool result.
+	transcripts types.AgentTranscriptStore
 	resumeMu    sync.Mutex
 
 	// dispatchMu guards busyTeams, the in-process record of which Teams are

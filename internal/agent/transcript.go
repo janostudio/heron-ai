@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -168,8 +169,17 @@ func (t *TurnLoop) continueTranscript(ctx context.Context, req types.AgentReques
 		appended[key] = true
 	}
 	out := cloneMessages(previous.Messages)
+	// A conversation that ends on a tool result is waiting for the model to act
+	// on it. The renderer always closes with a user turn so the model answers;
+	// appending that placeholder here would replace the tool result as the last
+	// message and turn a finished call back into a question.
+	endsOnToolResult := len(previous.Messages) > 0 &&
+		previous.Messages[len(previous.Messages)-1].Role == "tool"
 	for index, msg := range rendered {
 		if index == 0 && msg.Role == "system" {
+			continue
+		}
+		if endsOnToolResult && msg.Role == "user" && strings.TrimSpace(msg.Content) == types.ContinuePrompt {
 			continue
 		}
 		key := messageKey(msg)
