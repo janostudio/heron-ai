@@ -94,6 +94,14 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 	// One block per sender, so the renderer can turn each into its own message
 	// named after that Team. A single concatenated block would carry no source.
 	blocks := mailboxBlocks(messages)
+	// The question this continuation belongs to comes first: user asked, Teams
+	// reported back. It is not the turn's input — putting it last would read as
+	// a fresh request and restart the task.
+	if task := continuedTaskStatement(messages); task != "" {
+		blocks = append([]types.ContextBlock{{
+			Kind: "user_task", Text: task, Placement: "user", Stability: "stable", Priority: 90,
+		}}, blocks...)
+	}
 	// Wake the Team that has mail: its turn starts at that Team rather than at
 	// the Flow entry. The entry Team keeps its usual start when it is the one
 	// with mail, so a plain user turn is unchanged.
@@ -288,18 +296,42 @@ func truncateDelivery(text string, limit int) string {
 	return string(runes[:limit]) + "\n\n…（结果过长，已截断；完整内容见会话记录）"
 }
 
-// taskInputFromMessages returns the task the woken Team is working on.
+// taskInputFromMessages returns the task the woken Team is being asked to do.
 //
-// A dispatched message carries the original user input next to its payload.
-// Without it the Team sees only the inbox block and whatever its own history
-// remembers — enough to answer a question nobody asked, which is how a Team
-// asked about one repository replied with another's branch. The newest message
-// wins: it is the one the wake-up is for.
+// Only a work message carries one: it is the assignment this Team was handed,
+// and the turn exists to answer it. A result message also carries the original
+// user input, but that is the question the *previous* turn answered — the turn
+// being started here is a continuation of it, not a new one. Returning it from
+// a result made the wake-up render the user's words as the trailing user turn,
+// so the model read a report coming back as a fresh request and dispatched the
+// same job again (s17).
 func taskInputFromMessages(messages []types.MailboxMessage) string {
 	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Kind != mailboxKindWork {
+			continue
+		}
 		input, ok := messages[i].Payload["input"].(string)
 		if ok && strings.TrimSpace(input) != "" {
 			return input
+		}
+	}
+	return ""
+}
+
+// continuedTaskStatement returns the user input the results in this batch carry.
+//
+// It goes into the turn as the statement the continuation belongs to, placed
+// ahead of the collaborators' messages: the model sees the question that
+// started the task, then the Teams' reports. Rendering it as the trailing user
+// turn instead makes a report look like a new request.
+func continuedTaskStatement(messages []types.MailboxMessage) string {
+	for _, msg := range messages {
+		if msg.Kind == mailboxKindWork {
+			continue
+		}
+		input, ok := msg.Payload["input"].(string)
+		if ok && strings.TrimSpace(input) != "" {
+			return strings.TrimSpace(input)
 		}
 	}
 	return ""

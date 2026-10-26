@@ -310,7 +310,10 @@ func (r *Runtime) postResult(ctx context.Context,
 	}
 	payload := map[string]any{"team_result": execution.result}
 	// The entry Team is woken to answer the user, so it needs the question —
-	// not just the result it is relaying.
+	// not just the result it is relaying. It travels as the statement this
+	// continuation belongs to, not as the woken turn's input: as input it
+	// renders as the trailing user turn, and a report coming back then reads
+	// as a fresh request (see continuedTaskStatement).
 	if flowTurn.Input != "" {
 		payload["input"] = flowTurn.Input
 	}
