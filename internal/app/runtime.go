@@ -393,6 +393,13 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	})
 	onTaskDone := func(doneCtx context.Context, task types.ToolTask) {
 		if task.ToolName == agent.TeamRunToolName {
+			// The startup re-scan replays every terminal task so an answer
+			// finished just before a restart is not lost. Past this window the
+			// replay is noise: the conversation has moved on, or the session is
+			// long gone and would sit in "still running" until the wait limit.
+			if task.FinishedAt != nil && time.Since(*task.FinishedAt) > teamResultReplayWindow {
+				return
+			}
 			// The caller already returned a handle to the model and its loop
 			// ended; the answer re-enters as a tool result and runs the loop
 			// again. Failures here are logged, never panic: the task record
@@ -538,6 +545,10 @@ var toolWakeupWaitLimit = 60 * time.Second
 // durable store, so the wake-up is re-driven by the startup re-scan on the
 // next start rather than being lost for good — but an operator has to be able
 // to see that it happened, which is the whole point of the log.
+// teamResultReplayWindow bounds how old a finished Team task may be for the
+// startup re-scan to deliver it.
+const teamResultReplayWindow = 10 * time.Minute
+
 // teamResultSignal reconstructs what a Team call returned from its task record.
 func teamResultSignal(task types.ToolTask) flow.TeamResultSignal {
 	signal := flow.TeamResultSignal{

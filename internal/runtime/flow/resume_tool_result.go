@@ -66,6 +66,15 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 		return nil
 	}
 
+	// A completion callback can fire more than once for the same task: the
+	// process re-scans terminal tasks on startup so a result finished just
+	// before a restart is not lost. Delivering it again would append a second
+	// Collect pair and run the turn twice, so the transcript is the queue's
+	// ledger — one entry per task id.
+	if transcriptHasToolResult(transcript, signal.TaskID) {
+		return nil
+	}
+
 	// Write the answer first, whatever the session is doing. A busy session
 	// cannot run the turn now, but dropping the answer would lose it for good:
 	// the completion callback fires once. Persisting it means the next turn —
@@ -125,6 +134,28 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 		return fmt.Errorf("run turn for tool result: %w", runErr)
 	}
 	return nil
+}
+
+// transcriptHasToolResult reports whether this Task already has its Collect
+// pair in the conversation, i.e. whether the answer was already delivered.
+func transcriptHasToolResult(transcript *types.AgentTranscript, taskID string) bool {
+	if transcript == nil || taskID == "" {
+		return false
+	}
+	for _, message := range transcript.Messages {
+		for _, call := range message.ToolCalls {
+			if call.Name != "Collect" {
+				continue
+			}
+			handles, _ := call.Arguments["handles"].([]any)
+			for _, handle := range handles {
+				if handle == taskID {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // callerTranscriptID mirrors the Agent side's transcript naming: one

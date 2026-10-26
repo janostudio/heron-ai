@@ -204,3 +204,40 @@ func TestListTeamsEmptyForLeafTeam(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, entries)
 }
+
+// 完成回调可能对同一个任务触发多次（进程重启会重扫终态任务）。转录本身就是
+// 队列的账本：同一个 task 只进一次，第二次调用必须是 no-op，否则会追加两对
+// Collect 并把回合跑两遍。
+func TestResumeForToolResultIsIdempotent(t *testing.T) {
+	recorder := &inputRecordingTeamRuntime{}
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	rt := newTestRuntime(testDefinitions(), recorder, writer, nil)
+	transcripts := newMemoryTranscripts()
+	rt.SetTranscriptStore(transcripts)
+
+	session := seedMailboxSession(t, rt, "fs-idem", types.SessionWaitingInput)
+	id := callerTranscriptID(session.ID, "default", "coordinator")
+	require.NoError(t, transcripts.Save(context.Background(), types.AgentTranscript{
+		ID:            id,
+		FlowSessionID: session.ID,
+		TeamID:        "default",
+		CallID:        "coordinator",
+		Messages: []types.Message{
+			{Role: "system", Content: "sys"},
+			{Role: "user", Content: "查主分支"},
+			{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "c0", Name: "Team"}}},
+			{Role: "tool", ToolCallID: "c0", Content: `{"status":"accepted"}`},
+		},
+	}))
+
+	signal := TeamResultSignal{
+		TaskID: "task-9", CallerTeam: "default", CallID: "coordinator", Status: "done", Reply: "master",
+	}
+	require.NoError(t, rt.ResumeForToolResult(context.Background(), session.ID, signal))
+	first, _ := transcripts.Load(context.Background(), id)
+	require.Len(t, first.Messages, 6, "第一次追加一对")
+
+	require.NoError(t, rt.ResumeForToolResult(context.Background(), session.ID, signal))
+	second, _ := transcripts.Load(context.Background(), id)
+	require.Len(t, second.Messages, 6, "重复投递不再追加")
+}
