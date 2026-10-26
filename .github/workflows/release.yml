@@ -47,7 +47,11 @@ jobs:
           cp npm/bin/heron dist/npm/bin/
           chmod +x dist/npm/bin/heron
           VERSION=${GITHUB_REF#refs/tags/v}
-          sed -i "s/\"version\": \"0.0.0-dev\"/\"version\": \"$VERSION\"/" dist/npm/package.json
+          # 版本必须由 tag 注入。模板里写死版本号时 sed 匹配不到，npm 会去发布
+          # 那个写死的版本，报 "cannot publish over previously published versions"
+          # 或悄悄发出一个错误版本。匹配任意版本号，避免模板再被写死时静默失效。
+          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" dist/npm/package.json
+          node -e "const v=require('./dist/npm/package.json').version; if(v!=='$VERSION'){console.error('npm package version mismatch: '+v+' != $VERSION');process.exit(1)}"
 
       - name: Publish to npm
         env:
