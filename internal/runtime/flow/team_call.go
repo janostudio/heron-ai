@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -115,4 +116,72 @@ func teamCallInputText(item any) string {
 		}
 		return string(data)
 	}
+}
+
+// ListTeams projects the caller's edges into a catalog the model can read.
+//
+// Configuration stays the source of truth: the entries are derived from the
+// Flow definition on every call, so editing flows/default.yml changes what a
+// model sees without touching a prompt.
+func (r *Runtime) ListTeams(ctx context.Context, spec types.TeamCatalogSpec) ([]types.TeamCatalogEntry, error) {
+	if spec.FlowSessionID == "" {
+		return nil, fmt.Errorf("team catalog requires a flow session")
+	}
+	if _, err := r.loadSession(ctx, spec.FlowSessionID); err != nil {
+		return nil, err
+	}
+	defs := r.definitions.Snapshot()
+	binding, ok := defs.Flow.Teams[spec.CallerTeam]
+	if !ok {
+		return nil, fmt.Errorf("team %q is not configured in flow", spec.CallerTeam)
+	}
+	entries := make([]types.TeamCatalogEntry, 0, len(binding.CanActivate))
+	for _, target := range binding.CanActivate {
+		targetBinding, ok := defs.Flow.Teams[target]
+		if !ok {
+			continue
+		}
+		entry := types.TeamCatalogEntry{
+			TeamID:   target,
+			Receives: receivesOf(targetBinding.Inputs),
+		}
+		if team, found := defs.Teams[targetBinding.TeamID]; found {
+			entry.Responsibility = teamResponsibility(team)
+			entry.Produces = team.Output.Record
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+// receivesOf lists what a binding lets the target read, using the same words the
+// configuration uses so a caller can match it against what it just produced.
+func receivesOf(inputs types.InputSpec) []string {
+	receives := make([]string, 0, len(inputs.FlowRecords)+1)
+	if inputs.UserMessage {
+		receives = append(receives, "user_message")
+	}
+	receives = append(receives, inputs.FlowRecords...)
+	return receives
+}
+
+// teamResponsibility returns the Team's own statement of what it does. Calls are
+// a map, so the smallest id wins: the entry call is the one that describes the
+// Team, and this keeps the answer stable across runs.
+func teamResponsibility(team types.Team) string {
+	if strings.TrimSpace(team.Goal) != "" {
+		return strings.TrimSpace(team.Goal)
+	}
+	ids := make([]string, 0, len(team.Calls))
+	for id := range team.Calls {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		call := team.Calls[id]
+		if text := strings.TrimSpace(call.Responsibility); text != "" {
+			return text
+		}
+	}
+	return ""
 }

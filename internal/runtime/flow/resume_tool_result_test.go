@@ -169,3 +169,34 @@ func TestRunTeamRefusesConcurrentCall(t *testing.T) {
 	require.Equal(t, "failed", outcome.Status)
 	require.Contains(t, outcome.Error, "already running")
 }
+
+// 目录只投影调用方自己的出边：模型看到的是"我在这个位置能派谁"，不是整张图。
+func TestListTeamsReturnsCallerEdges(t *testing.T) {
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	rt := newTestRuntime(testDefinitions(), &inputRecordingTeamRuntime{}, writer, nil)
+	session := seedMailboxSession(t, rt, "fs-catalog", types.SessionWaitingInput)
+
+	entries, err := rt.ListTeams(context.Background(), types.TeamCatalogSpec{
+		FlowSessionID: session.ID,
+		CallerTeam:    "default",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "default 只能派 verify")
+	require.Equal(t, "verify", entries[0].TeamID)
+}
+
+// 叶子 Team 没有出边：目录为空，而不是列出别的 Team 的。
+func TestListTeamsEmptyForLeafTeam(t *testing.T) {
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	rt := newTestRuntime(testDefinitions(), &inputRecordingTeamRuntime{}, writer, nil)
+	session := seedMailboxSession(t, rt, "fs-catalog-leaf", types.SessionWaitingInput)
+
+	entries, err := rt.ListTeams(context.Background(), types.TeamCatalogSpec{
+		FlowSessionID: session.ID,
+		CallerTeam:    "verify",
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}

@@ -188,3 +188,46 @@ func findTeamSchema(t *testing.T, schemas []types.JSONSchema) types.JSONSchema {
 	t.Fatalf("schema for %q not found", TeamToolName)
 	return types.JSONSchema{}
 }
+
+type stubCatalog struct {
+	entries []types.TeamCatalogEntry
+	specs   []types.TeamCatalogSpec
+}
+
+func (c *stubCatalog) ListTeams(_ context.Context, spec types.TeamCatalogSpec) ([]types.TeamCatalogEntry, error) {
+	c.specs = append(c.specs, spec)
+	return c.entries, nil
+}
+
+// 目录要说明"谁在问"：同一个 Agent 在不同 Team 位置看到的可达集合不同。
+func TestListTeamsToolUsesCallerIdentity(t *testing.T) {
+	catalog := &stubCatalog{entries: []types.TeamCatalogEntry{
+		{TeamID: "repo-info", Responsibility: "读仓库事实", Receives: []string{"user_message"}, Produces: "RepoFacts"},
+	}}
+	tool := NewListTeamsTool(catalog)
+	ctx := withSpawnIdentity(context.Background(), types.AgentConfig{}, types.AgentRequest{
+		FlowSessionID: "fs-1",
+		TeamID:        "owner",
+	})
+
+	result, err := tool.Execute(ctx, nil)
+
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	require.Contains(t, result.Content, "repo-info")
+	require.Contains(t, result.Content, "RepoFacts")
+	require.Len(t, catalog.specs, 1)
+	require.Equal(t, "fs-1", catalog.specs[0].FlowSessionID)
+	require.Equal(t, "owner", catalog.specs[0].CallerTeam)
+}
+
+// 没有注入目录时不能假装有一条空目录：那会让模型以为无处可派。
+func TestListTeamsToolWithoutCatalog(t *testing.T) {
+	tool := NewListTeamsTool(nil)
+
+	result, err := tool.Execute(context.Background(), nil)
+
+	require.NoError(t, err)
+	require.False(t, result.Success)
+	require.Contains(t, result.Error, "not configured")
+}

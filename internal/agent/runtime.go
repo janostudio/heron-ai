@@ -2547,6 +2547,11 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 				"key":     {Type: "string", Description: "Instance key to reuse a given instance number (with its state); only valid with a single item"},
 			},
 		},
+		"ListTeams": {
+			Name: "ListTeams", Type: "object",
+			Description: "List the Teams you may hand work to: what each is for, what it can read, what record it produces.",
+			Properties:  map[string]types.JSONProperty{},
+		},
 		"Team": {
 			Name: "Team", Type: "object",
 			Description: "Hand work to another Team and return immediately with a task handle. The Team's answer arrives later as this call's result.",

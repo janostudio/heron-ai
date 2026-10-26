@@ -274,3 +274,66 @@ func (d *TeamTaskDispatcher) ExecutionSpec(name string) types.ToolExecutionSpec 
 	}
 	return types.ToolExecutionSpec{Class: types.ToolSerial}
 }
+
+// ListTeamsToolName is the tool a model calls to discover which Teams it may
+// hand work to.
+//
+// It is the "tool search" half of collaboration: the reach is decided by the
+// Flow, and this exposes it as a catalog the model can read — what each Team is
+// for, what it can read, what it produces — instead of a list baked into a
+// prompt that goes stale as soon as the Flow changes.
+const ListTeamsToolName = "ListTeams"
+
+// ListTeamsTool reads the caller's view of the Flow graph.
+type ListTeamsTool struct {
+	catalog types.TeamCatalog
+}
+
+func NewListTeamsTool(catalog types.TeamCatalog) *ListTeamsTool {
+	return &ListTeamsTool{catalog: catalog}
+}
+
+// SetCatalog wires the flow runtime after it exists.
+func (t *ListTeamsTool) SetCatalog(catalog types.TeamCatalog) {
+	if t == nil {
+		return
+	}
+	t.catalog = catalog
+}
+
+func (t *ListTeamsTool) Name() string { return ListTeamsToolName }
+
+func (t *ListTeamsTool) Description() string {
+	return "List the Teams you may hand work to, with what each is for, what it can read " +
+		"and what record it produces. Call this before choosing a team_id for Team."
+}
+
+func (t *ListTeamsTool) Parameters() map[string]any {
+	return map[string]any{}
+}
+
+func (t *ListTeamsTool) NeedsApproval() bool { return false }
+
+func (t *ListTeamsTool) Execute(ctx context.Context, _ map[string]any) (*types.ToolResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if t == nil || t.catalog == nil {
+		return teamError("ListTeams is not configured"), nil
+	}
+	spec := types.TeamCatalogSpec{}
+	if identity := spawnIdentityFromContext(ctx); identity != nil {
+		spec.FlowSessionID = identity.req.FlowSessionID
+		spec.CallerTeam = identity.req.TeamID
+	}
+	entries, err := t.catalog.ListTeams(ctx, spec)
+	if err != nil {
+		return teamError(err.Error()), nil
+	}
+	content, _ := json.Marshal(entries)
+	return &types.ToolResult{
+		Success:  true,
+		Content:  string(content),
+		Metadata: map[string]any{"teams": len(entries)},
+	}, nil
+}
