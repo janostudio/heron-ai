@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,15 +12,20 @@ import (
 
 // memoryTaskStore is the minimum the pending-call check needs.
 type memoryTaskStore struct {
+	mu    sync.Mutex
 	tasks []types.ToolTask
 }
 
 func (s *memoryTaskStore) Save(_ context.Context, task types.ToolTask) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.tasks = append(s.tasks, task)
 	return nil
 }
 
 func (s *memoryTaskStore) Load(_ context.Context, id string) (*types.ToolTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := range s.tasks {
 		if s.tasks[i].ID == id {
 			task := s.tasks[i]
@@ -30,7 +36,9 @@ func (s *memoryTaskStore) Load(_ context.Context, id string) (*types.ToolTask, e
 }
 
 func (s *memoryTaskStore) List(_ context.Context) ([]types.ToolTask, error) {
-	return s.tasks, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]types.ToolTask(nil), s.tasks...), nil
 }
 
 func (s *memoryTaskStore) Delete(_ context.Context, _ string) error { return nil }

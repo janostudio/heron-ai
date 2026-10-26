@@ -79,8 +79,15 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 	// when it handed work further down. What proves it has not finished is its
 	// own pending call, not the route: the route-based test never fired and the
 	// callee's "I dispatched it" was handed back as the answer.
+	logTeamCallFrame("team call entered", spec.CallerTeam, spec.TeamID, map[string]any{"pending_downstream": r.hasPendingTeamCallFrom(ctx, session.ID, spec.TeamID)})
 	if r.hasPendingTeamCallFrom(ctx, session.ID, spec.TeamID) {
 		if settled := r.awaitTeamSettlement(ctx, session.ID, spec.TeamID); settled != nil {
+			settledState := "settled"
+			if settled == nil {
+				settledState = "unsettled"
+			}
+			logTeamCallFrame("team call waited", spec.CallerTeam, spec.TeamID,
+				map[string]any{"outcome": settledState})
 			execution.result.Reply = settled.Reply
 			execution.result.Error = settled.Error
 
@@ -216,12 +223,23 @@ const teamSettleLimit = 5 * time.Minute
 // and read its last conclusion from the event stream when they clear.
 func (r *Runtime) awaitTeamSettlement(ctx context.Context, sessionID, teamID string) *types.TeamCallOutcome {
 	deadline := time.Now().Add(teamSettleLimit)
+	// What the callee had said before we started waiting. Clearing its pending
+	// call is not enough: that happens the instant the downstream task finishes,
+	// and the callee still has to run the turn that concludes. Comparing against
+	// this baseline is how we tell "it answered" from "it is about to answer".
+	baseline, _ := r.lastTeamReply(ctx, sessionID, teamID)
 	for {
 		if !r.hasPendingTeamCallFrom(ctx, sessionID, teamID) {
-			if reply, ok := r.lastTeamReply(ctx, sessionID, teamID); ok {
+			reply, ok := r.lastTeamReply(ctx, sessionID, teamID)
+			if ok && reply != baseline {
 				return &types.TeamCallOutcome{Status: "done", Reply: reply}
 			}
-			return nil
+			if !ok && baseline == "" {
+				return nil
+			}
+			// Pending cleared but the conclusion has not landed yet: the callee
+			// is running its follow-up turn. Keep waiting instead of handing back
+			// the dispatch receipt.
 		}
 		if time.Now().After(deadline) {
 			logging.Info("team call settled by timeout", map[string]any{
@@ -280,4 +298,18 @@ func (r *Runtime) lastTeamReply(ctx context.Context, sessionID, teamID string) (
 		}
 	}
 	return reply, reply != ""
+}
+
+// logTeamCallFrame records one step of a call's lifecycle.
+//
+// The settle-wait is invisible from the outside: a caller cannot tell "the
+// callee is still working" from "the callee answered immediately". Without these
+// lines the only way to diagnose it is to guess and re-run a four-minute
+// conversation.
+func logTeamCallFrame(event, caller, callee string, extra map[string]any) {
+	fields := map[string]any{"caller": caller, "callee": callee}
+	for key, value := range extra {
+		fields[key] = value
+	}
+	logging.Info(event, fields)
 }
