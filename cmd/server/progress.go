@@ -182,6 +182,36 @@ func copyTurnAnnouncement(base map[string]any, payload map[string]any) {
 	if hoisted := hoistDeliveries(payload["deliveries"]); len(hoisted) > 0 {
 		base["deliveries"] = hoisted
 	}
+	// Provenance travels with the announcement: team says who wrote the reply,
+	// contributors says which Teams produced what underneath it.
+	if contributors := hoistContributors(payload["contributors"]); len(contributors) > 0 {
+		base["contributors"] = contributors
+	}
+}
+
+// hoistContributors keeps the provenance list small enough to ride along with
+// every announcement.
+func hoistContributors(value any) []map[string]any {
+	items, ok := value.([]map[string]any)
+	if !ok {
+		return nil
+	}
+	trimmed := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		entry := map[string]any{}
+		for _, key := range []string{"team"} {
+			if text, ok := item[key].(string); ok && text != "" {
+				entry[key] = text
+			}
+		}
+		if text, ok := item["reply"].(string); ok && text != "" {
+			entry["reply"] = truncateUTF8(text, 600)
+		}
+		if len(entry) > 0 {
+			trimmed = append(trimmed, entry)
+		}
+	}
+	return trimmed
 }
 
 // waitingEventStatus maps the flow_turn.waiting_* event to the session status
