@@ -57,6 +57,10 @@ type Runtime struct {
 	// getting it wrong means either refusing a live turn or resuming a dead one.
 	turnMu       sync.Mutex
 	runningTurns map[string]bool
+	// closedInterrupts records the sessions whose dangling executions have
+	// already been given a terminal event by this process. One pass is enough:
+	// the terminal it writes is what subsequent replays read.
+	closedInterrupts map[string]bool
 	// pendingWakes de-duplicates wake retries for sessions that were still
 	// running when their wake-up arrived.
 	pendingWakes map[string]bool
@@ -656,6 +660,7 @@ func (r *Runtime) runTurnWithOrigin(
 	// arriving mid-turn is queued rather than mistaken for a crash leftover.
 	clearRunning := r.markTurnRunning(session.ID)
 	defer clearRunning()
+	r.closeInterruptedTurns(ctx, session.ID)
 	if err := r.validateDependencies(session.FlowID); err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -1247,6 +1252,26 @@ func (r *Runtime) executeTeamTurn(
 		return execution, err
 	}
 
+	teamRecords := selectFlowRecordsForBinding(records, binding, scopeSince)
+	// Record the hand-off before the Team runs: the consumer is what a display
+	// layer needs to draw "B → A" without repeating B's content. Writing it here
+	// (not in the Team) keeps the edge a Flow fact — the Team only knows it
+	// received records.
+	for _, record := range teamRecords {
+		if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+			EventHeader: types.EventHeader{
+				Type:          types.EventSharedRecordConsumed,
+				FlowSessionID: session.ID,
+				FlowTurnID:    flowTurn.ID,
+				TeamSessionID: teamSession.ID,
+				TeamTurnID:    teamTurn.ID,
+				TeamID:        binding.ID,
+			},
+			Payload: map[string]any{"record": record, "consumer_team": binding.ID},
+		}); err != nil {
+			return execution, err
+		}
+	}
 	teamResult, runErr := r.teams.Run(ctx, types.TeamTurnRequest{
 		FlowSession:        session,
 		FlowTurn:           flowTurn,
@@ -1256,7 +1281,7 @@ func (r *Runtime) executeTeamTurn(
 		Team:               team,
 		Input:              teamInput(input, binding.Inputs),
 		ContextBlocks:      blocks,
-		Records:            selectFlowRecordsForBinding(records, binding, scopeSince),
+		Records:            teamRecords,
 		Limits:             r.limits,
 		ResumeCallID:       current.resumeCallID,
 		ResumeCheckpointID: current.resumeCheckpointID,
@@ -1349,8 +1374,22 @@ func (r *Runtime) executeTeamTurn(
 	teamResult.Turn.FinishedAt = &now
 
 	for _, record := range teamResult.Records {
-		if record.Scope == types.RecordScopeFlow && r.evidence != nil {
-			if err := r.evidence.Publish(ctx, session.ID, record); err != nil {
+		// A Team that ran as a sub-task produces its records for the conversation
+		// that dispatched it. Its own scope says "team", so the caller's follow-up
+		// turn — which reads flow scope and matches `flow_records` by name — would
+		// find nothing, and no shared_record.consumed edge would ever be written
+		// (A→B fixture, 2026-10-28: caller declared flow_records: [WorkerReport],
+		// received zero records, produced zero consumed events). Publish a
+		// flow-scope copy so the hand-off is a Flow fact; the event below keeps
+		// the record exactly as it was produced.
+		publishScope := record.Scope
+		if publishScope != types.RecordScopeFlow && teamTurn.CallerTeam != "" {
+			publishScope = types.RecordScopeFlow
+		}
+		if publishScope == types.RecordScopeFlow && r.evidence != nil {
+			published := record
+			published.Scope = publishScope
+			if err := r.evidence.Publish(ctx, session.ID, published); err != nil {
 				return execution, err
 			}
 		}
@@ -2377,6 +2416,76 @@ func (r *Runtime) hasPendingTeamCall(ctx context.Context, sessionID string) bool
 }
 
 // markTurnRunning records that this process is executing a turn for a session.
+// closeInterruptedTurns gives every execution left running a terminal event
+// before this process starts a new turn on the session.
+//
+// A process that exits mid-turn leaves started events with no terminal: a
+// replay of 128 real sessions found 13 such FlowTurns and 22 TeamTurns, all on
+// the tail of a session. Without a terminal the state reads "still running"
+// forever, so every consumer asking "is it done" has to infer it — and an
+// inferred state is exactly what produces duplicated or missing output.
+//
+// Only the FlowTurn is closed here. Team and call turns belong to it: a client
+// reading the flow level sees the session become resumable again, and the
+// deeper records stay as they were for anyone debugging from the event stream.
+func (r *Runtime) closeInterruptedTurns(ctx context.Context, sessionID string) {
+	if r == nil || r.sessions == nil || sessionID == "" {
+		return
+	}
+	r.turnMu.Lock()
+	if r.closedInterrupts == nil {
+		r.closedInterrupts = make(map[string]bool)
+	}
+	alreadyClosed := r.closedInterrupts[sessionID]
+	r.closedInterrupts[sessionID] = true
+	r.turnMu.Unlock()
+	if alreadyClosed {
+		return
+	}
+	replay, err := r.sessions.Replay(ctx, sessionID)
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
+	for _, item := range interruptedExecutions(replay.Events, r.liveTeamsFor(sessionID)) {
+		if item.Kind != "flow_turn" || item.FlowTurnID == "" {
+			continue
+		}
+		turn := types.FlowTurn{
+			ID:            item.FlowTurnID,
+			FlowSessionID: sessionID,
+			Attempt:       item.Attempt,
+			RecoveryOf:    item.RecoveryOf,
+			Input:         item.Input,
+			Status:        types.TurnCancelled,
+			StartedAt:     item.StartedAt,
+			FinishedAt:    &now,
+		}
+		if err := r.appendSessionEvent(ctx, sessionID, storage.SessionEvent{
+			EventHeader: types.EventHeader{
+				Type:          types.EventFlowTurnCompleted,
+				FlowSessionID: sessionID,
+				FlowTurnID:    item.FlowTurnID,
+				Attempt:       item.Attempt,
+				RecoveryOf:    item.RecoveryOf,
+			},
+			Payload: map[string]any{
+				"turn":  turn,
+				"error": "interrupted: the process stopped while this turn was running",
+				// intermediate keeps a truncated progress turn from being
+				// relayed as an answer now that it has a terminal.
+				"intermediate": true,
+			},
+		}); err != nil {
+			logging.Warn("close interrupted turn failed", map[string]any{
+				"flow_session_id": sessionID,
+				"flow_turn_id":    item.FlowTurnID,
+				"error":           err.Error(),
+			})
+		}
+	}
+}
+
 func (r *Runtime) markTurnRunning(sessionID string) func() {
 	if sessionID == "" {
 		return func() {}

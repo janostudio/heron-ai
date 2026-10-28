@@ -38,7 +38,8 @@ S=.agents/data/sessions/<fs_id>                  # 下文命令沿用这个变�
 |---|---|---|
 | 用户每一轮的提问 | `flow.jsonl` → `flow_turn.started` | `payload.turn.input` |
 | 模型每轮原始回复 | `agent.jsonl` → `agent.model_response` | **`payload.text`**、`payload.round` |
-| 最终对用户的答复 | `evidence.jsonl` 的 SharedRecord | `summary` |
+| 这一轮对用户答了什么、谁写的 | `flow.jsonl` → `flow_turn` 终态 | `payload.reply`、`payload.team`（`intermediate=true` 时没有答复） |
+| 成品文本与依据 | `evidence.jsonl` 的 SharedRecord | `summary`、`basis[]` |
 
 ```bash
 jq -r 'select(.type=="flow_turn.started") | .payload.turn.input' $S/flow.jsonl
@@ -122,7 +123,7 @@ jq -r -s '[.[]|select(.type=="agent_turn.completed")]|group_by(.payload.call_res
 
 | 参考文件 | 内容 |
 |---|---|
-| `references/fields.md` | **每个配置字段的含义**（Flow/Team/Call/Agent/record/rules）+ 运行时事件字段 + **`${records.*}` 模板**（把共享记录传进 command） |
+| `references/fields.md` | **每个配置字段的含义**（Flow/Team/Call/Agent/record/rules/**workspace**）+ 运行时事件字段 + **`${records.*}` 模板**（把共享记录传进 command） |
 | `references/organization.md` | 目录组织、三层编排、设计优势 |
 | `references/operations.md` | 下载/使用/启动/关闭的详细命令 |
 | `references/define.md` | **Define 工具**：让 Agent 在对话中自建 Agent/Team 定义 |
@@ -135,14 +136,21 @@ jq -r -s '[.[]|select(.type=="agent_turn.completed")]|group_by(.payload.call_res
 2. 配置全部在 `.agents/` 目录下，按类型分目录。
 3. `model.model` 直接写模型 id（来自 models.json），**勿用 `${ENV}` 占位符**（引擎不展开环境变量）。
 4. record 靠 `output.record` + 下游 `inputs` 的 `{from, record}` 按名精确匹配，
-   名称是自由字符串、无校验，拼写必须一致。
+   名称是自由字符串；拼错在**加载期**就报"没有生产者"，不会拖到运行时。
+   被派发的子 Team 产出的记录会以 flow 作用域副本落进 `evidence.jsonl`，调用方按名就能读到。
 5. command call 不读对话内容；要把上游记录的值传给它，用 `command.env` 的
    `${records.<Name>.Data.<field>}` 模板（仅在 `Data` 顶层，字段缺失会让 call 失败）。
    详见 `references/fields.md`。
 6. `models.json` 含 api_key，永不提交。
-7. 想让 Agent 在对话中自建 Agent/Team，需在其 `AGENT.md` 里声明
+7. Agent 要读工作区根之外的目录（如仓库外的代码库），在 `workspace.read_roots`
+   里列出来：读取放行、写入仍拒绝。相对路径按**进程 cwd** 解析，换部署位置会失效
+   （失效条目被跳过，不会导致启动失败）。详见 `references/fields.md` 的 workspace 节。
+8. 想让 Agent 在对话中自建 Agent/Team，需在其 `AGENT.md` 里声明
    `tools.builtin: [..., Define]`；未声明则该工具对模型不可见。
    详见 `references/define.md`。
+9. Agent 声明了 `Team` 或 `Spawn` 时不必再手写 `Collect`——引擎会自动授予并暴露
+   schema。反过来只声明 `Team` 而不给 `Collect`，历史上会造成"模型反复调一个被
+   拒绝的工具直到轮次耗尽"。
 
 ## 脚本
 

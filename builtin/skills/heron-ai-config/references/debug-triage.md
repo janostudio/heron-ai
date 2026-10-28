@@ -95,10 +95,10 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 | 事件顺序 | `flow_session.created` → `flow_turn.started` → `team_*` → `flow_turn.waiting_input` |
 | **轮次** | 一轮 = `agent_turn.completed` 的 `call_result.Requests` 里一个元素；同一 agent 多个 Request 说明它多轮调用了模型 |
 | **route** | `team_turn.completed.payload.team_result.Turn.next.action` ∈ `proceed` / `activate` / `return` / `coordinate` / `fail` |
-| **终态** | 正常结束必然是 `flow_turn.waiting_input`（会话可续聊）；`failed` / `cancelled` / `interrupted` 才是异常终态 |
+| **终态** | 正常结束必然是 `flow_turn.waiting_input`（会话可续聊）；`failed` 是这一轮失败。`cancelled` 有两种来源：进程中断留下的悬空回合（见下），或外部取消——看 `payload.error` 是否写着 interrupted |
 | **team 范围** | 寒暄类应只激活 `entry` team；出现 specialist team 说明路由把它当成任务了 |
 | **消耗** | 事实源是 `team.jsonl` 的 `agent_turn.completed → payload.call_result.Requests[].usage`；flow 级加总 = 各 agent 之和 |
-| **证据** | 发布的 SharedRecord 同时出现在 `flow.jsonl` 的 `shared_record.published` 与 `evidence.jsonl` |
+| **证据** | 发布的 SharedRecord 同时出现在 `flow.jsonl` 的 `shared_record.published` 与 `evidence.jsonl`。被派发的子 Team 产出的记录会以 flow 作用域副本进入 `evidence.jsonl`，所以那里出现"不是入口 Team 写的"记录是正常的 |
 
 ### 异常模式对照
 
@@ -108,6 +108,8 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 | `call_result.Status` 非 completed | `call_result.Error` |
 | 某 agent 的 `Requests` 数暴涨 | 上下文膨胀。每轮把前序工具输出重新带给模型；查 `context.compacted`，并考虑收窄工具输出或减少读取量 |
 | `flow_turn` 迟迟不结束 | `runtime.max_team_turns` 兜底上限（默认很宽松，正常编排不会碰到）与路由是否成环 |
+| 会话尾巴上有一个 `running` 的回合，之后再没动过 | 进程在回合中途退出。**下一次在这个会话里发消息时**，引擎会先给那个回合补写 `flow_turn.completed` + `status=cancelled` + `payload.error=interrupted…`，然后才开始新回合。看到这条 `cancelled` 说明"上次是被中断的"，不是这次新出的错 |
+| 某条 record 明明产出了，下游 `flow_records` 却读不到 | 先看 `shared_record.consumed` 有没有对应事件：没有，说明下游根本没被移交这条记录（检查 `inputs` 名字与时间窗）；有事件却没内容，才去看下游的注入 |
 | 模型输出为空 / 解析失败 | 先确认读的是 `payload.text` 而非 `payload.content`；若有 `agent.feedback`，说明模型没按 schema 输出，引擎已追加重试提示 |
 | command call 无输出 | `command_turn.*` 在 `team.jsonl`；看 `payload` 的退出码与 stderr |
 ## 3. 从配置预测"该发生什么"

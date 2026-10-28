@@ -26,6 +26,17 @@ type WorkspaceOperation struct {
 type WorkspaceConfig struct {
 	Type string     `yaml:"type" json:"type"` // local | ssh | docker
 	SSH  *SSHConfig `yaml:"ssh,omitempty" json:"ssh,omitempty"`
+	// ReadRoots lists directories outside the workspace root that the file
+	// tools may READ. Writes are refused: a read root is an extension of the
+	// visible surface, not a second workspace. Relative entries resolve against
+	// the process working directory.
+	//
+	// It exists for one concrete layout: the engine runs with its cwd set to a
+	// subdirectory (heron-ai/) while the repositories it works on sit one level
+	// up (repos/), so every read of real code was rejected as "path escapes
+	// workspace" and the model fell back to Bash, which does not enforce the
+	// same boundary.
+	ReadRoots []string `yaml:"read_roots,omitempty" json:"read_roots,omitempty"`
 }
 
 // SSHConfig holds connection parameters for a remote SSH workspace.

@@ -178,6 +178,11 @@ jq -r 'select(.type=="agent.model_response"
 ```
 
 用于回答"这个结论基于哪个文件、哪个代码段"。
+
+`producer` 是归属依据（`team_id` / `call_id` / `call_turn_id`）。注意：**被派发的子 Team
+产出的记录会以 flow 作用域副本写进这里**，所以这个文件里出现"不是入口 Team 写的"
+记录是正常的，不是串数据。想知道某条记录交给了谁，看 `flow.jsonl` 的
+`shared_record.consumed`（`payload.consumer_team`）。
 ## 3. 聊天记录在哪看（用户问了什么 / 模型答了什么）
 
 这是最高频的排查需求。**对话不是存在一个"聊天记录文件"里，而是按层分散在三个位置**：
@@ -186,7 +191,8 @@ jq -r 'select(.type=="agent.model_response"
 |---|---|---|
 | **用户输入**（每一轮的提问原文） | `flow.jsonl` 的 `flow_turn.started` | `payload.turn.input` |
 | **模型每轮的原始回复** | `agent.jsonl` 的 `agent.model_response` | `payload.text`（含思考/JSON）、`payload.round` 标第几轮 |
-| **最终对用户的答复** | `evidence.jsonl` 的 SharedRecord | `summary`（已解析的成品文本） |
+| **这一轮对用户答了什么、谁写的** | `flow.jsonl` 的 `flow_turn` 终态 | `payload.reply` + `payload.team`（`intermediate=true` 表示这是进度不是答复，`reply` 为空） |
+| **成品文本与依据** | `evidence.jsonl` 的 SharedRecord | `summary`、`basis[]` |
 | 工具调用过程 | `agent.jsonl` 的 `tool_call.*` | `payload.tool_name` / `arguments` / `content` |
 | 内部提示（结构化重试等） | `agent.jsonl` 的 `agent.feedback` | `payload.content` |
 
@@ -198,6 +204,10 @@ jq -r 'select(.type=="flow_turn.started") | .payload.turn.input' $S/flow.jsonl
 
 # 模型每轮回复（text 里可能含 <think> 或待解析的 JSON）
 jq -r 'select(.type=="agent.model_response") | "[round \(.payload.round)] \(.payload.text)"' $S/agent.jsonl
+
+# 这一轮答了什么、由哪个 Team 写的（intermediate 的进度行没有 reply）
+jq -r 'select(.type|startswith("flow_turn.")) | select((.payload.reply // "") != "")
+       | "\(.flow_turn_id) [\(.payload.team // "-")] \(.payload.reply)"' $S/flow.jsonl
 
 # 最终答复（成品）
 jq -r '.summary' $S/evidence.jsonl

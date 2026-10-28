@@ -33,6 +33,31 @@ Flow → Team → Call → Agent / Command / Webhook
 
 ---
 
+## workspace（工作区，Flow / Team / Agent 三级继承）
+
+| 字段 | 含义 |
+|---|---|
+| `type` | `local`（默认）/ `ssh` |
+| `ssh` | 远程工作区配置（`host` / `user` / `key` 等） |
+| `read_roots` | **只读扩展根**：工作区根之外的目录，文件工具放行读取，写仍然拒绝 |
+
+- 工作区根是 heron 进程的 cwd，也就是 `.agents/` 的**上一级**。
+- 继承：Agent 覆盖 Team，Team 覆盖 Flow；都没写则用进程 cwd 作为 local 根。
+- `read_roots` 的相对路径按**进程 cwd** 解析，不是按配置文件所在目录。换部署位置后条目会失效，失效条目被**跳过**（不会导致启动失败），代价是那一刻读不到该目录。
+- 只读根只对读取类工具有效（`Read` / `Grep` / `Glob` / `CodeNav` 与目录遍历）；`Write` / `Edit` 始终被限制在工作区根内，不放行。
+
+典型用法——让 agent 读到工作区之外的代码库：
+
+```yaml
+workspace:
+  type: local
+  read_roots:
+    - ../repos
+    - ../.codebuddy
+```
+
+---
+
 ## Team（`.agents/teams/<name>.yml`）
 
 | 字段 | 类型 | 含义 |
@@ -188,9 +213,16 @@ frontmatter 分组：
 | `builtin` | 内置工具：Read/Write/Edit/Grep/Glob/Bash/WebSearch/WebFetch/CodeNav/AskUserQuestion/TodoWrite/TodoRead/Spawn/Collect/State/Define |
 | `custom` / `mcp` | 自定义 / MCP 工具 |
 
-> `Spawn`、`Collect`、`State`、`Define` 都是**按需开启**的工具：不写进
-> `builtin` 就既不会提供给模型，调用也会被允许清单拦下。`Define` 的语义
-> 见 `define.md`。
+> `Spawn`、`State`、`Define` 是**按需开启**的工具：不写进 `builtin` 就既不会
+> 提供给模型，调用也会被允许清单拦下。`Define` 的语义见 `define.md`。
+>
+> `Collect` 是例外：**声明了 `Team` 或 `Spawn` 时，引擎自动授予 `Collect`**（放入
+> 允许清单并暴露 schema）。派发了子任务就必须能收结果，不需要手写。
+>
+> 这个例外来自一次真实事故：只声明 `Team` 时，引擎回流结果会以模型名义写下一对
+> `Collect` 调用 + 结果；模型在转录里看到"自己调用过"，就跟着再调一次，而允许
+> 清单拒绝了它，于是模型反复重试直到轮次耗尽，那一轮没有任何答复。手动写
+> `Collect` 现在无害但不是必需。
 >
 > `WebSearch` / `WebFetch` 的数据源不在 Agent 层配，统一在 `.agents/settings.json`
 > 的 `web` 段。默认 provider `duckduckgo` 免 key，空配置即可搜；常见写法是
@@ -261,8 +293,20 @@ frontmatter 分组：
     - from: research          # 上游 call 名
       record: ResearchReport  # 上游产出的 record 名
   ```
-- **record 名称是自由字符串，无 schema 校验**——拼写必须与上游 `output.record` 完全一致，否则下游静默收不到。
+- **record 名称是自由字符串，schema 里没有枚举**——拼写必须与上游 `output.record` 完全一致，否则下游静默收不到。
+- 加载期会校验引用：`inputs` 里引用的 record 必须有人生产（存在对应的 `output.record`），`command` 里 `${records.X...}` 的 X 必须写在同一 call 的 `inputs` 里。写错在加载时就报错，不再等到运行时变成"缺字段"。
 - 调用不会自动读全部历史；需要什么就在 `inputs` 里声明什么。
+
+**作用域与可见性**
+
+| scope | 含义 |
+|---|---|
+| `team`（默认） | 产出它的 Team 自己用 |
+| `flow` | 整个 Flow 可见，下游按名就能匹配到 |
+
+- 被派发（通过 `Team` 工具调用起来）的子 Team，产出的记录会以 **flow 作用域的副本**写入 `evidence.jsonl`。这样调用方的 `flow_records` 才能按名读到它——否则子 Team 的结论只能留在它自己那一层。
+- 时间窗：被工具结果唤醒的回合只读**派发那一刻之后**产生的记录，上一轮问题的结论不会被当成本轮事实。窗口起点是派发，不是"收到结果"。
+- 想确认某条记录到底被谁消费，读 `shared_record.consumed` 事件（见下文运行时事件字段）。
 
 ## rules（`.agents/rules/<name>.md`）
 
@@ -305,6 +349,12 @@ priority: 10
 | `flow_turn.started` | `payload.turn.input` | **本轮用户输入原文** |
 | `flow_turn.*` | `payload.turn.status` | `running` / `waiting_input` / `failed` / `cancelled` |
 | `flow_turn.*` | `payload.session.status` | 会话级状态，正常结束为 `waiting_input` |
+| `flow_turn` 终态 | `payload.reply` | 这一轮给用户的答复（`intermediate=true` 时为空） |
+| `flow_turn` 终态 | `payload.team` | **写这条答复的 Team**（`origin` 只说明这轮怎么被唤醒，不是归属） |
+| `flow_turn` 终态 | `payload.contributors[]` | 这轮里每个 Team 说了什么、谁请求的——答复是复述时用它还原来源 |
+| `flow_turn` 终态 | `payload.deliveries[]` | 必须作为独立消息送达用户的结果：`message_id` / `team_id` / `text` |
+| `flow_turn` 终态 | `payload.intermediate` | `true` 表示这是内部进度而不是答案（`reply` 会被清空） |
+| `flow_turn.completed` | `payload.error` + `turn.status=cancelled` | 进程中断留下的悬空回合，在**下一个回合开始时**被补写为这个终态（`intermediate=true`），不属于本次运行的失败 |
 | `team_turn.completed` | `payload.team_result.Turn.next.action` | 路由：`proceed` / `activate` / `return` / `coordinate` / `fail` |
 | `team_turn.completed` | `payload.team_result.Turn.status` | team turn 状态 |
 | `team_turn.completed` | `payload.team_result.Reply` | 该 team 的最终文本 |
@@ -318,6 +368,9 @@ priority: 10
 | `tool_call.started` / `.completed` / `.failed` | `payload.tool_name` / `arguments` / `round`；`completed` 另有 `content`（结果）、`matches` 等 | 工具调用详情 |
 | `agent.feedback` | `payload.content`（+ 结构化重试时的 `payload.raw_text`） | 引擎追加的内部提示（如结构化重试）；`raw_text` 为被丢弃的模型原文 |
 | `shared_record.published` | `payload.record` | 发布的 record 全文 |
+| `shared_record.published` | `payload.record.producer` | 产出者：`team_id` / `call_id` / `call_turn_id` / `team_turn_id`（**顶层 `team_id` 为空，归属看这里**） |
+| `shared_record.published` | `payload.record.scope` | `team`（默认，产出者自用）/ `flow`（整个 flow 可见） |
+| `shared_record.consumed` | `payload.record` + `payload.consumer_team` | **某条 record 被交给了谁**（Flow 侧的移交事实，比从文本推断可靠） |
 | `evidence.jsonl` 每行 | `summary` / `basis[]` | 成品文本 / 依据的文件与行号 |
 
 > **大小写**：`payload.team_result` 下，叶子类型用小写（`Turn.next`、

@@ -241,3 +241,82 @@ func TestResumeForToolResultIsIdempotent(t *testing.T) {
 	second, _ := transcripts.Load(context.Background(), id)
 	require.Len(t, second.Messages, 6, "重复投递不再追加")
 }
+
+// 被调用方的结果回到调用方时，调用方声明了 flow_records，那条记录必须落进
+// 本轮的记录窗口。窗口若按"收到结果的那一刻"起算，刚产出的记录会因为它早
+// 了几百毫秒而被丢掉：调用方拿到了空输入，展示层也收不到 B→A 的消费边
+// （A→B fixture，2026-10-28 实测无 shared_record.consumed）。
+func TestResumeForToolResultKeepsRecordsPublishedAfterDispatch(t *testing.T) {
+	fileStore := storage.NewFileStore(t.TempDir())
+	writer := storage.NewJSONLSessionWriter(fileStore)
+	evidence := storage.NewJSONLEvidenceStore(fileStore)
+
+	recorder := &inputRecordingTeamRuntime{}
+	defs := testDefinitions()
+	defs.Flow.Teams["default"] = types.FlowTeamBinding{
+		ID:     "default",
+		TeamID: "default-team",
+		Inputs: types.InputSpec{FlowRecords: []string{"OwnerReply"}},
+	}
+	rt := newTestRuntime(defs, recorder, writer, evidence)
+	transcripts := newMemoryTranscripts()
+	rt.SetTranscriptStore(transcripts)
+
+	session := seedMailboxSession(t, rt, "fs-scope", types.SessionWaitingInput)
+
+	dispatched := time.Now().UTC().Add(-time.Minute)
+	require.NoError(t, evidence.Publish(context.Background(), session.ID, types.SharedRecord{
+		RecordID:  "stale-1",
+		Name:      "StaleReply",
+		Kind:      "agent_result",
+		Scope:     types.RecordScopeFlow,
+		Status:    types.RecordActive,
+		Revision:  1,
+		Summary:   "上一轮的结论",
+		CreatedAt: dispatched.Add(-time.Minute),
+	}))
+	require.NoError(t, evidence.Publish(context.Background(), session.ID, types.SharedRecord{
+		RecordID:  "fresh-1",
+		Name:      "OwnerReply",
+		Kind:      "agent_result",
+		Scope:     types.RecordScopeFlow,
+		Status:    types.RecordActive,
+		Revision:  1,
+		Summary:   "版本号是 v9.9.9。",
+		CreatedAt: dispatched.Add(30 * time.Second),
+	}))
+
+	tasks := &memoryTaskStore{}
+	tasks.tasks = []types.ToolTask{{
+		ID: "task-scope", FlowSessionID: session.ID, ToolCallID: "c0",
+		ToolName: types.ToolNameTeamRun, Status: types.ToolTaskCompleted, CreatedAt: dispatched,
+	}}
+	rt.SetTaskStore(tasks)
+
+	id := callerTranscriptID(session.ID, "default", "coordinator")
+	require.NoError(t, transcripts.Save(context.Background(), types.AgentTranscript{
+		ID:            id,
+		FlowSessionID: session.ID,
+		TeamID:        "default",
+		CallID:        "coordinator",
+		Messages: []types.Message{
+			{Role: "system", Content: "sys"},
+			{Role: "user", Content: "查一下版本号"},
+			{Role: "assistant", ToolCalls: []types.ToolCall{{ID: "c0", Name: "Team"}}},
+			{Role: "tool", ToolCallID: "c0", Content: `{"status":"accepted"}`},
+		},
+	}))
+
+	require.NoError(t, rt.ResumeForToolResult(context.Background(), session.ID, TeamResultSignal{
+		TaskID: "task-scope", CallerTeam: "default", CallID: "coordinator",
+		Status: "done", Reply: "版本号是 v9.9.9。",
+	}))
+
+	recorder.mu.Lock()
+	seen := append([]string(nil), recorder.records...)
+	recorder.mu.Unlock()
+	require.Contains(t, seen, "OwnerReply",
+		"派发之后产出的记录必须进入调用方本轮窗口")
+	require.NotContains(t, seen, "StaleReply",
+		"派发之前的记录仍要挡在外面，否则上一轮的结论会当成本轮事实")
+}

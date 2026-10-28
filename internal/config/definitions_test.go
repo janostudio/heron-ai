@@ -34,7 +34,7 @@ teams:
     depends_on: [default]
     inputs:
       - from: default
-        record: DiagnosisReport
+        record: AssistantReply
     on_proceed: [default]
 `), 0644))
 
