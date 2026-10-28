@@ -443,6 +443,15 @@ type ApprovalFlowRuntime interface {
 	ResumeApproval(ctx context.Context, sessionID, approvalID string, approved bool, reason string) (FlowTurnResult, error)
 }
 
+// PendingWorkRuntime is an optional transport extension: it reports work the
+// flow event stream does not record. A dispatched Team shows up in flow.jsonl
+// only once it answers, so a transport that wants to know whether the session
+// still owes a result has to ask — a follow_async subscription that read only
+// the events used to close while the Team was still working.
+type PendingWorkRuntime interface {
+	HasPendingTeamWork(ctx context.Context, sessionID string) bool
+}
+
 // AuditableApprovalFlowRuntime accepts the complete approval decision,
 // including approver identity and transport metadata. The older
 // ApprovalFlowRuntime remains as a compatibility adapter.

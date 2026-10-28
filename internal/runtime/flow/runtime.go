@@ -2393,6 +2393,14 @@ func replyPayloadField(reply string, intermediate bool) string {
 	return reply
 }
 
+// HasPendingTeamWork reports whether a Team dispatched from this session is
+// still running. Transports use it while following async turns: flow.jsonl
+// records a dispatched Team only when it answers, so without this a follower
+// sees an empty stream during the whole hand-over and closes early.
+func (r *Runtime) HasPendingTeamWork(ctx context.Context, sessionID string) bool {
+	return r.hasPendingTeamCall(ctx, sessionID)
+}
+
 // hasPendingTeamCall reports whether this session still has a Team call running.
 // It is the only signal that tells "this turn answered the user" apart from
 // "this turn handed work over and is waiting", and only the engine has it.

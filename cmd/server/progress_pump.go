@@ -38,6 +38,11 @@ var (
 	// mailbox wake-up starts a fresh turn a moment later, so an instant
 	// "no work" reading would close the window before the answer arrives.
 	followAsyncHold = 3 * time.Second
+	// followAsyncBusyPoll throttles the task-store lookup that tells the
+	// follower about work the event log cannot see (a running TeamRun task).
+	// Checking every poll would re-read session state ten times a second for a
+	// signal that only changes when a Team finishes.
+	followAsyncBusyPoll = 2 * time.Second
 )
 
 // eventPump forwards the session events of one flow turn to a JSON-RPC
@@ -73,6 +78,23 @@ type eventPump struct {
 	// the follower goroutine reads.
 	workMu sync.Mutex
 	work   backgroundWork
+
+	// busy reports outstanding work the event log cannot show. A TeamRun tool
+	// task lives in the task store, not in flow.jsonl, so a dispatch turn ends
+	// waiting_input with nothing left to fold while the dispatched Team is still
+	// running: backgroundPending() reads false, the follower closes the
+	// subscription three seconds later, and the answer written afterwards never
+	// reaches the caller (s24: the conclusion landed at 17:49 while the
+	// subscription had already stopped at 17:44).
+	//
+	// Nil means "no extra source", which keeps every existing caller and test
+	// working unchanged.
+	busy func(ctx context.Context, sessionID string) bool
+	// busyAt/busyResult throttle that lookup: the follower ticks every
+	// followAsyncPoll, and reading session state that often is needless IO.
+	busyMu     sync.Mutex
+	busyAt     time.Time
+	busyResult bool
 }
 
 func startEventPump(
@@ -244,7 +266,7 @@ func (p *eventPump) waitForIdle(ctx context.Context, sessionID string, maxWait t
 			})
 			return
 		}
-		if p.backgroundPending() {
+		if p.backgroundPending() || p.sessionBusy(ctx, sessionID) {
 			idleSince = time.Time{}
 			continue
 		}
@@ -292,6 +314,24 @@ func (p *eventPump) backgroundPending() bool {
 	p.workMu.Lock()
 	defer p.workMu.Unlock()
 	return p.work.pending()
+}
+
+// sessionBusy asks the caller-supplied source whether the session still owes
+// work that the event log does not record. Result is cached for
+// followAsyncBusyPoll so the 500ms follower loop does not re-read session
+// state on every tick.
+func (p *eventPump) sessionBusy(ctx context.Context, sessionID string) bool {
+	if p.busy == nil {
+		return false
+	}
+	p.busyMu.Lock()
+	defer p.busyMu.Unlock()
+	if time.Since(p.busyAt) < followAsyncBusyPoll {
+		return p.busyResult
+	}
+	p.busyResult = p.busy(ctx, sessionID)
+	p.busyAt = time.Now()
+	return p.busyResult
 }
 
 // backgroundWork is the part of the event log that decides whether a session
