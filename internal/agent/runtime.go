@@ -1582,6 +1582,23 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 	for _, name := range agent.Tools.MCP {
 		allowed[name] = struct{}{}
 	}
+	// Collect is the protocol half of Team/Spawn, not an optional capability.
+	// When a background result comes back the engine writes an assistant
+	// tool_call named Collect into the transcript so the protocol keeps its
+	// call/result pairing; the model then copies that call in later rounds. An
+	// agent allowed to hand work out but not to collect it gets every copied
+	// call rejected with "tool is not allowed", cannot tell what went wrong,
+	// and retries until its rounds run out (minimal two-Team fixture,
+	// 2026-10-27: the entry agent produced no final reply).
+	//
+	// Granting it here rather than requiring every Agent definition to list it
+	// keeps the two halves together: whoever can Team can Collect.
+	if _, teams := allowed[TeamToolName]; teams {
+		allowed["Collect"] = struct{}{}
+	}
+	if _, spawns := allowed["Spawn"]; spawns {
+		allowed["Collect"] = struct{}{}
+	}
 	filtered := make([]types.ToolCall, len(calls))
 	copy(filtered, calls)
 	for i, call := range filtered {
@@ -2639,6 +2656,23 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 		}
 		if schema, ok := builtinSchemas[toolName]; ok {
 			schemas = append(schemas, schema)
+		}
+	}
+	// Keep visibility in step with execution: Collect is granted to any agent
+	// that can Team or Spawn (see executeToolCalls), so the schema has to be
+	// advertised too. Advertising without allowing was the original bug; here
+	// the risk is the mirror image — allowing without advertising leaves the
+	// model copying a call it never learned the parameters for.
+	if _, teams := seen[TeamToolName]; teams {
+		if _, already := seen["Collect"]; !already {
+			seen["Collect"] = struct{}{}
+			schemas = append(schemas, builtinSchemas["Collect"])
+		}
+	}
+	if _, spawns := seen["Spawn"]; spawns {
+		if _, already := seen["Collect"]; !already {
+			seen["Collect"] = struct{}{}
+			schemas = append(schemas, builtinSchemas["Collect"])
 		}
 	}
 	// MCP tools are the second half of the same visibility contract as

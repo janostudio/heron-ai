@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -99,6 +100,9 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 	}
 	if err := validateAgentSupportDefinitions(flow, teams, agents, skills, flowTeamScopes); err != nil {
 		return nil, fmt.Errorf("validate agent support: %w", err)
+	}
+	if err := validateRecordReferences(flow, teams, flowTeamScopes); err != nil {
+		return nil, fmt.Errorf("validate record references: %w", err)
 	}
 
 	workspace, err := resolveWorkspace(flow, teams, agents)
@@ -536,6 +540,166 @@ func validateAgentCallDefinitions(flow types.Flow, teams map[string]types.Team, 
 					call.AgentID,
 				)
 			}
+		}
+	}
+	return nil
+}
+
+// builtinRecordProducers are records the engine publishes itself. They have no
+// definition entry to point at, so they are exempt from the producer check.
+var builtinRecordProducers = map[string]struct{}{
+	"TeamFailureReport": {},
+}
+
+// recordPlaceholder matches ${records.<Name>...} in a command call.
+var recordPlaceholder = regexp.MustCompile(`\$\{records\.([A-Za-z0-9_.-]+)`)
+
+// validateRecordReferences closes two gaps that used to surface only at
+// runtime, as an empty input or a failed command:
+//
+//  1. An input naming a record no Team or Call publishes. The turn then starts
+//     without that record and the agent reports "no evidence" instead of the
+//     configuration error it actually is.
+//  2. A command call using ${records.X...} without declaring X in its inputs.
+//     The command fails on the missing field, which reads like a runtime bug.
+//
+// Only local Teams are checked; package-scoped Teams resolve their own calls.
+func validateRecordReferences(flow types.Flow, teams map[string]types.Team, flowTeamScopes map[string]string) error {
+	producers := map[string]string{}
+	register := func(name, where string) {
+		if strings.TrimSpace(name) == "" {
+			return
+		}
+		if _, exists := producers[name]; !exists {
+			producers[name] = where
+		}
+	}
+
+	for flowTeamName, binding := range flow.Teams {
+		team, ok := teams[binding.TeamID]
+		if !ok {
+			continue
+		}
+		if _, scoped := flowTeamScopes[binding.TeamID]; scoped {
+			continue
+		}
+		_ = flowTeamName
+		register(team.Output.Record, "team "+team.ID)
+		register(team.Outputs.Record, "team "+team.ID)
+		for _, output := range team.Output.Records {
+			register(output.Record, "team "+team.ID)
+		}
+		for _, output := range team.Outputs.Records {
+			register(output.Record, "team "+team.ID)
+		}
+		for callName, call := range team.Calls {
+			where := "team " + team.ID + " call " + callName
+			register(call.Output.Record, where)
+			for _, output := range call.Output.Records {
+				register(output.Record, where)
+			}
+		}
+	}
+
+	checkInputs := func(owner string, spec types.InputSpec) error {
+		for _, name := range spec.FlowRecords {
+			if err := requireProducer(owner, name, producers); err != nil {
+				return err
+			}
+		}
+		for _, name := range spec.TeamRecords {
+			if err := requireProducer(owner, name, producers); err != nil {
+				return err
+			}
+		}
+		for _, input := range spec.Records {
+			if err := requireProducer(owner, input.Record, producers); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for flowTeamName, binding := range flow.Teams {
+		team, ok := teams[binding.TeamID]
+		if !ok {
+			continue
+		}
+		if _, scoped := flowTeamScopes[binding.TeamID]; scoped {
+			continue
+		}
+		if err := checkInputs("flow team "+flowTeamName, binding.Inputs); err != nil {
+			return err
+		}
+		if err := checkInputs("team "+team.ID, team.Inputs); err != nil {
+			return err
+		}
+		for callName, call := range team.Calls {
+			owner := "team " + team.ID + " call " + callName
+			if err := checkInputs(owner, call.Inputs); err != nil {
+				return err
+			}
+			if err := validateCommandPlaceholders(owner, call); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func requireProducer(owner, record string, producers map[string]string) error {
+	if strings.TrimSpace(record) == "" {
+		return nil
+	}
+	if _, builtin := builtinRecordProducers[record]; builtin {
+		return nil
+	}
+	if _, exists := producers[record]; exists {
+		return nil
+	}
+	return fmt.Errorf("%s inputs reference record %q, but no team or call publishes it", owner, record)
+}
+
+// validateCommandPlaceholders enforces the documented rule that a command may
+// only interpolate records its inputs declare. Failing here beats failing at
+// runtime with "missing field".
+func validateCommandPlaceholders(owner string, call types.Call) error {
+	if call.Command == nil {
+		return nil
+	}
+	declared := map[string]struct{}{}
+	for _, name := range call.Inputs.FlowRecords {
+		declared[name] = struct{}{}
+	}
+	for _, name := range call.Inputs.TeamRecords {
+		declared[name] = struct{}{}
+	}
+	for _, input := range call.Inputs.Records {
+		if input.Record != "" {
+			declared[input.Record] = struct{}{}
+		}
+		if input.As != "" {
+			declared[input.As] = struct{}{}
+		}
+	}
+
+	texts := []string{call.Command.Command}
+	texts = append(texts, call.Command.Args...)
+	for _, value := range call.Command.Env {
+		texts = append(texts, value)
+	}
+	for _, text := range texts {
+		for _, match := range recordPlaceholder.FindAllStringSubmatch(text, -1) {
+			name := match[1]
+			// ${records.X.Summary} / ${records.X.Data.y}: the record is the
+			// first segment.
+			if dot := strings.Index(name, "."); dot >= 0 {
+				name = name[:dot]
+			}
+			if _, ok := declared[name]; ok {
+				continue
+			}
+			return fmt.Errorf("%s command references ${records.%s}, but its inputs do not declare that record", owner, name)
 		}
 	}
 	return nil

@@ -24,6 +24,7 @@ flow_session_id           → sessions/<fs_id>/ 目录（一次对话）
 | flow | `team_turn.started` | ✓ | ✓ | ✓ | ✓ | | |
 | flow | `team_turn.completed` | ✓ | ✓ | ✓ | ✓ | | |
 | flow | `shared_record.published` | ✓ | ✓ | **✗** | ✓ | | |
+| flow | `shared_record.consumed` | ✓ | ✓ | ✓ | ✓ | | |
 | team | `agent_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | team | `command_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | agent | `agent.model_response` | ✓ | **✗** | ✓ | ✓ | ✓ | ✓ |
@@ -39,6 +40,10 @@ flow_session_id           → sessions/<fs_id>/ 目录（一次对话）
 3. **只有 agent call 会写 `agent.jsonl`**。command call（`command_turn.*`）只出现在
    `team.jsonl`，没有对应的 `agent.model_response`；它的输出在
    `command_turn.completed.payload` 里。
+
+补一条正面对照：**`shared_record.consumed` 顶层有 `team_id`**，值是消费方（拿到这条
+record 的 Team 绑定名）。查"B 的产出交给了谁"用它，不必反推 `producer`：
+`published` 说明谁写的，`consumed` 说明谁用了，两者是独立事实。
 
 ### 9.3 串联查询
 

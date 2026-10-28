@@ -75,7 +75,14 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 	// not hand work on, did not write. Its reply is a sentence about work it is
 	// not doing — s19's "已转给执行侧核实…" arrived this way, in eight seconds,
 	// with the task never leaving the caller.
-	if spec.CallerTeam != "" && totalToolCalls(execution.result) == 0 {
+	//
+	// The rule only applies to a Team that HAS tools. An agent whose whole job
+	// is to answer a question (no Read, no Bash, no Team) is finished when it
+	// replies; requiring a tool call there fails every such call and the caller
+	// is told the callee "did not do the work" after it already did
+	// (minimal A→B fixture, 2026-10-27: worker answered the version, was marked
+	// failed, and the entry agent retried twice before giving up).
+	if spec.CallerTeam != "" && totalToolCalls(execution.result) == 0 && teamDeclaresTools(defs, spec.TeamID) {
 		return types.TeamCallOutcome{
 			Status: "failed",
 			Error: fmt.Sprintf(
@@ -334,4 +341,38 @@ func totalToolCalls(result types.TeamTurnResult) int {
 		total += call.ToolCalls
 	}
 	return total
+}
+
+// teamDeclaresTools reports whether any agent call of the given flow binding
+// declares at least one tool. It is what separates "an execution team that said
+// something instead of working" from "a team whose job is to answer", which the
+// no-tool-call failure rule must not treat the same way.
+func teamDeclaresTools(defs *types.Definitions, bindingID string) bool {
+	binding, ok := defs.Flow.Teams[bindingID]
+	if !ok {
+		return false
+	}
+	team, ok := defs.Teams[binding.TeamID]
+	if !ok {
+		return false
+	}
+	// A Team with no calls at all is a configuration error, not evidence that
+	// it is answer-only. Keeping the old failure there avoids weakening the
+	// guard for the case it was written for.
+	if len(team.Calls) == 0 {
+		return true
+	}
+	for _, call := range team.Calls {
+		if call.Type != types.CallAgent {
+			continue
+		}
+		agent, ok := defs.Agents[call.AgentID]
+		if !ok {
+			continue
+		}
+		if len(agent.Tools.Builtin) > 0 || len(agent.Tools.Custom) > 0 || len(agent.Tools.MCP) > 0 {
+			return true
+		}
+	}
+	return false
 }

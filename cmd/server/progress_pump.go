@@ -52,6 +52,10 @@ type eventPump struct {
 
 	flowTurnID string
 	afterSeq   int64
+	// followAll stops the per-turn filter once the caller starts waiting for
+	// turns it did not start (follow_async). Set by waitForIdle; never cleared,
+	// because a pump that follows is released when following ends.
+	followAll atomic.Bool
 	// lastSeq is the highest seq handed to emit. Notifications are strictly
 	// increasing so a client can drop duplicates.
 	//
@@ -171,7 +175,12 @@ func (p *eventPump) handle(event storage.SessionEvent) {
 	if event.Seq <= p.lastSeq.Load() {
 		return
 	}
-	if p.flowTurnID != "" && event.FlowTurnID != p.flowTurnID {
+	// The turn filter exists so a caller sees only the turn it asked about.
+	// While following async work the caller is waiting for a DIFFERENT turn:
+	// the dispatch turn ends, the engine starts the follow-up one, and its
+	// status frame carries the answer. Filtering by the original turn threw that
+	// frame away and the user never saw the result (A→B fixture, 2026-10-28).
+	if !p.followAll.Load() && p.flowTurnID != "" && event.FlowTurnID != p.flowTurnID {
 		return
 	}
 	params := projectSessionEvent(event)
@@ -212,6 +221,14 @@ func (p *eventPump) waitForIdle(ctx context.Context, sessionID string, maxWait t
 	// One full replay seeds the state; every event after that arrives through
 	// the subscription and is applied incrementally (track).
 	p.seedBackgroundWork(ctx, sessionID)
+
+	// From here on the caller is waiting for turns it did not start, so the
+	// per-turn filter must stop applying.
+	p.followAll.Store(true)
+	logging.Info("progress pump: following", map[string]any{
+		"session_id": sessionID,
+		"last_seq":   p.lastSeq.Load(),
+	})
 
 	var idleSince time.Time
 	for {
@@ -283,12 +300,22 @@ func (p *eventPump) backgroundPending() bool {
 // 500ms interval a 15-minute follow used to parse the entire JSONL ~1800 times,
 // each parse holding the writer's global lock and blocking every event append.
 type backgroundWork struct {
-	openMail     map[string]struct{}
+	openMail  map[string]struct{}
+	openTeams map[string]struct{}
+	// openFlows closes the gap between "the callee's team_turn completed" and
+	// "the caller's follow-up FlowTurn started": at that instant no mailbox
+	// message and no TeamTurn are open, so the follower used to stop before the
+	// final answer existed.
+	openFlows    map[string]struct{}
 	lastTerminal *storage.SessionEvent
 }
 
 func newBackgroundWork() backgroundWork {
-	return backgroundWork{openMail: make(map[string]struct{})}
+	return backgroundWork{
+		openMail:  make(map[string]struct{}),
+		openTeams: make(map[string]struct{}),
+		openFlows: make(map[string]struct{}),
+	}
 }
 
 // backgroundWorkFromEvents folds a complete event log. The follower uses the
@@ -303,11 +330,21 @@ func backgroundWorkFromEvents(events []storage.SessionEvent) backgroundWork {
 }
 
 func (b *backgroundWork) apply(event storage.SessionEvent) {
+	if b.openFlows == nil {
+		b.openFlows = make(map[string]struct{})
+	}
 	switch event.Type {
+	case types.EventFlowTurnStarted:
+		if id := strings.TrimSpace(event.FlowTurnID); id != "" {
+			b.openFlows[id] = struct{}{}
+		}
 	case types.EventFlowTurnCompleted,
 		types.EventFlowTurnWaitingInput,
 		types.EventFlowTurnWaitingTool,
 		types.EventFlowTurnWaitingApproval:
+		if id := strings.TrimSpace(event.FlowTurnID); id != "" {
+			delete(b.openFlows, id)
+		}
 		copied := event
 		b.lastTerminal = &copied
 	case types.EventMailboxMessageEnqueued, types.EventMailboxMessageClaimed:
@@ -318,11 +355,34 @@ func (b *backgroundWork) apply(event storage.SessionEvent) {
 		if id := mailboxMessageID(event.Payload); id != "" {
 			delete(b.openMail, id)
 		}
+	case types.EventTeamTurnStarted:
+		// A Team that is still executing is work the caller is waiting on,
+		// even when the turn that activated it has already finished with a
+		// plain proceed route and no mailbox message is open. Without this the
+		// follower closed three seconds after the activator ended and the
+		// replies of the following turns never reached the client.
+		if id := event.TeamTurnID; id != "" {
+			if b.openTeams == nil {
+				b.openTeams = make(map[string]struct{})
+			}
+			b.openTeams[id] = struct{}{}
+		}
+	case types.EventTeamTurnCompleted,
+		types.EventTeamTurnWaitingInput,
+		types.EventTeamTurnWaitingTool,
+		types.EventTeamTurnWaitingApproval:
+		// A paused TeamTurn no longer owes the caller background work: the
+		// engine will not continue on its own, and the pause event itself has
+		// already been forwarded. Treating only completed as terminal would
+		// keep the subscription alive until followAsyncMaxWait.
+		if id := event.TeamTurnID; id != "" {
+			delete(b.openTeams, id)
+		}
 	}
 }
 
 func (b backgroundWork) pending() bool {
-	if len(b.openMail) > 0 {
+	if len(b.openMail) > 0 || len(b.openTeams) > 0 || len(b.openFlows) > 0 {
 		return true
 	}
 	if b.lastTerminal == nil {

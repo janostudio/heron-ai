@@ -80,7 +80,8 @@ heron --json-rpc --flow .agents/flows/default.yml
   编排 + `shared_record.*`）、`team.jsonl`（agent call 时间线，token 消耗在此可查）、
   `agent.jsonl`（模型输出与工具调用）
 - evidence 落盘 `.agents/data/sessions/<fs_id>/evidence.jsonl`（Flow-scope SharedRecord，
-  有 Flow 级记录时才出现）
+  有 Flow 级记录时才出现；被派发的子 Team 产出的记录会以 flow 作用域副本写进来，
+  所以里面出现非入口 Team 写的记录是正常的）
 - 状态快照落盘 `teams/<team_id>/state.md`、`agents/<team_id>/<call_id>/state.md`
 - 这些是运行时产物，勿提交（`.gitignore` 已忽略 `.agents/data/`）。
 

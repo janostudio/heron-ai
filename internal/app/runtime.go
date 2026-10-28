@@ -90,7 +90,11 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	if definitions.Workspace != nil && definitions.Workspace.Type != "" && definitions.Workspace.Type != "local" {
 		workspaceService, err = workspace.New(*definitions.Workspace, workspaceRoot, injectEnv)
 	} else {
-		workspaceService, err = workspace.NewLocal(workspaceRoot, injectEnv)
+		var readRoots []string
+		if definitions.Workspace != nil {
+			readRoots = definitions.Workspace.ReadRoots
+		}
+		workspaceService, err = workspace.NewLocalWithReadRoots(workspaceRoot, readRoots, injectEnv)
 	}
 	if err != nil {
 		return nil, err

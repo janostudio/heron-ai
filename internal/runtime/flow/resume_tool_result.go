@@ -133,8 +133,20 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	if activator == "" {
 		activator = transcript.TeamID
 	}
+	// The resumed turn answers the question that dispatched this call, so its
+	// record window starts when the call was dispatched — not when the callee
+	// finished. Anchoring at "now" excluded the very record that triggered the
+	// resume (published a moment earlier), which left the caller's declared
+	// flow_records empty and produced no shared_record.consumed edge for the
+	// display layer to draw (A→B fixture, 2026-10-28).
+	scopeSince := time.Now().UTC()
+	if r.tasks != nil {
+		if task, taskErr := r.tasks.Load(ctx, signal.TaskID); taskErr == nil && task != nil && !task.CreatedAt.IsZero() {
+			scopeSince = task.CreatedAt
+		}
+	}
 	_, runErr := r.runTurnWithOrigin(ctx, r.definitions.Snapshot(), session, "", nil,
-		[]activation{{teamID: activator}}, turnOriginTool, time.Now().UTC(), nil)
+		[]activation{{teamID: activator}}, turnOriginTool, scopeSince, nil)
 	if runErr != nil {
 		return fmt.Errorf("run turn for tool result: %w", runErr)
 	}

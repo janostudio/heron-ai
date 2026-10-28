@@ -38,6 +38,11 @@ const (
 	EventTeamTurnWaitingTool     = "team_turn.waiting_tool"
 	EventTeamTurnWaitingApproval = "team_turn.waiting_approval"
 	EventSharedRecordPublished   = "shared_record.published"
+	// EventSharedRecordConsumed records that a Team is being handed an existing
+	// record. It exists so a display layer can say which Team uses which
+	// production ("B → A") without duplicating the content: the production is
+	// shown once, at its producer, and every use is an edge.
+	EventSharedRecordConsumed = "shared_record.consumed"
 	EventRecoveryRequested       = "recovery.requested"
 	EventRecoveryCompleted       = "recovery.completed"
 

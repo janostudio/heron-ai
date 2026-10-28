@@ -18,6 +18,10 @@
 └── settings.json           # 引擎全局设置
 ```
 
+`.agents/` 的**上一级就是工作区根**（heron 进程的 cwd）。文件工具的读写默认都限制在
+这个根里；要读根之外的目录（例如同级放着的代码仓库），在 `workspace.read_roots` 里
+列出来，读取放行、写入仍拒绝。详见 `fields.md` 的 workspace 节。
+
 ## 编排层次
 
 ```

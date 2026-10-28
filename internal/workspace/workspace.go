@@ -60,11 +60,26 @@ type localWorkspace struct {
 	// injectEnv 是注入每条子进程（command call 与 Bash 工具）的全局环境变量。
 	// 由 runtime 从 settings.json 的 env 段解析后传入；nil 表示不注入。
 	injectEnv map[string]string
+	// readRoots 是主 workspace 根之外允许 READ 的目录，已解析为绝对路径。
+	// 典型场景：engine 的 cwd 是 heron-ai/，而它要读的 repos/ 在上一级。
+	// 写入一律拒绝——只读扩展不是第二个 workspace。
+	readRoots []string
 }
 
 // NewLocal 构造本地执行后端。injectEnv 可选（可变参数）：传入时其键值会
 // 注入每条子进程（覆盖同名进程环境变量）。
 func NewLocal(root string, injectEnv ...map[string]string) (Workspace, error) {
+	return NewLocalWithReadRoots(root, nil, injectEnv...)
+}
+
+// NewLocalWithReadRoots 构造带"根外只读目录"的本地后端。
+//
+// readRoots 里的目录对 Read/Grep/Glob/CodeNav 可见，对 Write/Edit 不可见。
+// 加这个能力的原因是一个具体冲突：engine 的工作区根是进程 cwd（例如
+// auto_bugfix/heron-ai），而它要操作的业务仓库在上一级
+// （auto_bugfix/repos）。路径校验按根拒绝，模型只能改走 Bash——而 Bash 不受
+// 这套校验约束，反而把边界绕过去了。给出一个显式的只读扩展比留这个后门安全。
+func NewLocalWithReadRoots(root string, readRoots []string, injectEnv ...map[string]string) (Workspace, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("workspace root is required")
 	}
@@ -83,7 +98,45 @@ func NewLocal(root string, injectEnv ...map[string]string) (Workspace, error) {
 	if len(injectEnv) > 0 {
 		env = injectEnv[0]
 	}
-	return &localWorkspace{root: filepath.Clean(absolute), injectEnv: env}, nil
+	normalizedRoots := make([]string, 0, len(readRoots))
+	for _, candidate := range readRoots {
+		if strings.TrimSpace(candidate) == "" {
+			continue
+		}
+		abs, absErr := filepath.Abs(candidate)
+		if absErr != nil {
+			return nil, fmt.Errorf("resolve read-only root %q: %w", candidate, absErr)
+		}
+		// Resolve symlinks once at construction: the permit check below is a
+		// prefix comparison, and a link recorded in its own spelling would
+		// never match the resolved path the tools actually open.
+		resolved, resolveErr := filepath.EvalSymlinks(abs)
+		if resolveErr != nil {
+			// A read-only root is an optional extension of the workspace, not a
+			// precondition for running: relative entries resolve against the
+			// process cwd, so a config that is right in one deployment is wrong
+			// in another. Refusing to start over it turns a missing convenience
+			// into an outage (test instance under /tmp, 2026-10-27).
+			continue
+		}
+		normalizedRoots = append(normalizedRoots, filepath.Clean(resolved))
+	}
+	return &localWorkspace{
+		root:      filepath.Clean(absolute),
+		injectEnv: env,
+		readRoots: normalizedRoots,
+	}, nil
+}
+
+// permitsReadRoot reports whether path (resolved, absolute) sits inside one of
+// the configured read-only roots.
+func (s *localWorkspace) permitsReadRoot(path string) bool {
+	for _, root := range s.readRoots {
+		if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *localWorkspace) Root() string {
@@ -114,7 +167,7 @@ func (s *localWorkspace) ResolvePathForToolRestricted(path string, restrict Rest
 	if err != nil {
 		return "", "", err
 	}
-	if !restrict.permits(relative) {
+	if !filepath.IsAbs(relative) && !restrict.permits(relative) {
 		// Same shape as Read: report absence rather than refusal, so the
 		// caller cannot use this to probe which paths exist.
 		return "", "", fmt.Errorf("%w: %s", ErrFileNotFound, relative)
@@ -162,7 +215,7 @@ func (s *localWorkspace) Read(ctx context.Context, req ReadRequest) (ReadResult,
 	// "link" points into a denied directory must be denied too, and only the
 	// resolved form can see that. Reading the file first and filtering the
 	// result would already have opened it.
-	if !req.Restrict.permits(relative) {
+	if !filepath.IsAbs(relative) && !req.Restrict.permits(relative) {
 		// ErrFileNotFound, not a distinct "denied" error: a separate error
 		// would confirm that the file exists and is off limits, which is
 		// exactly the fact the restriction exists to withhold. The read
@@ -282,6 +335,13 @@ func (s *localWorkspace) Write(ctx context.Context, req WriteRequest) (WriteResu
 	// ErrFileNotFound is reused rather than a new sentinel, so a caller that
 	// branches on "no such file" keeps working without a new case, and so
 	// the read and write sides of the restriction stay one concept.
+	if filepath.IsAbs(relative) {
+		// Read-only extension: the path is inside a configured read root, and
+		// a read root never becomes writable. Refused loudly for the reason in
+		// the comment above — a silent skip would let the model build on a file
+		// that was never written.
+		return WriteResult{}, fmt.Errorf("%w: %s (read-only root)", ErrPathOutsideWorkspace, relative)
+	}
 	if !req.Restrict.permits(relative) {
 		return WriteResult{}, fmt.Errorf("%w: %s", ErrFileNotFound, relative)
 	}
@@ -540,7 +600,7 @@ func (s *localWorkspace) GlobWithOptions(ctx context.Context, req GlobRequest) (
 		// descend at all. permits covers files too, so this one check
 		// handles both; a directory that is allowed back (a caller's own
 		// private tree, see Restriction) is not pruned.
-		if !req.Restrict.permits(relative) {
+		if !filepath.IsAbs(relative) && !req.Restrict.permits(relative) {
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
@@ -656,12 +716,12 @@ func (s *localWorkspace) Search(ctx context.Context, req SearchRequest) (SearchR
 			// has to be caught here — otherwise every file inside it is
 			// read from disk before being discarded, which is both wasteful
 			// and one refactor away from returning what it just read.
-			if !req.Restrict.permits(relative) {
+			if !filepath.IsAbs(relative) && !req.Restrict.permits(relative) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !req.Restrict.permits(relative) {
+		if !filepath.IsAbs(relative) && !req.Restrict.permits(relative) {
 			return nil
 		}
 		if req.Include != "" {
@@ -755,7 +815,22 @@ func (s *localWorkspace) resolve(path string) (string, string, error) {
 	// decision and the IO on the same file.
 	resolved, err := s.resolveWithinWorkspace(clean)
 	if err != nil {
-		return "", "", err
+		if !errors.Is(err, ErrPathOutsideWorkspace) || !s.permitsReadRoot(clean) {
+			return "", "", err
+		}
+		// Outside the workspace but inside a configured read-only root. The
+		// trick below: return the absolute path as "relative". Callers treat a
+		// leading separator as the external marker and must refuse writes.
+		external, externalErr := resolveSymlinksDeepest(clean)
+		if externalErr != nil {
+			return "", "", externalErr
+		}
+		if !s.permitsReadRoot(external) {
+			// A link inside an allowed root that points outside it must not
+			// widen the grant.
+			return "", "", fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
+		}
+		return external, external, nil
 	}
 	root, err := filepath.EvalSymlinks(s.root)
 	if err != nil {
@@ -804,6 +879,36 @@ func (s *localWorkspace) resolveWithinWorkspace(path string) (string, error) {
 	relative, err := filepath.Rel(root, filepath.Clean(resolved))
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
+	}
+	return filepath.Clean(resolved), nil
+}
+
+// resolveSymlinksDeepest resolves every symlink in path, tolerating a tail that
+// does not exist yet: the deepest existing ancestor is resolved and the missing
+// segments are appended. It performs no containment check — callers decide what
+// the result is allowed to be.
+func resolveSymlinksDeepest(path string) (string, error) {
+	existing := path
+	var missing []string
+	for {
+		if _, statErr := os.Lstat(existing); statErr == nil {
+			break
+		} else if !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return "", fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
+		}
+		missing = append([]string{filepath.Base(existing)}, missing...)
+		existing = parent
+	}
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return "", err
+	}
+	for _, segment := range missing {
+		resolved = filepath.Join(resolved, segment)
 	}
 	return filepath.Clean(resolved), nil
 }

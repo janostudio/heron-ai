@@ -27,6 +27,7 @@ const (
 	progressTypeToolUse           = "tool_use"
 	progressTypeToolResult        = "tool_result"
 	progressTypeRecordPublished   = "record_published"
+	progressTypeRecordConsumed    = "record_consumed"
 	progressTypeStatus            = "status"
 )
 
@@ -104,6 +105,8 @@ func projectSessionEvent(event storage.SessionEvent) map[string]any {
 		return projectToolFailed(base, event)
 	case types.EventSharedRecordPublished:
 		return projectRecordPublished(base, event.Payload)
+	case types.EventSharedRecordConsumed:
+		return projectRecordConsumed(base, event.Payload)
 	case types.EventFlowTurnWaitingInput, types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
 		base["type"] = progressTypeStatus
 		base["status"] = waitingEventStatus(event.Type)
@@ -346,7 +349,71 @@ func projectRecordPublished(base map[string]any, payload map[string]any) map[str
 	base["status"] = status
 	base["revision"] = revision
 	base["summary"] = truncateUTF8(summary, progressMaxTextBytes)
+	// The producer is what lets a connector say "Team B produced this" instead
+	// of showing an anonymous record. Without it the only attribute available is
+	// the text itself, and the display rule "attribute every production to its
+	// producer" cannot be implemented at all.
+	if producer := payloadRecordProducer(payload); len(producer) > 0 {
+		base["producer"] = producer
+	}
 	return base
+}
+
+// projectRecordConsumed turns "this Team was handed this record" into a frame.
+// It carries no content on purpose: the content belongs to the producer's
+// record_published frame, and repeating it here is exactly the duplication the
+// display rules forbid.
+func projectRecordConsumed(base map[string]any, payload map[string]any) map[string]any {
+	name, _, _, _, _ := payloadRecord(payload)
+	if name == "" {
+		return nil
+	}
+	base["type"] = progressTypeRecordConsumed
+	base["record_name"] = name
+	if consumer := payloadString(payload, "consumer_team"); consumer != "" {
+		base["consumer_team"] = consumer
+	}
+	return base
+}
+
+// payloadRecordProducer extracts the producing identity from a record payload,
+// accepting both the live struct and its replayed JSON form.
+func payloadRecordProducer(payload map[string]any) map[string]any {
+	switch record := payload["record"].(type) {
+	case types.SharedRecord:
+		return producerFields(record.Producer)
+	case map[string]any:
+		producer, _ := record["producer"].(map[string]any)
+		if len(producer) == 0 {
+			return nil
+		}
+		fields := make(map[string]any, 3)
+		for _, key := range []string{"team_id", "call_id", "team_turn_id"} {
+			if value, ok := producer[key].(string); ok && value != "" {
+				fields[key] = value
+			}
+		}
+		return fields
+	default:
+		return nil
+	}
+}
+
+func producerFields(producer types.ProducerRef) map[string]any {
+	fields := make(map[string]any, 3)
+	if producer.TeamID != "" {
+		fields["team_id"] = producer.TeamID
+	}
+	if producer.CallID != "" {
+		fields["call_id"] = producer.CallID
+	}
+	if producer.TeamTurnID != "" {
+		fields["team_turn_id"] = producer.TeamTurnID
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	return fields
 }
 
 // toolUseID is the connector-facing pairing key. It has to combine the call
