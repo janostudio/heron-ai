@@ -316,6 +316,13 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 			s.releasePump(sessionID, pump)
 			return
 		}
+		// The pump folds flow events only, and a TeamRun tool task is not one
+		// of them: it lives in the task store. Without this the follower sees
+		// an empty event log while a dispatched Team is still working, closes
+		// the subscription followAsyncHold later, and the answer written
+		// afterwards is never forwarded (s24: subscription stopped 17:44, the
+		// conclusion landed 17:49 and never reached the client).
+		pump.busy = s.pendingTeamWork
 		go func() {
 			pump.waitForIdle(ctx, sessionID, followAsyncMaxWait)
 			s.releasePump(sessionID, pump)
@@ -370,6 +377,22 @@ func (s *jsonRPCServer) startTurnPump(ctx context.Context, sessionID string) *ev
 	pump := startEventPump(ctx, s.sessions, sessionID, "", replay.LastSeq, s.writeProgress)
 	s.pumps[sessionID] = pump
 	return pump
+}
+
+// pendingTeamWork reports whether the session still has an outstanding TeamRun
+// tool task. The follower reads the flow event log, which holds no record of
+// those tasks: a dispatch turn therefore ends waiting_input with an empty event
+// log while the Team it handed work to is still running. Treating that as idle
+// is what dropped s24's conclusion.
+func (s *jsonRPCServer) pendingTeamWork(ctx context.Context, sessionID string) bool {
+	if s.runtime == nil || strings.TrimSpace(sessionID) == "" {
+		return false
+	}
+	pending, ok := s.runtime.(types.PendingWorkRuntime)
+	if !ok {
+		return false
+	}
+	return pending.HasPendingTeamWork(ctx, sessionID)
 }
 
 // registerPump records the session's streaming pump so later turns attach to
