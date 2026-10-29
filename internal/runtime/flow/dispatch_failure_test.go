@@ -410,11 +410,16 @@ func TestDrainTeamInboxLaunchesPendingMessage(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Empty inbox: nothing to launch.
+	// The Team is mid-round: the drain must leave the message pending. Holding
+	// the slot explicitly is what makes this deterministic — without it the
+	// first drain launches the message and the assertion races the dispatcher
+	// goroutine, which may already have run the Team.
+	require.True(t, runtime.tryMarkTeamBusy(session.ID, "verify"))
 	runtime.drainTeamInbox(ctx, session, "verify")
 	require.Equal(t, 0, fake.verifyRuns())
+	runtime.clearTeamBusy(session.ID, "verify")
 
-	// With the message pending, the drain launches it.
+	// With the slot free, the drain launches it.
 	runtime.drainTeamInbox(ctx, session, "verify")
 	waitForDispatchersDone(t, runtime, session.ID)
 	require.Equal(t, 1, fake.verifyRuns())
