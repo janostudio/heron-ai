@@ -21,10 +21,6 @@ const (
 	// progressPumpReconnects bounds how many times the pump re-subscribes
 	// after storage dropped it for falling behind.
 	progressPumpReconnects = 2
-	// followAsyncMaxWait caps how long one turn may keep following. A model
-	// call can legitimately take minutes; a wedged Team must not hold the
-	// subscription (and the caller's stdout) forever.
-	followAsyncMaxWait = 15 * time.Minute
 )
 
 // The follow cadence is a var so tests can shorten it; production keeps the
@@ -43,6 +39,17 @@ var (
 	// Checking every poll would re-read session state ten times a second for a
 	// signal that only changes when a Team finishes.
 	followAsyncBusyPoll = 2 * time.Second
+	// followAsyncSilenceLimit is how long a session may keep a task running
+	// without emitting a single event before the follower gives up. A real
+	// long run emits events (team turns, records, tool calls), so this only
+	// fires for a wedged task; it must never cap total runtime, because a
+	// single turn legitimately runs for hours.
+	followAsyncSilenceLimit = 30 * time.Minute
+	// followAsyncPendingGrace is how long the follower waits for work the
+	// event ledger still owes (a mailbox wake-up that has not been delivered
+	// yet) while no task is actually running. It replaces the old total-runtime
+	// cap: a stale ledger entry now costs minutes, not the whole follow window.
+	followAsyncPendingGrace = 2 * time.Minute
 )
 
 // eventPump forwards the session events of one flow turn to a JSON-RPC
@@ -68,6 +75,11 @@ type eventPump struct {
 	// and waitForIdle / subscribe read it while reporting and reconnecting. A
 	// plain int64 there was a data race the race detector reports.
 	lastSeq atomic.Int64
+	// lastEventAt is when this pump last saw an event (UnixNano). waitForIdle
+	// measures progress from it instead of from a total-runtime deadline, so a
+	// turn that keeps emitting events may follow for hours while a wedged one
+	// is abandoned after followAsyncSilenceLimit.
+	lastEventAt atomic.Int64
 
 	cancel  context.CancelFunc
 	done    chan struct{}
@@ -236,13 +248,20 @@ func (p *eventPump) waitForIdle(ctx context.Context, sessionID string, maxWait t
 	if p == nil || p.sessions == nil || strings.TrimSpace(sessionID) == "" {
 		return
 	}
-	deadline := time.Now().Add(maxWait)
+	// maxWait <= 0 means "no total-runtime cap": a single turn may legitimately
+	// run for hours, and cutting the subscription mid-run loses its answer.
+	// The bounds below measure absence of progress instead of elapsed time.
+	var deadline time.Time
+	if maxWait > 0 {
+		deadline = time.Now().Add(maxWait)
+	}
 	ticker := time.NewTicker(followAsyncPoll)
 	defer ticker.Stop()
 
 	// One full replay seeds the state; every event after that arrives through
 	// the subscription and is applied incrementally (track).
 	p.seedBackgroundWork(ctx, sessionID)
+	p.lastEventAt.Store(time.Now().UnixNano())
 
 	// From here on the caller is waiting for turns it did not start, so the
 	// per-turn filter must stop applying.
@@ -253,23 +272,58 @@ func (p *eventPump) waitForIdle(ctx context.Context, sessionID string, maxWait t
 	})
 
 	var idleSince time.Time
+	var pendingSince time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
-		if time.Now().After(deadline) {
-			logging.Warn("progress pump: follow_async timed out", map[string]any{
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			logging.Warn("progress pump: follow_async capped", map[string]any{
 				"session_id": sessionID,
 				"last_seq":   p.lastSeq.Load(),
 			})
 			return
 		}
-		if p.backgroundPending() || p.sessionBusy(ctx, sessionID) {
+
+		running := p.sessionBusy(ctx, sessionID)
+		if running {
+			silent := time.Since(time.Unix(0, p.lastEventAt.Load()))
+			if silent >= followAsyncSilenceLimit {
+				logging.Warn("progress pump: follow_async silent while task runs", map[string]any{
+					"session_id": sessionID,
+					"last_seq":   p.lastSeq.Load(),
+					"silent":     silent.String(),
+				})
+				return
+			}
+			// A Team is executing: progress is real even without new events.
 			idleSince = time.Time{}
+			pendingSince = time.Time{}
 			continue
 		}
+
+		if p.backgroundPending() {
+			// The event ledger still owes work (a wake-up that has not landed
+			// yet) while nothing is actually running. Wait a short grace so a
+			// mailbox dispatch is not cut off, then stop: the old behaviour sat
+			// here until the total-runtime cap expired.
+			if pendingSince.IsZero() {
+				pendingSince = time.Now()
+			}
+			if time.Since(pendingSince) < followAsyncPendingGrace {
+				continue
+			}
+			logging.Warn("progress pump: follow_async stale pending work", map[string]any{
+				"session_id": sessionID,
+				"last_seq":   p.lastSeq.Load(),
+				"waited":     time.Since(pendingSince).String(),
+			})
+			return
+		}
+		pendingSince = time.Time{}
+
 		if idleSince.IsZero() {
 			idleSince = time.Now()
 			continue
@@ -302,6 +356,7 @@ func (p *eventPump) seedBackgroundWork(ctx context.Context, sessionID string) {
 // event regardless of which turn it belongs to: the follower asks about the
 // session, not about one turn.
 func (p *eventPump) track(event storage.SessionEvent) {
+	p.lastEventAt.Store(time.Now().UnixNano())
 	p.workMu.Lock()
 	defer p.workMu.Unlock()
 	if p.work.openMail == nil {
@@ -414,7 +469,7 @@ func (b *backgroundWork) apply(event storage.SessionEvent) {
 		// A paused TeamTurn no longer owes the caller background work: the
 		// engine will not continue on its own, and the pause event itself has
 		// already been forwarded. Treating only completed as terminal would
-		// keep the subscription alive until followAsyncMaxWait.
+		// keep the subscription alive until followAsyncPendingGrace expires.
 		if id := event.TeamTurnID; id != "" {
 			delete(b.openTeams, id)
 		}

@@ -324,7 +324,10 @@ func (s *jsonRPCServer) handleTurn(ctx context.Context, id json.RawMessage, rawP
 		// conclusion landed 17:49 and never reached the client).
 		pump.busy = s.pendingTeamWork
 		go func() {
-			pump.waitForIdle(ctx, sessionID, followAsyncMaxWait)
+			// No total-runtime cap: one turn may legitimately run for hours.
+			// waitForIdle bounds the wait by absence of progress instead
+			// (silence while a task runs, stale pending work, or 3s idle).
+			pump.waitForIdle(ctx, sessionID, 0)
 			s.releasePump(sessionID, pump)
 		}()
 	}
