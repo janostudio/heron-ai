@@ -327,22 +327,43 @@ List of agent names this agent can delegate tasks to.
 
 ## State Tool
 
-`State` 是 agent 的"跨会话待办白板"（区别于 knowledge 的固化知识）。agent 在 TurnLoop 里增删改查自己的待办，做完一件事就划掉。同一 agent 的多个并发实例共享一份 state。
+`State` 是 agent 的"跨会话待办与备忘"（区别于 knowledge 的固化知识）。它在磁盘上是一个**目录**：一个 block 一个文件，外加一份 `index.md` 摘要。
+
+**state 不注入 prompt。** 引擎只注入一段固定指针（`state_pointer`，`Placement: system`、`Stability: stable`），说明目录位置和读取规则；条目靠 agent 调 `State` 按需读取。原因：把快照拼进 prompt 后，上一轮的结论会被当成这一轮的结果，实测导致 owner/coordinator 答非所问。
 
 在 `tools.builtin` 声明 `State` 后，agent 可调用：
 
 ```text
-State(action="add",    field=<field>, text=<内容>)        → 追加条目（id 自动生成）
-State(action="remove", field=<field>, id=<条目id>)         → 删除条目
-State(action="update", field=<field>, id=<条目id>, text=)  → 更新条目内容
-State(action="list",   field=<field>)                     → 列出某字段全部条目
-State(action="get",    field=<field>, id=<条目id>)         → 读单条目
+State(action="list")                                        → 读索引：有哪些 block、条目数、in_progress 数、updated_at
+State(action="list",   field=<block>)                       → 读一个 block 的条目（含 status）
+State(action="add",    field=<block>, text=<内容>[, status=]) → 追加条目（id 自动生成）
+State(action="remove", field=<block>, id=<条目id>)           → 删除条目
+State(action="update", field=<block>, id=<条目id>[, text=][, status=]) → 改文本/改状态
+State(action="get",    field=<block>, id=<条目id>)           → 读单条目
 ```
 
-- `field` 取值：`goal` / `confirmed` / `open_questions` / `decisions` / `next_steps` / `workspace` / `record_ids`。
-- agent 只能操作**自己的** state，无法越权访问其他 agent。
-- 每条目记录 `added_by`（谁加的）和 `handled_by`（谁处理的），格式 `agent名(实例号)`，如 `role-actor(e-1)`——共享白板可追溯，但所有实例都能处理任意条目。
-- 跨会话持久，落盘 `agents/<agentID>/state/state.md`。
+- `block` 取值：`goal` / `confirmed` / `open_questions` / `decisions` / `next_steps` / `workspace` / `record_ids`。
+- agent 只能操作**自己的** state，无法越权访问其他 agent；同一 agent 的并发实例共享同一份目录，写锁按 block 隔离。
+- 磁盘布局：
+
+```
+.agents/data/agents/<agentID>/state/
+├── index.md
+├── goal.md
+├── next_steps.md
+├── confirmed.md
+├── decisions.md
+├── open_questions.md
+├── workspace.md
+└── record_ids.md
+```
+
+- `next_steps` 是 todo 列表，条目带 `status`：`pending` / `in_progress` / `completed`（默认 pending）。**任何时刻最多一条 `in_progress`**，第二次写入会被拒绝并提示先完成或标记已有条目。
+- `status` 只在 `next_steps` 上生效；其他 block 传入会被忽略（`update` 会报错）。
+- 每个条目记录 `added_by`（谁加的）和 `handled_by`（谁处理的），格式 `agent名(实例号)`，如 `role-actor(e-1)`。
+- 跨会话持久；旧版单文件 `state/state.md` 在首次访问时自动拆分迁移，原文件保留为 `state.md.bak`。
+- `goal` 由 agent 自己设（`action="add", field="goal"`），引擎不再用 call 的 `responsibility` 自动填充；任务切换时应覆盖 goal 并清理旧 block。
+- 不要把本轮答复写进 state（引擎也不再自动写入），答复由 session/records 承载。
 
 详见 `docs/generic-engine/26-state-redesign.md`。
 

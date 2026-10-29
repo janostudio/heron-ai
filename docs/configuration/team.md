@@ -125,8 +125,14 @@ acquire_slot:
 | `goal` | string | Team 目标 |
 | `calls` | object | Team 内的 Agent、Command、Webhook 配置 |
 | `output` | object | Team 对外发布的 SharedRecord |
-| `state` | object | 可选 Team State 配置 |
+| `state` | object | 可选 Team State 配置（会话级快照，落盘不注入） |
 | `workspace` | object | 执行后端（local / 远程 SSH），见 [workspace](./workspace.md) |
+
+> Team State 与 per-call Agent State 只落盘，**不再拼进 prompt**：把上一轮的答复当作
+> `next_steps` 注入，会让它成为下一轮任务的"结论"。Agent 的跨会话 state 是一个目录
+> （`state/index.md` + 每 block 一个文件），走 `State` 工具按需读取（见
+> [agent.md](./agent.md#state-tool)）；Team/per-call state 没有读取
+> 工具，仅作为审计与恢复记录保留 `record_ids` / `workspace` 引用。
 
 ### Call
 

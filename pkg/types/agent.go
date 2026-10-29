@@ -72,6 +72,19 @@ type ToolConfig struct {
 	MCP     []string `yaml:"mcp,omitempty" json:"mcp,omitempty"`
 }
 
+// HasBuiltin reports whether the Agent declared one builtin tool. Callers use
+// it to decide whether an instruction about a tool applies at all: a state
+// policy handed to an Agent without the State tool is an instruction it cannot
+// follow.
+func (c ToolConfig) HasBuiltin(name string) bool {
+	for _, tool := range c.Builtin {
+		if tool == name {
+			return true
+		}
+	}
+	return false
+}
+
 type LoopConfig struct {
 	MaxRounds           int      `yaml:"max_rounds" json:"max_rounds"`
 	ToolExecution       string   `yaml:"tool_execution,omitempty" json:"tool_execution,omitempty"` // sequential | parallel_safe

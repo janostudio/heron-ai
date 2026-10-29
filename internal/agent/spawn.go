@@ -515,19 +515,17 @@ func (t *SpawnTool) runChild(
 		Priority:  85,
 	}}
 
-	snapshot, err := t.states.LoadAgentState(childCtx, agentID)
-	if err != nil {
-		return &spawnOutcome{Key: instance.Key, Error: err.Error()}
-	}
-	stateText := renderAgentState(snapshot)
-	if stateText != "" {
+	// A spawned child reads its own cross-session state through the State tool;
+	// the prompt only gets the pointer. Injecting the snapshot made a previous
+	// child's reply answer the next child's item.
+	if def.Tools.HasBuiltin("State") {
 		blocks = append(blocks, types.ContextBlock{
-			Kind:         "agent_state",
-			Text:         stateText,
-			Source:       "agent_state",
-			Stability:    "dynamic",
-			Priority:     60,
-			Compressible: true,
+			Kind:      "state_pointer",
+			Text:      state.PointerText(agentID),
+			Source:    "agent_state",
+			Placement: "system",
+			Stability: "stable",
+			Priority:  60,
 		})
 	}
 
@@ -573,7 +571,7 @@ func (t *SpawnTool) runChild(
 		outcome.Error = fmt.Sprintf("child ended with status %s", result.Status)
 		return outcome
 	}
-	if err := t.saveAgentState(childCtx, agentID, string(itemJSON), stateText, result); err != nil {
+	if err := t.saveAgentState(childCtx, agentID, string(itemJSON), result); err != nil {
 		outcome.Error = fmt.Sprintf("save agent state: %v", err)
 	}
 	return outcome
@@ -642,40 +640,27 @@ func (t *SpawnTool) emitChildEvent(
 	_, _ = t.sessions.Append(ctx, parent.FlowSessionID, storage.LayerTeam, event)
 }
 
-// saveAgentState applies the same deterministic update the Team runtime
-// uses for per-call agent state: first outcome is confirmed, later replies
-// become next steps, workspace refs are tracked.
+// saveAgentState records the spawned item as the goal when none is set, and
+// tracks workspace refs. Both writes touch one block each, so a child never
+// rewrites its parent's todo list. The child's reply is not written: it is the
+// turn's outcome, and a stored outcome is indistinguishable from a finding on
+// the next task.
 func (t *SpawnTool) saveAgentState(
 	ctx context.Context,
-	agentID, itemJSON, previousStateText string,
+	agentID, itemJSON string,
 	result *types.AgentResult,
 ) error {
-	snapshot, err := t.states.LoadAgentState(ctx, agentID)
-	if err != nil {
+	if err := t.states.SetGoalIfEmpty(ctx, agentID, itemJSON); err != nil {
 		return err
 	}
-	if snapshot.Goal == "" {
-		snapshot.Goal = itemJSON
-	}
-	reply := strings.TrimSpace(result.Reply)
-	if reply != "" {
-		item := types.StateItem{ID: t.states.NextItemID(), Text: reply}
-		if strings.TrimSpace(previousStateText) == "" {
-			snapshot.Confirmed = append(snapshot.Confirmed, item)
-		} else {
-			snapshot.NextSteps = append(snapshot.NextSteps, item)
-		}
-	}
+	refs := make([]types.StateWorkspaceRef, 0, len(result.WorkspaceOps))
 	for _, operation := range result.WorkspaceOps {
 		if operation.Path == "" {
 			continue
 		}
-		snapshot.Workspace = append(snapshot.Workspace, types.StateWorkspaceRef{
-			Path:     operation.Path,
-			Revision: operation.Revision,
-		})
+		refs = append(refs, types.StateWorkspaceRef{Path: operation.Path, Revision: operation.Revision})
 	}
-	return t.states.SaveAgentState(ctx, agentID, snapshot)
+	return t.states.AppendWorkspace(ctx, agentID, refs...)
 }
 
 func childCallID(parentCallID, key string) string {
@@ -935,26 +920,4 @@ func spawnTaskID(parent types.AgentRequest, key string) string {
 		base = "agent"
 	}
 	return fmt.Sprintf("%s:spawn:%s:%d", base, key, spawnTurnSeq.Add(1))
-}
-
-func renderAgentState(snapshot types.StateSnapshot) string {
-	var sections []string
-	if snapshot.Goal != "" {
-		sections = append(sections, "Goal: "+snapshot.Goal)
-	}
-	appendList := func(title string, values []types.StateItem) {
-		if len(values) == 0 {
-			return
-		}
-		texts := make([]string, len(values))
-		for i, item := range values {
-			texts[i] = item.Text
-		}
-		sections = append(sections, title+":\n- "+strings.Join(texts, "\n- "))
-	}
-	appendList("Confirmed", snapshot.Confirmed)
-	appendList("Open Questions", snapshot.OpenQuestions)
-	appendList("Decisions", snapshot.Decisions)
-	appendList("Next Steps", snapshot.NextSteps)
-	return strings.Join(sections, "\n\n")
 }

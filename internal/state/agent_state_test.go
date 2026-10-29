@@ -27,9 +27,13 @@ func TestStoreAgentStateRoundTrip(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	data, err := files.Read(".agents/data/agents/code-fixer/state/state.md")
+	data, err := files.Read(".agents/data/agents/code-fixer/state/index.md")
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(string(data), "---\n"))
+
+	goal, err := files.Read(".agents/data/agents/code-fixer/state/goal.md")
+	require.NoError(t, err)
+	assert.Contains(t, string(goal), "fix the assigned file")
 
 	reloaded, err := store.LoadAgentState(context.Background(), "code-fixer")
 	require.NoError(t, err)
@@ -102,7 +106,10 @@ func TestStoreAgentStateBounded(t *testing.T) {
 		Confirmed: []types.StateItem{{ID: "i-1", Text: strings.Repeat("fact ", 100)}},
 	})
 	require.NoError(t, err)
-	data, readErr := files.Read(".agents/data/agents/worker/state/state.md")
+	goal, readErr := files.Read(".agents/data/agents/worker/state/goal.md")
 	require.NoError(t, readErr)
-	assert.LessOrEqual(t, len(data), 300)
+	assert.LessOrEqual(t, len(goal), 300, "a long goal is trimmed to the per-block budget")
+	confirmed, readErr := files.Read(".agents/data/agents/worker/state/confirmed.md")
+	require.NoError(t, readErr)
+	assert.LessOrEqual(t, len(confirmed), 300, "a long entry is trimmed to the per-block budget")
 }

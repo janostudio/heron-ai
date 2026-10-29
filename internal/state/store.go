@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,9 +18,9 @@ import (
 )
 
 const (
-	defaultTeamMaxChars        = 4000
-	defaultAgentMaxChars       = 2000
-	defaultAgentStateMaxChars  = 4000
+	defaultTeamMaxChars       = 4000
+	defaultAgentMaxChars      = 2000
+	defaultAgentStateMaxChars = 4000
 )
 
 // Limits controls the hard size of state.md snapshots.
@@ -103,26 +104,482 @@ func (s *Store) SaveAgent(ctx context.Context, snapshot types.StateSnapshot) err
 }
 
 // LoadAgentState reads the persistent cross-session state of one Agent
-// (design doc 26). A missing snapshot is not an error.
+// (design doc 26). The state is a directory of blocks; this assembles them into
+// one snapshot for callers that think in fields. A missing state is not an
+// error: it returns an empty snapshot.
 func (s *Store) LoadAgentState(ctx context.Context, agentID string) (types.StateSnapshot, error) {
-	return s.load(ctx, s.agentStatePath(agentID), types.StateScopeAgent, "", "", "")
+	if err := s.ensureAgentState(ctx, agentID); err != nil {
+		return types.StateSnapshot{}, err
+	}
+	blocks, index, err := s.loadAgentBlocks(ctx, agentID)
+	if err != nil {
+		return types.StateSnapshot{}, err
+	}
+	return snapshotFromBlocks(blocks, index), nil
 }
 
-// SaveAgentState persists one Agent's cross-session state. The snapshot is
-// scoped by agent id and outlives any session.
+// SaveAgentState persists a whole snapshot. It exists for callers that already
+// hold every field; block-scoped writes are the normal path and avoid
+// overwriting blocks another instance changed in between.
 func (s *Store) SaveAgentState(ctx context.Context, agentID string, snapshot types.StateSnapshot) error {
 	if strings.TrimSpace(agentID) == "" {
 		return errors.New("agent state agent is required")
 	}
-	snapshot.Scope = types.StateScopeAgent
-	snapshot.SessionID = ""
-	snapshot.TeamID = ""
-	snapshot.CallID = ""
-	return s.save(ctx, s.agentStatePath(agentID), snapshot, s.limits.AgentStateMaxChars)
+	if err := s.ensureAgentState(ctx, agentID); err != nil {
+		return err
+	}
+	blocks := blocksFromSnapshot(snapshot)
+	// One save is one revision. The blocks share it, so a snapshot round-trip
+	// reports the number of saves rather than the number of files.
+	revision := snapshot.Revision + 1
+	now := time.Now().UTC()
+	for _, name := range orderedBlocks {
+		block := blocks[name]
+		block.Revision = revision
+		block.UpdatedAt = now
+		if err := s.writeBlockFile(ctx, agentID, block, s.limits.AgentStateMaxChars); err != nil {
+			return err
+		}
+		blocks[name] = block
+	}
+	return s.writeIndex(ctx, agentID, indexFromBlocks(blocks, revision, now))
 }
 
-func (s *Store) agentStatePath(agentID string) string {
-	return filepath.Join(".agents", "data", "agents", agentID, "state", "state.md")
+// LoadIndex reads the summary that State(action="list") returns by default.
+func (s *Store) LoadIndex(ctx context.Context, agentID string) (types.StateIndex, error) {
+	if err := s.ensureAgentState(ctx, agentID); err != nil {
+		return types.StateIndex{}, err
+	}
+	index, err := s.readIndexFile(ctx, agentID)
+	if err != nil {
+		return types.StateIndex{}, err
+	}
+	if len(index.Blocks) > 0 || index.Revision > 0 {
+		return index, nil
+	}
+	// No index yet (a partially written directory, or a hand-made one): derive
+	// it from whatever block files exist rather than pretending the state is
+	// empty.
+	blocks, _, err := s.loadAgentBlocks(ctx, agentID)
+	if err != nil {
+		return types.StateIndex{}, err
+	}
+	revision, updatedAt := 0, time.Time{}
+	for _, block := range blocks {
+		if block.Revision > revision {
+			revision = block.Revision
+		}
+		if block.UpdatedAt.After(updatedAt) {
+			updatedAt = block.UpdatedAt
+		}
+	}
+	return indexFromBlocks(blocks, revision, updatedAt), nil
+}
+
+// LoadBlock reads one block. Unknown names are an error: a typo must not read
+// as "empty block".
+func (s *Store) LoadBlock(ctx context.Context, agentID, name string) (types.StateBlock, error) {
+	if !validBlock(name) {
+		return types.StateBlock{}, fmt.Errorf("state: unsupported block %q", name)
+	}
+	if err := s.ensureAgentState(ctx, agentID); err != nil {
+		return types.StateBlock{}, err
+	}
+	return s.readBlockFile(ctx, agentID, name)
+}
+
+// SaveBlock writes one block and refreshes its index line. Only this block's
+// file is rewritten, which is the point of the directory layout: two instances
+// editing different blocks do not overwrite each other.
+func (s *Store) SaveBlock(ctx context.Context, agentID string, block types.StateBlock) error {
+	if strings.TrimSpace(agentID) == "" {
+		return errors.New("agent state agent is required")
+	}
+	if !validBlock(block.Name) {
+		return fmt.Errorf("state: unsupported block %q", block.Name)
+	}
+	if err := s.ensureAgentState(ctx, agentID); err != nil {
+		return err
+	}
+	index, err := s.readIndexFile(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	revision := index.Revision + 1
+	block.Revision = revision
+	block.UpdatedAt = time.Now().UTC()
+	if err := s.writeBlockFile(ctx, agentID, block, s.limits.AgentStateMaxChars); err != nil {
+		return err
+	}
+	return s.updateIndexLine(ctx, agentID, block, revision)
+}
+
+// SetGoalIfEmpty seeds the goal block without overwriting work the Agent has
+// already claimed.
+func (s *Store) SetGoalIfEmpty(ctx context.Context, agentID, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	block, err := s.LoadBlock(ctx, agentID, types.StateBlockGoal)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(block.Goal) != "" {
+		return nil
+	}
+	block.Goal = text
+	return s.SaveBlock(ctx, agentID, block)
+}
+
+// AppendWorkspace adds file references, skipping duplicates of the same path
+// with the same revision.
+func (s *Store) AppendWorkspace(ctx context.Context, agentID string, refs ...types.StateWorkspaceRef) error {
+	block, err := s.LoadBlock(ctx, agentID, types.StateBlockWorkspace)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, ref := range refs {
+		if ref.Path == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range block.Workspace {
+			if existing.Path == ref.Path && existing.Revision == ref.Revision {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		block.Workspace = append(block.Workspace, ref)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return s.SaveBlock(ctx, agentID, block)
+}
+
+// AppendRecordIDs adds SharedRecord references, skipping ids already present.
+func (s *Store) AppendRecordIDs(ctx context.Context, agentID string, ids ...string) error {
+	block, err := s.LoadBlock(ctx, agentID, types.StateBlockRecordIDs)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]bool, len(block.RecordIDs))
+	for _, id := range block.RecordIDs {
+		seen[id] = true
+	}
+	changed := false
+	for _, id := range ids {
+		if strings.TrimSpace(id) == "" || seen[id] {
+			continue
+		}
+		block.RecordIDs = append(block.RecordIDs, id)
+		seen[id] = true
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return s.SaveBlock(ctx, agentID, block)
+}
+
+// loadAgentBlocks reads every block file plus the index.
+func (s *Store) loadAgentBlocks(ctx context.Context, agentID string) (map[string]types.StateBlock, types.StateIndex, error) {
+	blocks := make(map[string]types.StateBlock, len(orderedBlocks))
+	for _, name := range orderedBlocks {
+		block, err := s.readBlockFile(ctx, agentID, name)
+		if err != nil {
+			return nil, types.StateIndex{}, err
+		}
+		blocks[name] = block
+	}
+	index, err := s.readIndexFile(ctx, agentID)
+	if err != nil {
+		return nil, types.StateIndex{}, err
+	}
+	return blocks, index, nil
+}
+
+func (s *Store) readBlockFile(ctx context.Context, agentID, name string) (types.StateBlock, error) {
+	if err := contextErr(ctx); err != nil {
+		return types.StateBlock{}, err
+	}
+	data, err := s.files.Read(agentBlockPath(agentID, name))
+	if errors.Is(err, storage.ErrNotFound) {
+		return types.StateBlock{Name: name}, nil
+	}
+	if err != nil {
+		return types.StateBlock{}, err
+	}
+	return decodeBlock(name, data)
+}
+
+// writeBlockFile encodes and stores one block, reducing it when it exceeds the
+// per-block budget. The order is deliberate: drop finished entries first, then
+// shorten text, then drop references. A block that still does not fit is an
+// error rather than a silent truncation.
+func (s *Store) writeBlockFile(ctx context.Context, agentID string, block types.StateBlock, maxChars int) error {
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	if maxChars <= 0 {
+		maxChars = defaultAgentStateMaxChars
+	}
+	encode := func() ([]byte, error) { return encodeBlock(block) }
+	if listBlocks[block.Name] {
+		block.Items = reduceItems(block.Items, s.limits.MaxItems)
+	}
+	data, err := encode()
+	if err != nil {
+		return err
+	}
+	if len(data) > maxChars && listBlocks[block.Name] {
+		block.Items = reduceItems(block.Items, 10)
+		if data, err = encode(); err != nil {
+			return err
+		}
+	}
+	if len(data) > maxChars && listBlocks[block.Name] {
+		for i := range block.Items {
+			block.Items[i].Text = trimText(block.Items[i].Text, maxInt(maxChars/10, 20))
+		}
+		if data, err = encode(); err != nil {
+			return err
+		}
+	}
+	if len(data) > maxChars && block.Name == types.StateBlockGoal {
+		block.Goal = trimText(block.Goal, maxInt(maxChars/2, 40))
+		if data, err = encode(); err != nil {
+			return err
+		}
+	}
+	if len(data) > maxChars && block.Name == types.StateBlockWorkspace {
+		for len(block.Workspace) > 0 && len(data) > maxChars {
+			block.Workspace = block.Workspace[:len(block.Workspace)/2]
+			if data, err = encode(); err != nil {
+				return err
+			}
+		}
+	}
+	if len(data) > maxChars && block.Name == types.StateBlockRecordIDs {
+		for len(block.RecordIDs) > 0 && len(data) > maxChars {
+			block.RecordIDs = block.RecordIDs[:len(block.RecordIDs)/2]
+			if data, err = encode(); err != nil {
+				return err
+			}
+		}
+	}
+	if len(data) > maxChars {
+		return fmt.Errorf("state block %s exceeds max_chars=%d after reduction", block.Name, maxChars)
+	}
+	return s.files.Write(agentBlockPath(agentID, block.Name), data)
+}
+
+func trimText(text string, limit int) string {
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "…"
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func (s *Store) readIndexFile(ctx context.Context, agentID string) (types.StateIndex, error) {
+	if err := contextErr(ctx); err != nil {
+		return types.StateIndex{}, err
+	}
+	data, err := s.files.Read(agentIndexPath(agentID))
+	if errors.Is(err, storage.ErrNotFound) {
+		return types.StateIndex{}, nil
+	}
+	if err != nil {
+		return types.StateIndex{}, err
+	}
+	return decodeIndex(data)
+}
+
+func (s *Store) writeIndex(ctx context.Context, agentID string, index types.StateIndex) error {
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	return s.files.Write(agentIndexPath(agentID), encodeIndex(index))
+}
+
+// updateIndexLine rewrites the index with one block's new metadata. The whole
+// index is small and derived, so rewriting it is cheaper than maintaining a
+// merge algorithm.
+func (s *Store) updateIndexLine(ctx context.Context, agentID string, block types.StateBlock, revision int) error {
+	index, err := s.readIndexFile(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	meta := types.StateBlockMeta{
+		Name: block.Name, Revision: block.Revision, UpdatedAt: block.UpdatedAt,
+	}
+	switch {
+	case block.Name == types.StateBlockGoal:
+		index.Goal = block.Goal
+		if strings.TrimSpace(block.Goal) != "" {
+			meta.Entries = 1
+		}
+	case block.Name == types.StateBlockWorkspace:
+		meta.Entries = len(block.Workspace)
+	case block.Name == types.StateBlockRecordIDs:
+		meta.Entries = len(block.RecordIDs)
+	default:
+		meta.Entries = len(block.Items)
+		for _, item := range block.Items {
+			if item.Status == types.StateStatusInProgress {
+				meta.InProgress++
+			}
+		}
+	}
+	replaced := false
+	for i := range index.Blocks {
+		if index.Blocks[i].Name == block.Name {
+			index.Blocks[i] = meta
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		index.Blocks = append(index.Blocks, meta)
+		sort.Slice(index.Blocks, func(i, j int) bool {
+			return blockOrder(index.Blocks[i].Name) < blockOrder(index.Blocks[j].Name)
+		})
+	}
+	index.Revision = revision
+	index.UpdatedAt = block.UpdatedAt
+	return s.writeIndex(ctx, agentID, index)
+}
+
+func blockOrder(name string) int {
+	for i, block := range orderedBlocks {
+		if block == name {
+			return i
+		}
+	}
+	return len(orderedBlocks)
+}
+
+// ensureAgentState migrates the pre-directory single file on first access.
+func (s *Store) ensureAgentState(ctx context.Context, agentID string) error {
+	if strings.TrimSpace(agentID) == "" {
+		return errors.New("agent state agent is required")
+	}
+	if s.files.Exists(agentIndexPath(agentID)) {
+		return nil
+	}
+	legacy := agentLegacyPath(agentID)
+	if !s.files.Exists(legacy) {
+		return nil
+	}
+	return s.migrateLegacy(ctx, agentID, legacy)
+}
+
+// migrateLegacy splits state.md into blocks and keeps the original as
+// state.md.bak. The backup is deliberate: migration is the only point where
+// data changes shape, and the old file is the only way back.
+func (s *Store) migrateLegacy(ctx context.Context, agentID, legacy string) error {
+	snapshot, err := s.load(ctx, legacy, types.StateScopeAgent, "", "", "")
+	if err != nil {
+		return fmt.Errorf("migrate legacy state: %w", err)
+	}
+	data, err := s.files.Read(legacy)
+	if err != nil {
+		return err
+	}
+	blocks := blocksFromSnapshot(snapshot)
+	revision := snapshot.Revision
+	updatedAt := snapshot.UpdatedAt.UTC()
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	for _, name := range orderedBlocks {
+		block := blocks[name]
+		block.Revision = revision
+		block.UpdatedAt = updatedAt
+		if err := s.writeBlockFile(ctx, agentID, block, s.limits.AgentStateMaxChars); err != nil {
+			return err
+		}
+		blocks[name] = block
+	}
+	if err := s.writeIndex(ctx, agentID, indexFromBlocks(blocks, revision, updatedAt)); err != nil {
+		return err
+	}
+	if err := s.files.Write(filepath.Join(agentStateDir(agentID), legacyBackup), data); err != nil {
+		return err
+	}
+	return s.files.Delete(legacy)
+}
+
+// snapshotFromBlocks assembles the field view used by callers that still think
+// in one snapshot.
+func snapshotFromBlocks(blocks map[string]types.StateBlock, index types.StateIndex) types.StateSnapshot {
+	updatedAt := index.UpdatedAt
+	if updatedAt.IsZero() {
+		for _, block := range blocks {
+			if block.UpdatedAt.After(updatedAt) {
+				updatedAt = block.UpdatedAt
+			}
+		}
+	}
+	return types.StateSnapshot{
+		Scope:         types.StateScopeAgent,
+		Revision:      index.Revision,
+		Goal:          blocks[types.StateBlockGoal].Goal,
+		Confirmed:     blocks[types.StateBlockConfirmed].Items,
+		OpenQuestions: blocks[types.StateBlockOpenQuestions].Items,
+		Decisions:     blocks[types.StateBlockDecisions].Items,
+		NextSteps:     blocks[types.StateBlockNextSteps].Items,
+		Workspace:     blocks[types.StateBlockWorkspace].Workspace,
+		RecordIDs:     blocks[types.StateBlockRecordIDs].RecordIDs,
+		UpdatedAt:     updatedAt,
+	}
+}
+
+func blocksFromSnapshot(snapshot types.StateSnapshot) map[string]types.StateBlock {
+	return map[string]types.StateBlock{
+		types.StateBlockGoal:          {Name: types.StateBlockGoal, Goal: snapshot.Goal},
+		types.StateBlockConfirmed:     {Name: types.StateBlockConfirmed, Items: snapshot.Confirmed},
+		types.StateBlockOpenQuestions: {Name: types.StateBlockOpenQuestions, Items: snapshot.OpenQuestions},
+		types.StateBlockDecisions:     {Name: types.StateBlockDecisions, Items: snapshot.Decisions},
+		types.StateBlockNextSteps:     {Name: types.StateBlockNextSteps, Items: snapshot.NextSteps},
+		types.StateBlockWorkspace:     {Name: types.StateBlockWorkspace, Workspace: snapshot.Workspace},
+		types.StateBlockRecordIDs:     {Name: types.StateBlockRecordIDs, RecordIDs: snapshot.RecordIDs},
+	}
+}
+
+// reduceItems keeps unfinished entries first. A completed entry survives only
+// while there is budget left; dropping one loses a status, not a task.
+func reduceItems(items []types.StateItem, max int) []types.StateItem {
+	if max <= 0 {
+		max = 40
+	}
+	if len(items) <= max {
+		return items
+	}
+	var open, done []types.StateItem
+	for _, item := range items {
+		if item.Status == types.StateStatusCompleted {
+			done = append(done, item)
+			continue
+		}
+		open = append(open, item)
+	}
+	if len(open) >= max {
+		return tail(open, max)
+	}
+	return append(open, tail(done, max-len(open))...)
 }
 
 func (s *Store) path(sessionID string, parts ...string) string {

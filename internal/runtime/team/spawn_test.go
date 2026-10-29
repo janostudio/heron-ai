@@ -306,8 +306,9 @@ func newDownstreamRuntime(t *testing.T, runner agent.AgentRunner, files storage.
 	registry := call.NewRegistry()
 	require.NoError(t, registry.Register(call.NewAgentExecutor(runner)))
 	runtime := newTestRuntime(registry, map[string]types.AgentConfig{
-		"fix-agent":    {Name: "fix-agent"},
-		"child-agent":  {Name: "child-agent"},
+		"fix-agent": {Name: "fix-agent"},
+		// The synthetic child can read its own state, so it gets the pointer.
+		"child-agent":  {Name: "child-agent", Tools: types.ToolConfig{Builtin: []string{"State"}}},
 		"verify-agent": {Name: "verify-agent"},
 	})
 	runtime.SetStateStore(state.NewStore(files, state.Limits{}))
@@ -416,33 +417,38 @@ func TestRuntime_AgentStateRoutingForSyntheticCalls(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.TurnCompleted, result.Turn.Status)
 
-	// The static parent kept its session-scoped per-call state.
+	// The per-call state keeps only the structured ledger; the responsibility
+	// is no longer copied into the goal.
 	parentState, err := states.LoadAgent(context.Background(), "fs-1", "fix-team", "fixer")
 	require.NoError(t, err)
-	assert.Equal(t, "dispatch fixes", parentState.Goal)
+	assert.Empty(t, parentState.Goal)
 
-	// The synthetic child loaded the agent state as a context block...
+	// The synthetic child is pointed at its agent state...
 	blocks := runner.capturedChildBlocks()
 	sawItem, sawAgent := false, false
 	for _, block := range blocks {
 		if block.Kind == "fanout_item" && strings.Contains(block.Text, "fix a.go") {
 			sawItem = true
 		}
-		if block.Kind == "agent_state" && strings.Contains(block.Text, "keep fixing") {
+		if block.Kind == "state_pointer" {
 			sawAgent = true
+			assert.Contains(t, block.Text, "child-agent/state/")
+			assert.Equal(t, "system", block.Placement)
+			assert.Equal(t, "stable", block.Stability)
+			// ...but never handed its contents: the previous goal must not
+			// reach the prompt.
+			assert.NotContains(t, block.Text, "keep fixing")
 		}
 	}
 	assert.True(t, sawItem)
 	assert.True(t, sawAgent)
 
-	// ...and persisted its outcome to the cross-session agent scope (previous
-	// state text exists, so the reply lands in NextSteps), never to the
-	// session scope.
+	// The reply is not written into state; the goal it found stays untouched.
 	agentState, err := states.LoadAgentState(context.Background(), "child-agent")
 	require.NoError(t, err)
 	assert.Equal(t, "keep fixing", agentState.Goal)
-	require.Len(t, agentState.NextSteps, 1)
-	assert.Equal(t, "child outcome k1", agentState.NextSteps[0].Text)
+	assert.Empty(t, agentState.Confirmed)
+	assert.Empty(t, agentState.NextSteps)
 
 	// No session-scoped state was created for the synthetic call id.
 	childSessionState, err := states.LoadAgent(context.Background(), "fs-1", "fix-team", "fixer/k1")
@@ -772,6 +778,6 @@ func TestRuntime_TurnLoopSpawnDownstreamEndToEnd(t *testing.T) {
 	agentState, err := states.LoadAgentState(context.Background(), "child-agent")
 	require.NoError(t, err)
 	assert.Equal(t, `"fix a.go"`, agentState.Goal)
-	require.Len(t, agentState.Confirmed, 1)
-	assert.Equal(t, "child outcome", agentState.Confirmed[0].Text)
+	assert.Empty(t, agentState.Confirmed, "the reply is an outcome, not a state entry")
+	assert.Empty(t, agentState.NextSteps)
 }
