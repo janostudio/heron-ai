@@ -64,6 +64,11 @@ type Runtime struct {
 	// pendingWakes de-duplicates wake retries for sessions that were still
 	// running when their wake-up arrived.
 	pendingWakes map[string]bool
+	// wakeRetryInterval / wakeRetryAttempts override the wake-retry knobs.
+	// Zero means "use the package default". They are per-runtime so the retry
+	// goroutine never reads a value a test is rewriting.
+	wakeRetryInterval time.Duration
+	wakeRetryAttempts int
 
 	// asyncDispatch opts the runtime into P0 mailbox dispatch: when the entry
 	// team activates a team, the work is handed to a background goroutine and

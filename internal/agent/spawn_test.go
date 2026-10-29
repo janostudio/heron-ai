@@ -66,8 +66,16 @@ func newSpawnFixture(t *testing.T, options ...SpawnOption) *spawnFixture {
 		registry: agentstore.NewRegistry(files),
 		states:   state.NewStore(files, state.Limits{}),
 		agents: map[string]types.AgentConfig{
-			"parent-agent": {Name: "parent-agent"},
-			"child-agent":  {Name: "child-agent", Persona: types.PersonaConfig{Role: "child"}},
+			// The default spawn target is the calling agent, so the parent needs
+			// the State tool for its pointer to be injected.
+			"parent-agent": {Name: "parent-agent", Tools: types.ToolConfig{Builtin: []string{"State"}}},
+			"child-agent": {
+				Name:    "child-agent",
+				Persona: types.PersonaConfig{Role: "child"},
+				// State is what the child reads its cross-session memory with;
+				// a child without the tool gets no pointer.
+				Tools: types.ToolConfig{Builtin: []string{"State"}},
+			},
 		},
 	}
 	fixture.spawn = NewSpawnTool(fixture.runner, fixture.store(), fixture.registry, fixture.states, options...)
@@ -371,24 +379,38 @@ func TestSpawnTool_ReusesInstanceByKey(t *testing.T) {
 func TestSpawnTool_AgentStatePersistsAcrossSpawns(t *testing.T) {
 	fixture := newSpawnFixture(t)
 
+	// A verdict from an earlier task: it must still be readable through the
+	// State tool, and must never be handed to the model as prompt content.
+	require.NoError(t, fixture.states.SaveAgentState(context.Background(), "parent-agent", types.StateSnapshot{
+		Goal:      "earlier task",
+		Confirmed: []types.StateItem{{ID: "i-1", Text: "LEAKED_VERDICT"}},
+	}))
+
 	_, err := fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "first", "key": "role-a"})
 	require.NoError(t, err)
 
-	// Second spawn of the same agent must receive its persisted state.
+	// Second spawn of the same agent must be told its state exists...
 	_, err = fixture.spawn.Execute(fixture.ctx(), map[string]any{"item": "second", "key": "role-a"})
 	require.NoError(t, err)
 
 	calls := fixture.runner.recorded()
 	require.Len(t, calls, 2)
-	block := contextBlock(calls[1].req.ContextBlocks, "agent_state")
-	require.NotNil(t, block, "agent_state block missing on reuse")
-	assert.Contains(t, block.Text, "child reply for "+calls[0].req.CallID)
+	block := contextBlock(calls[1].req.ContextBlocks, "state_pointer")
+	require.NotNil(t, block, "state_pointer block missing on reuse")
+	assert.Contains(t, block.Text, "parent-agent/state/")
+	assert.Equal(t, "system", block.Placement)
+	assert.Equal(t, "stable", block.Stability)
+	// ...but the snapshot itself is not injected: the earlier verdict must not
+	// reach the prompt, or it would answer the new item.
+	assert.NotContains(t, block.Text, "LEAKED_VERDICT")
+	assert.Nil(t, contextBlock(calls[1].req.ContextBlocks, "agent_state"),
+		"the snapshot must never be injected")
 
-	snapshot, loadErr := fixture.states.LoadAgentState(context.Background(), "parent-agent")
-	require.NoError(t, loadErr)
-	assert.Equal(t, `"first"`, snapshot.Goal)
-	require.Len(t, snapshot.Confirmed, 1)
-	assert.Equal(t, "child reply for "+calls[0].req.CallID, snapshot.Confirmed[0].Text)
+	// The verdict is still there for the agent that asks for it.
+	confirmed, listErr := fixture.states.List(context.Background(), "parent-agent", state.FieldConfirmed)
+	require.NoError(t, listErr)
+	require.Len(t, confirmed, 1)
+	assert.Equal(t, "LEAKED_VERDICT", confirmed[0].Text)
 }
 
 func TestSpawnTool_AgentStateSharedAcrossInstances(t *testing.T) {
@@ -400,10 +422,11 @@ func TestSpawnTool_AgentStateSharedAcrossInstances(t *testing.T) {
 	require.NoError(t, err)
 
 	// State is now one workbench per agent (design doc 26): the second
-	// instance with a different key observes the first instance's state.
+	// instance with a different key learns that the workbench exists, and reads
+	// it through the State tool.
 	calls := fixture.runner.recorded()
 	require.Len(t, calls, 2)
-	assert.NotNil(t, contextBlock(calls[1].req.ContextBlocks, "agent_state"))
+	assert.NotNil(t, contextBlock(calls[1].req.ContextBlocks, "state_pointer"))
 }
 
 func TestSpawnTool_ChildFailureReportedPerChild(t *testing.T) {
@@ -616,7 +639,8 @@ func TestTurnLoop_SpawnDeclaredExecutesInline(t *testing.T) {
 
 	snapshot, loadErr := fixture.states.LoadAgentState(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
-	assert.NotEmpty(t, snapshot.Confirmed)
+	assert.JSONEq(t, `{"file":"a.go"}`, snapshot.Goal)
+	assert.Empty(t, snapshot.Confirmed, "the reply must not be stored as a memory entry")
 }
 
 func TestTurnLoop_SpawnUndeclaredIsFiltered(t *testing.T) {

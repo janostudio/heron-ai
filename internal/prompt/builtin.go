@@ -188,10 +188,13 @@ func (p *PromptRenderer) BuildSystemPrompt(agent types.AgentConfig, rctx RenderC
 		parts = append(parts, GetTemplate("tool-usage"))
 	}
 
-	// State management instructions are stable Agent policy. The actual
-	// Team/Agent State snapshots are dynamic and belong in the user context
-	// below, not in the cacheable system prefix.
-	parts = append(parts, GetTemplate("state-management"))
+	// State management instructions are stable Agent policy, and only bind an
+	// Agent that can actually reach its state. The snapshot itself is not
+	// injected at all: a stable pointer names the file and the State tool reads
+	// it on demand (see state.PointerText).
+	if agent.Tools.HasBuiltin("State") {
+		parts = append(parts, GetTemplate("state-management"))
+	}
 
 	// Execution management is also stable Agent policy. Keep it in the
 	// system prefix rather than appending it after dynamic user context so
@@ -306,6 +309,10 @@ func renderContextBlock(block types.ContextBlock) string {
 		return "## Team State\n" + block.Text
 	case "agent_state":
 		return "## Agent State\n" + block.Text
+	case "state_pointer":
+		// The pointer already carries its own heading; wrapping it again would
+		// nest two "State" titles in the system prompt.
+		return block.Text
 	case "fanout_item":
 		return "## Your Item\n" + block.Text
 	case "records":
@@ -341,12 +348,23 @@ Tools are your only way to observe and change the outside world. Treat them as a
 - Every tool call consumes part of your turn budget. Batch independent reads; avoid redundant or speculative calls.`
 
 const stateManagementTemplate = `## State Management
-You maintain durable state across turns. Use it to stay consistent and avoid re-deriving what you already learned.
+Your state is a directory of small blocks for this agent, and it is NOT loaded
+into this prompt. Start with State(action="list"): the index tells you which
+blocks exist, how many entries they hold, whether anything is in_progress, and
+how old each block is. Load one block (field=<name>) only when you need its
+entries.
 
-- Record decisions together with their rationale, not just the conclusion.
-- Record concrete findings (identifiers, values, facts), not vague impressions.
-- Update state when new information changes or supersedes a prior entry.
-- Before redoing work, check whether state already contains the answer.`
+- Read before assuming. Judge a block by its updated_at and by the goal: a block
+  written for another task is stale.
+- Record decisions with their rationale, and concrete findings (identifiers,
+  values, facts) rather than vague impressions.
+- next_steps carries the todo lifecycle: pending -> in_progress -> completed.
+  Mark a step in_progress before starting it, and completed immediately when it
+  is done. Keep at most one entry in_progress.
+- When the task changes, overwrite the goal and clear the blocks that no longer
+  apply, instead of layering the new task on top of the old one.
+- Never copy a turn's final answer into state: the session already carries it,
+  and a stored answer reads as a finding on the next task.`
 
 const knowledgeQueryTemplate = `## Knowledge Usage
 When background knowledge is injected into your context:

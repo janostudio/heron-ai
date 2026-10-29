@@ -26,9 +26,12 @@ func NewStateTool(states *state.Store) *StateTool {
 func (t *StateTool) Name() string { return "State" }
 
 func (t *StateTool) Description() string {
-	return "Read and update your own todo state (confirmed / open_questions / decisions / next_steps / goal). " +
-		"Use action=add to append a todo, action=remove to delete by id, action=update to rewrite an entry, " +
-		"action=list to list all entries of a field, and action=get to read one entry."
+	return "Read and update your own cross-session state. The state is a directory of blocks " +
+		"(goal / confirmed / open_questions / decisions / next_steps / workspace / record_ids) and is NOT injected into your prompt. " +
+		"Call action=list with no field to read the index (blocks, entry counts, in_progress, updated_at, revision), " +
+		"then action=list with field=<name> when you need the entries. " +
+		"Use action=add to append an entry, action=remove to delete by id, action=update to rewrite text and/or status, action=get to read one entry. " +
+		"next_steps entries carry status pending / in_progress / completed, and at most one may be in_progress."
 }
 
 func (t *StateTool) NeedsApproval() bool { return false }
@@ -47,11 +50,16 @@ func (t *StateTool) Parameters() map[string]any {
 		"field": map[string]any{
 			"type":        "string",
 			"enum":        []string{"goal", "confirmed", "open_questions", "decisions", "next_steps", "workspace", "record_ids"},
-			"description": "Which state field to operate on",
+			"description": "Which block to operate on. Omit it with action=list to read the index.",
 		},
 		"text": map[string]any{
 			"type":        "string",
-			"description": "Entry content for add/update, or the new goal for action=add with field=goal",
+			"description": "Entry content for add/update, or the new goal for action=add with field=goal. Empty on update keeps the current text.",
+		},
+		"status": map[string]any{
+			"type":        "string",
+			"enum":        []string{"pending", "in_progress", "completed"},
+			"description": "Todo status for next_steps entries (default pending). Only one entry may be in_progress. Empty on update keeps the current status.",
 		},
 		"id": map[string]any{
 			"type":        "string",
@@ -74,6 +82,7 @@ func (t *StateTool) Execute(ctx context.Context, params map[string]any) (*types.
 	fieldStr, _ := params["field"].(string)
 	text, _ := params["text"].(string)
 	id, _ := params["id"].(string)
+	status, _ := params["status"].(string)
 
 	field := state.StateField(strings.TrimSpace(fieldStr))
 
@@ -85,7 +94,7 @@ func (t *StateTool) Execute(ctx context.Context, params map[string]any) (*types.
 			}
 			return &types.ToolResult{Success: true, Content: "goal set"}, nil
 		}
-		if err := t.states.Add(ctx, agentID, field, text, actor); err != nil {
+		if err := t.states.Add(ctx, agentID, field, text, status, actor); err != nil {
 			return &types.ToolResult{Success: false, Error: err.Error()}, nil
 		}
 		return &types.ToolResult{Success: true, Content: "added"}, nil
@@ -97,17 +106,28 @@ func (t *StateTool) Execute(ctx context.Context, params map[string]any) (*types.
 		return &types.ToolResult{Success: true, Content: "removed"}, nil
 
 	case "update":
-		if err := t.states.Update(ctx, agentID, field, id, text, actor); err != nil {
+		if err := t.states.Update(ctx, agentID, field, id, text, status, actor); err != nil {
 			return &types.ToolResult{Success: false, Error: err.Error()}, nil
 		}
 		return &types.ToolResult{Success: true, Content: "updated"}, nil
 
 	case "list":
-		items, err := t.states.List(ctx, agentID, field)
+		// Freshness travels with the entries: the state is not in the prompt,
+		// so updated_at and revision are the only way to tell this task's
+		// entries from another task's leftovers. With no field, list returns
+		// the index, which is usually enough to decide what to load.
+		if strings.TrimSpace(fieldStr) == "" {
+			index, err := t.states.LoadIndex(ctx, agentID)
+			if err != nil {
+				return &types.ToolResult{Success: false, Error: err.Error()}, nil
+			}
+			return t.jsonResult(index)
+		}
+		result, err := t.states.ListWithMeta(ctx, agentID, field)
 		if err != nil {
 			return &types.ToolResult{Success: false, Error: err.Error()}, nil
 		}
-		return t.jsonResult(items)
+		return t.jsonResult(result)
 
 	case "get":
 		item, err := t.states.Get(ctx, agentID, field, id)

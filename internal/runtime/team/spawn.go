@@ -205,44 +205,31 @@ func (s *runState) producersFromLocked(callID string) []string {
 	return result
 }
 
-// saveSpawnedAgentState applies the same deterministic update the Spawn tool
-// uses for inline children (spawn.go saveAgentState): the item becomes the
-// goal, the first reply is confirmed, later replies become next steps, and
-// workspace refs are tracked.
+// saveSpawnedAgentState records what the runtime knows without interpreting it:
+// the spawned item becomes the goal when none is set, and workspace refs are
+// tracked. Both are block-scoped writes, so this never rewrites the Agent's
+// todo list. The reply is deliberately not written — it is the turn's outcome,
+// already carried by the session and the records, and storing it made the next
+// task read it as its own finding.
 func saveSpawnedAgentState(
 	ctx context.Context,
 	states *state.Store,
 	spec agentstore.SpawnedCallSpec,
-	previousStateText string,
 	result types.CallResult,
 ) error {
-	snapshot, err := states.LoadAgentState(ctx, spec.AgentID)
-	if err != nil {
-		return err
-	}
 	itemJSON, err := json.Marshal(spec.Item)
 	if err != nil {
 		return fmt.Errorf("encode spawn item: %w", err)
 	}
-	if snapshot.Goal == "" {
-		snapshot.Goal = string(itemJSON)
+	if err := states.SetGoalIfEmpty(ctx, spec.AgentID, string(itemJSON)); err != nil {
+		return err
 	}
-	if reply := strings.TrimSpace(result.Reply); reply != "" {
-		item := types.StateItem{ID: states.NextItemID(), Text: reply}
-		if strings.TrimSpace(previousStateText) == "" {
-			snapshot.Confirmed = append(snapshot.Confirmed, item)
-		} else {
-			snapshot.NextSteps = append(snapshot.NextSteps, item)
-		}
-	}
+	refs := make([]types.StateWorkspaceRef, 0, len(result.WorkspaceOps))
 	for _, operation := range result.WorkspaceOps {
 		if operation.Path == "" {
 			continue
 		}
-		snapshot.Workspace = append(snapshot.Workspace, types.StateWorkspaceRef{
-			Path:     operation.Path,
-			Revision: operation.Revision,
-		})
+		refs = append(refs, types.StateWorkspaceRef{Path: operation.Path, Revision: operation.Revision})
 	}
-	return states.SaveAgentState(ctx, spec.AgentID, snapshot)
+	return states.AppendWorkspace(ctx, spec.AgentID, refs...)
 }

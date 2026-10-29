@@ -11,7 +11,7 @@
 | 概念 | 对象 | 生命周期 | 机制 |
 |---|---|---|---|
 | **Context**（本文） | 对话消息 `[]types.Message` | 单次 AgentTurn | 压缩（Compactor） |
-| **State** | 会话内工作状态快照 | 会话内 | 机械 append，注入下一轮 |
+| **State** | 跨会话工作状态（待办白板） | 跨会话 | 按需读取：只注入固定指针，条目由 State 工具读 |
 | **Knowledge** | 跨会话长期知识 | 跨会话持久 | KnowledgeSummarizer 提炼 |
 
 本文只讨论 Context。
@@ -54,7 +54,7 @@ active 消息列表
 
 | 字段 | 含义 |
 |---|---|
-| `Kind` | 块类型（`team_state` / `agent_state` / `entity_state` / `knowledge` / `records` 等） |
+| `Kind` | 块类型（`state_pointer` / `knowledge` / `records` 等） |
 | `Text` | 文本内容 |
 | `Parts` | 多媒体内容（图片等） |
 | `Placement` | `system` 或 `user`，决定拼进哪条消息 |
@@ -79,7 +79,7 @@ active 消息列表
 2. Agent Body（额外指令）
 3. ContextBlocks（Placement=system，如 knowledge、rules）
 4. Tool usage 指令
-5. State 管理指令（`state-management` 模板）
+5. State 管理指令（`state-management` 模板，仅当 agent 声明了 `State` 工具）
 6. Execution 管理指令
 7. Perspective isolation
 8. Output format（如有 structured output）

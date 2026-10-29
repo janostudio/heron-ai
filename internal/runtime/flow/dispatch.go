@@ -226,10 +226,25 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 // that arrives in between has to wait rather than give up. One wait per session
 // at a time (pendingWakes), so several Teams finishing together do not stack
 // timers.
-var (
-	wakeRetryInterval = 500 * time.Millisecond
-	wakeRetryAttempts = 120 // ~1 minute at the default interval
+//
+// The knobs are Runtime fields, not package variables: the retry goroutine reads
+// them, and a test that restored a package variable afterwards raced that read.
+const (
+	defaultWakeRetryInterval = 500 * time.Millisecond
+	defaultWakeRetryAttempts = 120 // ~1 minute at the default interval
 )
+
+// wakeRetryConfig returns the effective retry knobs for this runtime.
+func (r *Runtime) wakeRetryConfig() (time.Duration, int) {
+	interval, attempts := r.wakeRetryInterval, r.wakeRetryAttempts
+	if interval <= 0 {
+		interval = defaultWakeRetryInterval
+	}
+	if attempts <= 0 {
+		attempts = defaultWakeRetryAttempts
+	}
+	return interval, attempts
+}
 
 // wakeIfIdle calls the injected waker only when the session is idle enough to
 // resume.
@@ -286,7 +301,8 @@ func (r *Runtime) wakeIfIdleAttempt(ctx context.Context, sessionID string, attem
 // owns no resources beyond its timer and is capped by wakeRetryAttempts, so a
 // session that never becomes idle leaves nothing behind.
 func (r *Runtime) scheduleWakeRetry(sessionID string, attempt int) {
-	if attempt > wakeRetryAttempts {
+	interval, maxAttempts := r.wakeRetryConfig()
+	if attempt > maxAttempts {
 		logging.Warn("wake retry exhausted: session stayed running", map[string]any{
 			"flow_session_id": sessionID,
 			"attempts":        attempt - 1,
@@ -307,7 +323,7 @@ func (r *Runtime) scheduleWakeRetry(sessionID string, attempt int) {
 	r.pendingWakes[sessionID] = true
 	r.dispatchMu.Unlock()
 
-	delay := wakeRetryInterval
+	delay := interval
 	logging.Debug("wake deferred: session running", map[string]any{
 		"flow_session_id": sessionID,
 		"attempt":         attempt,

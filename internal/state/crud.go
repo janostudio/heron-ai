@@ -4,23 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// StateField identifies one field of an Agent's cross-session state. It is
-// the unit of the CRUD operations (design doc 26 §4.2).
+// StateField identifies one field of an Agent's cross-session state. A field is
+// backed by exactly one block file.
 type StateField string
 
 const (
-	FieldGoal          StateField = "goal"
-	FieldConfirmed     StateField = "confirmed"
-	FieldOpenQuestions StateField = "open_questions"
-	FieldDecisions     StateField = "decisions"
-	FieldNextSteps     StateField = "next_steps"
-	FieldWorkspace     StateField = "workspace"
-	FieldRecordIDs     StateField = "record_ids"
+	FieldGoal          StateField = types.StateBlockGoal
+	FieldConfirmed     StateField = types.StateBlockConfirmed
+	FieldOpenQuestions StateField = types.StateBlockOpenQuestions
+	FieldDecisions     StateField = types.StateBlockDecisions
+	FieldNextSteps     StateField = types.StateBlockNextSteps
+	FieldWorkspace     StateField = types.StateBlockWorkspace
+	FieldRecordIDs     StateField = types.StateBlockRecordIDs
 )
 
 // itemSeq produces unique, monotonically increasing ids for StateItems. It is
@@ -34,35 +35,19 @@ func newItemID() string {
 
 // NextItemID returns a fresh, unique StateItem id for callers that construct
 // StateItems outside the CRUD methods (e.g. the runtime's automatic state
-// updates). Ids are unique within the process, which is sufficient combined
-// with agent scoping.
+// updates).
 func (s *Store) NextItemID() string {
 	return newItemID()
 }
 
-// fieldItems returns a pointer to the target StateItem slice for the given
-// field. It reports false for fields that are not item lists.
-func fieldItems(snapshot *types.StateSnapshot, field StateField) (*[]types.StateItem, bool) {
-	switch field {
-	case FieldConfirmed:
-		return &snapshot.Confirmed, true
-	case FieldOpenQuestions:
-		return &snapshot.OpenQuestions, true
-	case FieldDecisions:
-		return &snapshot.Decisions, true
-	case FieldNextSteps:
-		return &snapshot.NextSteps, true
-	default:
-		return nil, false
-	}
-}
-
-// withAgentLock runs fn while holding the agent-level state write lock. It
-// never blocks: a busy agent returns an error.
-func (s *Store) withAgentLock(agentID string, fn func() error) error {
-	unlock, acquired := s.locks.TryLock(agentID)
+// withBlockLock runs fn while holding the write lock of one Agent's block.
+// Block granularity is what makes the directory layout pay off: two instances
+// editing different blocks do not contend. It never blocks — a busy block
+// returns an error.
+func (s *Store) withBlockLock(agentID, block string, fn func() error) error {
+	unlock, acquired := s.locks.TryLock(agentID + "/" + block)
 	if !acquired {
-		return fmt.Errorf("state: agent %q state is busy", agentID)
+		return fmt.Errorf("state: agent %q block %q is busy", agentID, block)
 	}
 	defer unlock()
 	return fn()
@@ -71,41 +56,71 @@ func (s *Store) withAgentLock(agentID string, fn func() error) error {
 // Add appends a todo entry to the given field, generating a fresh id. agentID
 // scopes the shared whiteboard; actor is the "agent(instance)" attribution
 // recorded as AddedBy (it may be empty for non-instance callers).
-func (s *Store) Add(ctx context.Context, agentID string, field StateField, text string, actor string) error {
+//
+// status is only meaningful for next_steps, the todo list. Empty reads as
+// pending; at most one entry may be in_progress, matching the rule that one
+// task is being worked on at a time.
+func (s *Store) Add(ctx context.Context, agentID string, field StateField, text string, status string, actor string) error {
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
 	switch field {
 	case FieldWorkspace:
-		return errors.New("state: workspace entries are structural; add them via SaveAgentState")
+		return errors.New("state: workspace entries are structural; add them via AppendWorkspace")
 	case FieldRecordIDs:
-		return s.addRecordID(ctx, agentID, text)
+		return s.AppendRecordIDs(ctx, agentID, text)
 	case FieldGoal:
 		return errors.New("state: goal is single-valued; use SetGoal")
 	case FieldConfirmed, FieldOpenQuestions, FieldDecisions, FieldNextSteps:
 	default:
 		return fmt.Errorf("state: unsupported field %q", field)
 	}
-	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadAgentState(ctx, agentID)
+
+	normalized, err := normalizeStatus(status)
+	if err != nil {
+		return err
+	}
+	if field != FieldNextSteps {
+		// Only the todo list carries a lifecycle; a "completed" decision is
+		// meaningless and would invite the model to manage a state that has no
+		// meaning.
+		normalized = ""
+	}
+	if normalized == types.StateStatusInProgress {
+		if err := s.ensureSingleInProgress(ctx, agentID, field, ""); err != nil {
+			return err
+		}
+	}
+
+	return s.withBlockLock(agentID, string(field), func() error {
+		block, err := s.LoadBlock(ctx, agentID, string(field))
 		if err != nil {
 			return err
 		}
-		target, _ := fieldItems(&snapshot, field)
-		*target = append(*target, types.StateItem{ID: newItemID(), Text: text, AddedBy: actor})
-		return s.SaveAgentState(ctx, agentID, snapshot)
+		block.Items = append(block.Items, types.StateItem{
+			ID: newItemID(), Text: text, Status: normalized, AddedBy: actor,
+		})
+		return s.SaveBlock(ctx, agentID, block)
 	})
 }
 
-func (s *Store) addRecordID(ctx context.Context, agentID, value string) error {
-	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadAgentState(ctx, agentID)
-		if err != nil {
-			return err
+// ensureSingleInProgress rejects a second in_progress entry in the same block.
+// Silently demoting the older one would lose the fact that two things were
+// started.
+func (s *Store) ensureSingleInProgress(ctx context.Context, agentID string, field StateField, exceptID string) error {
+	items, err := s.List(ctx, agentID, field)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.ID == exceptID {
+			continue
 		}
-		snapshot.RecordIDs = append(snapshot.RecordIDs, value)
-		return s.SaveAgentState(ctx, agentID, snapshot)
-	})
+		if item.Status == types.StateStatusInProgress {
+			return fmt.Errorf("state: %s already has an in_progress entry (%s); finish it or mark it completed first", field, item.ID)
+		}
+	}
+	return nil
 }
 
 // Remove deletes one entry. For item lists id is the StateItem.ID; for
@@ -114,16 +129,20 @@ func (s *Store) Remove(ctx context.Context, agentID string, field StateField, id
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
-	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadAgentState(ctx, agentID)
+	blockName := string(field)
+	if !validBlock(blockName) {
+		return fmt.Errorf("state: unsupported field %q", field)
+	}
+	return s.withBlockLock(agentID, blockName, func() error {
+		block, err := s.LoadBlock(ctx, agentID, blockName)
 		if err != nil {
 			return err
 		}
 		switch field {
 		case FieldWorkspace:
-			next := snapshot.Workspace[:0]
+			next := block.Workspace[:0]
 			removed := false
-			for _, item := range snapshot.Workspace {
+			for _, item := range block.Workspace {
 				if item.Path == id {
 					removed = true
 					continue
@@ -133,11 +152,11 @@ func (s *Store) Remove(ctx context.Context, agentID string, field StateField, id
 			if !removed {
 				return fmt.Errorf("state: workspace entry %q not found", id)
 			}
-			snapshot.Workspace = next
+			block.Workspace = next
 		case FieldRecordIDs:
-			next := snapshot.RecordIDs[:0]
+			next := block.RecordIDs[:0]
 			removed := false
-			for _, value := range snapshot.RecordIDs {
+			for _, value := range block.RecordIDs {
 				if value == id {
 					removed = true
 					continue
@@ -147,15 +166,11 @@ func (s *Store) Remove(ctx context.Context, agentID string, field StateField, id
 			if !removed {
 				return fmt.Errorf("state: record id %q not found", id)
 			}
-			snapshot.RecordIDs = next
+			block.RecordIDs = next
 		default:
-			items, ok := fieldItems(&snapshot, field)
-			if !ok {
-				return fmt.Errorf("state: unsupported field %q", field)
-			}
-			next := (*items)[:0]
+			next := block.Items[:0]
 			removed := false
-			for _, item := range *items {
+			for _, item := range block.Items {
 				if item.ID == id {
 					removed = true
 					continue
@@ -165,33 +180,60 @@ func (s *Store) Remove(ctx context.Context, agentID string, field StateField, id
 			if !removed {
 				return fmt.Errorf("state: item %q not found in %s", id, field)
 			}
-			*items = next
+			block.Items = next
 		}
-		return s.SaveAgentState(ctx, agentID, snapshot)
+		return s.SaveBlock(ctx, agentID, block)
 	})
 }
 
-// Update rewrites the text of one item identified by id and records actor as
-// HandledBy. agentID scopes the shared whiteboard; actor is the attribution.
-func (s *Store) Update(ctx context.Context, agentID string, field StateField, id, text string, actor string) error {
+// Update rewrites one entry identified by id and records actor as HandledBy.
+// Empty text keeps the current text; empty status keeps the current status, so
+// "mark it in_progress" and "rewrite it" are the same call.
+func (s *Store) Update(ctx context.Context, agentID string, field StateField, id, text, status, actor string) error {
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
-	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadAgentState(ctx, agentID)
+	blockName := string(field)
+	if !validBlock(blockName) {
+		return fmt.Errorf("state: unsupported field %q", field)
+	}
+	if field != FieldNextSteps && strings.TrimSpace(status) != "" {
+		return fmt.Errorf("state: status only applies to %s", FieldNextSteps)
+	}
+	normalized, err := normalizeStatus(status)
+	if err != nil {
+		return err
+	}
+	if normalized == types.StateStatusInProgress {
+		if err := s.ensureSingleInProgress(ctx, agentID, field, id); err != nil {
+			return err
+		}
+	}
+	return s.withBlockLock(agentID, blockName, func() error {
+		block, err := s.LoadBlock(ctx, agentID, blockName)
 		if err != nil {
 			return err
 		}
-		items, ok := fieldItems(&snapshot, field)
+		items, ok := listItems(&block)
 		if !ok {
 			return fmt.Errorf("state: field %q is not updatable", field)
 		}
 		for i := range *items {
-			if (*items)[i].ID == id {
-				(*items)[i].Text = text
-				(*items)[i].HandledBy = actor
-				return s.SaveAgentState(ctx, agentID, snapshot)
+			if (*items)[i].ID != id {
+				continue
 			}
+			if strings.TrimSpace(text) != "" {
+				(*items)[i].Text = text
+			}
+			if field == FieldNextSteps {
+				if strings.TrimSpace(status) != "" {
+					(*items)[i].Status = normalized
+				} else if (*items)[i].Status == "" {
+					(*items)[i].Status = types.StateStatusPending
+				}
+			}
+			(*items)[i].HandledBy = actor
+			return s.SaveBlock(ctx, agentID, block)
 		}
 		return fmt.Errorf("state: item %q not found in %s", id, field)
 	})
@@ -199,37 +241,81 @@ func (s *Store) Update(ctx context.Context, agentID string, field StateField, id
 
 // List returns every entry of the given field.
 func (s *Store) List(ctx context.Context, agentID string, field StateField) ([]types.StateItem, error) {
-	if err := contextErr(ctx); err != nil {
-		return nil, err
-	}
-	snapshot, err := s.LoadAgentState(ctx, agentID)
+	result, err := s.ListWithMeta(ctx, agentID, field)
 	if err != nil {
 		return nil, err
 	}
+	return result.Items, nil
+}
+
+// ListWithMeta returns one field's entries together with the block metadata.
+// The State tool uses it so a reader can tell a three-day-old entry from one
+// written this turn: the state is not injected into the prompt, so freshness
+// has to be carried by the read itself.
+func (s *Store) ListWithMeta(ctx context.Context, agentID string, field StateField) (types.StateList, error) {
+	if err := contextErr(ctx); err != nil {
+		return types.StateList{}, err
+	}
+	blockName := string(field)
+	if !validBlock(blockName) {
+		return types.StateList{}, fmt.Errorf("state: unsupported field %q", field)
+	}
+	block, err := s.LoadBlock(ctx, agentID, blockName)
+	if err != nil {
+		return types.StateList{}, err
+	}
+	list := types.StateList{
+		UpdatedAt: block.UpdatedAt,
+		Revision:  block.Revision,
+	}
+	if field == FieldGoal {
+		list.Goal = block.Goal
+	} else if goal, goalErr := s.LoadBlock(ctx, agentID, types.StateBlockGoal); goalErr == nil {
+		// The goal travels with every read: it is the label that tells the
+		// caller whether this block belongs to the task it is doing.
+		list.Goal = goal.Goal
+	}
+	list.Items, err = itemsOf(block, field)
+	if err != nil {
+		return types.StateList{}, err
+	}
+	return list, nil
+}
+
+// itemsOf projects one block into the entry shape the tool returns.
+func itemsOf(block types.StateBlock, field StateField) ([]types.StateItem, error) {
 	switch field {
-	case FieldRecordIDs:
-		items := make([]types.StateItem, 0, len(snapshot.RecordIDs))
-		for _, value := range snapshot.RecordIDs {
-			items = append(items, types.StateItem{ID: value, Text: value})
+	case FieldGoal:
+		if strings.TrimSpace(block.Goal) == "" {
+			return nil, nil
 		}
-		return items, nil
+		return []types.StateItem{{ID: "goal", Text: block.Goal}}, nil
 	case FieldWorkspace:
-		items := make([]types.StateItem, 0, len(snapshot.Workspace))
-		for _, ref := range snapshot.Workspace {
+		items := make([]types.StateItem, 0, len(block.Workspace))
+		for _, ref := range block.Workspace {
 			items = append(items, types.StateItem{ID: ref.Path, Text: ref.Path + " (" + ref.Revision + ")"})
 		}
 		return items, nil
-	case FieldGoal:
-		if snapshot.Goal == "" {
-			return nil, nil
+	case FieldRecordIDs:
+		items := make([]types.StateItem, 0, len(block.RecordIDs))
+		for _, value := range block.RecordIDs {
+			items = append(items, types.StateItem{ID: value, Text: value})
 		}
-		return []types.StateItem{{ID: "goal", Text: snapshot.Goal}}, nil
+		return items, nil
 	default:
-		items, ok := fieldItems(&snapshot, field)
-		if !ok {
-			return nil, fmt.Errorf("state: unsupported field %q", field)
-		}
-		return *items, nil
+		return block.Items, nil
+	}
+}
+
+// listItems returns a pointer to the block's item slice for the fields that
+// support entry updates.
+func listItems(block *types.StateBlock) (*[]types.StateItem, bool) {
+	switch block.Name {
+	case types.StateBlockConfirmed, types.StateBlockOpenQuestions,
+		types.StateBlockDecisions, types.StateBlockNextSteps:
+		return &block.Items, true
+	default:
+		return nil, false
 	}
 }
 
@@ -253,27 +339,17 @@ func (s *Store) SetGoal(ctx context.Context, agentID, text string) error {
 	if err := contextErr(ctx); err != nil {
 		return err
 	}
-	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadAgentState(ctx, agentID)
+	return s.withBlockLock(agentID, types.StateBlockGoal, func() error {
+		block, err := s.LoadBlock(ctx, agentID, types.StateBlockGoal)
 		if err != nil {
 			return err
 		}
-		snapshot.Goal = text
-		return s.SaveAgentState(ctx, agentID, snapshot)
+		block.Goal = text
+		return s.SaveBlock(ctx, agentID, block)
 	})
 }
 
 // ClearGoal clears the single-valued goal.
 func (s *Store) ClearGoal(ctx context.Context, agentID string) error {
-	if err := contextErr(ctx); err != nil {
-		return err
-	}
-	return s.withAgentLock(agentID, func() error {
-		snapshot, err := s.LoadAgentState(ctx, agentID)
-		if err != nil {
-			return err
-		}
-		snapshot.Goal = ""
-		return s.SaveAgentState(ctx, agentID, snapshot)
-	})
+	return s.SetGoal(ctx, agentID, "")
 }

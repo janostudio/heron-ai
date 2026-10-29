@@ -313,10 +313,11 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 	result.Turn.Status = types.TurnCompleted
 	result.Turn.RecordIDs = recordIDs(result.Records)
 	if states != nil && req.Team.State.Enabled {
+		// Only the structured ledger is recorded. next_steps used to receive the
+		// whole Team reply, which turned a todo list into a log and made a
+		// finished turn's answer look like an open task. The reply is already
+		// in session.jsonl; the state keeps the record ids it refers to.
 		teamState.RecordIDs = append(teamState.RecordIDs, result.Turn.RecordIDs...)
-		if reply := strings.TrimSpace(result.Reply); reply != "" {
-			teamState.NextSteps = append(teamState.NextSteps, types.StateItem{ID: states.NextItemID(), Text: reply})
-		}
 		if err := states.SaveTeam(ctx, teamState); err != nil {
 			return result, err
 		}
@@ -420,23 +421,6 @@ func (r *Runtime) runBatch(
 			callReq.ResumeTaskID = resume.TaskID
 			callReq.ResumeApprovalID = resume.ApprovalID
 			callReq.ResumeApproval = resume.Approval
-			if states != nil && req.Team.State.Enabled {
-				teamSnapshot, stateErr := states.LoadTeam(ctx, req.FlowSession.ID, req.Team.ID)
-				if stateErr != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = stateErr
-					}
-					results[name] = types.CallResult{Status: types.TurnFailed, Error: stateErr.Error()}
-					mu.Unlock()
-					return
-				}
-				callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
-					Kind: "team_state", Text: renderState(teamSnapshot),
-					Source: "team_state", Stability: "dynamic", Priority: 70,
-					Compressible: true,
-				})
-			}
 			if configured.Type == types.CallAgent {
 				agent, ok := agents[configured.AgentID]
 				if !ok {
@@ -524,44 +508,20 @@ func (r *Runtime) runBatch(
 					})
 				}
 				callReq.AgentDefinition = &agent
-				if isSpawned {
-					// Agent state routing (design 20 §5): a synthetic call reads
-					// its agent's persistent cross-session state, not the
-					// session-scoped per-call state — the same scope inline
-					// spawned children use.
-					if states != nil {
-						snapshot, stateErr := states.LoadAgentState(ctx, spec.AgentID)
-						if stateErr != nil {
-							mu.Lock()
-							if firstErr == nil {
-								firstErr = stateErr
-							}
-							results[name] = types.CallResult{Status: types.TurnFailed, Error: stateErr.Error()}
-							mu.Unlock()
-							return
-						}
-						if text := renderState(snapshot); text != "" {
-							callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
-								Kind: "agent_state", Text: text, Source: "agent_state",
-								Stability: "dynamic", Priority: 60, Compressible: true,
-							})
-						}
-					}
-				} else if states != nil && req.Team.State.Enabled {
-					snapshot, stateErr := states.LoadAgent(ctx, req.FlowSession.ID, req.Team.ID, configured.ID)
-					if stateErr != nil {
-						mu.Lock()
-						if firstErr == nil {
-							firstErr = stateErr
-						}
-						results[name] = types.CallResult{Status: types.TurnFailed, Error: stateErr.Error()}
-						mu.Unlock()
-						return
-					}
+				// State routing (design 26): the snapshot is never injected.
+				// Every Agent that declares the State tool gets the pointer,
+				// spawned or not — the tool reads the same cross-session scope
+				// in both cases. The session-scoped per-call state has no tool
+				// to read it, which is why it is written for audit and not sent
+				// to the model; sending it is what let a previous turn's verdict
+				// answer a new question.
+				if agent.Tools.HasBuiltin("State") {
 					callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
-						Kind: "agent_state", Text: renderState(snapshot),
-						Source: "agent_state", Stability: "dynamic", Priority: 60,
-						Compressible: true,
+						Kind: "state_pointer", Text: agentStatePointer(configured.AgentID), Source: "agent_state",
+						// Stable for a given agent (the path does not change), so it
+						// stays in the cached prefix; system placement keeps it a
+						// policy rather than conversation.
+						Placement: "system", Stability: "stable", Priority: 60,
 					})
 				}
 			}
@@ -605,13 +565,13 @@ func (r *Runtime) runBatch(
 					// Agent state routing: persist to the cross-session agent
 					// scope with the same deterministic update inline children
 					// apply.
-					if stateErr := saveSpawnedAgentState(ctx, states, *spec, contextBlockText(callReq.ContextBlocks, "agent_state"), callResult); stateErr != nil {
+					if stateErr := saveSpawnedAgentState(ctx, states, *spec, callResult); stateErr != nil {
 						err = stateErr
 						callResult.Status = types.TurnFailed
 						callResult.Error = stateErr.Error()
 					}
 				} else if req.Team.State.Enabled {
-					if stateErr := r.saveAgentState(ctx, states, req, configured, contextBlockText(callReq.ContextBlocks, "agent_state"), callResult); stateErr != nil {
+					if stateErr := r.saveAgentState(ctx, states, req, configured, callResult); stateErr != nil {
 						err = stateErr
 						callResult.Status = types.TurnFailed
 						callResult.Error = stateErr.Error()
@@ -951,7 +911,6 @@ func (r *Runtime) saveAgentState(
 	states *state.Store,
 	req types.TeamTurnRequest,
 	configured types.Call,
-	previousText string,
 	result types.CallResult,
 ) error {
 	if configured.Type != types.CallAgent || states == nil {
@@ -961,14 +920,12 @@ func (r *Runtime) saveAgentState(
 	if err != nil {
 		return err
 	}
-	if snapshot.Goal == "" {
-		snapshot.Goal = configured.Responsibility
-	}
-	if strings.TrimSpace(previousText) == "" && strings.TrimSpace(result.Reply) != "" {
-		snapshot.Confirmed = append(snapshot.Confirmed, types.StateItem{ID: states.NextItemID(), Text: result.Reply})
-	} else if strings.TrimSpace(result.Reply) != "" {
-		snapshot.NextSteps = append(snapshot.NextSteps, types.StateItem{ID: states.NextItemID(), Text: result.Reply})
-	}
+	// Goal and the natural-language lists belong to the Agent: it sets its own
+	// goal through the State tool, and it decides what is worth remembering.
+	// The runtime only records the structured references, which cannot be
+	// misread as a conclusion. `goal` used to be seeded from
+	// configured.Responsibility, a value that never changes — so every later
+	// turn inherited a goal describing the role instead of the task.
 	snapshot.RecordIDs = append(snapshot.RecordIDs, recordIDs(result.Records)...)
 	for _, operation := range result.WorkspaceOps {
 		if operation.Path == "" {
@@ -980,39 +937,6 @@ func (r *Runtime) saveAgentState(
 		})
 	}
 	return states.SaveAgent(ctx, snapshot)
-}
-
-func renderState(snapshot types.StateSnapshot) string {
-	var sections []string
-	if snapshot.Goal != "" {
-		sections = append(sections, "Goal: "+snapshot.Goal)
-	}
-	appendList := func(title string, values []types.StateItem) {
-		if len(values) == 0 {
-			return
-		}
-		texts := make([]string, len(values))
-		for i, item := range values {
-			texts[i] = item.Text
-		}
-		sections = append(sections, title+":\n- "+strings.Join(texts, "\n- "))
-	}
-	appendList("Confirmed", snapshot.Confirmed)
-	appendList("Open Questions", snapshot.OpenQuestions)
-	appendList("Decisions", snapshot.Decisions)
-	// Next Steps is deliberately not rendered. The whiteboard survives across
-	// turns, but a Next Step is a plan for the turn that wrote it: rendered
-	// again later, a finished plan reads as the outcome of the current task. A
-	// Team asked about repo B answered with repo A's branch and HEAD word for
-	// word, because that verdict was still sitting in Next Steps.
-	body := strings.Join(sections, "\n\n")
-	if body == "" {
-		return ""
-	}
-	// Everything that does survive is labelled for what it is. Without the
-	// boundary the same confusion happens one section earlier: a stale
-	// "confirmed" line is read as this turn's finding.
-	return "State carried over from earlier turns (memory, not the outcome of the current task unless the current task continues it):\n\n" + body
 }
 
 func renderRules(definitions map[string]types.RuleItem, names []string, agentID, teamID string) string {
@@ -1229,15 +1153,6 @@ func recordBlocks(records []types.SharedRecord) []types.ContextBlock {
 		})
 	}
 	return blocks
-}
-
-func contextBlockText(blocks []types.ContextBlock, kind string) string {
-	for _, block := range blocks {
-		if block.Kind == kind {
-			return block.Text
-		}
-	}
-	return ""
 }
 
 func hasContextBlock(blocks []types.ContextBlock, kind string) bool {

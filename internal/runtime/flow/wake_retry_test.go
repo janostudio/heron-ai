@@ -45,9 +45,9 @@ func TestWakeRetriesWhileSessionStillRunning(t *testing.T) {
 	woke := make(chan string, 4)
 	runtime.SetWaker(func(sessionID string) { woke <- sessionID })
 
-	previous := wakeRetryInterval
-	wakeRetryInterval = 10 * time.Millisecond
-	t.Cleanup(func() { wakeRetryInterval = previous })
+	// The knobs are per-runtime: the retry goroutine reads them, so a test that
+	// mutated a package variable here raced that read.
+	runtime.wakeRetryInterval = 10 * time.Millisecond
 
 	runtime.wakeIfIdle(context.Background(), session.ID)
 	select {
@@ -87,11 +87,8 @@ func TestWakeRetryStopsAtAttemptLimit(t *testing.T) {
 	woke := make(chan string, 4)
 	runtime.SetWaker(func(sessionID string) { woke <- sessionID })
 
-	previousInterval, previousAttempts := wakeRetryInterval, wakeRetryAttempts
-	wakeRetryInterval, wakeRetryAttempts = 5*time.Millisecond, 3
-	t.Cleanup(func() {
-		wakeRetryInterval, wakeRetryAttempts = previousInterval, previousAttempts
-	})
+	runtime.wakeRetryInterval = 5 * time.Millisecond
+	runtime.wakeRetryAttempts = 3
 
 	runtime.wakeIfIdle(context.Background(), session.ID)
 	require.Never(t, func() bool {

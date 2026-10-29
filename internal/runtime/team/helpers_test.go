@@ -112,58 +112,18 @@ func TestAddUsageNilReceiverIsNoop(t *testing.T) {
 	})
 }
 
-// stateCarriedOverHeader is the boundary that keeps a previous turn's verdict
-// from being read as the current task's result.
-const stateCarriedOverHeader = "State carried over from earlier turns (memory, not the outcome of the current task unless the current task continues it):\n\n"
-
-func TestRenderState(t *testing.T) {
-	tests := []struct {
-		name     string
-		snapshot types.StateSnapshot
-		expected string
-	}{
-		{
-			name:     "empty snapshot",
-			snapshot: types.StateSnapshot{},
-			expected: "",
-		},
-		{
-			name: "goal only",
-			snapshot: types.StateSnapshot{
-				Goal: "fix the bug",
-			},
-			expected: stateCarriedOverHeader + "Goal: fix the bug",
-		},
-		{
-			name: "goal plus lists",
-			snapshot: types.StateSnapshot{
-				Goal:          "g",
-				Confirmed:     []types.StateItem{{ID: "i-1", Text: "a"}, {ID: "i-2", Text: "b"}},
-				OpenQuestions: []types.StateItem{{ID: "i-3", Text: "q"}},
-				Decisions:     []types.StateItem{{ID: "i-4", Text: "d1"}, {ID: "i-5", Text: "d2"}},
-				NextSteps:     []types.StateItem{{ID: "i-6", Text: "n"}},
-			},
-			expected: stateCarriedOverHeader +
-				"Goal: g\n\n" +
-				"Confirmed:\n- a\n- b\n\n" +
-				"Open Questions:\n- q\n\n" +
-				"Decisions:\n- d1\n- d2",
-		},
-		{
-			// A finished turn's plan must not survive into the next one — it is
-			// exactly what a Team quotes back as its answer.
-			name: "next steps only",
-			snapshot: types.StateSnapshot{
-				NextSteps: []types.StateItem{{ID: "i-7", Text: "已核实仓库 heron-ai 的主分支是 master"}},
-			},
-			expected: "",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, renderState(tt.snapshot))
-		})
-	}
+// The pointer names the store and the rules for judging an entry. It must
+// never carry an entry: an injected snapshot is what let a previous turn's
+// verdict answer a new question.
+func TestAgentStatePointer(t *testing.T) {
+	text := agentStatePointer("coordinator")
+	assert.Contains(t, text, ".agents/data/agents/coordinator/state/")
+	assert.Contains(t, text, `action="list"`)
+	assert.Contains(t, text, "not the result of the current task")
+	assert.Contains(t, text, "updated_at")
+	assert.NotContains(t, text, "Confirmed:")
+	assert.NotContains(t, text, "Goal: ")
+	assert.Empty(t, agentStatePointer("   "))
 }
 
 func TestRenderRules(t *testing.T) {
@@ -578,17 +538,6 @@ func TestBuildCallInput(t *testing.T) {
 			assert.Equal(t, tt.expected, buildCallInput(tt.input, nil, nil, tt.configured))
 		})
 	}
-}
-
-func TestContextBlockText(t *testing.T) {
-	blocks := []types.ContextBlock{
-		{Kind: "input", Text: "the input"},
-		{Kind: "records", Text: "the records"},
-	}
-	assert.Equal(t, "the input", contextBlockText(blocks, "input"))
-	assert.Equal(t, "the records", contextBlockText(blocks, "records"))
-	assert.Equal(t, "", contextBlockText(blocks, "missing"))
-	assert.Equal(t, "", contextBlockText(nil, "input"))
 }
 
 func TestHasContextBlock(t *testing.T) {

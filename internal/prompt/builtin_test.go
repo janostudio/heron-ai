@@ -283,3 +283,37 @@ func TestRenderPutsContinuedTaskBeforeCollaborators(t *testing.T) {
 	require.Contains(t, messages[3].Content, "owner has reported back",
 		"the trailing turn states what happened instead of saying \"continue\"")
 }
+
+// A state pointer is policy: it says where the store is and how to read it, so
+// it belongs in the system prompt. The entries themselves are read on demand
+// and never travel with the pointer.
+func TestStatePointerRendersAsSystemPolicy(t *testing.T) {
+	pointer := "## Persistent State\nYour cross-session state is a file: .agents/data/agents/a/state/state.md\nRead it with the State tool."
+	agent := types.AgentConfig{Name: "a", Tools: types.ToolConfig{Builtin: []string{"State"}}}
+
+	messages, err := NewPromptRenderer(nil).Render(agent, types.AgentRequest{}, RenderContext{ContextBlocks: []types.ContextBlock{
+		{Kind: "state_pointer", Text: pointer, Placement: "system", Stability: "stable", Source: "agent_state"},
+		{Kind: "input", Text: "do the task", Placement: "user", Source: "user"},
+	}})
+	require.NoError(t, err)
+
+	require.Equal(t, "system", messages[0].Role)
+	require.Contains(t, messages[0].Content, ".agents/data/agents/a/state/state.md")
+	require.Contains(t, messages[0].Content, "## State Management")
+	for _, message := range messages[1:] {
+		require.NotContains(t, message.Content, "## Persistent State",
+			"the pointer is policy, not conversation")
+	}
+}
+
+// The policy is dead weight without the tool: it tells the Agent to use
+// something it cannot call.
+func TestStateManagementPolicyRequiresTool(t *testing.T) {
+	withTool := NewPromptRenderer(nil).BuildSystemPrompt(
+		types.AgentConfig{Tools: types.ToolConfig{Builtin: []string{"State"}}}, RenderContext{})
+	withoutTool := NewPromptRenderer(nil).BuildSystemPrompt(
+		types.AgentConfig{Tools: types.ToolConfig{Builtin: []string{"Read"}}}, RenderContext{})
+
+	require.Contains(t, withTool, "## State Management")
+	require.NotContains(t, withoutTool, "## State Management")
+}

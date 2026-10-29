@@ -36,11 +36,77 @@ type StateWorkspaceRef struct {
 // record the actor (as "agent(instance)" identifiers) who created and last
 // updated the entry, so a shared per-agent todo whiteboard stays traceable
 // while every concurrent instance may still read or mutate any entry.
+//
+// Status is the item's place in the todo lifecycle: pending, in_progress or
+// completed (empty reads as pending). It exists so "done" is a fact the model
+// can state, instead of only being expressible by deleting the entry.
 type StateItem struct {
 	ID        string `yaml:"id" json:"id"`
 	Text      string `yaml:"text" json:"text"`
+	Status    string `yaml:"status,omitempty" json:"status,omitempty"`
 	AddedBy   string `yaml:"added_by,omitempty" json:"added_by,omitempty"`
 	HandledBy string `yaml:"handled_by,omitempty" json:"handled_by,omitempty"`
+}
+
+// StateList is the State tool's list result: one field's entries plus the
+// snapshot metadata the caller needs to judge freshness. The metadata travels
+// with the data because the snapshot is no longer injected into the prompt —
+// the timestamp has to come back from the read that fetched the entries.
+type StateList struct {
+	UpdatedAt time.Time   `json:"updated_at"`
+	Revision  int         `json:"revision"`
+	Goal      string      `json:"goal,omitempty"`
+	Items     []StateItem `json:"items"`
+}
+
+// State block names. One block per file under the Agent's state directory.
+const (
+	StateBlockGoal          = "goal"
+	StateBlockConfirmed     = "confirmed"
+	StateBlockOpenQuestions = "open_questions"
+	StateBlockDecisions     = "decisions"
+	StateBlockNextSteps     = "next_steps"
+	StateBlockWorkspace     = "workspace"
+	StateBlockRecordIDs     = "record_ids"
+)
+
+// StateTodoStatus is one entry's place in the todo lifecycle.
+const (
+	StateStatusPending    = "pending"
+	StateStatusInProgress = "in_progress"
+	StateStatusCompleted  = "completed"
+)
+
+// StateBlock is one file of an Agent's state directory.
+type StateBlock struct {
+	Name      string
+	Revision  int
+	UpdatedAt time.Time
+	Goal      string
+	Items     []StateItem
+	Workspace []StateWorkspaceRef
+	RecordIDs []string
+}
+
+// StateBlockMeta is the index line for one block. InProgress is carried
+// separately so a reader can see at a glance whether work is under way without
+// loading the block.
+type StateBlockMeta struct {
+	Name       string    `json:"name"`
+	Entries    int       `json:"entries"`
+	InProgress int       `json:"in_progress"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Revision   int       `json:"revision"`
+}
+
+// StateIndex is the default answer to State(action="list"): what blocks exist,
+// how old they are, and whether anything is in flight. It is a summary, not a
+// substitute for reading a block.
+type StateIndex struct {
+	Revision  int              `json:"revision"`
+	UpdatedAt time.Time        `json:"updated_at"`
+	Goal      string           `json:"goal,omitempty"`
+	Blocks    []StateBlockMeta `json:"blocks"`
 }
 
 // StateSnapshot is the fixed-format shared todo whiteboard stored as state.md.

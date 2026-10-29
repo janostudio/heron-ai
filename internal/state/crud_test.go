@@ -14,8 +14,8 @@ func TestAddListGetUpdateRemove(t *testing.T) {
 	store := NewStore(storage.NewFileStore(t.TempDir()), Limits{})
 	ctx := context.Background()
 
-	require.NoError(t, store.Add(ctx, "agent-a", FieldConfirmed, "first todo", "agent-a(e-1)"))
-	require.NoError(t, store.Add(ctx, "agent-a", FieldConfirmed, "second todo", "agent-a(e-2)"))
+	require.NoError(t, store.Add(ctx, "agent-a", FieldConfirmed, "first todo", "", "agent-a(e-1)"))
+	require.NoError(t, store.Add(ctx, "agent-a", FieldConfirmed, "second todo", "", "agent-a(e-2)"))
 
 	items, err := store.List(ctx, "agent-a", FieldConfirmed)
 	require.NoError(t, err)
@@ -30,7 +30,7 @@ func TestAddListGetUpdateRemove(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "first todo", got.Text)
 
-	require.NoError(t, store.Update(ctx, "agent-a", FieldConfirmed, items[0].ID, "updated todo", "agent-a(e-3)"))
+	require.NoError(t, store.Update(ctx, "agent-a", FieldConfirmed, items[0].ID, "updated todo", "", "agent-a(e-3)"))
 	got, err = store.Get(ctx, "agent-a", FieldConfirmed, items[0].ID)
 	require.NoError(t, err)
 	assert.Equal(t, "updated todo", got.Text)
@@ -63,13 +63,13 @@ func TestCRUDRejectsUnsupportedField(t *testing.T) {
 	store := NewStore(storage.NewFileStore(t.TempDir()), Limits{})
 	ctx := context.Background()
 
-	err := store.Add(ctx, "agent-a", StateField("bogus"), "x", "")
+	err := store.Add(ctx, "agent-a", StateField("bogus"), "x", "", "")
 	require.Error(t, err)
 
-	err = store.Add(ctx, "agent-a", FieldGoal, "x", "")
+	err = store.Add(ctx, "agent-a", FieldGoal, "x", "", "")
 	require.Error(t, err)
 
-	err = store.Add(ctx, "agent-a", FieldWorkspace, "x", "")
+	err = store.Add(ctx, "agent-a", FieldWorkspace, "x", "", "")
 	require.Error(t, err)
 }
 
@@ -85,8 +85,8 @@ func TestRecordIDsAddRemoveList(t *testing.T) {
 	store := NewStore(storage.NewFileStore(t.TempDir()), Limits{})
 	ctx := context.Background()
 
-	require.NoError(t, store.Add(ctx, "agent-a", FieldRecordIDs, "rec-1", ""))
-	require.NoError(t, store.Add(ctx, "agent-a", FieldRecordIDs, "rec-2", ""))
+	require.NoError(t, store.Add(ctx, "agent-a", FieldRecordIDs, "rec-1", "", ""))
+	require.NoError(t, store.Add(ctx, "agent-a", FieldRecordIDs, "rec-2", "", ""))
 
 	items, err := store.List(ctx, "agent-a", FieldRecordIDs)
 	require.NoError(t, err)

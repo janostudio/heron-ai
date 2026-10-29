@@ -206,11 +206,13 @@ func TestSpawnTool_AsyncChildResultCollected(t *testing.T) {
 	assert.Equal(t, "completed", payload["status"])
 	assert.Contains(t, payload["reply"], "child reply for call-1/k1")
 
-	// Agent state is persisted by the async child, exactly like sync ones.
+	// Agent state keeps the goal and workspace refs; the reply itself is the
+	// turn's outcome and is not written into state.
 	snapshot, loadErr := fixture.states.LoadAgentState(context.Background(), "parent-agent")
 	require.NoError(t, loadErr)
-	require.NotEmpty(t, snapshot.Confirmed)
-	assert.Contains(t, snapshot.Confirmed[0].Text, "child reply for")
+	assert.Equal(t, `"a"`, snapshot.Goal)
+	assert.Empty(t, snapshot.Confirmed)
+	assert.Empty(t, snapshot.NextSteps)
 }
 
 func TestSpawnTool_AsyncChildFailureStoredPerChild(t *testing.T) {
