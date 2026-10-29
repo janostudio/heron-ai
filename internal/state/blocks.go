@@ -3,7 +3,6 @@ package state
 import (
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -273,8 +272,8 @@ func parseWorkspaceLine(line string) (string, string) {
 func encodeIndex(index types.StateIndex) []byte {
 	var front strings.Builder
 	front.WriteString("---\n")
-	front.WriteString(fmt.Sprintf("revision: %d\n", index.Revision))
-	front.WriteString(fmt.Sprintf("updated_at: %s\n", index.UpdatedAt.UTC().Format(time.RFC3339Nano)))
+	fmt.Fprintf(&front, "revision: %d\n", index.Revision)
+	fmt.Fprintf(&front, "updated_at: %s\n", index.UpdatedAt.UTC().Format(time.RFC3339Nano))
 	if strings.TrimSpace(index.Goal) != "" {
 		// The goal is repeated here on purpose: the index is the default read,
 		// and "which task is this" is the first thing a reader needs.
@@ -290,8 +289,8 @@ func encodeIndex(index types.StateIndex) []byte {
 		if !block.UpdatedAt.IsZero() {
 			updated = block.UpdatedAt.UTC().Format(time.RFC3339Nano)
 		}
-		body.WriteString(fmt.Sprintf("| %s | %d | %d | %s | %d |\n",
-			block.Name, block.Entries, block.InProgress, updated, block.Revision))
+		fmt.Fprintf(&body, "| %s | %d | %d | %s | %d |\n",
+			block.Name, block.Entries, block.InProgress, updated, block.Revision)
 	}
 	return []byte(body.String())
 }
@@ -369,16 +368,16 @@ func indexFromBlocks(blocks map[string]types.StateBlock, revision int, updatedAt
 		meta := types.StateBlockMeta{
 			Name: name, Revision: block.Revision, UpdatedAt: block.UpdatedAt,
 		}
-		switch {
-		case name == types.StateBlockGoal:
+		switch name {
+		case types.StateBlockGoal:
 			if strings.TrimSpace(block.Goal) == "" {
 				continue
 			}
 			meta.Entries = 1
 			index.Goal = block.Goal
-		case name == types.StateBlockWorkspace:
+		case types.StateBlockWorkspace:
 			meta.Entries = len(block.Workspace)
-		case name == types.StateBlockRecordIDs:
+		case types.StateBlockRecordIDs:
 			meta.Entries = len(block.RecordIDs)
 		default:
 			meta.Entries = len(block.Items)
@@ -391,13 +390,6 @@ func indexFromBlocks(blocks map[string]types.StateBlock, revision int, updatedAt
 		index.Blocks = append(index.Blocks, meta)
 	}
 	return index
-}
-
-// sortedBlockNames is used by tests and migration.
-func sortedBlockNames() []string {
-	names := append([]string(nil), orderedBlocks...)
-	sort.Strings(names)
-	return names
 }
 
 // normalizeStatus validates one entry status. Empty reads as pending.

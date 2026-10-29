@@ -425,15 +425,15 @@ func (s *Store) updateIndexLine(ctx context.Context, agentID string, block types
 	meta := types.StateBlockMeta{
 		Name: block.Name, Revision: block.Revision, UpdatedAt: block.UpdatedAt,
 	}
-	switch {
-	case block.Name == types.StateBlockGoal:
+	switch block.Name {
+	case types.StateBlockGoal:
 		index.Goal = block.Goal
 		if strings.TrimSpace(block.Goal) != "" {
 			meta.Entries = 1
 		}
-	case block.Name == types.StateBlockWorkspace:
+	case types.StateBlockWorkspace:
 		meta.Entries = len(block.Workspace)
-	case block.Name == types.StateBlockRecordIDs:
+	case types.StateBlockRecordIDs:
 		meta.Entries = len(block.RecordIDs)
 	default:
 		meta.Entries = len(block.Items)
