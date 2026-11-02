@@ -2588,6 +2588,23 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 			},
 			Required: []string{"handles"},
 		},
+		"ScheduleWakeup": {
+			Name: "ScheduleWakeup", Type: "object",
+			Description: "Schedule a one-off wake-up for yourself at a later time. When it fires you get back your own note plus what changed meanwhile. It fires once — it is not a cron. Use it only for things nothing will notify you about; work handed to Team or Spawn already notifies you when it finishes.",
+			Properties: map[string]types.JSONProperty{
+				"when": {Type: "string", Description: "A duration like \"30m\", \"6h\", \"2d\", or an RFC3339 timestamp with a timezone"},
+				"note": {Type: "string", Description: "What your future self should check, and what to do about what it finds. Handed back verbatim."},
+			},
+			Required: []string{"when", "note"},
+		},
+		"CancelWakeup": {
+			Name: "CancelWakeup", Type: "object",
+			Description: "Cancel a wake-up you scheduled earlier. Cancelling one that already fired is a no-op.",
+			Properties: map[string]types.JSONProperty{
+				"wakeup_id": {Type: "string", Description: "The wakeup_id returned by ScheduleWakeup"},
+			},
+			Required: []string{"wakeup_id"},
+		},
 		"State": {
 			Name: "State", Type: "object",
 			Description: "Read and update your own todo state (confirmed / open_questions / decisions / next_steps / goal). Use action=add to append a todo, action=remove to delete by id, action=update to rewrite an entry, action=list to list all entries of a field, and action=get to read one entry.",

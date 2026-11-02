@@ -41,7 +41,11 @@ type Runtime struct {
 	// transcripts is the per-Agent conversation store. A finished Team call
 	// enters the caller's conversation through it as a tool result.
 	transcripts types.AgentTranscriptStore
-	resumeMu    sync.Mutex
+	// resumeLocks serialises the resume entry points of one session. It is
+	// keyed by session rather than held once for the runtime: a runtime serves
+	// every conversation in the process, and one conversation's slow resume
+	// must not delay another's.
+	resumeLocks sync.Map
 
 	// dispatchMu guards busyTeams, the in-process record of which Teams are
 	// executing right now. A Team is a single execution unit, so two messages
@@ -64,6 +68,31 @@ type Runtime struct {
 	// pendingWakes de-duplicates wake retries for sessions that were still
 	// running when their wake-up arrived.
 	pendingWakes map[string]bool
+
+	// wakeupMu guards wakeupIndex: the self-scheduled wake-ups this process
+	// knows about, per session. The index is a cache over the event stream
+	// (wakeup.created / fired / skipped / cancelled / expired), which stays
+	// the source of truth so a restart rebuilds what is still due.
+	wakeupMu    sync.Mutex
+	wakeupIndex map[string]*wakeupIndex
+	wakeupCfg   types.WakeupLimits
+	// wakeupSignal nudges the scheduler loop to recompute its next deadline
+	// after a registration or a cancellation. It is buffered and written
+	// non-blocking: a nudge that arrives while one is already pending is the
+	// same nudge.
+	wakeupSignal chan struct{}
+	// wakeupInflight marks the records the scheduler has started firing, so
+	// the loop cannot start the same one twice before its state event lands.
+	// Guarded by wakeupMu.
+	wakeupInflight map[string]bool
+	// wakeupSessionLister enumerates sessions for startup recovery. It is
+	// injected because the sessions directory is app-layer layout.
+	wakeupSessionLister func(context.Context) ([]string, error)
+	// wakeupOnce starts the scheduler loop at most once. The loop is started on
+	// demand rather than at build time: a process with no timers should not
+	// hold a goroutine that does nothing, and a test that never schedules a
+	// wake-up should not leave one behind.
+	wakeupOnce sync.Once
 	// wakeRetryInterval / wakeRetryAttempts override the wake-retry knobs.
 	// Zero means "use the package default". They are per-runtime so the retry
 	// goroutine never reads a value a test is rewriting.
@@ -91,13 +120,17 @@ func NewRuntime(
 	evidenceStore storage.EvidenceStore,
 ) *Runtime {
 	return &Runtime{
-		definitions:  definitions,
-		teams:        teamRuntime,
-		sessions:     sessionWriter,
-		evidence:     evidenceStore,
-		limits:       types.RuntimeLimits{}.WithDefaults(),
-		busyTeams:    make(map[teamKey]bool),
-		pendingWakes: make(map[string]bool),
+		definitions:    definitions,
+		teams:          teamRuntime,
+		sessions:       sessionWriter,
+		evidence:       evidenceStore,
+		limits:         types.RuntimeLimits{}.WithDefaults(),
+		busyTeams:      make(map[teamKey]bool),
+		pendingWakes:   make(map[string]bool),
+		wakeupIndex:    make(map[string]*wakeupIndex),
+		wakeupCfg:      types.DefaultWakeupLimits(),
+		wakeupSignal:   make(chan struct{}, 1),
+		wakeupInflight: make(map[string]bool),
 	}
 }
 
@@ -252,8 +285,7 @@ func (r *Runtime) Resume(ctx context.Context, sessionID string, input string) (t
 }
 
 func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
-	r.resumeMu.Lock()
-	defer r.resumeMu.Unlock()
+	defer r.resumeLock(sessionID)()
 
 	session, err := r.loadSession(ctx, sessionID)
 	if err != nil {
@@ -359,8 +391,7 @@ func (r *Runtime) ResumeApproval(ctx context.Context, sessionID, approvalID stri
 // requests are durable and intentionally never expire; callers decide in
 // order by passing the request ID found in the latest waiting state.
 func (r *Runtime) ResumeApprovalWithResponse(ctx context.Context, sessionID string, decision types.HITLResponse) (types.FlowTurnResult, error) {
-	r.resumeMu.Lock()
-	defer r.resumeMu.Unlock()
+	defer r.resumeLock(sessionID)()
 
 	session, err := r.loadSession(ctx, sessionID)
 	if err != nil {
@@ -644,6 +675,11 @@ const (
 	turnOriginMailbox = "mailbox"
 	// turnOriginResume is a turn that continues a paused Tool call or approval.
 	turnOriginResume = "resume"
+	// turnOriginWakeup is a turn the session started for itself, from a note
+	// its own model left earlier. It is not a response to anything the user
+	// said, and its input block is placed in the system section for that
+	// reason.
+	turnOriginWakeup = "wakeup"
 )
 
 // runTurnWithOrigin is runTurnWithActivationsAndContext with an explicit
@@ -1644,6 +1680,18 @@ func (r *Runtime) finishTurn(
 		// team records still carry it for anyone debugging from the event stream.
 		for index := range result.TeamResults {
 			result.TeamResults[index].Reply = ""
+		}
+		// A wake-up exists to tell the user what changed, so its text is a
+		// delivery even when the turn is intermediate. Without this the one
+		// message the feature is for is cleared by the rule above: the turn is
+		// intermediate precisely because the downstream Team it is checking on
+		// is still running.
+		if result.Turn.Origin == turnOriginWakeup && strings.TrimSpace(replyForCaller) != "" {
+			result.Deliveries = append(result.Deliveries, types.UserDelivery{
+				MessageID: result.Turn.ID,
+				TeamID:    result.FinalReplyTeam,
+				Text:      truncateDelivery(replyForCaller, maxDeliveryChars),
+			})
 		}
 	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{

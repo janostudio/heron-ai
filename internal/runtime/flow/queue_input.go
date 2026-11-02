@@ -58,8 +58,7 @@ func (r *Runtime) queueUserInput(ctx context.Context, session types.FlowSession,
 // recurse or deadlock. The lock is taken here so two drains cannot start two
 // turns at once.
 func (r *Runtime) drainQueuedInput(ctx context.Context, sessionID string) {
-	r.resumeMu.Lock()
-	defer r.resumeMu.Unlock()
+	defer r.resumeLock(sessionID)()
 
 	for {
 		next, session, ok := r.pendingUserInput(ctx, sessionID)
