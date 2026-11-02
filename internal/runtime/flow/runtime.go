@@ -860,6 +860,12 @@ func (r *Runtime) runTurnWithOrigin(
 	hasWaitTool := false
 	hasWaitApproval := false
 
+	// Tracked only so a tripped Team-turn backstop can say who looped. A bare
+	// count leaves the reader grepping the event stream for the cycle, and
+	// the moment the backstop fires is the moment that is hardest to do.
+	activationCounts := make(map[string]int)
+	var recentActivations []string
+
 	for len(queue) > 0 {
 		if err := contextErr(ctx); err != nil {
 			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, err)
@@ -889,11 +895,24 @@ func (r *Runtime) runTurnWithOrigin(
 		// The same limit is counted over the whole session on the mailbox
 		// path (scheduler.runMessageTurn), because there every round is a
 		// separate turn and a per-turn counter would never trip.
+		for _, act := range ready {
+			pair := activationPair(act)
+			activationCounts[pair]++
+			recentActivations = append(recentActivations, pair)
+		}
+		if len(recentActivations) > recentActivationWindow {
+			recentActivations = recentActivations[len(recentActivations)-recentActivationWindow:]
+		}
 		if teamTurns+len(ready) > r.limits.MaxTeamTurns {
-			limitErr := fmt.Errorf("flow turn exceeded max team turns: %d", r.limits.MaxTeamTurns)
+			limitErr := fmt.Errorf("flow turn exceeded max team turns: %d (%s)",
+				r.limits.MaxTeamTurns,
+				describeActivationBurst(teamTurns+len(ready), activationCounts, recentActivations))
 			logging.Error("flow turn exceeded max team turns", map[string]any{
 				"flow_session_id": session.ID,
 				"flow_turn_id":    turn.ID,
+				"activated":       teamTurns + len(ready),
+				"top_pairs":       topActivationPairs(activationCounts),
+				"recent":          recentActivations,
 				"error":           limitErr.Error(),
 			})
 			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, limitErr)
@@ -2618,4 +2637,62 @@ func newID(prefix string) string {
 		return prefix + "_" + hex.EncodeToString(raw[:])
 	}
 	return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+}
+
+// recentActivationWindow is how many activations a tripped Team-turn backstop
+// reports. Six is enough to show a two-Team cycle repeating without turning
+// the error into a log dump.
+const recentActivationWindow = 6
+
+// activationPair names one edge of the activation graph, e.g. "owner→worktree".
+// The entry Team has no activator, so it is labelled distinctly rather than
+// showing up as "→entry".
+func activationPair(act activation) string {
+	if act.activator == "" {
+		return "entry→" + act.teamID
+	}
+	return act.activator + "→" + act.teamID
+}
+
+// topActivationPairs returns the most frequent edges, most-used first.
+func topActivationPairs(counts map[string]int) []string {
+	type pair struct {
+		name string
+		n    int
+	}
+	pairs := make([]pair, 0, len(counts))
+	for name, n := range counts {
+		pairs = append(pairs, pair{name, n})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].n != pairs[j].n {
+			return pairs[i].n > pairs[j].n
+		}
+		return pairs[i].name < pairs[j].name
+	})
+	if len(pairs) > 3 {
+		pairs = pairs[:3]
+	}
+	out := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, fmt.Sprintf("%s ×%d", p.name, p.n))
+	}
+	return out
+}
+
+// describeActivationBurst explains which activations consumed the budget.
+// A backstop that only prints its threshold cannot be acted on: the reader
+// needs to know whether one Team re-activated itself, whether two Teams are
+// ping-ponging, or whether a wide fan-out simply exceeded the cap.
+func describeActivationBurst(total int, counts map[string]int, recent []string) string {
+	parts := []string{fmt.Sprintf("activated %d", total)}
+	if top := topActivationPairs(counts); len(top) > 0 {
+		parts = append(parts, "top: "+strings.Join(top, ", "))
+	}
+	if len(recent) > 0 {
+		parts = append(parts, "recent: "+strings.Join(recent, " → "))
+	}
+	parts = append(parts,
+		"usually a routing cycle; raise settings.json runtime.max_team_turns only if the hand-offs are legitimate")
+	return strings.Join(parts, "; ")
 }

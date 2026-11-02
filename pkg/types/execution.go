@@ -343,12 +343,31 @@ type FlowTurnResult struct {
 // orchestration concept: the flow may still choose any valid static or dynamic
 // route within these bounds.
 //
-// The defaults are deliberately loose. A legitimate Flow may hand work back
-// and forth many times (an owner team re-dispatching a fixer after a failed
-// test, a reviewer sending work back for changes), and it must not trip a
-// limit while doing normal work. These bounds exist only to stop a runaway
-// loop, so they sit well above any plausible legitimate count. A Flow that
-// wants tighter bounds can lower them in settings.json.
+// # These are backstops, not throttles
+//
+// Every field here answers "how do we stop an execution that would otherwise
+// never end". None of them is meant to pace normal work. Before adding one,
+// three questions must all have an answer:
+//
+//  1. Is tripping it always a bug? If a legitimate run can reach it, the
+//     value is too low or the check belongs somewhere else.
+//  2. Is the threshold at least 3x the P99 legitimate count? The defaults
+//     below are deliberately loose for this reason: a Flow may hand work
+//     back and forth many times (an owner re-dispatching a fixer after a
+//     failed test, a reviewer sending work back for changes) and must not
+//     trip a limit while doing normal work.
+//  3. Can the failure say who looped? A backstop fires at the moment the
+//     system has stopped working, so the message is the only diagnostic the
+//     reader has left. "exceeded N" without the cycle is not actionable.
+//
+// Anything that fails question 1 is a concurrency bound, not a backstop:
+// express it as queueing (see MaxParallel*) rather than failure.
+//
+// A fourth rule follows from the same reasoning: never count over the whole
+// session unless the thing being counted is itself session-scoped. A session
+// total accumulates across unrelated user requests, so a legitimately long
+// conversation eventually exhausts it — which is a throttle wearing a
+// backstop's clothes.
 //
 // # The counting window is not uniform
 //
