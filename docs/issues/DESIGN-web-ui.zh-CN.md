@@ -343,7 +343,17 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 | 节点事件 `events[]` | 一个 Call 几十~几百条，全会话上万条 | **按节点区间** `first_seq..last_seq` 分页，默认 50 条 |
 | 单条 payload | 几百字节 ~ 几 MB | **按需**，默认 512 字节摘要，点开单条才取 |
 
-量级参照：一次问答约 10 条事件；一次构建排查约 180；跑一天的长任务约 7000（20 FlowTurn / 60 TeamTurn / 90 Call / 600 round）。上限来自 `RuntimeLimits`：`MaxTeamTurns` 100、`MaxAgentRounds` 200——**树的规模可控，事件的规模不可控**，这正是分层的依据。
+量级参照：一次问答约 10 条事件；一次构建排查约 180；跑一天的长任务约 7000（20 FlowTurn / 60 TeamTurn / 90 Call / 600 round）。
+
+规模上限来自 `RuntimeLimits`，但三个数的计量窗口不同，不能笼统写「上限 100」：
+
+| 限制 | 默认 | 计量窗口 | 超限后果 |
+|---|---|---|---|
+| `max_team_turns` | 100 | **两条路径两个窗口**：同步路径按本回合计；mailbox 路径按整个会话累计 | 同步：回合失败；mailbox：消息标 dead，会话不再派活 |
+| `max_calls_per_team_turn` | 100 | 单个 TeamTurn | 不失败，转 `coordinate` 交激活方决策 |
+| `max_agent_rounds` | 200 | 单个 AgentTurn（与 `loop.max_rounds`、`budget.max_model_rounds` 取最小） | 回合结束（截断） |
+
+所以：树的节点数受前两者约束、量级可控；事件数还要乘轮数、量级不可控——这正是分层的依据。
 
 **展开规则**：默认只展开到 FlowTurn；round 层（可能几十个）必须主动点；折叠态与选中节点记在 URL（`?open=ft_x,tt_y`）；节点状态点表示整棵子树的终态，折叠时也能看出哪支有问题。事件列表里连续 5 条以上同类事件折成一行（`tool_call.completed ×12`），失败工具默认展开。
 

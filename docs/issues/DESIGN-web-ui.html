@@ -2441,8 +2441,31 @@ proxy_read_timeout 3600s;</pre>
     </tbody>
   </table>
   <p>
-    上限来自 <code>RuntimeLimits</code>：<code>MaxTeamTurns</code> 默认 100、<code>MaxAgentRounds</code> 默认 200、<code>MaxCallsPerTeamTurn</code> 也有上限。
-    也就是说：<strong>树骨架的规模是可控的，事件的规模不可控</strong>——这正是分层的依据。
+    规模上限来自 <code>RuntimeLimits</code>，但三个数的计量口径不同，写文档时必须分开说：
+  </p>
+  <table>
+    <thead><tr><th>限制</th><th>默认</th><th>计量窗口</th><th>超限后果</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>max_team_turns</code></td><td>100</td>
+        <td><strong>两条路径两个窗口</strong>：同步路径按「本回合」计；mailbox 路径按「整个会话」累计</td>
+        <td>同步：该回合失败；mailbox：消息标 dead，会话不再派活</td>
+      </tr>
+      <tr>
+        <td><code>max_calls_per_team_turn</code></td><td>100</td>
+        <td>按「单个 TeamTurn」计</td>
+        <td>不失败，转 <code>coordinate</code> 交激活方决策</td>
+      </tr>
+      <tr>
+        <td><code>max_agent_rounds</code></td><td>200</td>
+        <td>按「单个 AgentTurn」计（与 <code>loop.max_rounds</code>、<code>budget.max_model_rounds</code> 取最小）</td>
+        <td>该回合结束（截断）</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>
+    所以「树的节点数」受 <code>max_team_turns</code> 与 <code>max_calls_per_team_turn</code> 约束，量级可控；
+    而「事件数」还要乘 <code>max_agent_rounds</code>，量级不可控——<strong>这正是分层（骨架全量 / 事件分页 / payload 按需）的依据</strong>。
   </p>
 
   <h3>14.8.4 深链与未加载内容</h3>
