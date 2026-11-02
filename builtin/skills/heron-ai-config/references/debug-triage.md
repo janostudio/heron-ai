@@ -104,7 +104,7 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 
 | 现象 | 去看什么 |
 |---|---|
-| `flow_turn.failed` | 它的 `error`；常见 `repeated Flow activation "A->B" exceeded retry limit`（某个 team 反复激活同一组目标——多半是路由成环或 agent 没识别"这一步已完成"。先修路由，只有在确属合法的多次转交时才调 `settings.json` 的 `runtime.max_activation_retries`） |
+| `flow_turn.failed` | 它的 `error`；常见 `flow turn exceeded max team turns`（路由成环、或 agent 没识别"这一步已完成"。先修路由，只有在确属合法的多次转交时才调 `settings.json` 的 `runtime.max_team_turns`） |
 | `call_result.Status` 非 completed | `call_result.Error` |
 | 某 agent 的 `Requests` 数暴涨 | 上下文膨胀。每轮把前序工具输出重新带给模型；查 `context.compacted`，并考虑收窄工具输出或减少读取量 |
 | `flow_turn` 迟迟不结束 | `runtime.max_team_turns` 兜底上限（默认很宽松，正常编排不会碰到）与路由是否成环 |
@@ -124,7 +124,7 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 | `teams/*.yml` 的 `output.record` | 该 team 该发布什么 record | `flow.jsonl` 的 `shared_record.published` 的 `name` |
 | `agents/*/AGENT.md` 的 `loop` / `budget` | 轮数上限 | `Requests` 元素个数不应超过 `max_rounds` |
 | `agents/*/AGENT.md` 的 `structured_output` | 是否会有 `agent.feedback` 重试 | 有则说明模型没按 schema 输出 |
-| `settings.json` 的 `runtime` | `max_team_turns` / `max_activation_retries` 等 | 触发上限时 `flow_turn.failed` |
+| `settings.json` 的 `runtime` | `max_team_turns` / `max_calls_per_team_turn` / `max_agent_rounds` 等 | 触发上限时 `flow_turn.failed` |
 
 ```bash
 # 该 flow 允许激活哪些 team

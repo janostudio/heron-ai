@@ -215,7 +215,6 @@ func TestRuntimeLimitsWithDefaults(t *testing.T) {
 			MaxParallelTeams:     20,
 			MaxParallelCalls:     20,
 			MaxCoordinateRetries: 20,
-			MaxActivationRetries: 20,
 			MaxParallelTools:     20,
 		}, got)
 	})
@@ -228,7 +227,6 @@ func TestRuntimeLimitsWithDefaults(t *testing.T) {
 			MaxParallelTeams:     -1,
 			MaxParallelCalls:     -1,
 			MaxCoordinateRetries: -1,
-			MaxActivationRetries: -1,
 			MaxParallelTools:     -1,
 		}
 		got := in.WithDefaults()
@@ -239,7 +237,6 @@ func TestRuntimeLimitsWithDefaults(t *testing.T) {
 			MaxParallelTeams:     20,
 			MaxParallelCalls:     20,
 			MaxCoordinateRetries: 20,
-			MaxActivationRetries: 20,
 			MaxParallelTools:     20,
 		}, got)
 	})
@@ -252,7 +249,6 @@ func TestRuntimeLimitsWithDefaults(t *testing.T) {
 			MaxParallelTeams:     8,
 			MaxParallelCalls:     9,
 			MaxCoordinateRetries: 10,
-			MaxActivationRetries: 11,
 			MaxParallelTools:     12,
 		}
 		got := in.WithDefaults()

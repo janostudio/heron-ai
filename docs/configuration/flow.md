@@ -78,9 +78,6 @@ entry ──activate──▶ A ──activate──▶ B
   this time, so one Team can be activated by the entry directly and by another
   Team in the same Flow.
 
-Repeated activation of the same target is bounded by
-`runtime.max_activation_retries`, for every Team alike.
-
 ### on_proceed
 
 `on_proceed` fixes the next step when a TeamTurn ends with the default

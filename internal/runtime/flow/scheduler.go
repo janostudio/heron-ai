@@ -45,8 +45,8 @@ func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession,
 	// max_team_turns rounds in total, which caps how many turns a *user* may
 	// have in one conversation — a long-running session would eventually stop
 	// accepting input. What bounds a run-away chain is the per-FlowTurn limit
-	// in runTurnWithOrigin plus max_activation_retries on a repeated
-	// dispatcher→target pair.
+	// in runTurnWithOrigin together with the per-TeamTurn and per-AgentTurn
+	// limits.
 	// A message launched by the dispatcher was already claimed there, which is
 	// what kept a concurrent wake-up from taking it. Only a message that
 	// arrives unclaimed is claimed here.

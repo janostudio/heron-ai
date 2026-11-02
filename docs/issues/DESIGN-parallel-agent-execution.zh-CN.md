@@ -569,7 +569,7 @@ P0 把"派活/汇总/失败上报/邮箱接收"都绑在 `binding.Coordinator` �
 | 唤醒固定入口 Team | 唤醒**持有 pending 邮件的 Team**（`nextWakingTeam`） |
 | 被派发 Team 只跑一轮、路由被丢弃 | `runMessageTurn` 跑完按同一套路由规则投递（activate 投 work，proceed/return/coordinate/fail 投结果） |
 | 同一 Team 可能被并发跑两轮 | `busyTeams` 抢槽：同 Team 永远只跑一轮；被挡下的消息由 `drainTeamInbox` 在槽位释放后接着派 |
-| `max_activation_retries` 只在单 turn 内计数 | 改为**会话级**（`checkActivationBudget` 数 work 消息）；`max_team_turns` 同样升为会话级总量 |
+| `max_activation_retries` 只在单 turn 内计数 | ~~改为会话级（`checkActivationBudget` 数 work 消息）；`max_team_turns` 同样升为会话级总量~~ —— **该方案已撤销（PR #39）**：会话级总量会限制「一个会话里用户能聊多少轮」，`max_activation_retries` 因从未接线被整体删除 |
 | 恢复路径假设"单链 turn" | `interruptedExecutions` 排除**本进程正在跑**的 Team；`pendingTeamResumes` 返回全部待恢复 Team，多待恢复时报错而非静默丢弃 |
 
 **不变的部分**：FlowTurn 仍是**一次消息处理事务**，同一时刻每个 Team 至多一个 running round；

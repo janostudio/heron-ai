@@ -355,8 +355,6 @@ type FlowTurnResult struct {
 // Every field below states its own window and what happens when it trips,
 // because two of them are easy to misread:
 //
-//   - MaxActivationRetries is counted per (source, target) pair over the whole
-//     session, because the repeated unit spans turns.
 //   - MaxTeamTurns is per FlowTurn only. A session-wide counterpart was
 //     removed on purpose: it capped how many turns a *user* could have in one
 //     conversation.
@@ -371,8 +369,8 @@ type RuntimeLimits struct {
 	// marks new messages dead once the session has started that many rounds
 	// in total, which caps how many turns a *user* may have in one
 	// conversation — a long-running session would eventually stop accepting
-	// input. A run-away chain is bounded by this per-turn limit plus
-	// MaxActivationRetries on a repeated dispatcher→target pair.
+	// input. A run-away chain is bounded by this per-turn limit together with
+	// the per-TeamTurn and per-AgentTurn limits below.
 	MaxTeamTurns int `json:"max_team_turns"`
 
 	// MaxCallsPerTeamTurn bounds the Calls one TeamTurn may execute, counted
@@ -399,19 +397,6 @@ type RuntimeLimits struct {
 	// turn itself is not failed by it.
 	MaxCoordinateRetries int `json:"max_coordinate_retries"`
 
-	// MaxActivationRetries bounds how often one Team may dispatch work to the
-	// same target. Counted per (source, target) pair over the whole session
-	// by replaying mailbox work messages: a dispatched Team runs in its own
-	// turn, so a per-turn counter would never see the repeat.
-	//
-	// Status: not wired yet. checkActivationBudget implements the check, but
-	// nothing in the current build enqueues work messages between Teams, so
-	// the limit cannot fire. Wire it up when mailbox dispatch lands, and
-	// narrow the window to "since the user last spoke" at that point —
-	// otherwise it repeats the mistake the session-wide Team-turn budget
-	// made.
-	MaxActivationRetries int `json:"max_activation_retries"`
-
 	// MaxParallelTools bounds tool calls running at once inside one
 	// AgentTurn. Tool parallelism lives inside the Agent loop and is not a
 	// Flow/Team orchestration level.
@@ -436,9 +421,6 @@ func (l RuntimeLimits) WithDefaults() RuntimeLimits {
 	}
 	if l.MaxCoordinateRetries <= 0 {
 		l.MaxCoordinateRetries = 20
-	}
-	if l.MaxActivationRetries <= 0 {
-		l.MaxActivationRetries = 20
 	}
 	if l.MaxParallelTools <= 0 {
 		l.MaxParallelTools = 20
