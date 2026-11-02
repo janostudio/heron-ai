@@ -80,12 +80,18 @@ func serveAuthToken(flagValue string) string {
 // requireBearerToken wraps next so every request must carry
 // "Authorization: Bearer <token>". When token is empty the handler is returned
 // unchanged — callers only reach that state for a loopback bind.
+//
+// What stays open is deliberately narrow; see openWithoutToken.
 func requireBearerToken(token string, next http.Handler) http.Handler {
 	if strings.TrimSpace(token) == "" {
 		return next
 	}
 	expected := []byte("Bearer " + token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if openWithoutToken(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		presented := []byte(strings.TrimSpace(r.Header.Get("Authorization")))
 		// Constant-time comparison: the token is a bearer credential, and
 		// byte-wise early exit leaks its prefix to a timing observer.
@@ -96,4 +102,29 @@ func requireBearerToken(token string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// openWithoutToken reports whether path is served before authentication.
+//
+// Two things stay open, and only these two:
+//
+//   - The viewer shell: index.html, /static/*, and the /s/<id> route that
+//     serves index.html so a deep link loads. The shell carries no data and has
+//     to load before the browser can be asked for a token — guarding it makes
+//     the token field unreachable over HTTP, which is the state this function
+//     exists to fix.
+//   - /api/health, which answers liveness only (ready flag, pending wakeup
+//     count, session count). Launchers and monitors poll it before they hold a
+//     credential, and it leaks no conversation content.
+//
+// The default is guarded: anything under /api/ needs the token unless it is
+// named here, so a new route cannot become public by accident.
+func openWithoutToken(path string) bool {
+	if path == "/api/health" {
+		return true
+	}
+	if path == "/api" || strings.HasPrefix(path, "/api/") {
+		return false
+	}
+	return true
 }
