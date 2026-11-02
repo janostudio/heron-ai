@@ -62,6 +62,12 @@ type RuntimeBundle struct {
 	Tasks        types.ToolTaskStore
 	TaskControl  types.ToolTaskCanceller
 
+	// Files is the same FileStore the session writer writes through. It is
+	// exposed for read-only consumers (the web record view) so they can replay
+	// a session without going through the runtime: reading history must not
+	// touch live turn state.
+	Files storage.FileStore
+
 	// DefinitionStore is the live store the runtimes resolve against, and the
 	// source of the reload path. Callers that want the tree to act on must
 	// read DefinitionStore.Snapshot(); Definitions above is the startup tree
@@ -513,6 +519,7 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	}
 
 	return &RuntimeBundle{
+		Files:             files,
 		Flow:              flowRuntime,
 		Definitions:       definitions,
 		ToolExecutor:      toolExecutor,

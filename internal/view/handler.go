@@ -18,6 +18,9 @@ type Handler struct {
 	sessions storage.SessionWriter
 	tasks    types.ToolTaskStore
 	cancel   types.ToolTaskCanceller
+	// files is the read-only history source the web record view replays. It is
+	// nil for handlers built without one; those answer 503 rather than panic.
+	files storage.FileStore
 }
 
 func NewHandler() *Handler {
@@ -81,7 +84,14 @@ type approvalRequest struct {
 	ApprovalID string `json:"approval_id,omitempty"`
 }
 
+// HandleRun serves the /api/sessions path. The method decides what it means:
+// GET reads the index, POST creates a session. One path, because a page and a
+// machine client should not need different bases for the same resource.
 func (h *Handler) HandleRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		h.HandleSessionList(w, r)
+		return
+	}
 	if h.runtime == nil {
 		http.Error(w, "FlowRuntime is not configured", http.StatusServiceUnavailable)
 		return
