@@ -180,6 +180,7 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 		bundle.Tasks,
 		bundle.TaskControl,
 	)
+	handler.SetFileStore(bundle.Files)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/run", handler.HandleRun)
 	mux.HandleFunc("/api/sessions", handler.HandleRun)
@@ -189,6 +190,13 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 	// engine reports it has a runtime, and the counts tell an operator whether
 	// the timers survived a restart.
 	mux.HandleFunc("/api/health", handler.HandleHealth)
+	// Session record: one endpoint for the timeline, the execution tree and the
+	// derived counts. Reading history must not touch live turn state, so it
+	// serves from the file store rather than through the runtime.
+	mux.HandleFunc("GET /api/sessions/{id}/record", handler.HandleRecord)
+	// The page. Everything unmatched falls here and resolves inside the embed
+	// FS, so a traversal attempt can only 404.
+	mux.HandleFunc("/", handler.HandleWebStatic)
 	mux.HandleFunc("/api/stream", handler.HandleStream)
 	mux.HandleFunc("/api/recovery/status", handler.HandleRecoveryStatus)
 	mux.HandleFunc("/api/recovery", handler.HandleRecover)
