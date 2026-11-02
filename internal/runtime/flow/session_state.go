@@ -66,24 +66,6 @@ func (r *Runtime) loadAgentSessions(ctx context.Context, sessionID string) (map[
 	return sessions, nil
 }
 
-// countTeamTurns returns how many Team rounds the session has started. It is
-// the session-level total a Team-turn budget is measured against: with several
-// Teams running and each turn dispatching more, a per-turn count no longer
-// bounds anything, but the event stream still records every round.
-func (r *Runtime) countTeamTurns(ctx context.Context, sessionID string) (int, error) {
-	events, err := r.replayFlowEvents(ctx, sessionID)
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, event := range events {
-		if event.Type == types.EventTeamTurnStarted {
-			n++
-		}
-	}
-	return n, nil
-}
-
 // checkActivationBudget fails when a Team has already dispatched a message to
 // the same target max_activation_retries times over the session. A dispatched
 // Team runs in its own turn, so a repetition that spans turns (A activates B, B

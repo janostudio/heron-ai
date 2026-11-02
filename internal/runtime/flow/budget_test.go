@@ -10,14 +10,19 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// TestCountTeamTurnsCountsStarts proves the session-level counter reads off the
-// event stream, so a Team-turn budget no longer needs its own state.
-func TestCountTeamTurnsCountsStarts(t *testing.T) {
+// A long conversation must never run out of budget. The removed session-wide
+// check marked a new message dead once the session had started max_team_turns
+// rounds in total — which in practice capped how many turns a *user* could
+// have in one conversation. Only the per-FlowTurn limit bounds a turn now.
+func TestRunMessageTurnIsNotBlockedBySessionTeamTurnTotal(t *testing.T) {
 	rt, _ := newMailboxTestRuntime(t)
 	ctx := context.Background()
-	session, _ := mailboxTestSession(t)
+	session, turn := mailboxTestSession(t)
+	rt.SetLimits(types.RuntimeLimits{MaxTeamTurns: 1})
 
-	for _, team := range []string{"owner", "worktree", "owner"} {
+	// Two rounds already spent — one more than the per-turn limit, which is
+	// exactly the state that used to mark the next message dead.
+	for _, team := range []string{"owner", "worktree"} {
 		require.NoError(t, rt.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
 			EventHeader: types.EventHeader{
 				Type:          types.EventTeamTurnStarted,
@@ -27,30 +32,6 @@ func TestCountTeamTurnsCountsStarts(t *testing.T) {
 		}))
 	}
 
-	n, err := rt.countTeamTurns(ctx, session.ID)
-	require.NoError(t, err)
-	require.Equal(t, 3, n)
-}
-
-// TestRunMessageTurnStopsAtSessionTeamTurnBudget pins the backstop: once the
-// session has started max_team_turns rounds, a further dispatched message is
-// marked dead instead of running another round. It is the session total that
-// bounds a dispatching chain, not any single turn.
-func TestRunMessageTurnStopsAtSessionTeamTurnBudget(t *testing.T) {
-	rt, _ := newMailboxTestRuntime(t)
-	ctx := context.Background()
-	session, turn := mailboxTestSession(t)
-	rt.SetLimits(types.RuntimeLimits{MaxTeamTurns: 1})
-
-	// One round already spent.
-	require.NoError(t, rt.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
-		EventHeader: types.EventHeader{
-			Type:          types.EventTeamTurnStarted,
-			FlowSessionID: session.ID,
-			TeamID:        "owner",
-		},
-	}))
-
 	msg, err := rt.enqueueWorkMessage(ctx, session, turn, addr("worktree", ""), map[string]any{"caller_team": "owner"})
 	require.NoError(t, err)
 
@@ -58,7 +39,15 @@ func TestRunMessageTurnStopsAtSessionTeamTurnBudget(t *testing.T) {
 
 	box, err := rt.loadMailbox(ctx, session.ID)
 	require.NoError(t, err)
-	require.Equal(t, types.MailboxDead, box[msg.MessageID].Status, "over-budget work must not run")
+
+	// The message may end up dead for an unrelated reason (this fixture's
+	// Team cannot execute the dispatched work). What must not happen is the
+	// budget killing it: that is the check this test exists to keep deleted.
+	if box[msg.MessageID].Status == types.MailboxDead {
+		reason, _ := box[msg.MessageID].Payload["dead_reason"].(string)
+		require.NotContains(t, reason, "max team turns",
+			"a session total must not cap how many turns a conversation may have")
+	}
 }
 
 // TestActivationBudgetStopsCrossTurnLoop pins the cross-turn bound: a Team that

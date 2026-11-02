@@ -352,31 +352,27 @@ type FlowTurnResult struct {
 //
 // # The counting window is not uniform
 //
-// Two fields below are counted over a window that a reader would not guess
-// from their names, and both are easy to misread as "per turn":
+// Every field below states its own window and what happens when it trips,
+// because two of them are easy to misread:
 //
-//   - MaxTeamTurns is counted per FlowTurn on the synchronous path and over
-//     the whole session on the mailbox path. One number, two counters.
-//   - MaxActivationRetries is counted per (source, target) pair over the
-//     whole session, because the repeated unit spans turns.
+//   - MaxActivationRetries is counted per (source, target) pair over the whole
+//     session, because the repeated unit spans turns.
+//   - MaxTeamTurns is per FlowTurn only. A session-wide counterpart was
+//     removed on purpose: it capped how many turns a *user* could have in one
+//     conversation.
 //
-// Lowering either to bound a single run-away turn can instead stop the whole
-// session. Read the field's own comment before changing a value.
+// Read the field's own comment before changing a value.
 type RuntimeLimits struct {
-	// MaxTeamTurns bounds how many TeamTurns may run. The counted window
-	// depends on how the turn was started:
+	// MaxTeamTurns bounds how many TeamTurns one FlowTurn may run, counted
+	// per turn. Exceeding it fails that turn with "flow turn exceeded max
+	// team turns"; the session may start a new turn afterwards.
 	//
-	//   - Synchronous path — a FlowTurn activates Teams and waits for them.
-	//     Counted per FlowTurn. Exceeding it fails that turn with "flow turn
-	//     exceeded max team turns"; the session may start a new turn later.
-	//   - Mailbox path — one message per turn, Teams dispatching Teams.
-	//     Counted over the whole session by replaying team_turn.started.
-	//     Exceeding it marks the message dead and stops further dispatch, so
-	//     the session can no longer hand out work.
-	//
-	// The session-wide count on the mailbox path is deliberate: every round
-	// starts a new turn there, so a per-turn counter would never trip. What
-	// runs away in that mode is a chain of turns, not one long turn.
+	// There is deliberately no session-wide counterpart. A session total
+	// marks new messages dead once the session has started that many rounds
+	// in total, which caps how many turns a *user* may have in one
+	// conversation — a long-running session would eventually stop accepting
+	// input. A run-away chain is bounded by this per-turn limit plus
+	// MaxActivationRetries on a repeated dispatcher→target pair.
 	MaxTeamTurns int `json:"max_team_turns"`
 
 	// MaxCallsPerTeamTurn bounds the Calls one TeamTurn may execute, counted
@@ -406,8 +402,14 @@ type RuntimeLimits struct {
 	// MaxActivationRetries bounds how often one Team may dispatch work to the
 	// same target. Counted per (source, target) pair over the whole session
 	// by replaying mailbox work messages: a dispatched Team runs in its own
-	// turn, so a per-turn counter would never see the repeat. Exceeding it
-	// rejects the dispatch.
+	// turn, so a per-turn counter would never see the repeat.
+	//
+	// Status: not wired yet. checkActivationBudget implements the check, but
+	// nothing in the current build enqueues work messages between Teams, so
+	// the limit cannot fire. Wire it up when mailbox dispatch lands, and
+	// narrow the window to "since the user last spoke" at that point —
+	// otherwise it repeats the mistake the session-wide Team-turn budget
+	// made.
 	MaxActivationRetries int `json:"max_activation_retries"`
 
 	// MaxParallelTools bounds tool calls running at once inside one
