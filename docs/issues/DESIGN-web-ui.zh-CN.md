@@ -301,6 +301,10 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 
 **状态页 `/status`**：`/api/health` 内容 + 会话数 + 最近 20 条事件。
 
+**追踪页 `/s/{id}/trace`**：执行树 + 节点详情（见 §4.8）。
+
+**事件流页 `/s/{id}/events`**：全量事件的原始列表，按层/类型/失败过滤，可导出 JSONL。
+
 ### 4.6 主动回合必须显眼
 
 这是页面与其他 agent 界面的产品差异：别的页面是「你问它答」，这里的页面要回答「**它背着你做了什么**」。
@@ -311,6 +315,56 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 
 列表的 `Active` 来自 `sessionlist` 按 `flow_turn.*` 事件的派生判断（不读 `session.status`——它在 `flow.jsonl` 里停在 `running` 不回写）。页面只显示，不重新推导。
 
+### 4.8 会话记录：一份数据，三种呈现
+
+引擎那边本来就是**一份只增不改的记录**：一个 `sessionID` 目录、三层 jsonl（flow/team/agent）、`seq` 全局递增、`EventHeader` 带完整 scope 链。`eval.SessionFacts` 的注释就写着「the merged three-layer timeline」。
+
+所以界面不该把它切开。上一版拆成三个视图、三个接口（history / trace / events），等于在界面层复制了三份索引——用户想知道「第 8 条事件前后发生了什么」，却要在三个页面之间跳。
+
+正确形态：**一份记录 → 一个接口 → 一个页面 → 三种渲染**。
+
+| 呈现 | 看什么 | 切换时保留 |
+|---|---|---|
+| 对话 | 人能读的消息流（11 类事件） | 同一份事件数组、当前选中 seq、按 seq 还原的滚动位置 |
+| 结构 | 执行树 + 节点详情（`eval.NewGraph`） | 同上 |
+| 原始 | 合并后的完整事件表（47 类，含 payload） | 同上 |
+
+顶部常驻的还有：
+
+- **KPI**：回合、步骤、工具调用（含失败）、总耗时、token、压缩次数、模型；
+- **时间轴 minimap**：色带按真实耗时占比，颜色区分用户/步骤/工具/压缩/错误/重试/定时检查，点色块跳站点；
+- **回放**：`◀` `▶` 逐站、1x/2x/4x 播放、`/` 搜索、导出 Markdown 与 JSONL。
+
+**三级粒度，因为数据量差四个数量级**：
+
+| 粒度 | 一次多少 | 策略 |
+|---|---|---|
+| 树骨架 `nodes[]` | 几十~几百个节点（只跟回合/Team/Call 有关，跟轮数无关） | **全量返回**，可见性用折叠控制；深链 `?node=` 因此一定能定位 |
+| 节点事件 `events[]` | 一个 Call 几十~几百条，全会话上万条 | **按节点区间** `first_seq..last_seq` 分页，默认 50 条 |
+| 单条 payload | 几百字节 ~ 几 MB | **按需**，默认 512 字节摘要，点开单条才取 |
+
+量级参照：一次问答约 10 条事件；一次构建排查约 180；跑一天的长任务约 7000（20 FlowTurn / 60 TeamTurn / 90 Call / 600 round）。
+
+规模上限来自 `RuntimeLimits`，但三个数的计量窗口不同，不能笼统写「上限 100」：
+
+| 限制 | 默认 | 计量窗口 | 超限后果 |
+|---|---|---|---|
+| `max_team_turns` | 100 | **按单个 FlowTurn**；会话级对应项已被刻意删除 | 该回合失败，会话可开始新回合 |
+| `max_calls_per_team_turn` | 100 | 单个 TeamTurn | 不失败，转 `coordinate` 交激活方决策 |
+| `max_agent_rounds` | 200 | 单个 AgentTurn（与 `loop.max_rounds`、`budget.max_model_rounds` 取最小） | 回合结束（截断） |
+
+为什么没有会话级上限：曾有一条「会话累计 TeamTurn 数」的检查，但 mailbox 里跑的只有用户排队输入，这条限制实际等于「一个会话里用户能聊多少轮」——聊够 100 轮后不再接受输入。防 runaway 交给单回合上限与「同一对 Team 反复派活」的计数。
+
+所以：树的节点数受前两者约束、量级可控；事件数还要乘轮数、量级不可控——这正是分层的依据。
+
+**展开规则**：默认只展开到 FlowTurn；round 层（可能几十个）必须主动点；折叠态与选中节点记在 URL（`?open=ft_x,tt_y`）；节点状态点表示整棵子树的终态，折叠时也能看出哪支有问题。事件列表里连续 5 条以上同类事件折成一行（`tool_call.completed ×12`），失败工具默认展开。
+
+**原始请求面板**是回溯里最有用的一块：`AgentTranscript` 已存在 `.agents/data/agent-transcripts/`，按 `flow_session_id + team_id + call_id + agent_id` 分文件，含累积的 `Messages` 与 `SystemHash`。展开任一 `agent.model_response` 能看到该轮的消息前缀、系统提示版本、工具目录、token 明细。
+
+**一个精度限制**：transcript 是累积列表，不是每次请求的快照。要精确复现某一轮，需按 `agent_turn_id` 截取前缀并重建系统提示。后续可在 `agent.model_response` 里补一条 `request_digest`（message 数、system hash、工具名列表、token），成本低但能让重建免于猜测。
+
+界面细节（三种呈现的布局、时间轴、节点详情字段、加载策略）见 HTML 版 §14。
+
 ---
 
 ## 五、API 缺口
@@ -319,6 +373,7 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 |---|---|---|---|
 | `/api/sessions` | GET | `sessionlist.List`（`list.go:47`） | 列表，支持 `?active=1`、`?limit=` |
 | `/api/sessions/{id}/history` | GET | `sessionlist.History`（`history.go:47`） | 历史，支持 `?after_seq=` |
+| `/api/sessions/{id}/record` | GET | `storage.Replay` + `eval.NewGraph` + `eval.SessionFacts` | **唯一的记录接口**：合并三层事件 + 执行树 + KPI。分页 `?after_seq=&limit=`，payload 按需 `?include_payload=seq:7`；增量走 `/api/stream?follow=1` |
 | `/api/wakeups` | GET | runtime 的 wakeup index | 支持 `?session_id=`、`?status=` |
 | `/api/wakeups/{id}` | DELETE | `Runtime.CancelWakeup` | 页面取消定时 |
 | `/api/login` | POST | token 校验 | 换 cookie（仅非 loopback） |
@@ -348,6 +403,8 @@ connect 的价值收窄为「IM 平台接入 + 多用户/权限/展示」，不�
 | 阶段 | 内容 | 验收（可复现） |
 |---|---|---|
 | **P0 只读可看** | 静态托管 + `/api/sessions` + `/api/sessions/{id}/history` + 列表页 + 详情页（历史 + SSE 实时） | `--serve` 起一个会话并让它跑，浏览器打开：会话出现在列表，点进去能看到历史与**正在产生**的输出（工具调用逐条出现） |
+| **P1b 会话记录** | `/api/sessions/{id}/record`；记录页三呈现（对话/结构/原始）；KPI | 打开一个跑完的会话，三种呈现之间切换不重新请求；KPI 与 `eval.SessionFacts` 对得上 |
+| **P2 时间轴** | minimap + 逐站 + 播放 + 搜索 + 原始请求面板 | 点色块跳到站点；播放按 1x 走完；展开任一 `model_response` 能看到该轮消息前缀与系统提示版本 |
 | **P1 能操作** | 发消息、审批、取消；输入框与审批条 | 页面发一句 → CLI 侧同一会话看到；触发审批时页面出现审批条，允许后会话继续 |
 | **P2 主动能力可见** | `/api/wakeups` + 取消；定时任务面板；`origin=wakeup` 样式与未读 | 登记 2 分钟唤醒 → 页面显示"2 分钟后"→ 到点出现带标识的检查回合，列表页出现未读徽标 |
 | **P3 执行权收敛** | 拆 `buildCurrentRuntime` 与"起 HTTP / 跑 TUI"；无参数时同进程双前端；新增 `attach` | 两个终端（`--serve` + `attach`）共享一个引擎，页面实时同步；`flow.jsonl` 的 seq 连续无重复；Ctrl-C 后端口释放 |
