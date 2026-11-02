@@ -27,6 +27,7 @@ import (
 	"github.com/heron-ai/heron-engine/internal/state"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/internal/tool"
+	"github.com/heron-ai/heron-engine/internal/tool/script"
 	"github.com/heron-ai/heron-engine/internal/workspace"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -250,6 +251,54 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// TestBuildToolSchemasIncludesDefine, which fails if either half is
 	// missing.
 	toolRegistry.Register(agent.NewDefineTool(definitionwriter.NewWriter(store), store))
+
+	// Script (REPL code mode) is opt-in through settings.json tools.script.
+	// Everything it needs is constructed here rather than inside the tool so the
+	// feature has exactly one switch and no hidden defaults.
+	//
+	// The catalog lists every registered builtin except Script itself, not the
+	// per-agent whitelist: the catalog is rendered per session but the agent
+	// config is not available at this point. That is safe because visibility is
+	// not authorization — an inner call goes back through executeToolCalls,
+	// which applies the agent's policy, bash gate and approvals. A tool listed
+	// but not permitted is refused there with a readable error.
+	if definitions.Script.Enabled {
+		stepStore := script.NewFileStepStore(files, "scripts")
+		// names is the agent's whitelist, published per turn by the runtime. A
+		// nil slice means "not narrowed", which only happens outside a turn.
+		catalog := func(names []string) []script.CatalogTool {
+			allowed := map[string]struct{}{}
+			for _, name := range names {
+				allowed[name] = struct{}{}
+			}
+			all := toolRegistry.List()
+			visible := make([]types.Tool, 0, len(all))
+			for _, candidate := range all {
+				if candidate.Name() == script.ToolName {
+					continue
+				}
+				if len(allowed) > 0 {
+					if _, ok := allowed[candidate.Name()]; !ok {
+						continue
+					}
+				}
+				visible = append(visible, candidate)
+			}
+			return script.CatalogFromTools(visible)
+		}
+		scriptTool := script.NewScriptTool(toolExecutor, stepStore, catalog, script.Options{
+			Timeout:       time.Duration(definitions.Script.TimeoutMS) * time.Millisecond,
+			MaxSteps:      definitions.Script.MaxSteps,
+			MaxOutput:     definitions.Script.MaxOutputBytes,
+			CatalogBudget: definitions.Script.CatalogBudget,
+			SpecOf: func(name string) types.ToolExecutionSpec {
+				return toolRegistry.ExecutionSpec(name)
+			},
+		})
+		toolRegistry.Register(scriptTool)
+		turnLoop.SetScriptDescription(scriptTool.CodeDescriptionFor)
+	}
+
 	mediaStore := media.NewFileStore(files, media.Limits{})
 	if setter, ok := provider.(types.MediaResolverSetter); ok {
 		setter.SetMediaResolver(mediaStore)

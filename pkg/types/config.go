@@ -34,6 +34,23 @@ type KnowledgeConfig struct {
 	SummaryModel string `json:"summary_model,omitempty"`
 }
 
+// ScriptConfig 配置 Script（REPL 代码模式）工具，对应 settings.json 的
+// tools.script 段。
+//
+// 零值即关闭。开启后模型可以用一个 Script 调用编排多个同步工具，
+// 中间结果不进上下文；写操作仍然逐次过 policy / bash gate / 审批。
+type ScriptConfig struct {
+	Enabled bool `json:"enabled"`
+	// TimeoutMS 是单次脚本的计算预算（不含工具调用耗时）。默认 60000，上限 600000。
+	TimeoutMS int `json:"timeout_ms,omitempty"`
+	// MaxSteps 是单次脚本内层工具调用次数上限，默认 200。
+	MaxSteps int `json:"max_steps,omitempty"`
+	// MaxOutputBytes 限制返回值加 console 输出，默认 100KB。
+	MaxOutputBytes int `json:"max_output_bytes,omitempty"`
+	// CatalogBudget 是注入 code 参数描述的工具目录字符预算，默认 8000。
+	CatalogBudget int `json:"catalog_budget,omitempty"`
+}
+
 // Web 工具支持的 provider。
 const (
 	// WebProviderTinyFish 提供 search / fetch，需要 API Key。
