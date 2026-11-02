@@ -33,7 +33,10 @@ flow 绑定里带 `user_message` 的只有 `default / intake / diagnose / design
 ### 1.3 已实测的症状
 
 用户说"对 genie-1 拉一下代码"：没有任何 team 具备这个能力，coordinator 只能反复 activate `intake`，
-触发 `max_activation_retries` 后整轮 failed 且会话不可续聊（失败原因已修复落盘，见 commit `1dd0c9a`）。
+触发上限后整轮 failed 且会话不可续聊（失败原因已修复落盘，见 commit `1dd0c9a`）。
+
+> 注：当时触发的是 `max_activation_retries`，该字段后续实现中从未接线、已整体删除（PR #39）。
+> 现在拦这一类空转的是 `max_team_turns`（按 FlowTurn 计）。
 
 ### 1.4 worktree 能力散落
 
@@ -58,7 +61,7 @@ acquire / setup_branch 在 intake；`check.sh` 在 verify；`release.sh`、`list
 4. **它看不到 team 内部过程**，只看得到 team 产出的 record 和 `TeamFailureReport`。
 5. **失败语义**（`flow.md` 107-115）：`TeamFailureReport` 是执行结果，如实汇总，不自动重试，用户要求才重试。
 6. **轮次生命周期**：`proceed` 后会话进入 `waiting_input`，用户可继续；
-   但同一 FlowTurn 内对同一目标重复 activate 超过 `max_activation_retries` 会让整轮 `failed` 且不可续聊。
+   但同一 FlowTurn 内重复 activate 超过 `max_team_turns` 会让整轮 `failed` 且不可续聊。
    因此判断标准是**"这次再派有没有新依据"**（新 record 或用户新指令），没有就 `proceed` 向用户说明，而不是空转。
    这是"没有进展就别重复"，不是限制次数，也不是替下游判断产出好坏。
 7. **看不到的能力**：只有 `can_activate` 里的 team。用户要的事没有 team 能做，就如实告知，不要硬派。

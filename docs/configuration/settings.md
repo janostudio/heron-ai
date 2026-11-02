@@ -91,7 +91,6 @@ There is currently no configuration for run-data retention.
     "max_parallel_teams": 20,
     "max_parallel_calls": 20,
     "max_parallel_tools": 20,
-    "max_activation_retries": 20,
     "max_coordinate_retries": 20
   }
 }
@@ -107,10 +106,9 @@ These limits have different scopes:
 
 | Field | Scope | Meaning |
 |---|---|---|
-| `max_team_turns` | one `FlowSession` | Maximum Team rounds the session may start in total. It is a session total, not a per-turn one, because a Team's round can dispatch further Teams — the unit that grows without bound is the session |
+| `max_team_turns` | one `FlowTurn` | Maximum Team rounds one turn may run. There is deliberately no session-wide total: that would cap how many turns a user may have in one conversation, and a long session would eventually stop accepting input |
 | `max_calls_per_team_turn` | one `TeamTurn` | Maximum Agent/Command/Webhook calls executed by this TeamTurn |
 | `max_agent_rounds` | one `AgentTurn` | Maximum Model/Tool loop iterations inside one AgentTurn |
-| `max_activation_retries` | one `FlowTurn` | How often one Team may activate the same set of targets before the FlowTurn fails |
 | `max_coordinate_retries` | one `FlowTurn` | How often one Team may hand a decision back to its activator (the coordinate route) before the FlowTurn fails |
 
 `max_parallel_teams`, `max_parallel_calls`, and `max_parallel_tools` only limit concurrency. They do

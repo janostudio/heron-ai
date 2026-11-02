@@ -254,6 +254,11 @@ func TestRuntimeLimitsCallsPerTeamTurnNotAcrossFlow(t *testing.T) {
 		},
 	})
 	require.ErrorContains(t, err, "team turn exceeded max calls: 2")
+	// A backstop has to name the Team and what already ran: the count alone
+	// does not tell the reader which Call list to trim.
+	require.ErrorContains(t, err, "already ran")
+	require.Contains(t, err.Error(), "snapshot")
+	require.Contains(t, err.Error(), "explore")
 	require.Equal(t, types.NextCoordinate, result.Next.Action)
 }
 

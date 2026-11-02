@@ -860,6 +860,12 @@ func (r *Runtime) runTurnWithOrigin(
 	hasWaitTool := false
 	hasWaitApproval := false
 
+	// Tracked only so a tripped Team-turn backstop can say who looped. A bare
+	// count leaves the reader grepping the event stream for the cycle, and
+	// the moment the backstop fires is the moment that is hardest to do.
+	activationCounts := make(map[string]int)
+	var recentActivations []string
+
 	for len(queue) > 0 {
 		if err := contextErr(ctx); err != nil {
 			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, err)
@@ -885,11 +891,33 @@ func (r *Runtime) runTurnWithOrigin(
 			})
 			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, progressErr)
 		}
+		// Per-turn count: teamTurns accumulated inside this FlowTurn only.
+		// The same limit is counted over the whole session on the mailbox
+		// path (scheduler.runMessageTurn), because there every round is a
+		// separate turn and a per-turn counter would never trip.
+		for _, act := range ready {
+			pair := activationPair(act)
+			activationCounts[pair]++
+			recentActivations = append(recentActivations, pair)
+		}
+		if len(recentActivations) > recentActivationWindow {
+			recentActivations = recentActivations[len(recentActivations)-recentActivationWindow:]
+		}
 		if teamTurns+len(ready) > r.limits.MaxTeamTurns {
-			limitErr := fmt.Errorf("flow turn exceeded max team turns: %d", r.limits.MaxTeamTurns)
+			limitErr := &limitError{
+				Name:     "max_team_turns",
+				Value:    r.limits.MaxTeamTurns,
+				Observed: teamTurns + len(ready),
+				TopPairs: topActivationPairs(activationCounts),
+				Recent:   recentActivations,
+				Detail:   "usually a routing cycle; raise settings.json runtime.max_team_turns only if the hand-offs are legitimate",
+			}
 			logging.Error("flow turn exceeded max team turns", map[string]any{
 				"flow_session_id": session.ID,
 				"flow_turn_id":    turn.ID,
+				"activated":       limitErr.Observed,
+				"top_pairs":       limitErr.TopPairs,
+				"recent":          limitErr.Recent,
 				"error":           limitErr.Error(),
 			})
 			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, limitErr)
@@ -1694,35 +1722,43 @@ func (r *Runtime) finishTurn(
 			})
 		}
 	}
+	payload := map[string]any{
+		"session": result.Session,
+		"turn":    result.Turn,
+		"error":   result.Error,
+		// reply and origin are hoisted to the top level because a caller
+		// relaying the answer of an unattended turn reads them without
+		// decoding the turn record.
+		"reply":  replyPayloadField(replyForCaller, result.Turn.Intermediate),
+		"origin": result.Turn.Origin,
+		// origin says how the turn was woken (a mailbox message), not who
+		// wrote the text. Consumers attributing a message to its producer
+		// must read team.
+		"team": result.FinalReplyTeam,
+		// Contributors is the turn's provenance: which Team said what, and
+		// which Team asked it. A reply written by the coordinating Team is a
+		// restatement of other Teams' results; without this a consumer can
+		// only see the writer and has to guess the source.
+		"contributors": contributorPayload(result.TeamResults, result.Turn.Intermediate),
+		"intermediate": result.Turn.Intermediate,
+		// Deliveries travel with the turn event: they are results the user
+		// must see as their own messages, independent of the reply above.
+		"deliveries": deliveryPayload(result.Deliveries),
+	}
+	// A tripped backstop carries structured facts alongside its message, so a
+	// reader can mark the turn, highlight the looping edges, or count how often
+	// a limit fires without parsing the error string back into fields.
+	var limit *limitError
+	if errors.As(runErr, &limit) {
+		payload["limit"] = limit.Payload()
+	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          eventType,
 			FlowSessionID: result.Session.ID,
 			FlowTurnID:    result.Turn.ID,
 		},
-		Payload: map[string]any{
-			"session": result.Session,
-			"turn":    result.Turn,
-			"error":   result.Error,
-			// reply and origin are hoisted to the top level because a caller
-			// relaying the answer of an unattended turn reads them without
-			// decoding the turn record.
-			"reply":  replyPayloadField(replyForCaller, result.Turn.Intermediate),
-			"origin": result.Turn.Origin,
-			// origin says how the turn was woken (a mailbox message), not who
-			// wrote the text. Consumers attributing a message to its producer
-			// must read team.
-			"team": result.FinalReplyTeam,
-			// Contributors is the turn's provenance: which Team said what, and
-			// which Team asked it. A reply written by the coordinating Team is a
-			// restatement of other Teams' results; without this a consumer can
-			// only see the writer and has to guess the source.
-			"contributors": contributorPayload(result.TeamResults, result.Turn.Intermediate),
-			"intermediate": result.Turn.Intermediate,
-			// Deliveries travel with the turn event: they are results the user
-			// must see as their own messages, independent of the reply above.
-			"deliveries": deliveryPayload(result.Deliveries),
-		},
+		Payload: payload,
 	}); err != nil {
 		return result, err
 	}
@@ -2614,4 +2650,45 @@ func newID(prefix string) string {
 		return prefix + "_" + hex.EncodeToString(raw[:])
 	}
 	return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+}
+
+// recentActivationWindow is how many activations a tripped Team-turn backstop
+// reports. Six is enough to show a two-Team cycle repeating without turning
+// the error into a log dump.
+const recentActivationWindow = 6
+
+// activationPair names one edge of the activation graph, e.g. "owner→worktree".
+// The entry Team has no activator, so it is labelled distinctly rather than
+// showing up as "→entry".
+func activationPair(act activation) string {
+	if act.activator == "" {
+		return "entry→" + act.teamID
+	}
+	return act.activator + "→" + act.teamID
+}
+
+// topActivationPairs returns the most frequent edges, most-used first.
+func topActivationPairs(counts map[string]int) []string {
+	type pair struct {
+		name string
+		n    int
+	}
+	pairs := make([]pair, 0, len(counts))
+	for name, n := range counts {
+		pairs = append(pairs, pair{name, n})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].n != pairs[j].n {
+			return pairs[i].n > pairs[j].n
+		}
+		return pairs[i].name < pairs[j].name
+	})
+	if len(pairs) > 3 {
+		pairs = pairs[:3]
+	}
+	out := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, fmt.Sprintf("%s ×%d", p.name, p.n))
+	}
+	return out
 }

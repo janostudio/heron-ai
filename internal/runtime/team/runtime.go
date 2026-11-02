@@ -143,6 +143,9 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 	var allRecords []types.SharedRecord
 	var allReply []string
 	teamCalls := 0
+	// Kept only to explain a tripped Call backstop: "exceeded max calls: 100"
+	// without the Team and the names is not actionable.
+	var executedCalls []string
 	limits := req.Limits.WithDefaults()
 
 	// A resumed TeamTurn may already contain completed sibling Calls. They
@@ -203,10 +206,19 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 			})
 			return result, fmt.Errorf("%s", result.Error)
 		}
+		// Per-TeamTurn count. Exceeding it is not a failure: the Team routes
+		// NextCoordinate so its activator decides whether to continue, and
+		// the caller sees the reason in result.Error.
 		if teamCalls+len(ready) > limits.MaxCallsPerTeamTurn {
-			result.Error = fmt.Sprintf("team turn exceeded max calls: %d", limits.MaxCallsPerTeamTurn)
+			result.Error = fmt.Sprintf(
+				"team turn exceeded max calls: %d (team %q already ran %d: %s; this batch wanted %d more)",
+				limits.MaxCallsPerTeamTurn, req.Team.ID, teamCalls,
+				summarizeCallNames(executedCalls, 8), len(ready))
 			result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
 			return result, fmt.Errorf("%s", result.Error)
+		}
+		for name := range ready {
+			executedCalls = append(executedCalls, name)
 		}
 		teamCalls += len(ready)
 
@@ -1393,4 +1405,25 @@ func contextErr(ctx context.Context) error {
 	default:
 		return nil
 	}
+}
+
+// summarizeCallNames renders up to limit Call names, sorted so the message is
+// stable across runs, with a count of the remainder.
+func summarizeCallNames(names []string, limit int) string {
+	if len(names) == 0 {
+		return "none"
+	}
+	sorted := append([]string(nil), names...)
+	sort.Strings(sorted)
+	shown := sorted
+	rest := 0
+	if len(shown) > limit {
+		rest = len(shown) - limit
+		shown = shown[:limit]
+	}
+	out := strings.Join(shown, ", ")
+	if rest > 0 {
+		out += fmt.Sprintf(" (+%d more)", rest)
+	}
+	return out
 }
