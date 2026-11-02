@@ -133,6 +133,72 @@
     return "";
   }
 
+  /* ---------- auth ---------- */
+  /* The server leaves the page itself open and guards /api/. That split is what
+   * makes a token field possible: the browser can load this script and ask for
+   * the token here. A page served behind the token would answer 401 in plain
+   * text, with no UI to type anything into.
+   */
+  var TOKEN_KEY = "heron.serve.token";
+
+  function readToken() {
+    try { return window.localStorage.getItem(TOKEN_KEY) || ""; } catch (error) { return ""; }
+  }
+
+  function writeToken(value) {
+    try { window.localStorage.setItem(TOKEN_KEY, value); } catch (error) { /* storage disabled */ }
+  }
+
+  function dropToken() {
+    try { window.localStorage.removeItem(TOKEN_KEY); } catch (error) { /* storage disabled */ }
+  }
+
+  function rejected(error) {
+    dropToken();
+    error.unauthorized = true;
+    renderLogin("token \u4e0d\u6b63\u786e\u6216\u5df2\u5931\u6548\uff0c\u8bf7\u91cd\u65b0\u8f93\u5165\u3002");
+    throw error;
+  }
+
+  /* apiFetch attaches the bearer token and turns 401 into the login screen.
+   * Every data request goes through it: a bare fetch would fail with an
+   * unreadable error whenever the token is missing or stale. */
+  function apiFetch(path) {
+    var headers = {};
+    var token = readToken();
+    if (token) { headers.Authorization = "Bearer " + token; }
+    return fetch(path, { headers: headers }).then(function (response) {
+      if (response.status === 401) { return rejected(new Error("HTTP 401")); }
+      return response;
+    });
+  }
+
+  function renderLogin(message) {
+    clear(app);
+    var input = el("input", {
+      type: "password",
+      class: "token-input",
+      placeholder: "\u8bbf\u95ee token",
+      autocomplete: "current-password",
+      spellcheck: "false"
+    });
+    var form = el("form", { class: "login" },
+      el("h1", null, "heron-ai"),
+      el("p", { class: "muted" }, "\u8fd9\u4e2a\u670d\u52a1\u8981\u6c42\u8bbf\u95ee token\u3002"),
+      input,
+      el("button", { type: "submit" }, "\u8fdb\u5165"),
+      el("p", { class: "login-hint" }, message || ""));
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var value = input.value.trim();
+      if (!value) { input.focus(); return; }
+      writeToken(value);
+      route();
+    });
+    app.appendChild(form);
+    input.focus();
+  }
+
   /* ---------- router ---------- */
   function navigate(href) {
     history.pushState(null, "", href);
@@ -148,6 +214,10 @@
   window.addEventListener("popstate", route);
 
   function route() {
+    if (!readToken()) {
+      renderLogin("");
+      return;
+    }
     var match = location.pathname.match(/^\/s\/(.+)$/);
     if (match) {
       renderRecord(decodeURIComponent(match[1]));
@@ -169,7 +239,7 @@
       el("h1", null, "heron-ai"),
       el("span", { class: "muted" }, "\u4f1a\u8bdd\u5217\u8868")));
 
-    fetch("/api/sessions")
+    apiFetch("/api/sessions")
       .then(function (response) {
         if (!response.ok) { throw new Error("HTTP " + response.status); }
         return response.json();
@@ -199,7 +269,12 @@
         });
         app.appendChild(rows);
       })
-      .catch(function (error) { fail("\u8bfb\u53d6\u4f1a\u8bdd\u5217\u8868\u5931\u8d25\uff1a" + error.message); });
+      .catch(function (error) {
+        // 401 already swapped in the login form; an error box on top of it
+        // would hide the field the reader has to type into.
+        if (error && error.unauthorized) { return; }
+        fail("\u8bfb\u53d6\u4f1a\u8bdd\u5217\u8868\u5931\u8d25\uff1a" + error.message);
+      });
   }
 
   /* ---------- record ---------- */
@@ -210,14 +285,17 @@
       el("span", { class: "crumb" }, link("/", "\u2190 \u4f1a\u8bdd\u5217\u8868")),
       el("span", { class: "crumb mono" }, sessionID)));
 
-    fetch("/api/sessions/" + encodeURIComponent(sessionID) + "/record")
+    apiFetch("/api/sessions/" + encodeURIComponent(sessionID) + "/record")
       .then(function (response) {
         if (response.status === 404) { throw new Error("\u4f1a\u8bdd\u4e0d\u5b58\u5728"); }
         if (!response.ok) { throw new Error("HTTP " + response.status); }
         return response.json();
       })
       .then(function (record) { paintRecord(sessionID, record); })
-      .catch(function (error) { fail("\u8bfb\u53d6\u4f1a\u8bdd\u8bb0\u5f55\u5931\u8d25\uff1a" + error.message); });
+      .catch(function (error) {
+        if (error && error.unauthorized) { return; }
+        fail("\u8bfb\u53d6\u4f1a\u8bdd\u8bb0\u5f55\u5931\u8d25\uff1a" + error.message);
+      });
   }
 
   function paintRecord(sessionID, record) {

@@ -219,6 +219,11 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 	// this host. A token is mandatory once the listener leaves loopback; on
 	// loopback it is optional, so the local TUI/bridge keeps working
 	// unchanged.
+	//
+	// The token guards the API, not the page: the viewer shell and /api/health
+	// stay open so a browser can load the page and be asked for the token.
+	// openWithoutToken is the list, and it fails closed for anything else under
+	// /api/.
 	api := requireBearerToken(token, mux)
 
 	fmt.Printf("Heron AI FlowRuntime server listening on %s:%s\n", host, port)

@@ -105,3 +105,49 @@ func TestServeAuthTokenPrefersFlagThenEnv(t *testing.T) {
 		t.Fatalf("no token configured = %q, want empty", got)
 	}
 }
+
+// The viewer shell and the liveness probe stay open so a browser can load the
+// page and be asked for the token. Every data route stays guarded.
+func TestRequireBearerTokenLeavesShellAndHealthOpen(t *testing.T) {
+	handler := requireBearerToken("secret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	open := []string{"/", "/s/fs_abc123", "/static/app.js", "/static/app.css", "/api/health"}
+	for _, path := range open {
+		t.Run("open "+path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("%s without token = %d, want 200: the page has to load before anyone can type a token", path, recorder.Code)
+			}
+		})
+	}
+
+	guarded := []string{"/api", "/api/", "/api/sessions", "/api/sessions/fs_abc123/record", "/api/status", "/api/stream"}
+	for _, path := range guarded {
+		t.Run("guarded "+path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("%s without token = %d, want 401", path, recorder.Code)
+			}
+		})
+	}
+}
+
+// Anything new under /api/ is guarded unless it is named, so adding a route
+// cannot silently widen what an unauthenticated caller can reach.
+func TestOpenWithoutTokenFailsClosed(t *testing.T) {
+	if !openWithoutToken("/api/health") {
+		t.Fatal("/api/health must stay open: launchers and monitors poll it without a credential")
+	}
+	if !openWithoutToken("/") || !openWithoutToken("/static/app.js") {
+		t.Fatal("the viewer shell must stay open")
+	}
+	for _, path := range []string{"/api", "/api/sessions", "/api/tasks", "/api/anything-new"} {
+		if openWithoutToken(path) {
+			t.Fatalf("%s must require the token", path)
+		}
+	}
+}
