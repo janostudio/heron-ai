@@ -58,6 +58,8 @@ func main() {
 	serverURL := flag.String("server", "", "HTTP Heron server URL for stream-json client mode")
 	port := flag.String("port", "", "HTTP server port (default: 8080)")
 	serve := flag.Bool("serve", false, "Start HTTP server mode")
+	exitWithParent := flag.Bool("exit-with-parent", false,
+		"Exit when the process that started this server exits; use it when a supervisor that may be killed starts the server")
 	serveHost := flag.String("host", "", "HTTP server bind host (default: 127.0.0.1)")
 	authToken := flag.String("auth-token", "", "Bearer token required by --serve (default: $HERON_SERVE_TOKEN)")
 	listFlag := flag.Bool("list", false, "List sessions; pick one interactively to resume it")
@@ -119,7 +121,7 @@ func main() {
 	}
 
 	if *serve {
-		startServer(flowPath, serveBindAddress(*serveHost), *port, serveAuthToken(*authToken), overrides)
+		startServer(flowPath, serveBindAddress(*serveHost), *port, serveAuthToken(*authToken), *exitWithParent, overrides)
 		return
 	}
 	if flowPath == "" {
@@ -150,7 +152,7 @@ func resolveFlowPath(flowPath string) string {
 	return ""
 }
 
-func startServer(flowPath, host, port, token string, o cliOverrides) {
+func startServer(flowPath, host, port, token string, exitWithParent bool, o cliOverrides) {
 	if flowPath == "" {
 		fmt.Fprintln(os.Stderr, "Error: --serve requires a new-format Flow config")
 		os.Exit(1)
@@ -163,7 +165,10 @@ func startServer(flowPath, host, port, token string, o cliOverrides) {
 		os.Exit(1)
 	}
 
-	bundle, _, err := buildCurrentRuntime(context.Background(), flowPath, o)
+	// Serve is the only shape whose process outlives its turns and whose event
+	// stream a client can follow, so it is the only one that exposes the
+	// wake-up tools. Everywhere else the model never sees them.
+	bundle, _, err := buildCurrentRuntime(context.Background(), flowPath, o, app.WithWakeupTools(true))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building runtime: %v\n", err)
 		os.Exit(1)
@@ -180,6 +185,10 @@ func startServer(flowPath, host, port, token string, o cliOverrides) {
 	mux.HandleFunc("/api/sessions", handler.HandleRun)
 	mux.HandleFunc("/api/sessions/turn", handler.HandleTurn)
 	mux.HandleFunc("/api/status", handler.HandleStatus)
+	// Readiness for an embedding client: it starts sending work only after the
+	// engine reports it has a runtime, and the counts tell an operator whether
+	// the timers survived a restart.
+	mux.HandleFunc("/api/health", handler.HandleHealth)
 	mux.HandleFunc("/api/stream", handler.HandleStream)
 	mux.HandleFunc("/api/recovery/status", handler.HandleRecoveryStatus)
 	mux.HandleFunc("/api/recovery", handler.HandleRecover)
@@ -208,10 +217,15 @@ func startServer(flowPath, host, port, token string, o cliOverrides) {
 	if !isLoopbackHost(host) {
 		fmt.Printf("Authentication: bearer token required\n")
 	}
-	if err := http.ListenAndServe(net.JoinHostPort(host, port), api); err != nil {
-		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
-		shutdownAndExit(bundle, 1)
+	// No read/write deadline: /api/sessions/stream is a long-lived SSE
+	// connection that a write deadline would cut mid-stream. The header
+	// timeout is enough to keep a stalled handshake from holding a slot.
+	server := &http.Server{
+		Addr:              net.JoinHostPort(host, port),
+		Handler:           api,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
+	newServeLifecycle(server, bundle).run(exitWithParent)
 }
 
 // shutdownAndExit closes the runtime before exiting.
@@ -1172,7 +1186,7 @@ type cliOverrides struct {
 	maxRounds int
 }
 
-func buildCurrentRuntime(ctx context.Context, flowPath string, o cliOverrides) (*app.RuntimeBundle, string, error) {
+func buildCurrentRuntime(ctx context.Context, flowPath string, o cliOverrides, options ...app.BuildOption) (*app.RuntimeBundle, string, error) {
 	definitions, provider, err := buildProvider(ctx, flowPath, o.model)
 	if err != nil {
 		return nil, "", err
@@ -1187,7 +1201,7 @@ func buildCurrentRuntime(ctx context.Context, flowPath string, o cliOverrides) (
 		return nil, "", fmt.Errorf("resolve flow path %q: %w", flowPath, err)
 	}
 	store := types.NewDefinitionStore(definitions, config.ConfigRootForFlow(absFlow), absFlow)
-	bundle, err := app.BuildRuntime(ctx, store, provider, ".", o.logLevel)
+	bundle, err := app.BuildRuntime(ctx, store, provider, ".", o.logLevel, options...)
 	if err != nil {
 		return nil, "", err
 	}

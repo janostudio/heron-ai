@@ -22,6 +22,7 @@ import (
 	"github.com/heron-ai/heron-engine/internal/runtime/call"
 	"github.com/heron-ai/heron-engine/internal/runtime/flow"
 	"github.com/heron-ai/heron-engine/internal/runtime/team"
+	"github.com/heron-ai/heron-engine/internal/sessionlist"
 	"github.com/heron-ai/heron-engine/internal/skill"
 	"github.com/heron-ai/heron-engine/internal/state"
 	"github.com/heron-ai/heron-engine/internal/storage"
@@ -29,6 +30,27 @@ import (
 	"github.com/heron-ai/heron-engine/internal/workspace"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
+
+// BuildOption adjusts how the runtime is assembled. Options are variadic so
+// existing callers keep their signature; only a caller that knows something
+// about its own process shape has to say so.
+type BuildOption func(*buildOptions)
+
+type buildOptions struct {
+	// wakeupTools decides whether the model can see ScheduleWakeup at all.
+	// Only the serve mode registers it: every other shape either exits with
+	// its turn or has no channel to deliver a wake-up's output, so exposing
+	// the tool there would let a model arrange something that never reaches
+	// anyone.
+	wakeupTools bool
+}
+
+// WithWakeupTools exposes the wake-up tools to models. It is enabled by the
+// serve mode, whose process outlives its turns and whose event stream is
+// readable by a client.
+func WithWakeupTools(enabled bool) BuildOption {
+	return func(options *buildOptions) { options.wakeupTools = enabled }
+}
 
 // RuntimeBundle wires the new FlowRuntime without exposing its internal
 // executors to CLI, HTTP, or TUI callers.
@@ -58,7 +80,11 @@ type RuntimeBundle struct {
 	MCP *mcp.MCPAdapter
 }
 
-func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider types.ModelProvider, workspaceRoot string, logLevelOverride string) (*RuntimeBundle, error) {
+func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider types.ModelProvider, workspaceRoot string, logLevelOverride string, options ...BuildOption) (*RuntimeBundle, error) {
+	buildOpts := buildOptions{}
+	for _, option := range options {
+		option(&buildOpts)
+	}
 	if store == nil {
 		return nil, errors.New("definition store is required")
 	}
@@ -304,6 +330,14 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// The catalog is the model's view of the Flow's edges: what it may hand work
 	// to, and why it would pick each one.
 	listTeamsTool := agent.NewListTeamsTool(nil)
+	// Self-scheduled wake-ups. The model leaves itself a note and the session
+	// starts a turn when it comes due; this is the only turn entry that is not
+	// a response to something that already happened. Both tools are registered
+	// here because the registry is snapshotted into every Agent's schema, and
+	// the scheduler is wired once the flow runtime exists.
+	scheduleWakeupTool := agent.NewScheduleWakeupTool(nil)
+	cancelWakeupTool := agent.NewCancelWakeupTool(nil)
+	registerWakeupTools := buildOpts.wakeupTools
 	asyncDispatcher := agent.NewTeamTaskDispatcher(teamTool, agent.NewSpawnTaskDispatcher(spawnTool, toolExecutor))
 	taskRunner := agent.NewAsyncToolExecutor(taskStore, asyncDispatcher)
 	teamTool.SetTaskRunner(taskRunner)
@@ -312,6 +346,10 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// registration after that point never reaches a model.
 	toolRegistry.Register(teamTool)
 	toolRegistry.Register(listTeamsTool)
+	if registerWakeupTools {
+		toolRegistry.Register(scheduleWakeupTool)
+		toolRegistry.Register(cancelWakeupTool)
+	}
 	spawnTool.SetTaskRunner(taskRunner)
 	spawnTool.SetSessionWriter(sessionWriter)
 	toolRegistry.Register(agent.NewCollectTool(taskRunner))
@@ -371,6 +409,25 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// executor. It is built after the tool registry, hence the late wiring.
 	teamTool.SetRunner(flowRuntime)
 	listTeamsTool.SetCatalog(flowRuntime)
+	// The flow runtime owns the wake-up records: it is what can append the
+	// events, read the session back after a restart, and start the turn. The
+	// tools only translate a model call into a request.
+	scheduleWakeupTool.SetScheduler(flowRuntime)
+	cancelWakeupTool.SetScheduler(flowRuntime)
+	// Recovery needs the list of sessions that might still owe a wake-up. The
+	// flow package deliberately does not know the sessions directory, so the
+	// app layer supplies it.
+	flowRuntime.SetSessionLister(func(listCtx context.Context) ([]string, error) {
+		sessions, err := sessionlist.List(files, sessionlist.SessionsDir)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]string, 0, len(sessions))
+		for _, session := range sessions {
+			ids = append(ids, session.ID)
+		}
+		return ids, nil
+	})
 	// A finished Team call enters the conversation that made it as a tool
 	// result. The flow needs the store directly: the caller's transcript is the
 	// only place the answer belongs.
@@ -395,6 +452,16 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 			}
 		}()
 	})
+	// The wake-up loop is started only when this process actually owes a
+	// timer: recovered records with a deadline, or a registration made later.
+	// A process with nothing to wait for holds no goroutine for it.
+	//
+	// Recovery runs before the loop so an overdue wake-up survives a restart:
+	// the record is in the event stream, and this is the process that reads it
+	// back.
+	if pending := flowRuntime.RecoverWakeups(ctx); pending > 0 {
+		flowRuntime.StartWakeupSchedulerAsync()
+	}
 	onTaskDone := func(doneCtx context.Context, task types.ToolTask) {
 		if task.ToolName == agent.TeamRunToolName {
 			// The startup re-scan replays every terminal task so an answer

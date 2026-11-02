@@ -36,6 +36,7 @@
 | 文档 | 主题 | 状态 |
 |---|---|---|
 | [DESIGN-parallel-agent-execution](./DESIGN-parallel-agent-execution.zh-CN.md) | 多 agent 并行执行：想要的 actor/mailbox 模型 vs 现状"单会话单 turn 同步推进"；含**改造点 C1–C7 / 收益 B1–B6 / 影响面 I1–I9**、**P0/P1/P2 阶段切分**、**§九 P0 实现记录** | **P0 已实现**（mailbox 派活不阻塞 + 结果回流 + 唤醒；context 归属仍搁置） |
+| [DESIGN-schedule-wakeup](./DESIGN-schedule-wakeup.zh-CN.md) | 模型定时自唤醒：现状六条推进入口全部由外部事件触发（唯一"自动"的 `ResumeForMailbox` 也要先有消息），`Team` 派完即断、`Collect` 只能阻塞到终态、`team_run` 从不写 `Progress`；方案是给模型一个异步工具 `ScheduleWakeup`，引擎只提供**唤醒原语 / 调度 / 期间事实 / 出站通道**，节奏与判断归模型；含**四道门、durable timer、facts 从事件流派生（9 类事实，零新工具零执行路径改动）、唤醒 input 进 system 而非 user、deliveries 而非 reply、醒来无事即静默结束、唤醒链硬停、6 类边界情形**、**完整方案的 5 件组件 + 落地顺序（P0 含 5 步可复现验收）**、**§十一 部署形态（timer 活在进程里 → 必须常驻；含业界三类做法对比、heron-ai `--serve` 与 heron-connect 的接入契约）**、外部对照（Claude Code `schedule_wakeup`、pi-scheduler `wakeOn`、durable sleep、两个烧钱事故） | **未实现（提案）** |
 
 ## 状态含义
 

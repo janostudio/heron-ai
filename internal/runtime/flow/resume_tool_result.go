@@ -49,8 +49,7 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	if r == nil || r.transcripts == nil || sessionID == "" {
 		return nil
 	}
-	r.resumeMu.Lock()
-	defer r.resumeMu.Unlock()
+	defer r.resumeLock(sessionID)()
 
 	if _, err := r.loadSession(ctx, sessionID); err != nil {
 		return err

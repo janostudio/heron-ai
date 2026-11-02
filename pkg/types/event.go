@@ -43,8 +43,8 @@ const (
 	// production ("B → A") without duplicating the content: the production is
 	// shown once, at its producer, and every use is an edge.
 	EventSharedRecordConsumed = "shared_record.consumed"
-	EventRecoveryRequested       = "recovery.requested"
-	EventRecoveryCompleted       = "recovery.completed"
+	EventRecoveryRequested    = "recovery.requested"
+	EventRecoveryCompleted    = "recovery.completed"
 
 	// Mailbox events (also recorded in flow.jsonl).
 	EventMailboxMessageEnqueued  = "mailbox.message.enqueued"
@@ -52,6 +52,16 @@ const (
 	EventMailboxMessageDelivered = "mailbox.message.delivered"
 	EventMailboxMessageDead      = "mailbox.message.dead"
 	EventMailboxBatchDispatched  = "mailbox.batch.dispatched"
+
+	// Self-scheduled wake-ups (also recorded in flow.jsonl). The payload
+	// carries the whole WakeupRecord, so replay can rebuild the pending set
+	// without a second store. A wake-up performs no work, so these are the
+	// only states it has.
+	EventWakeupCreated   = "wakeup.created"
+	EventWakeupFired     = "wakeup.fired"
+	EventWakeupSkipped   = "wakeup.skipped"
+	EventWakeupCancelled = "wakeup.cancelled"
+	EventWakeupExpired   = "wakeup.expired"
 )
 
 // Team event types (team.jsonl).

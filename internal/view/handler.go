@@ -229,6 +229,13 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Sscanf(value, "%d", &lastID)
 	}
 
+	// follow keeps the stream open after a turn ends. A caller that wants to
+	// see the turns this session starts on its own — a scheduled wake-up — has
+	// no request in flight to subscribe with, so without this the stream would
+	// close before the wake-up ever fired. Without the parameter the old
+	// behaviour is unchanged: one turn's events, then close.
+	follow := r.URL.Query().Get("follow") == "1"
+
 	events, err := h.sessions.Subscribe(streamCtx, sessionID, lastID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -243,10 +250,37 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		if err := writer.WriteSessionEvent(event); err != nil {
 			return
 		}
-		if event.Type == types.EventFlowTurnCompleted {
+		if !follow && event.Type == types.EventFlowTurnCompleted {
 			return
 		}
 	}
+}
+
+// wakeupStatsProvider is implemented by a runtime that owns scheduled
+// wake-ups. It is an optional interface so the handler keeps working with any
+// FlowRuntime, including the fakes used in tests.
+type wakeupStatsProvider interface {
+	WakeupStats(ctx context.Context) (pending int, sessions int)
+}
+
+// healthResponse is what an embedding client probes before it starts sending
+// work: a process that is up but has no runtime is not ready.
+type healthResponse struct {
+	Ready          bool `json:"ready"`
+	PendingWakeups int  `json:"pending_wakeups"`
+	SessionsLoaded int  `json:"sessions_loaded"`
+}
+
+// HandleHealth reports readiness and how many wake-ups are waiting. The counts
+// are what an operator needs to answer "did the engine remember my timers
+// across the restart" without reading the event logs.
+func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	response := healthResponse{Ready: h.runtime != nil}
+	if provider, ok := h.runtime.(wakeupStatsProvider); ok {
+		response.PendingWakeups, response.SessionsLoaded = provider.WakeupStats(r.Context())
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func (h *Handler) HandleRecoveryStatus(w http.ResponseWriter, r *http.Request) {

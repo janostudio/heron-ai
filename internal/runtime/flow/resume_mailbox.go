@@ -26,8 +26,7 @@ import (
 // rather than failing. Errors are reserved for the cases a caller can act on:
 // a missing session, or a turn that actually started and then failed.
 func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types.FlowTurnResult, error) {
-	r.resumeMu.Lock()
-	defer r.resumeMu.Unlock()
+	defer r.resumeLock(sessionID)()
 
 	session, err := r.loadSession(ctx, sessionID)
 	if err != nil {
