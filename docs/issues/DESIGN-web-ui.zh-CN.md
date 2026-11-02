@@ -301,6 +301,10 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 
 **状态页 `/status`**：`/api/health` 内容 + 会话数 + 最近 20 条事件。
 
+**追踪页 `/s/{id}/trace`**：执行树 + 节点详情（见 §4.8）。
+
+**事件流页 `/s/{id}/events`**：全量事件的原始列表，按层/类型/失败过滤，可导出 JSONL。
+
 ### 4.6 主动回合必须显眼
 
 这是页面与其他 agent 界面的产品差异：别的页面是「你问它答」，这里的页面要回答「**它背着你做了什么**」。
@@ -311,6 +315,26 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 
 列表的 `Active` 来自 `sessionlist` 按 `flow_turn.*` 事件的派生判断（不读 `session.status`——它在 `flow.jsonl` 里停在 `running` 不回写）。页面只显示，不重新推导。
 
+### 4.8 全量追踪：对话只是投影，不是全部
+
+引擎产生 **47 类事件**，而对话视图只用到 11 类。剩下的是执行结构：Team 批次、Call、AgentTurn 的每一轮、邮箱消息、共享记录、上下文压缩、审批生命周期、恢复与重试。
+
+这些不展示，"agent 做了什么"就只回答了一半。所以除对话页外，还需要两个视图：
+
+| 视图 | 回答什么 | 数据 |
+|---|---|---|
+| 对话 `/s/{id}` | 说了什么、结果是什么 | 对话投影（11 类事件） |
+| **追踪** `/s/{id}/trace` | 谁在什么时候做了什么、卡在哪 | 执行树 + 每节点事件 |
+| **事件流** `/s/{id}/events` | 原始的每一条事件 | 全量 47 类，含 payload |
+
+**执行树不用新造**：`internal/eval/correlation.go` 已经有 `NewGraph(events) *Graph`，六类节点（flow_session / flow_turn / team_session / team_turn / call_turn / agent_session），每个节点带五个 scope id、状态、起止时间、`FirstSeq/LastSeq`（事件区间）、`Attempt/RecoveryOf`（重试与恢复谱系）。追踪页只做 JSON 投影。
+
+**排序直接用 seq**：`JSONLSessionWriter.nextSeq` 按 `sessionID` 记，不区分 layer。三层文件（`flow.jsonl` / `team.jsonl` / `agent.jsonl`）合并后按 seq 排就是全局时间线，没有并列也不需要再按时间戳排。
+
+**双向跳转**：消息 →「查看追踪」定位到对应 FlowTurn 节点；节点 →「在对话中查看」滚到消息；工具行尾的 seq 可点，直接选中所在的 round。
+
+界面细节（树的形态、节点详情字段、加载策略、API 契约）见 HTML 版 §14。
+
 ---
 
 ## 五、API 缺口
@@ -319,6 +343,8 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 |---|---|---|---|
 | `/api/sessions` | GET | `sessionlist.List`（`list.go:47`） | 列表，支持 `?active=1`、`?limit=` |
 | `/api/sessions/{id}/history` | GET | `sessionlist.History`（`history.go:47`） | 历史，支持 `?after_seq=` |
+| `/api/sessions/{id}/trace` | GET | `eval.NewGraph` + `SessionFacts` | 执行树，支持 `?root=`、`?depth=` |
+| `/api/sessions/{id}/events` | GET | `storage.Replay` | 全量事件，支持 `?after_seq=`、`?limit=`、`?types=`、`?include_payload=` |
 | `/api/wakeups` | GET | runtime 的 wakeup index | 支持 `?session_id=`、`?status=` |
 | `/api/wakeups/{id}` | DELETE | `Runtime.CancelWakeup` | 页面取消定时 |
 | `/api/login` | POST | token 校验 | 换 cookie（仅非 loopback） |
@@ -348,6 +374,7 @@ connect 的价值收窄为「IM 平台接入 + 多用户/权限/展示」，不�
 | 阶段 | 内容 | 验收（可复现） |
 |---|---|---|
 | **P0 只读可看** | 静态托管 + `/api/sessions` + `/api/sessions/{id}/history` + 列表页 + 详情页（历史 + SSE 实时） | `--serve` 起一个会话并让它跑，浏览器打开：会话出现在列表，点进去能看到历史与**正在产生**的输出（工具调用逐条出现） |
+| **P1b 追踪** | `/api/sessions/{id}/trace` + `/api/sessions/{id}/events`；追踪页（树 + 节点详情）；事件流页 | 打开一个跑完的会话，能看到 FlowTurn → TeamTurn → Call → AgentTurn → Round 五层；47 类事件都能按层/类型过滤，导出 JSONL 与 `flow.jsonl` 逐行一致 |
 | **P1 能操作** | 发消息、审批、取消；输入框与审批条 | 页面发一句 → CLI 侧同一会话看到；触发审批时页面出现审批条，允许后会话继续 |
 | **P2 主动能力可见** | `/api/wakeups` + 取消；定时任务面板；`origin=wakeup` 样式与未读 | 登记 2 分钟唤醒 → 页面显示"2 分钟后"→ 到点出现带标识的检查回合，列表页出现未读徽标 |
 | **P3 执行权收敛** | 拆 `buildCurrentRuntime` 与"起 HTTP / 跑 TUI"；无参数时同进程双前端；新增 `attach` | 两个终端（`--serve` + `attach`）共享一个引擎，页面实时同步；`flow.jsonl` 的 seq 连续无重复；Ctrl-C 后端口释放 |

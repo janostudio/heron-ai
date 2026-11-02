@@ -551,6 +551,86 @@ textarea.box:focus { border-color: var(--c-accent); outline: none; box-shadow: 0
 .tree-what em { font-style: normal; color: var(--c-text-muted); }
 .tree-note { color: var(--c-text-muted); font-size: var(--fs-12); white-space: nowrap; }
 
+
+/* ============ 追踪视图（执行树 + 节点详情） ============ */
+.trace-layout { display: grid; grid-template-columns: 380px minmax(0,1fr); min-height: 560px; }
+@media (max-width: 1000px) { .trace-layout { grid-template-columns: 1fr; } }
+.trace-tree {
+  border-right: 1px solid var(--c-border); background: var(--c-bg-subtle);
+  padding: var(--s3) var(--s2) var(--s4); overflow: auto; max-height: 620px;
+}
+@media (max-width: 1000px) { .trace-tree { border-right: none; border-bottom: 1px solid var(--c-border); max-height: 320px; } }
+.trace-filters { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 var(--s2) var(--s3); }
+
+.tnode {
+  position: relative; display: grid; grid-template-columns: 12px minmax(0,1fr) auto;
+  gap: 6px; align-items: center; padding: 5px var(--s2) 5px 0;
+  border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-12);
+}
+.tnode:hover { background: var(--c-bg-sunken); }
+.tnode[aria-selected="true"] { background: var(--c-accent-soft); box-shadow: inset 2px 0 0 var(--c-accent); }
+.tnode .dot2 { width: 6px; height: 6px; border-radius: var(--r-full); background: var(--c-border-strong); }
+.tnode .dot2.ok { background: var(--c-ok); }
+.tnode .dot2.warn { background: var(--c-warn-line); }
+.tnode .dot2.bad { background: var(--c-danger); }
+.tnode .dot2.run { background: var(--c-accent); }
+.tnode-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tnode-kind {
+  font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-text-faint);
+  margin-right: 4px;
+}
+.tnode-meta { font-size: var(--fs-11); color: var(--c-text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tnode.lv1 { padding-left: 14px; }
+.tnode.lv2 { padding-left: 28px; }
+.tnode.lv3 { padding-left: 42px; }
+.tnode.lv4 { padding-left: 56px; }
+.tnode.lv1::before, .tnode.lv2::before, .tnode.lv3::before, .tnode.lv4::before {
+  content: ""; position: absolute; left: 7px; top: 0; bottom: 0; width: 1px; background: var(--c-border);
+}
+.tnode.lv2::before { left: 21px; }
+.tnode.lv3::before { left: 35px; }
+.tnode.lv4::before { left: 49px; }
+
+.trace-detail { padding: var(--s4) var(--s5); overflow: auto; max-height: 620px; }
+.td-head { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s3); }
+.td-id { font-family: var(--f-mono); font-size: var(--fs-12); color: var(--c-text-muted); }
+.td-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: var(--s2) var(--s4); margin-bottom: var(--s4); }
+@media (max-width: 700px) { .td-grid { grid-template-columns: 1fr; } }
+.td-item { font-size: var(--fs-12); }
+.td-k { color: var(--c-text-faint); font-size: var(--fs-11); }
+.td-v { font-variant-numeric: tabular-nums; }
+
+.ev-list { border: 1px solid var(--c-border); border-radius: var(--r-md); overflow: hidden; }
+.ev-row {
+  display: grid; grid-template-columns: 40px 176px minmax(0,1fr);
+  gap: var(--s2); padding: 5px var(--s3); font-size: var(--fs-12);
+  border-bottom: 1px solid var(--c-border); align-items: baseline;
+}
+.ev-row:last-child { border-bottom: none; }
+.ev-row:hover { background: var(--c-bg-subtle); }
+.ev-seq { font-family: var(--f-mono); color: var(--c-text-faint); font-size: var(--fs-11); }
+.ev-type {
+  font-family: var(--f-mono); font-size: var(--fs-11); color: var(--c-text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ev-sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-sum b { font-weight: 600; }
+
+/* ============ 全量事件表 ============ */
+.raw-wrap { padding: var(--s3) var(--s5) var(--s5); }
+.raw-table { width: 100%; border-collapse: collapse; font-size: var(--fs-12); }
+.raw-table th {
+  text-align: left; font-size: var(--fs-11); text-transform: uppercase; letter-spacing: .06em;
+  color: var(--c-text-faint); font-weight: 600; padding: var(--s2) var(--s2);
+  border-bottom: 1px solid var(--c-border-strong); white-space: nowrap;
+}
+.raw-table td { padding: 5px var(--s2); border-bottom: 1px solid var(--c-border); vertical-align: top; }
+.raw-table tr:hover td { background: var(--c-bg-subtle); }
+.raw-table .seq { font-family: var(--f-mono); color: var(--c-text-faint); font-variant-numeric: tabular-nums; }
+.raw-table .t { font-family: var(--f-mono); font-size: var(--fs-11); white-space: nowrap; }
+.raw-table .layer { font-size: var(--fs-11); color: var(--c-text-muted); }
+.raw-table .sum { color: var(--c-text-muted); }
+
 </style>
 </head>
 <body>
@@ -585,6 +665,7 @@ textarea.box:focus { border-color: var(--c-accent); outline: none; box-shadow: 0
     <a href="#security">11 · 安全</a>
     <a href="#phases">12 · 阶段与验收</a>
     <a href="#edges">13 · 边界与异常</a>
+    <a href="#trace">14 · 全量追踪</a>
   </div>
 </nav>
 
@@ -735,7 +816,9 @@ heron-ai           → 进程 B（TUI），又 build 了一个 runtime，也写�
       <button class="frame-tab" role="tab" aria-selected="true" data-screen="s-list">会话列表</button>
       <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-detail">会话详情</button>
       <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-wakeups">定时任务</button>
+      <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-trace">追踪</button>
       <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-status">状态</button>
+      <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-raw">事件流</button>
     </div>
 
     <div class="frame-body">
@@ -1025,6 +1108,285 @@ packages/common/workspace-template/pnpm-lock.yaml:1:lockfileVersion: '9.0'
         </div>
       </div>
 
+
+      <!-- ==================== 追踪（执行树） ==================== -->
+      <div class="screen" id="s-trace">
+        <div class="app-bar">
+          <div class="app-brand">heron-ai <small>追踪 · fs_a1b2c3</small></div>
+          <div class="app-actions">
+            <span class="tag mono">2 个 FlowTurn</span>
+            <button class="btn sm">导出 JSON</button>
+          </div>
+        </div>
+
+        <div class="trace-layout">
+          <div class="trace-tree">
+            <div class="trace-filters">
+              <button class="chip" aria-pressed="true">全部</button>
+              <button class="chip" aria-pressed="false">只看失败</button>
+              <button class="chip" aria-pressed="false">工具</button>
+              <button class="chip" aria-pressed="false">邮箱</button>
+            </div>
+
+            <div class="tnode lv0" data-detail="flow" aria-selected="false">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label"><span class="tnode-kind">flow_turn</span>ft_fa13d378 · user</span>
+              <span class="tnode-meta">04:12 · 5.5s</span>
+            </div>
+            <div class="tnode lv1" data-detail="team" aria-selected="false">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label"><span class="tnode-kind">team_turn</span>tt_5eed9d · default</span>
+              <span class="tnode-meta">5.5s</span>
+            </div>
+            <div class="tnode lv2" data-detail="call" aria-selected="true">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label"><span class="tnode-kind">call</span>answer · agent</span>
+              <span class="tnode-meta">12.4k tok</span>
+            </div>
+            <div class="tnode lv3" data-detail="agent" aria-selected="false">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label"><span class="tnode-kind">agent_turn</span>assistant · 3 轮</span>
+              <span class="tnode-meta">5.5s</span>
+            </div>
+            <div class="tnode lv4" data-detail="round" aria-selected="false">
+              <span class="dot2 bad"></span>
+              <span class="tnode-label">round 0 · model + Bash</span>
+              <span class="tnode-meta">4.3s</span>
+            </div>
+            <div class="tnode lv4" data-detail="round" aria-selected="false">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label">round 1 · Grep</span>
+              <span class="tnode-meta">0.1s</span>
+            </div>
+            <div class="tnode lv4" data-detail="round" aria-selected="false">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label">round 2 · Edit</span>
+              <span class="tnode-meta">0.0s</span>
+            </div>
+            <div class="tnode lv2" data-detail="mailbox" aria-selected="false">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label"><span class="tnode-kind">mailbox</span>2 条消息 · 已投递</span>
+              <span class="tnode-meta">1.2s</span>
+            </div>
+            <div class="tnode lv2" data-detail="record" aria-selected="false">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label"><span class="tnode-kind">record</span>Answer · 已发布</span>
+              <span class="tnode-meta">1</span>
+            </div>
+            <div class="tnode lv0" data-detail="flow" aria-selected="false">
+              <span class="dot2 warn"></span>
+              <span class="tnode-label"><span class="tnode-kind">flow_turn</span>ft_eda854 · wakeup</span>
+              <span class="tnode-meta">06:12 · 0.8s</span>
+            </div>
+            <div class="tnode lv1" data-detail="team" aria-selected="false">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label"><span class="tnode-kind">team_turn</span>tt_8c71a0 · default</span>
+              <span class="tnode-meta">0.8s</span>
+            </div>
+            <div class="tnode lv2" data-detail="call" aria-selected="false">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label"><span class="tnode-kind">call</span>answer · agent</span>
+              <span class="tnode-meta">3.1k tok</span>
+            </div>
+            <div class="tnode lv0" data-detail="flow" aria-selected="false">
+              <span class="dot2 warn"></span>
+              <span class="tnode-label"><span class="tnode-kind">flow_turn</span>ft_1b20cc · resume（中断恢复）</span>
+              <span class="tnode-meta">04:31 · 0.4s</span>
+            </div>
+            <div class="tnode lv1" data-detail="team" aria-selected="false">
+              <span class="dot2 ok"></span>
+              <span class="tnode-label"><span class="tnode-kind">team_turn</span>tt_c0ffee · default · attempt 2</span>
+              <span class="tnode-meta">0.4s</span>
+            </div>
+          </div>
+
+          <div class="trace-detail">
+            <!-- Call 层详情 -->
+            <div class="td-panel" data-panel="call">
+              <div class="td-head">
+                <span class="tag accent">call · agent</span>
+                <strong>answer</strong>
+                <span class="td-id">call_answer</span>
+                <span class="tag ok">completed</span>
+              </div>
+              <div class="td-grid">
+                <div class="td-item"><div class="td-k">所属 Team</div><div class="td-v">default / qa_team</div></div>
+                <div class="td-item"><div class="td-k">所属 FlowTurn</div><div class="td-v mono">ft_fa13d378</div></div>
+                <div class="td-item"><div class="td-k">耗时</div><div class="td-v">5.5s</div></div>
+                <div class="td-item"><div class="td-k">Token</div><div class="td-v">8.2k in / 4.2k out</div></div>
+                <div class="td-item"><div class="td-k">事件区间</div><div class="td-v mono">seq 4 – 19（16 条）</div></div>
+                <div class="td-item"><div class="td-k">模型</div><div class="td-v mono">claude-sonnet-4.6</div></div>
+              </div>
+              <div class="ev-list">
+                <div class="ev-row"><span class="ev-seq">4</span><span class="ev-type">call_turn.started</span><span class="ev-sum">type=agent · agent=assistant</span></div>
+                <div class="ev-row"><span class="ev-seq">5</span><span class="ev-type">agent_turn.started</span><span class="ev-sum">round 上限 14 · 工具 8 个</span></div>
+                <div class="ev-row"><span class="ev-seq">6</span><span class="ev-type">agent.model_response</span><span class="ev-sum">round 0 · tool_calls=Bash · 1.8k tok</span></div>
+                <div class="ev-row"><span class="ev-seq">7</span><span class="ev-type">tool_call.started</span><span class="ev-sum">Bash · <b>make build</b></span></div>
+                <div class="ev-row"><span class="ev-seq">8</span><span class="ev-type">tool_call.failed</span><span class="ev-sum">exit=2 · <b>ERR_PNPM_OUTDATED_LOCKFILE</b></span></div>
+                <div class="ev-row"><span class="ev-seq">9</span><span class="ev-type">context.compacted</span><span class="ev-sum">第 1 轮后 · 18.4k → 6.1k tok</span></div>
+                <div class="ev-row"><span class="ev-seq">12</span><span class="ev-type">tool_call.started</span><span class="ev-sum">Grep · pnpm-lock</span></div>
+                <div class="ev-row"><span class="ev-seq">14</span><span class="ev-type">tool_call.started</span><span class="ev-sum">Edit · package.json</span></div>
+                <div class="ev-row"><span class="ev-seq">16</span><span class="ev-type">shared_record.published</span><span class="ev-sum">Answer · answer-1793344235</span></div>
+                <div class="ev-row"><span class="ev-seq">19</span><span class="ev-type">call_turn.completed</span><span class="ev-sum">reply 已产出 · 12.4k tok</span></div>
+              </div>
+            </div>
+
+            <!-- Round 层详情 -->
+            <div class="td-panel" data-panel="round" hidden>
+              <div class="td-head">
+                <span class="tag">round 0</span>
+                <span class="td-id">at_b31c / round 0</span>
+                <span class="tag danger">含失败工具</span>
+              </div>
+              <div class="td-grid">
+                <div class="td-item"><div class="td-k">模型调用</div><div class="td-v">1 次 · 1.8k tok</div></div>
+                <div class="td-item"><div class="td-k">工具</div><div class="td-v">1 个（失败）</div></div>
+                <div class="td-item"><div class="td-k">耗时</div><div class="td-v">4.3s（模型 0.1s + 工具 4.2s）</div></div>
+                <div class="td-item"><div class="td-k">结束原因</div><div class="td-v mono">tool_calls</div></div>
+              </div>
+              <div class="ev-list">
+                <div class="ev-row"><span class="ev-seq">6</span><span class="ev-type">agent.model_response</span><span class="ev-sum">finish=tool_calls · content 为空</span></div>
+                <div class="ev-row"><span class="ev-seq">7</span><span class="ev-type">tool_call.started</span><span class="ev-sum">arguments: {"command":"make build IMAGE=…"}</span></div>
+                <div class="ev-row"><span class="ev-seq">8</span><span class="ev-type">tool_call.failed</span><span class="ev-sum">4.2s · exit=2 · 输出 412 字节</span></div>
+              </div>
+              <div class="note warn" style="margin-top:var(--s4)">
+                <div><strong>失败工具自动展开</strong>在追踪视图里点开一个含失败工具的 round，工具输出默认展开——排查时不用再点一次。</div>
+              </div>
+            </div>
+
+            <!-- FlowTurn 详情 -->
+            <div class="td-panel" data-panel="flow" hidden>
+              <div class="td-head">
+                <span class="tag accent">flow_turn</span>
+                <span class="td-id">ft_fa13d378</span>
+                <span class="tag mono">origin=user</span>
+              </div>
+              <div class="td-grid">
+                <div class="td-item"><div class="td-k">输入</div><div class="td-v">升级沙箱镜像到最新的基础层…</div></div>
+                <div class="td-item"><div class="td-k">状态</div><div class="td-v">waiting_input（可续）</div></div>
+                <div class="td-item"><div class="td-k">TeamTurn</div><div class="td-v">1 个</div></div>
+                <div class="td-item"><div class="td-k">事件区间</div><div class="td-v mono">seq 3 – 18（16 条）</div></div>
+                <div class="td-item"><div class="td-k">路由</div><div class="td-v mono">proceed</div></div>
+                <div class="td-item"><div class="td-k">injected context</div><div class="td-v">3 块（rules 2 / knowledge 1）</div></div>
+              </div>
+              <div class="ev-list">
+                <div class="ev-row"><span class="ev-seq">3</span><span class="ev-type">flow_turn.started</span><span class="ev-sum">origin=user · input 已注入</span></div>
+                <div class="ev-row"><span class="ev-seq">10</span><span class="ev-type">mailbox.message.enqueued</span><span class="ev-sum">from=team-sandbox · 1 条</span></div>
+                <div class="ev-row"><span class="ev-seq">18</span><span class="ev-type">flow_turn.waiting_input</span><span class="ev-sum">reply 已产出 · <b>intermediate=true</b></span></div>
+              </div>
+            </div>
+
+            <!-- TeamTurn 详情 -->
+            <div class="td-panel" data-panel="team" hidden>
+              <div class="td-head">
+                <span class="tag accent">team_turn</span>
+                <span class="td-id">tt_5eed9d</span>
+                <span class="tag ok">completed</span>
+              </div>
+              <div class="td-grid">
+                <div class="td-item"><div class="td-k">Team</div><div class="td-v">qa_team（default）</div></div>
+                <div class="td-item"><div class="td-k">批次</div><div class="td-v">1 批 · 1 个 Call</div></div>
+                <div class="td-item"><div class="td-k">attempt</div><div class="td-v">1</div></div>
+                <div class="td-item"><div class="td-k">路由</div><div class="td-v mono">proceed</div></div>
+              </div>
+              <div class="ev-list">
+                <div class="ev-row"><span class="ev-seq">4</span><span class="ev-type">team_turn.started</span><span class="ev-sum">depends_on 为空</span></div>
+                <div class="ev-row"><span class="ev-seq">16</span><span class="ev-type">team_turn.completed</span><span class="ev-sum">1 个 Call 完成 · 产出 Answer</span></div>
+              </div>
+            </div>
+
+            <!-- AgentTurn 详情 -->
+            <div class="td-panel" data-panel="agent" hidden>
+              <div class="td-head">
+                <span class="tag accent">agent_turn</span>
+                <span class="td-id">at_b31c · assistant</span>
+                <span class="tag ok">completed</span>
+              </div>
+              <div class="td-grid">
+                <div class="td-item"><div class="td-k">轮数</div><div class="td-v">3 / 上限 14</div></div>
+                <div class="td-item"><div class="td-k">工具调用</div><div class="td-v">3 个（1 失败）</div></div>
+                <div class="td-item"><div class="td-k">压缩</div><div class="td-v">1 次（第 1 轮后）</div></div>
+                <div class="td-item"><div class="td-k">Token</div><div class="td-v">8.2k in / 4.2k out</div></div>
+              </div>
+              <div class="ev-list">
+                <div class="ev-row"><span class="ev-seq">5</span><span class="ev-type">agent_turn.started</span><span class="ev-sum">工具白名单 8 个 · hitl 关闭</span></div>
+                <div class="ev-row"><span class="ev-seq">9</span><span class="ev-type">context.compacted</span><span class="ev-sum">18.4k → 6.1k tok</span></div>
+                <div class="ev-row"><span class="ev-seq">17</span><span class="ev-type">agent_turn.completed</span><span class="ev-sum">3 轮 · 5.5s</span></div>
+              </div>
+            </div>
+
+            <!-- 邮箱 / 记录 -->
+            <div class="td-panel" data-panel="mailbox" hidden>
+              <div class="td-head"><span class="tag accent">mailbox</span><strong>2 条消息</strong></div>
+              <div class="ev-list">
+                <div class="ev-row"><span class="ev-seq">10</span><span class="ev-type">message.enqueued</span><span class="ev-sum">from=team-sandbox · kind=work</span></div>
+                <div class="ev-row"><span class="ev-seq">11</span><span class="ev-type">batch.dispatched</span><span class="ev-sum">目标 default · 1 条</span></div>
+                <div class="ev-row"><span class="ev-seq">12</span><span class="ev-type">message.claimed</span><span class="ev-sum">by default · attempt 1</span></div>
+                <div class="ev-row"><span class="ev-seq">13</span><span class="ev-type">message.delivered</span><span class="ev-sum">已写入上下文</span></div>
+              </div>
+            </div>
+            <div class="td-panel" data-panel="record" hidden>
+              <div class="td-head"><span class="tag accent">record</span><strong>Answer</strong></div>
+              <div class="ev-list">
+                <div class="ev-row"><span class="ev-seq">16</span><span class="ev-type">shared_record.published</span><span class="ev-sum">answer-1793344235 · by team-sandbox</span></div>
+                <div class="ev-row"><span class="ev-seq">20</span><span class="ev-type">shared_record.consumed</span><span class="ev-sum">by default · 注入下一轮上下文</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== 全量事件流 ==================== -->
+      <div class="screen" id="s-raw">
+        <div class="app-bar">
+          <div class="app-brand">heron-ai <small>事件流 · fs_a1b2c3</small></div>
+          <div class="app-actions">
+            <span class="tag mono">seq 1–33 · 33 条</span>
+            <button class="btn sm">导出 JSONL</button>
+          </div>
+        </div>
+
+        <div class="raw-wrap">
+          <div class="trace-filters" style="padding-left:0">
+            <button class="chip" aria-pressed="true">全部 33</button>
+            <button class="chip" aria-pressed="false">flow 18</button>
+            <button class="chip" aria-pressed="false">team 9</button>
+            <button class="chip" aria-pressed="false">agent 6</button>
+            <button class="chip" aria-pressed="false">仅失败 2</button>
+          </div>
+
+          <table class="raw-table">
+            <thead>
+              <tr><th>seq</th><th>时间</th><th>层</th><th>type</th><th>摘要</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="seq">1</td><td class="t">04:12:03.102</td><td class="layer">flow</td><td class="t">flow_session.created</td><td class="sum">status=created</td></tr>
+              <tr><td class="seq">3</td><td class="t">04:12:03.240</td><td class="layer">flow</td><td class="t">flow_turn.started</td><td class="sum">origin=user · ft_fa13d378</td></tr>
+              <tr><td class="seq">4</td><td class="t">04:12:03.301</td><td class="layer">team</td><td class="t">team_turn.started</td><td class="sum">default · tt_5eed9d</td></tr>
+              <tr><td class="seq">5</td><td class="t">04:12:03.342</td><td class="layer">agent</td><td class="t">agent_turn.started</td><td class="sum">assistant · 工具 8 个</td></tr>
+              <tr><td class="seq">6</td><td class="t">04:12:03.610</td><td class="layer">agent</td><td class="t">agent.model_response</td><td class="sum">round 0 · finish=tool_calls</td></tr>
+              <tr><td class="seq">7</td><td class="t">04:12:03.615</td><td class="layer">agent</td><td class="t">tool_call.started</td><td class="sum">Bash · make build</td></tr>
+              <tr><td class="seq">8</td><td class="t">04:12:07.820</td><td class="layer">agent</td><td class="t">tool_call.failed</td><td class="sum">exit=2 · ERR_PNPM_OUTDATED_LOCKFILE</td></tr>
+              <tr><td class="seq">9</td><td class="t">04:12:07.905</td><td class="layer">agent</td><td class="t">context.compacted</td><td class="sum">18.4k → 6.1k tok</td></tr>
+              <tr><td class="seq">10</td><td class="t">04:12:07.960</td><td class="layer">flow</td><td class="t">mailbox.message.enqueued</td><td class="sum">from=team-sandbox · kind=work</td></tr>
+              <tr><td class="seq">11</td><td class="t">04:12:08.010</td><td class="layer">flow</td><td class="t">mailbox.batch.dispatched</td><td class="sum">目标 default · 1 条</td></tr>
+              <tr><td class="seq">12</td><td class="t">04:12:08.120</td><td class="layer">flow</td><td class="t">mailbox.message.claimed</td><td class="sum">by default</td></tr>
+              <tr><td class="seq">13</td><td class="t">04:12:08.155</td><td class="layer">flow</td><td class="t">mailbox.message.delivered</td><td class="sum">已写入上下文</td></tr>
+              <tr><td class="seq">16</td><td class="t">04:12:08.402</td><td class="layer">flow</td><td class="t">shared_record.published</td><td class="sum">Answer · answer-1793344235</td></tr>
+              <tr><td class="seq">18</td><td class="t">04:12:08.710</td><td class="layer">flow</td><td class="t">flow_turn.waiting_input</td><td class="sum">intermediate=true · reply 被清空</td></tr>
+              <tr><td class="seq">20</td><td class="t">04:12:08.905</td><td class="layer">flow</td><td class="t">shared_record.consumed</td><td class="sum">by default</td></tr>
+              <tr><td class="seq">22</td><td class="t">06:12:04.310</td><td class="layer">flow</td><td class="t">wakeup.fired</td><td class="sum">wk_775e85ac · late 4ms</td></tr>
+              <tr><td class="seq">23</td><td class="t">06:12:04.402</td><td class="layer">flow</td><td class="t">flow_turn.started</td><td class="sum">origin=wakeup · ft_eda854</td></tr>
+              <tr><td class="seq">33</td><td class="t">06:12:05.180</td><td class="layer">flow</td><td class="t">flow_turn.waiting_input</td><td class="sum">intermediate=false · 1 条 delivery</td></tr>
+            </tbody>
+          </table>
+
+          <div class="hint" style="margin-top:var(--s3)">
+            显示 18 / 33 条。表格按 seq 递增，跨三层合并；点任意行展开完整 payload。
+          </div>
+        </div>
+      </div>
+
       <!-- ==================== 状态 ==================== -->
       <div class="screen" id="s-status">
         <div class="app-bar">
@@ -1255,7 +1617,8 @@ packages/common/workspace-template/pnpm-lock.yaml:1:lockfileVersion: '9.0'
 <section id="events">
   <h2><span class="num">7</span>事件 → 界面映射</h2>
   <p class="lead">
-    页面只消费会话事件流（<code>/api/stream?follow=1</code>），不轮询、不猜测。每条事件驱动哪一块、怎么合并，全部列在这里。
+    这一节只讲<strong>对话视图</strong>的投影：哪些事件会变成一条消息、按什么规则合并。
+    引擎产生的 53 类事件里，大部分不进入对话（Team 批次、Call、邮箱、记录、压缩、恢复），它们属于追踪视图，见第 14 节。
   </p>
 
   <div class="note warn">
@@ -1684,6 +2047,162 @@ proxy_read_timeout 3600s;</pre>
   </div>
 </section>
 
+
+<section id="trace">
+  <h2><span class="num">14</span>全量追踪</h2>
+  <p class="lead">
+    对话视图只回答了「说了什么」。要回答「引擎到底做了什么」，必须把执行树和全部事件摆出来——
+    这不是加一个页面，是把已经存在但被拍平的数据恢复成结构。
+  </p>
+
+  <h3>14.1 数据盘点：53 类事件，对话层只用到 10 个</h3>
+  <table>
+    <thead><tr><th>分组</th><th>事件</th><th>条数</th><th>当前展示</th><th>该去哪</th></tr></thead>
+    <tbody>
+      <tr><td>会话 / 回合</td><td><code>flow_session.*</code> <code>flow_turn.*</code></td><td>7</td><td>2</td><td>追踪 + 事件流</td></tr>
+      <tr><td>Team</td><td><code>team_session.*</code> <code>team_turn.*</code></td><td>7</td><td>1</td><td>追踪（TeamTurn 节点）</td></tr>
+      <tr><td>Call</td><td><code>agent_turn.*</code> <code>command_turn.*</code> <code>webhook_turn.*</code></td><td>10</td><td>2</td><td>追踪（Call 节点）</td></tr>
+      <tr><td>Agent</td><td><code>agent_session.*</code> <code>agent.feedback</code></td><td>3</td><td>0</td><td>追踪 + 事件流</td></tr>
+      <tr><td>工具 / 上下文</td><td><code>tool_call.*</code> <code>context.compacted</code></td><td>4</td><td>2</td><td>对话（工具行）+ 追踪（压缩）</td></tr>
+      <tr><td>邮箱</td><td><code>mailbox.message.*</code> <code>mailbox.batch.*</code></td><td>5</td><td>0</td><td>追踪（邮箱节点）</td></tr>
+      <tr><td>记录</td><td><code>shared_record.*</code></td><td>2</td><td>0</td><td>追踪（记录节点）</td></tr>
+      <tr><td>审批</td><td><code>approval.requested / resolved</code></td><td>2</td><td>0</td><td>对话（审批条）+ 追踪（生命周期）</td></tr>
+      <tr><td>恢复</td><td><code>recovery.requested / completed</code></td><td>2</td><td>0</td><td>追踪（中断与重试）</td></tr>
+      <tr><td>定时唤醒</td><td><code>wakeup.*</code></td><td>5</td><td>4</td><td>对话（标记）+ 定时任务页</td></tr>
+      <tr><td colspan="2"><strong>合计</strong></td><td><strong>47</strong></td><td><strong>11</strong></td><td></td></tr>
+    </tbody>
+  </table>
+  <p>
+    另外三类数据不在事件流里，需要时链接过去、不内嵌：
+    <code>.agents/data/logs/*.log</code>（执行日志）、<code>agent-transcripts/</code>（模型对话全文）、
+    <code>state.json</code>（会话状态快照）。
+  </p>
+
+  <h3>14.2 执行树：引擎已经有，别重造</h3>
+  <p>
+    <code>internal/eval/correlation.go</code> 里已经有一个把事件流折叠成执行树的实现：
+    <code>NewGraph(events []storage.SessionEvent) *Graph</code>，六类节点——
+  </p>
+  <div class="grid c3">
+    <div class="card"><h4>flow_session</h4><p>会话根。所有节点最终都挂在它下面。</p></div>
+    <div class="card"><h4>flow_turn</h4><p>一次请求/唤醒的完整回合。承载 <code>origin</code>、路由、输入。</p></div>
+    <div class="card"><h4>team_session</h4><p>Team 的长期状态，跨 turn 存活，所以挂在 flow_session 而不是某个 turn 上。</p></div>
+    <div class="card"><h4>team_turn</h4><p>一次 Team 执行：批次、<code>depends_on</code>、限流、路由。</p></div>
+    <div class="card"><h4>call_turn</h4><p>一次 Call 执行，<code>call_type</code> 区分 agent / command / webhook。</p></div>
+    <div class="card"><h4>agent_session</h4><p>Agent 的转录归属，从 <code>agent_session.created</code> 的 payload 里取。</p></div>
+  </div>
+
+  <p>每个节点带这些字段，直接够渲染：</p>
+  <table>
+    <thead><tr><th>字段</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>Parent</code> / <code>Children</code></td><td>建树。<strong>归属按生命周期而非因果</strong>：team_session 挂 flow_session，team_turn 挂 flow_turn</td></tr>
+      <tr><td>五级 scope id</td><td><code>FlowSessionID / FlowTurnID / TeamSessionID / TeamTurnID / TeamID / CallID / AgentID</code>，任一节点都能回答"我跑在哪个 FlowTurn 里"</td></tr>
+      <tr><td><code>Status</code></td><td>运行 / 完成 / 等待输入 / 等待工具 / 等待审批 / 失败</td></tr>
+      <tr><td><code>StartedAt</code> / <code>FinishedAt</code></td><td>耗时。<code>waiting_*</code> 也算结束——回合离开了 running，但可续</td></tr>
+      <tr><td><code>FirstSeq</code> / <code>LastSeq</code></td><td><strong>事件区间</strong>。点击节点就能取出它名下的事件；也只给最具体的那个节点记账，TeamTurn 的区间不覆盖它 Call 的事件</td></tr>
+      <tr><td><code>Attempt</code> / <code>RecoveryOf</code></td><td>重试与恢复的谱系</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <div>
+      <strong>排序可以直接用 seq</strong>
+      <code>JSONLSessionWriter</code> 的 <code>nextSeq</code> 是按 <code>sessionID</code> 记的，不区分 layer——三层文件（<code>flow.jsonl</code> / <code>team.jsonl</code> / <code>agent.jsonl</code>）合并后按 seq 排就是全局时间线。不需要额外的时间戳排序，也不会有并列。
+    </div>
+  </div>
+
+  <h3>14.3 三个视图的分工</h3>
+  <table>
+    <thead><tr><th>视图</th><th>回答什么</th><th>数据</th><th>典型用户</th></tr></thead>
+    <tbody>
+      <tr><td><strong>对话</strong> <code>/s/{id}</code></td><td>说了什么、结果是什么</td><td>对话投影（11 类事件）</td><td>日常使用</td></tr>
+      <tr><td><strong>追踪</strong> <code>/s/{id}/trace</code></td><td>谁在什么时候做了什么、卡在哪</td><td>执行树 + 每节点事件</td><td>排查"为什么慢/为什么错"</td></tr>
+      <tr><td><strong>事件流</strong> <code>/s/{id}/events</code></td><td>原始的每一条事件</td><td>全量 47 类，含 payload</td><td>对账、复现、导出</td></tr>
+    </tbody>
+  </table>
+
+  <h3>14.4 对话 ↔ 追踪的双向跳转</h3>
+  <ul>
+    <li><strong>对话 → 追踪</strong>：每条消息的右上角「查看追踪」，跳到该回合的 FlowTurn 节点（用消息对应的 <code>flow_turn_id</code> 定位）。</li>
+    <li><strong>追踪 → 对话</strong>：节点详情里的「在对话中查看」，滚到对应消息。</li>
+    <li><strong>工具行 → 追踪</strong>：工具调用行尾的 <code>seq</code> 可点，直接选中该 <code>tool_call</code> 事件所在的 round。</li>
+    <li><strong>不做的</strong>：不做"追踪里内嵌对话气泡"。两个视图的数据结构不同，互相嵌入会让两边都难维护。</li>
+  </ul>
+
+  <h3>14.5 加载与性能</h3>
+  <table>
+    <thead><tr><th>问题</th><th>做法</th></tr></thead>
+    <tbody>
+      <tr><td>会话跑一天有几千条事件</td><td>追踪页默认只折叠到 FlowTurn 层；点开才拉该子树（<code>?root={node_id}</code>），不一次全取</td></tr>
+      <tr><td>事件流页太重</td><td>服务端分页 <code>?after_seq=&amp;limit=200</code>；只渲染 200 行，滚动到底再取</td></tr>
+      <tr><td>payload 很大（工具输出几 MB）</td><td>列表只显示摘要；点开单条才取完整 payload（<code>?include_payload=1</code>），超过 256 KB 截断并提示下载</td></tr>
+      <tr><td>实时追加</td><td>追踪页订阅同一条 SSE；新事件到达时按 <code>seq</code> 归到对应节点，已展开的节点就地追加</td></tr>
+      <tr><td>深链</td><td><code>/s/{id}/trace?node=call_answer</code>、<code>?focus=seq:8</code> 可直接定位，便于贴给别人看</td></tr>
+    </tbody>
+  </table>
+
+  <h3>14.6 新增 API</h3>
+  <pre><span class="k">GET</span> /api/sessions/{id}/trace?root={node_id}&amp;depth=2
+
+<span class="k">200</span>
+{
+  "nodes": [
+    {
+      "id": "call_answer",
+      "kind": "call_turn",
+      "parent": "tt_5eed9d",
+      "children": ["at_b31c"],
+      "scope": {"flow_session_id": "fs_a1b2c3", "flow_turn_id": "ft_fa13d378",
+                "team_session_id": "fs_a1b2c3:default", "team_turn_id": "tt_5eed9d",
+                "team_id": "default", "call_id": "answer", "agent_id": "assistant"},
+      "status": "completed",
+      "started_at": "2026-11-02T04:12:03.342Z",
+      "finished_at": "2026-11-02T04:12:08.710Z",
+      "first_seq": 4,
+      "last_seq": 19,
+      "attempt": 1,
+      "recovery_of": ""
+    }
+  ],
+  "facts": {
+    "tokens": {"input": 8200, "output": 4200},
+    "tool_calls": 3,
+    "tool_failures": 1,
+    "compactions": 1,
+    "records": 1,
+    "mailbox_messages": 2
+  }
+}
+
+<span class="k">GET</span> /api/sessions/{id}/events?after_seq=0&amp;limit=200&amp;types=tool_call.failed,approval.*&amp;include_payload=0
+<span class="k">200</span> { "events": [ … ], "next_seq": 201, "total": 33 }</pre>
+  <p>
+    <code>trace</code> 直接复用 <code>eval.NewGraph</code> 与 <code>SessionFacts</code>，只做 JSON 投影；
+    <code>events</code> 复用 <code>storage.Replay</code> + 过滤。两者都是只读，不碰 runtime 状态。
+  </p>
+
+  <h3>14.7 阶段</h3>
+  <table>
+    <thead><tr><th>阶段</th><th>内容</th><th>验收</th></tr></thead>
+    <tbody>
+      <tr><td><strong>P2</strong></td><td>追踪页（树 + 节点详情）、<code>/trace</code> 接口</td><td>打开一个跑完的会话，能看到 FlowTurn → TeamTurn → Call → AgentTurn → Round 五层，点节点能看到它名下的事件</td></tr>
+      <tr><td><strong>P2</strong></td><td>事件流页、<code>/events</code> 接口</td><td>47 类事件都能看到，按层/类型/失败过滤生效，导出 JSONL 与环境里 <code>flow.jsonl</code> 逐行一致</td></tr>
+      <tr><td><strong>P3</strong></td><td>对话 ↔ 追踪跳转、深链</td><td>从一条消息跳到它的 FlowTurn 节点；把链接贴给别人，打开就停在同一节点</td></tr>
+      <tr><td><strong>P4</strong></td><td>大 payload 按需加载、子树懒加载</td><td>一个 5000 事件的会话，首屏加载 < 300ms</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note danger">
+    <div>
+      <strong>这一节纠正了上一版的判断</strong>
+      上一版把「展示 agent 做了什么」理解成"把对话渲染出来"，于是 47 类事件只画了 11 类，
+      执行结构被拍平成一条消息列表。但实际上引擎早就有执行树抽象（<code>eval.Graph</code>），
+      只是没暴露给界面。追踪视图不是新造数据，是把已有的结构还原出来。
+    </div>
+  </div>
+</section>
+
 </main>
 </div>
 
@@ -1721,7 +2240,9 @@ proxy_read_timeout 3600s;</pre>
     "s-list": "http://127.0.0.1:8080/",
     "s-detail": "http://127.0.0.1:8080/s/fs_a1b2c3",
     "s-wakeups": "http://127.0.0.1:8080/wakeups",
-    "s-status": "http://127.0.0.1:8080/status"
+    "s-trace": "http://127.0.0.1:8080/s/fs_a1b2c3/trace",
+    "s-status": "http://127.0.0.1:8080/status",
+    "s-raw": "http://127.0.0.1:8080/s/fs_a1b2c3/events"
   };
 
   function showScreen(id) {
@@ -1883,6 +2404,22 @@ proxy_read_timeout 3600s;</pre>
       }, 3000);
     });
   }
+
+  /* ---------- 原型：追踪树选中节点 ---------- */
+  var tnodes = Array.prototype.slice.call(document.querySelectorAll(".tnode"));
+  var panels = Array.prototype.slice.call(document.querySelectorAll(".td-panel"));
+
+  tnodes.forEach(function (node) {
+    node.addEventListener("click", function () {
+      tnodes.forEach(function (other) { other.setAttribute("aria-selected", "false"); });
+      node.setAttribute("aria-selected", "true");
+      var want = node.getAttribute("data-detail");
+      var hasPanel = panels.some(function (panel) { return panel.getAttribute("data-panel") === want; });
+      panels.forEach(function (panel) {
+        panel.hidden = panel.getAttribute("data-panel") !== (hasPanel ? want : "call");
+      });
+    });
+  });
 
   /* ---------- 文档：目录高亮 ---------- */
   var links = Array.prototype.slice.call(document.querySelectorAll(".toc a"));
