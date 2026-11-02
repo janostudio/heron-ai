@@ -349,22 +349,70 @@ type FlowTurnResult struct {
 // limit while doing normal work. These bounds exist only to stop a runaway
 // loop, so they sit well above any plausible legitimate count. A Flow that
 // wants tighter bounds can lower them in settings.json.
+//
+// # The counting window is not uniform
+//
+// Two fields below are counted over a window that a reader would not guess
+// from their names, and both are easy to misread as "per turn":
+//
+//   - MaxTeamTurns is counted per FlowTurn on the synchronous path and over
+//     the whole session on the mailbox path. One number, two counters.
+//   - MaxActivationRetries is counted per (source, target) pair over the
+//     whole session, because the repeated unit spans turns.
+//
+// Lowering either to bound a single run-away turn can instead stop the whole
+// session. Read the field's own comment before changing a value.
 type RuntimeLimits struct {
-	// MaxTeamTurns bounds the Team rounds one FlowSession may start in total.
-	// It is a session total rather than a per-turn one because a Team's round
-	// can dispatch further Teams, so the unit that grows without bound is the
-	// session, not any single turn.
-	MaxTeamTurns        int `json:"max_team_turns"`
+	// MaxTeamTurns bounds how many TeamTurns may run. The counted window
+	// depends on how the turn was started:
+	//
+	//   - Synchronous path — a FlowTurn activates Teams and waits for them.
+	//     Counted per FlowTurn. Exceeding it fails that turn with "flow turn
+	//     exceeded max team turns"; the session may start a new turn later.
+	//   - Mailbox path — one message per turn, Teams dispatching Teams.
+	//     Counted over the whole session by replaying team_turn.started.
+	//     Exceeding it marks the message dead and stops further dispatch, so
+	//     the session can no longer hand out work.
+	//
+	// The session-wide count on the mailbox path is deliberate: every round
+	// starts a new turn there, so a per-turn counter would never trip. What
+	// runs away in that mode is a chain of turns, not one long turn.
+	MaxTeamTurns int `json:"max_team_turns"`
+
+	// MaxCallsPerTeamTurn bounds the Calls one TeamTurn may execute, counted
+	// per TeamTurn. Exceeding it does not fail the turn: the Team routes
+	// NextCoordinate so its activator decides what to do next.
 	MaxCallsPerTeamTurn int `json:"max_calls_per_team_turn"`
-	MaxAgentRounds      int `json:"max_agent_rounds"`
-	MaxParallelTeams    int `json:"max_parallel_teams"`
-	MaxParallelCalls    int `json:"max_parallel_calls"`
+
+	// MaxAgentRounds bounds the model/tool iterations inside one AgentTurn.
+	// The effective value is the smallest of this, the Agent's
+	// loop.max_rounds, and its budget.max_model_rounds.
+	MaxAgentRounds int `json:"max_agent_rounds"`
+
+	// MaxParallelTeams bounds how many Teams run at once within one batch.
+	// Activations beyond it are deferred to the next batch, not dropped.
+	MaxParallelTeams int `json:"max_parallel_teams"`
+
+	// MaxParallelCalls bounds how many Calls run at once within one TeamTurn.
+	// Calls beyond it are deferred to the next batch, not dropped.
+	MaxParallelCalls int `json:"max_parallel_calls"`
+
 	// MaxCoordinateRetries bounds how often one Team may hand a decision back
-	// to its activator (the coordinate route) within a FlowTurn.
+	// to its activator (the coordinate route) within a FlowTurn. Counted per
+	// Team, per FlowTurn. A Team over the limit has that route skipped; the
+	// turn itself is not failed by it.
 	MaxCoordinateRetries int `json:"max_coordinate_retries"`
+
+	// MaxActivationRetries bounds how often one Team may dispatch work to the
+	// same target. Counted per (source, target) pair over the whole session
+	// by replaying mailbox work messages: a dispatched Team runs in its own
+	// turn, so a per-turn counter would never see the repeat. Exceeding it
+	// rejects the dispatch.
 	MaxActivationRetries int `json:"max_activation_retries"`
-	// Tool parallelism is inside one AgentTurn and is not a Flow/Team
-	// orchestration level.
+
+	// MaxParallelTools bounds tool calls running at once inside one
+	// AgentTurn. Tool parallelism lives inside the Agent loop and is not a
+	// Flow/Team orchestration level.
 	MaxParallelTools int `json:"max_parallel_tools"`
 }
 

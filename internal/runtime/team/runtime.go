@@ -203,6 +203,9 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 			})
 			return result, fmt.Errorf("%s", result.Error)
 		}
+		// Per-TeamTurn count. Exceeding it is not a failure: the Team routes
+		// NextCoordinate so its activator decides whether to continue, and
+		// the caller sees the reason in result.Error.
 		if teamCalls+len(ready) > limits.MaxCallsPerTeamTurn {
 			result.Error = fmt.Sprintf("team turn exceeded max calls: %d", limits.MaxCallsPerTeamTurn)
 			result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}

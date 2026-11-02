@@ -40,10 +40,15 @@ import (
 func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession, msg types.MailboxMessage) {
 	defs := r.definitions.Snapshot()
 
-	// The Team-turn budget is a session total, not a per-turn one: with Teams
-	// dispatching Teams, each round starts a new turn, so only a count across
-	// the whole session bounds a runaway loop. Exceeding it ends the session
-	// rather than spawning another round.
+	// The Team-turn budget is a session total on this path, not a per-turn
+	// one: with Teams dispatching Teams, each round starts a new turn, so
+	// only a count across the whole session bounds a runaway loop. Exceeding
+	// it ends the session rather than spawning another round.
+	//
+	// This is the same MaxTeamTurns number that the synchronous path counts
+	// per FlowTurn (runtime.runTurnWithOrigin). Two counters, one threshold:
+	// lowering it to bound a single long turn also caps how many mailbox
+	// messages a session may ever process.
 	if started, err := r.countTeamTurns(ctx, session.ID); err != nil {
 		logging.Error("count team turns", map[string]any{
 			"flow_session_id": session.ID,

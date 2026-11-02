@@ -885,6 +885,10 @@ func (r *Runtime) runTurnWithOrigin(
 			})
 			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, progressErr)
 		}
+		// Per-turn count: teamTurns accumulated inside this FlowTurn only.
+		// The same limit is counted over the whole session on the mailbox
+		// path (scheduler.runMessageTurn), because there every round is a
+		// separate turn and a per-turn counter would never trip.
 		if teamTurns+len(ready) > r.limits.MaxTeamTurns {
 			limitErr := fmt.Errorf("flow turn exceeded max team turns: %d", r.limits.MaxTeamTurns)
 			logging.Error("flow turn exceeded max team turns", map[string]any{
