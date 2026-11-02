@@ -184,7 +184,7 @@ pre .c { color: var(--c-text-faint); }
 .note::before { content: ""; background: var(--c-accent); border-radius: var(--r-full); }
 .note.warn::before { background: var(--c-warn-line); }
 .note.danger::before { background: var(--c-danger); }
-.note strong { display: block; margin-bottom: 2px; }
+.note > div > strong:first-child { display: block; margin-bottom: 2px; }
 
 /* 标签 */
 .tag {
@@ -720,10 +720,16 @@ textarea.box:focus { border-color: var(--c-accent); outline: none; box-shadow: 0
 .demo-tree { padding: var(--s2) 0; border-right: 1px solid var(--c-border); }
 .demo-side { padding: var(--s3); background: var(--c-bg-subtle); font-size: var(--fs-12); }
 .drow {
-  display: grid; grid-template-columns: 16px 12px minmax(0,1fr) 78px 66px 10px;
+  display: grid; grid-template-columns: 16px 12px minmax(0,1fr) 70px 56px 132px 10px;
   gap: 6px; align-items: center; padding: 3px var(--s3) 3px 0;
   font-size: var(--fs-12); white-space: nowrap;
 }
+.dspan { position: relative; height: 9px; background: var(--c-bg-sunken); border-radius: 2px; }
+.dspan i { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--c-accent); opacity: .55; }
+.dspan i.warn { background: var(--c-warn-line); }
+.dspan i.bad { background: var(--c-danger); }
+.dspan i.ok { background: var(--c-ok); }
+.dspan-note { font-size: 10px; color: var(--c-text-faint); margin-left: 4px; }
 .drow:hover { background: var(--c-bg-subtle); }
 .drow.sel { background: var(--c-accent-soft); box-shadow: inset 2px 0 0 var(--c-accent); }
 .dbranch { font-family: var(--f-mono); color: var(--c-text-faint); font-size: 11px; }
@@ -2488,126 +2494,129 @@ proxy_read_timeout 3600s;</pre>
     每行固定六列：连接线 / 折叠箭头 / 类型+标题+id / 耗时 / token / 状态点。下面是静态稿，用来定形态。
   </p>
 
-  <h3>15.1 全展开</h3>
+  <h3>15.1 全展开（含并行分支）</h3>
   <div class="demo">
-    <div class="demo-head">会话 fs_a1b2c3 · 3 个回合 · 33 事件 · 选中 Call 节点</div>
+    <div class="demo-head">会话 fs_a1b2c3 · 3 个回合 · 33 事件 · 右列是相对时间轴（按事件序号刻度）</div>
     <div class="demo-body">
       <div class="demo-tree">
-        <div class="drow" style="padding-left:calc(var(--s3) + 0px)">
-          <span class="dbranch"></span>
-          <span class="dtoggle">▾</span>
-          <span class="dlabel"><span class="dkind">flow_turn</span>回合 1 · user<span class="did">ft_fa13d378</span></span>
-          <span class="dtime">04:12 · 5.5s</span>
-          <span class="dtok"></span>
+        <div class="drow" style="padding-left:var(--s3)">
+          <span class="dbranch"></span><span class="dtoggle">▾</span>
+          <span class="dlabel"><span class="dkind">flow_turn</span>回合 1 · user<span class="did">seq 3–18</span></span>
+          <span class="dtime">04:12 · 5.5s</span><span class="dtok"></span>
+          <span class="dspan"><i class="ok" style="left:0%;width:40.5%"></i></span>
           <span class="ddot ok"></span>
         </div>
         <div class="drow" style="padding-left:calc(var(--s3) + 14px)">
-          <span class="dbranch">├─</span>
-          <span class="dtoggle">▾</span>
-          <span class="dlabel"><span class="dkind">team_turn</span>TeamTurn · default<span class="did">tt_5eed9d</span></span>
-          <span class="dtime">5.5s</span>
-          <span class="dtok"></span>
+          <span class="dbranch">├─</span><span class="dtoggle">▾</span>
+          <span class="dlabel"><span class="dkind">team_turn</span>TeamTurn · research<span class="did">seq 4–13</span></span>
+          <span class="dtime">1.1s</span><span class="dtok"></span>
+          <span class="dspan"><i class="ok" style="left:2.7%;width:24.3%"></i></span>
           <span class="ddot ok"></span>
         </div>
-        <div class="drow sel" style="padding-left:calc(var(--s3) + 28px)">
-          <span class="dbranch">│ ├─</span>
-          <span class="dtoggle">▾</span>
+        <div class="drow" style="padding-left:calc(var(--s3) + 28px)">
+          <span class="dbranch">│ └─</span><span class="dtoggle">▾</span>
           <span class="dlabel"><span class="dkind">call</span>Call · agent<span class="did">answer</span></span>
-          <span class="dtime">5.5s</span>
-          <span class="dtok">12.4k</span>
+          <span class="dtime">1.1s</span><span class="dtok">3.1k</span>
+          <span class="dspan"><i class="ok" style="left:5.4%;width:18.9%"></i></span>
           <span class="ddot ok"></span>
+        </div>
+        <div class="drow sel" style="padding-left:calc(var(--s3) + 14px)">
+          <span class="dbranch">├─</span><span class="dtoggle">▾</span>
+          <span class="dlabel"><span class="dkind">team_turn</span>TeamTurn · sandbox<span class="did">seq 6–8</span></span>
+          <span class="dtime">2.4s</span><span class="dtok"></span>
+          <span class="dspan"><i class="ok" style="left:8.1%;width:5.4%"></i></span>
+          <span class="ddot ok"></span>
+        </div>
+        <div class="drow" style="padding-left:calc(var(--s3) + 28px)">
+          <span class="dbranch">│ ├─</span><span class="dtoggle">▾</span>
+          <span class="dlabel"><span class="dkind">call</span>Call · agent<span class="did">build</span></span>
+          <span class="dtime">1.3s</span><span class="dtok">5.1k</span>
+          <span class="dspan"><i class="bad" style="left:8.1%;width:2.7%"></i></span>
+          <span class="ddot bad"></span>
         </div>
         <div class="drow" style="padding-left:calc(var(--s3) + 42px)">
-          <span class="dbranch">│ │ ├─</span>
-          <span class="dtoggle">▾</span>
-          <span class="dlabel"><span class="dkind">agent_turn</span>AgentTurn · assistant<span class="did">3 轮 / 14</span></span>
-          <span class="dtime">5.5s</span>
-          <span class="dtok"></span>
-          <span class="ddot ok"></span>
-        </div>
-        <div class="drow" style="padding-left:calc(var(--s3) + 56px)">
-          <span class="dbranch">│ │ │ ├─</span>
-          <span class="dtoggle">●</span>
-          <span class="dlabel"><span class="dkind">round</span>round 0 · 模型 + Bash<span class="did">exit 2</span></span>
-          <span class="dtime">4.3s</span>
-          <span class="dtok">1.8k</span>
+          <span class="dbranch">│ │ ├─</span><span class="dtoggle">▾</span>
+          <span class="dlabel"><span class="dkind">agent_turn</span>AgentTurn · assistant<span class="did">2 轮</span></span>
+          <span class="dtime">1.3s</span><span class="dtok"></span>
+          <span class="dspan"><i class="bad" style="left:8.1%;width:5.4%"></i></span>
           <span class="ddot bad"></span>
         </div>
         <div class="drow" style="padding-left:calc(var(--s3) + 56px)">
-          <span class="dbranch">│ │ │ ├─</span>
-          <span class="dtoggle">●</span>
-          <span class="dlabel"><span class="dkind">round</span>round 1 · Grep<span class="did">2 matches</span></span>
-          <span class="dtime">0.1s</span>
-          <span class="dtok">0.6k</span>
-          <span class="ddot ok"></span>
+          <span class="dbranch">│ │ │ ├─</span><span class="dtoggle">●</span>
+          <span class="dlabel"><span class="dkind">round</span>round 0 · Bash<span class="did">exit 2</span></span>
+          <span class="dtime">1.2s</span><span class="dtok">1.8k</span>
+          <span class="dspan"><i class="bad" style="left:8.1%;width:2.0%"></i></span>
+          <span class="ddot bad"></span>
         </div>
         <div class="drow" style="padding-left:calc(var(--s3) + 56px)">
-          <span class="dbranch">│ │ │ └─</span>
-          <span class="dtoggle">●</span>
-          <span class="dlabel"><span class="dkind">round</span>round 2 · Edit<span class="did">package.json</span></span>
-          <span class="dtime">0.0s</span>
-          <span class="dtok">0.4k</span>
+          <span class="dbranch">│ │ │ └─</span><span class="dtoggle">●</span>
+          <span class="dlabel"><span class="dkind">round</span>round 1 · Edit<span class="did">package.json</span></span>
+          <span class="dtime">0.1s</span><span class="dtok">0.4k</span>
+          <span class="dspan"><i class="ok" style="left:10.8%;width:2.0%"></i></span>
           <span class="ddot ok"></span>
         </div>
         <div class="drow" style="padding-left:calc(var(--s3) + 28px)">
-          <span class="dbranch">│ ├─</span>
-          <span class="dtoggle">●</span>
-          <span class="dlabel"><span class="dkind">mailbox</span>邮箱 · 2 条已投递<span class="did">delivered</span></span>
-          <span class="dtime">1.2s</span>
-          <span class="dtok"></span>
+          <span class="dbranch">│ └─</span><span class="dtoggle">▾</span>
+          <span class="dlabel"><span class="dkind">call</span>Call · command<span class="did">verify</span></span>
+          <span class="dtime">0.6s</span><span class="dtok"></span>
+          <span class="dspan"><i class="ok" style="left:13.5%;width:2.0%"></i></span>
           <span class="ddot ok"></span>
         </div>
-        <div class="drow" style="padding-left:calc(var(--s3) + 28px)">
-          <span class="dbranch">│ └─</span>
-          <span class="dtoggle">●</span>
-          <span class="dlabel"><span class="dkind">record</span>记录 · Answer<span class="did">answer-1793</span></span>
-          <span class="dtime">1 条</span>
-          <span class="dtok"></span>
+        <div class="drow" style="padding-left:calc(var(--s3) + 14px)">
+          <span class="dbranch">├─</span><span class="dtoggle">●</span>
+          <span class="dlabel"><span class="dkind">mailbox</span>邮箱 · 2 条已投递<span class="did">seq 10–13</span></span>
+          <span class="dtime">1.2s</span><span class="dtok"></span>
+          <span class="dspan"><i class="ok" style="left:18.9%;width:8.1%"></i></span>
           <span class="ddot ok"></span>
         </div>
-        <div class="drow" style="padding-left:calc(var(--s3) + 0px)">
-          <span class="dbranch">└─</span>
-          <span class="dtoggle">▸</span>
-          <span class="dlabel"><span class="dkind">flow_turn</span>回合 2 · wakeup<span class="did">ft_eda854</span></span>
-          <span class="dtime">06:12 · 0.8s</span>
-          <span class="dtok"></span>
+        <div class="drow" style="padding-left:calc(var(--s3) + 14px)">
+          <span class="dbranch">└─</span><span class="dtoggle">●</span>
+          <span class="dlabel"><span class="dkind">record</span>记录 · Answer<span class="did">seq 16</span></span>
+          <span class="dtime">1 条</span><span class="dtok"></span>
+          <span class="dspan"><i class="ok" style="left:35.1%;width:2.0%"></i></span>
+          <span class="ddot ok"></span>
+        </div>
+        <div class="drow" style="padding-left:var(--s3)">
+          <span class="dbranch"></span><span class="dtoggle">▸</span>
+          <span class="dlabel"><span class="dkind">flow_turn</span>回合 2 · wakeup<span class="did">seq 22–33</span></span>
+          <span class="dtime">06:12 · 0.8s</span><span class="dtok"></span>
+          <span class="dspan"><i class="warn" style="left:51.4%;width:29.7%"></i></span>
           <span class="ddot warn"></span>
         </div>
-        <div class="drow" style="padding-left:calc(var(--s3) + 0px)">
-          <span class="dbranch"></span>
-          <span class="dtoggle">▸</span>
-          <span class="dlabel"><span class="dkind">flow_turn</span>回合 3 · resume（中断恢复）<span class="did">ft_1b20cc</span></span>
-          <span class="dtime">04:31 · 0.4s</span>
-          <span class="dtok"></span>
+        <div class="drow" style="padding-left:var(--s3)">
+          <span class="dbranch"></span><span class="dtoggle">▸</span>
+          <span class="dlabel"><span class="dkind">flow_turn</span>回合 3 · resume<span class="did">seq 34–40</span></span>
+          <span class="dtime">04:31 · 0.4s</span><span class="dtok"></span>
+          <span class="dspan"><i class="warn" style="left:83.8%;width:16.2%"></i></span>
           <span class="ddot warn"></span>
         </div>
       </div>
       <div class="demo-side">
-        <div class="dside-h"><span class="tag accent">call · agent</span><strong>answer</strong></div>
+        <div class="dside-h"><span class="tag accent">team_turn</span><strong>sandbox</strong></div>
         <div class="dside-k">所属</div>
-        <div class="dside-v">回合 1 · TeamTurn tt_5eed9d</div>
-        <div class="dside-k">耗时 / Token</div>
-        <div class="dside-v">5.5s · 12.4k（in 8.2k）</div>
-        <div class="dside-k">事件区间</div>
-        <div class="dside-v"><span class="mono">seq 4 – 19</span>（16 条）</div>
+        <div class="dside-v">回合 1 · 与 research 并行</div>
+        <div class="dside-k">区间 / 耗时</div>
+        <div class="dside-v"><span class="mono">seq 6 – 12</span> · 2.4s</div>
         <div class="dside-k">子节点</div>
-        <div class="dside-v">AgentTurn ×1 · round ×3</div>
-        <div class="dside-k">该节点事件（前 50 条）</div>
+        <div class="dside-v">Call ×2（build 失败、verify 通过）</div>
+        <div class="dside-k">右栏事件（前 50 条）</div>
         <div class="ev-list" style="margin-top:4px">
-          <div class="ev-row"><span class="ev-seq">4</span><span class="ev-type">call_turn.started</span><span class="ev-sum">type=agent</span></div>
-          <div class="ev-row"><span class="ev-seq">6</span><span class="ev-type">model_response</span><span class="ev-sum">round 0</span></div>
-          <div class="ev-row"><span class="ev-seq">8</span><span class="ev-type">tool_call.failed</span><span class="ev-sum">Bash · exit 2</span></div>
-          <div class="ev-row"><span class="ev-seq">9</span><span class="ev-type">context.compacted</span><span class="ev-sum">18.4k→6.1k</span></div>
-          <div class="ev-more"><button class="btn sm" type="button">加载更多（还有 11 条）</button></div>
+          <div class="ev-row"><span class="ev-seq">6</span><span class="ev-type">team_turn.started</span><span class="ev-sum">depends_on=[]</span></div>
+          <div class="ev-row"><span class="ev-seq">11</span><span class="ev-type">call.completed</span><span class="ev-sum">build · failed</span></div>
+          <div class="ev-row"><span class="ev-seq">12</span><span class="ev-type">team_turn.completed</span><span class="ev-sum">1 失败 1 通过</span></div>
+          <div class="ev-more"><button class="btn sm" type="button">加载更多（还有 9 条）</button></div>
         </div>
       </div>
     </div>
   </div>
-  <ul>
-    <li><code>round 0</code> 的状态点是红的：它含失败工具。折叠时状态点保留，折叠的子树出过问题也能发现。</li>
-    <li>邮箱与记录挂在 <code>TeamTurn</code> 下——它们是这个 Team 的产物，不属于某一次 Call。</li>
-    <li>缩进每级 14px，到第四级（round）不再加深，避免右侧信息被挤走。</li>
-  </ul>
+
+  <div class="note warn">
+    <div>
+      <strong>纵向顺序是「谁先开始」，不是「谁先结束」</strong>
+      <code>TeamTurn · research</code> 先开始（seq 4）却<strong>后结束</strong>（seq 13）；<code>TeamTurn · sandbox</code> 晚开始（seq 6）<strong>先结束</strong>（seq 8）。
+      只看行序会得出「上面先完成」的错误结论——每行右侧的<strong>区间条</strong>才是真相：条重叠说明并行，条的右端位置决定谁先收尾。
+    </div>
+  </div>
 
   <h3>15.2 默认折叠：只展开到回合层</h3>
   <div class="demo">
@@ -2620,6 +2629,7 @@ proxy_read_timeout 3600s;</pre>
           <span class="dlabel"><span class="dkind">flow_turn</span>回合 1 · user<span class="did">ft_fa13d378</span></span>
           <span class="dtime">04:12 · 5.5s</span>
           <span class="dtok"></span>
+          <span class="dspan"><i class="ok" style="left:0.0%;width:40.5%"></i></span>
           <span class="ddot ok"></span>
         </div>
         <div class="drow" style="padding-left:calc(var(--s3) + 14px)">
@@ -2628,6 +2638,7 @@ proxy_read_timeout 3600s;</pre>
           <span class="dlabel"><span class="dkind">team_turn</span>TeamTurn · default<span class="did">tt_5eed9d</span></span>
           <span class="dtime">5.5s</span>
           <span class="dtok"></span>
+          <span class="dspan"><i class="ok" style="left:2.7%;width:32.4%"></i></span>
           <span class="ddot ok"></span>
         </div>
         <div class="drow" style="padding-left:calc(var(--s3) + 28px)">
@@ -2636,6 +2647,7 @@ proxy_read_timeout 3600s;</pre>
           <span class="dlabel"><span class="dkind">call</span>Call · agent（收起）<span class="did">answer</span></span>
           <span class="dtime">5.5s</span>
           <span class="dtok">12.4k</span>
+          <span class="dspan"><i class="ok" style="left:5.4%;width:27.0%"></i></span>
           <span class="ddot ok"></span>
         </div>
         <div class="drow" style="padding-left:calc(var(--s3) + 0px)">
@@ -2644,6 +2656,7 @@ proxy_read_timeout 3600s;</pre>
           <span class="dlabel"><span class="dkind">flow_turn</span>回合 2 · wakeup<span class="did">ft_eda854</span></span>
           <span class="dtime">06:12 · 0.8s</span>
           <span class="dtok"></span>
+          <span class="dspan"><i class="warn" style="left:51.4%;width:29.7%"></i></span>
           <span class="ddot warn"></span>
         </div>
         <div class="drow" style="padding-left:calc(var(--s3) + 0px)">
@@ -2652,6 +2665,7 @@ proxy_read_timeout 3600s;</pre>
           <span class="dlabel"><span class="dkind">flow_turn</span>回合 3 · resume（中断恢复）<span class="did">ft_1b20cc</span></span>
           <span class="dtime">04:31 · 0.4s</span>
           <span class="dtok"></span>
+          <span class="dspan"><i class="warn" style="left:83.8%;width:16.2%"></i></span>
           <span class="ddot warn"></span>
         </div>
       </div>
@@ -2666,7 +2680,54 @@ proxy_read_timeout 3600s;</pre>
     </div>
   </div>
 
-  <h3>15.3 每层显示什么</h3>
+  <h3>15.3 纵向顺序不是时间顺序</h3>
+  <p>
+    这是画树时最容易错的一条。<strong>行序表达的是归属与开始先后，不是结束先后。</strong>
+    引擎里各层的并发语义并不一样：
+  </p>
+  <table>
+    <thead><tr><th>层</th><th>能否并行</th><th>依据</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>回合 <code>flow_turn</code></td>
+        <td>同会话串行，但<strong>可以交错</strong></td>
+        <td>六个推进入口都持 <code>resumeLock(sessionID)</code>，所以不会真的同时跑；但前一个回合进入 <code>waiting_tool</code> 挂起后，后一个（resume / wakeup）可以起来——于是「回合 1 先开始、回合 2 先结束」是正常现象</td>
+      </tr>
+      <tr>
+        <td>TeamTurn</td>
+        <td><strong>并行</strong>，上限 20</td>
+        <td><code>limitActivations(ready, MaxParallelTeams)</code>，<code>MaxParallelTeams</code> 默认 20</td>
+      </tr>
+      <tr>
+        <td>Call</td>
+        <td><strong>并行</strong>，上限 <code>MaxParallelCalls</code></td>
+        <td><code>limitCalls(ready, MaxParallelCalls)</code>（<code>internal/runtime/team/runtime.go:194</code>）</td>
+      </tr>
+      <tr>
+        <td>round 内工具</td>
+        <td><strong>并行</strong>，上限 <code>MaxParallelTools</code></td>
+        <td>注释明确：「Tool parallelism is inside one AgentTurn and is not a Flow/Team orchestration level」</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h4>由此定的三条规则</h4>
+  <ol>
+    <li><strong>排序按 <code>first_seq</code> 升序</strong>：谁先开始谁在上。不按结束排——按结束排会让子节点跑到父节点上面，归属结构就散了。</li>
+    <li><strong>重叠即并行</strong>：兄弟节点的区间条有交叠，说明它们同时在跑。不额外加「并行」标签，条本身就是证据（标签会随事件增长而过期）。</li>
+    <li><strong>结束先后只看条右端</strong>：耗时列给绝对数字，区间条给相对位置。两者一致，行序不参与判断。</li>
+  </ol>
+
+  <div class="note warn">
+    <div>
+      <strong>还有一个会让区间条变长的因素</strong>
+      <code>waiting_tool</code> / <code>waiting_approval</code> 也算「离开 running」——<code>eval.Graph</code> 把任何终态事件都当作 <code>FinishedAt</code>。
+      但回合可以被 resume 继续，继续后 <code>last_seq</code> 会被推后。所以一个回合的区间条可能在恢复后变长，这不是 bug，是「它确实活了这么久」。
+      界面上用<strong>实线段 + 虚线段</strong>区分「连续执行」与「挂起等待后恢复」。
+    </div>
+  </div>
+
+  <h3>15.4 每层显示什么</h3>
   <table>
     <thead><tr><th>层</th><th>左侧标签</th><th>id / 次列</th><th>右列</th><th>右栏（点开后）</th></tr></thead>
     <tbody>
