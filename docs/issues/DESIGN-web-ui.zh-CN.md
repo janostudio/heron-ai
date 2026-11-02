@@ -335,6 +335,18 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 - **时间轴 minimap**：色带按真实耗时占比，颜色区分用户/步骤/工具/压缩/错误/重试/定时检查，点色块跳站点；
 - **回放**：`◀` `▶` 逐站、1x/2x/4x 播放、`/` 搜索、导出 Markdown 与 JSONL。
 
+**三级粒度，因为数据量差四个数量级**：
+
+| 粒度 | 一次多少 | 策略 |
+|---|---|---|
+| 树骨架 `nodes[]` | 几十~几百个节点（只跟回合/Team/Call 有关，跟轮数无关） | **全量返回**，可见性用折叠控制；深链 `?node=` 因此一定能定位 |
+| 节点事件 `events[]` | 一个 Call 几十~几百条，全会话上万条 | **按节点区间** `first_seq..last_seq` 分页，默认 50 条 |
+| 单条 payload | 几百字节 ~ 几 MB | **按需**，默认 512 字节摘要，点开单条才取 |
+
+量级参照：一次问答约 10 条事件；一次构建排查约 180；跑一天的长任务约 7000（20 FlowTurn / 60 TeamTurn / 90 Call / 600 round）。上限来自 `RuntimeLimits`：`MaxTeamTurns` 100、`MaxAgentRounds` 200——**树的规模可控，事件的规模不可控**，这正是分层的依据。
+
+**展开规则**：默认只展开到 FlowTurn；round 层（可能几十个）必须主动点；折叠态与选中节点记在 URL（`?open=ft_x,tt_y`）；节点状态点表示整棵子树的终态，折叠时也能看出哪支有问题。事件列表里连续 5 条以上同类事件折成一行（`tool_call.completed ×12`），失败工具默认展开。
+
 **原始请求面板**是回溯里最有用的一块：`AgentTranscript` 已存在 `.agents/data/agent-transcripts/`，按 `flow_session_id + team_id + call_id + agent_id` 分文件，含累积的 `Messages` 与 `SystemHash`。展开任一 `agent.model_response` 能看到该轮的消息前缀、系统提示版本、工具目录、token 明细。
 
 **一个精度限制**：transcript 是累积列表，不是每次请求的快照。要精确复现某一轮，需按 `agent_turn_id` 截取前缀并重建系统提示。后续可在 `agent.model_response` 里补一条 `request_digest`（message 数、system hash、工具名列表、token），成本低但能让重建免于猜测。

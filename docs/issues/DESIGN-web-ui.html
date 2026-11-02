@@ -563,7 +563,7 @@ textarea.box:focus { border-color: var(--c-accent); outline: none; box-shadow: 0
 .trace-filters { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 var(--s2) var(--s3); }
 
 .tnode {
-  position: relative; display: grid; grid-template-columns: 12px minmax(0,1fr) auto;
+  position: relative; display: grid; grid-template-columns: 10px 12px minmax(0,1fr) auto;
   gap: 6px; align-items: center; padding: 5px var(--s2) 5px 0;
   border-radius: var(--r-sm); cursor: pointer; font-size: var(--fs-12);
 }
@@ -580,6 +580,13 @@ textarea.box:focus { border-color: var(--c-accent); outline: none; box-shadow: 0
   margin-right: 4px;
 }
 .tnode-meta { font-size: var(--fs-11); color: var(--c-text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tnode-toggle {
+  font-size: 9px; color: var(--c-text-faint); text-align: center; line-height: 1;
+  cursor: pointer; user-select: none; transition: transform .12s ease;
+}
+.tnode-toggle.leaf { visibility: hidden; }
+.tnode.collapsed > .tnode-toggle { transform: rotate(-90deg); }
+.tnode.collapsed > .dot2 { opacity: .5; }
 .tnode.lv1 { padding-left: 14px; }
 .tnode.lv2 { padding-left: 28px; }
 .tnode.lv3 { padding-left: 42px; }
@@ -615,6 +622,13 @@ textarea.box:focus { border-color: var(--c-accent); outline: none; box-shadow: 0
 }
 .ev-sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ev-sum b { font-weight: 600; }
+.ev-more {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) var(--s3); border-top: 1px solid var(--c-border);
+  background: var(--c-bg-subtle);
+}
+.ev-more .hint { margin: 0; }
+.ev-group { color: var(--c-text-muted); font-style: normal; }
 
 /* ============ 全量事件表 ============ */
 .raw-wrap { padding: var(--s3) var(--s5) var(--s5); }
@@ -1176,73 +1190,87 @@ packages/common/workspace-template/pnpm-lock.yaml:1:lockfileVersion: '9.0'
               <button class="chip" aria-pressed="false">邮箱</button>
             </div>
 
-            <div class="tnode lv0" data-detail="flow" aria-selected="false">
+            <div class="tnode lv0" data-detail="flow" aria-selected="false" data-node="ft1">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle">▾</span>
               <span class="tnode-label"><span class="tnode-kind">flow_turn</span>ft_fa13d378 · user</span>
               <span class="tnode-meta">04:12 · 5.5s</span>
             </div>
-            <div class="tnode lv1" data-detail="team" aria-selected="false">
+            <div class="tnode lv1" data-detail="team" aria-selected="false" data-node="tt1" data-parent="ft1">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle">▾</span>
               <span class="tnode-label"><span class="tnode-kind">team_turn</span>tt_5eed9d · default</span>
               <span class="tnode-meta">5.5s</span>
             </div>
-            <div class="tnode lv2" data-detail="call" aria-selected="true">
+            <div class="tnode lv2" data-detail="call" aria-selected="true" data-node="call1" data-parent="tt1">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle">▾</span>
               <span class="tnode-label"><span class="tnode-kind">call</span>answer · agent</span>
               <span class="tnode-meta">12.4k tok</span>
             </div>
-            <div class="tnode lv3" data-detail="agent" aria-selected="false">
+            <div class="tnode lv3" data-detail="agent" aria-selected="false" data-node="at1" data-parent="call1">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle">▾</span>
               <span class="tnode-label"><span class="tnode-kind">agent_turn</span>assistant · 3 轮</span>
               <span class="tnode-meta">5.5s</span>
             </div>
-            <div class="tnode lv4" data-detail="round" aria-selected="false">
+            <div class="tnode lv4" data-detail="round" aria-selected="false" data-parent="at1">
               <span class="dot2 bad"></span>
+              <span class="tnode-toggle leaf">▾</span>
               <span class="tnode-label">round 0 · model + Bash</span>
               <span class="tnode-meta">4.3s</span>
             </div>
-            <div class="tnode lv4" data-detail="round" aria-selected="false">
+            <div class="tnode lv4" data-detail="round" aria-selected="false" data-parent="at1">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle leaf">▾</span>
               <span class="tnode-label">round 1 · Grep</span>
               <span class="tnode-meta">0.1s</span>
             </div>
-            <div class="tnode lv4" data-detail="round" aria-selected="false">
+            <div class="tnode lv4" data-detail="round" aria-selected="false" data-parent="at1">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle leaf">▾</span>
               <span class="tnode-label">round 2 · Edit</span>
               <span class="tnode-meta">0.0s</span>
             </div>
-            <div class="tnode lv2" data-detail="mailbox" aria-selected="false">
+            <div class="tnode lv2" data-detail="mailbox" aria-selected="false" data-parent="tt1">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle leaf">▾</span>
               <span class="tnode-label"><span class="tnode-kind">mailbox</span>2 条消息 · 已投递</span>
               <span class="tnode-meta">1.2s</span>
             </div>
-            <div class="tnode lv2" data-detail="record" aria-selected="false">
+            <div class="tnode lv2" data-detail="record" aria-selected="false" data-parent="tt1">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle leaf">▾</span>
               <span class="tnode-label"><span class="tnode-kind">record</span>Answer · 已发布</span>
               <span class="tnode-meta">1</span>
             </div>
-            <div class="tnode lv0" data-detail="flow" aria-selected="false">
+            <div class="tnode lv0" data-detail="flow" aria-selected="false" data-node="ft2">
               <span class="dot2 warn"></span>
+              <span class="tnode-toggle">▾</span>
               <span class="tnode-label"><span class="tnode-kind">flow_turn</span>ft_eda854 · wakeup</span>
               <span class="tnode-meta">06:12 · 0.8s</span>
             </div>
-            <div class="tnode lv1" data-detail="team" aria-selected="false">
+            <div class="tnode lv1" data-detail="team" aria-selected="false" data-node="tt2" data-parent="ft2">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle">▾</span>
               <span class="tnode-label"><span class="tnode-kind">team_turn</span>tt_8c71a0 · default</span>
               <span class="tnode-meta">0.8s</span>
             </div>
-            <div class="tnode lv2" data-detail="call" aria-selected="false">
+            <div class="tnode lv2" data-detail="call" aria-selected="false" data-node="call2" data-parent="tt2">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle">▾</span>
               <span class="tnode-label"><span class="tnode-kind">call</span>answer · agent</span>
               <span class="tnode-meta">3.1k tok</span>
             </div>
-            <div class="tnode lv0" data-detail="flow" aria-selected="false">
+            <div class="tnode lv0" data-detail="flow" aria-selected="false" data-node="ft3">
               <span class="dot2 warn"></span>
+              <span class="tnode-toggle">▾</span>
               <span class="tnode-label"><span class="tnode-kind">flow_turn</span>ft_1b20cc · resume（中断恢复）</span>
               <span class="tnode-meta">04:31 · 0.4s</span>
             </div>
-            <div class="tnode lv1" data-detail="team" aria-selected="false">
+            <div class="tnode lv1" data-detail="team" aria-selected="false" data-node="tt3" data-parent="ft3">
               <span class="dot2 ok"></span>
+              <span class="tnode-toggle">▾</span>
               <span class="tnode-label"><span class="tnode-kind">team_turn</span>tt_c0ffee · default · attempt 2</span>
               <span class="tnode-meta">0.4s</span>
             </div>
@@ -1274,8 +1302,13 @@ packages/common/workspace-template/pnpm-lock.yaml:1:lockfileVersion: '9.0'
                 <div class="ev-row"><span class="ev-seq">9</span><span class="ev-type">context.compacted</span><span class="ev-sum">第 1 轮后 · 18.4k → 6.1k tok</span></div>
                 <div class="ev-row"><span class="ev-seq">12</span><span class="ev-type">tool_call.started</span><span class="ev-sum">Grep · pnpm-lock</span></div>
                 <div class="ev-row"><span class="ev-seq">14</span><span class="ev-type">tool_call.started</span><span class="ev-sum">Edit · package.json</span></div>
+                <div class="ev-row"><span class="ev-seq">15</span><span class="ev-type">tool_call.completed</span><span class="ev-sum ev-group">×2（Grep、Edit）· 连续同类已折叠，点开还原</span></div>
                 <div class="ev-row"><span class="ev-seq">16</span><span class="ev-type">shared_record.published</span><span class="ev-sum">Answer · answer-1793344235</span></div>
                 <div class="ev-row"><span class="ev-seq">19</span><span class="ev-type">call_turn.completed</span><span class="ev-sum">reply 已产出 · 12.4k tok</span></div>
+                <div class="ev-more">
+                  <button class="btn sm" type="button">加载更多（还有 6 条）</button>
+                  <span class="hint">按 seq 递增，每页 50 条</span>
+                </div>
               </div>
             </div>
 
@@ -1296,6 +1329,10 @@ packages/common/workspace-template/pnpm-lock.yaml:1:lockfileVersion: '9.0'
                 <div class="ev-row"><span class="ev-seq">6</span><span class="ev-type">agent.model_response</span><span class="ev-sum">finish=tool_calls · content 为空</span></div>
                 <div class="ev-row"><span class="ev-seq">7</span><span class="ev-type">tool_call.started</span><span class="ev-sum">arguments: {"command":"make build IMAGE=…"}</span></div>
                 <div class="ev-row"><span class="ev-seq">8</span><span class="ev-type">tool_call.failed</span><span class="ev-sum">4.2s · exit=2 · 输出 412 字节</span></div>
+                <div class="ev-more">
+                  <button class="btn sm" type="button">加载更多（还有 18 条）</button>
+                  <span class="hint">该 round 共 21 条事件</span>
+                </div>
               </div>
               <div class="note warn" style="margin-top:var(--s4)">
                 <div><strong>失败工具自动展开</strong>在追踪视图里点开一个含失败工具的 round，工具输出默认展开——排查时不用再点一次。</div>
@@ -2292,18 +2329,89 @@ proxy_read_timeout 3600s;</pre>
     <code>eval.SessionFacts</code> 算 KPI。全部只读，不碰 runtime 状态。
   </p>
 
-  <h3>14.8 加载与性能</h3>
+  <h3>14.8 展开与分页：三级粒度</h3>
+  <p>
+    一次执行的数据量可以差四个数量级，所以不能用一个策略通吃。按「树骨架 / 节点事件 / payload」分三层，各自定策略。
+  </p>
   <table>
-    <thead><tr><th>问题</th><th>做法</th></tr></thead>
+    <thead><tr><th>粒度</th><th>一次多少</th><th>策略</th><th>为什么</th></tr></thead>
     <tbody>
-      <tr><td>跑一天的会话几千条事件</td><td>首次只取最近 500 条 + <code>latest_seq</code>；向上滚动加载更早的，按 seq 前插</td></tr>
-      <tr><td>三种呈现同时存在</td><td>只有当前呈现渲染 DOM；另外两个保留数据不建节点（切换时重建，实测 &lt; 50ms）</td></tr>
-      <tr><td>原始模式行数太多</td><td>虚拟滚动，只渲染视口内约 60 行</td></tr>
-      <tr><td>payload 很大</td><td>默认摘要 512 字节；点开单条才取全量，超 256 KB 截断并给下载链接</td></tr>
-      <tr><td>实时追加打断阅读</td><td>用户停留在历史位置时，新事件只更新顶部「有 N 条新事件」提示，不自动滚动</td></tr>
-      <tr><td>深链</td><td><code>/s/{id}?seq=47&amp;mode=tree</code> 直接定位到某条事件的某种呈现</td></tr>
+      <tr>
+        <td><strong>树骨架</strong><br><code>nodes[]</code></td>
+        <td>几十到几百个节点</td>
+        <td><strong>全量返回</strong>，一次建树；可见性用折叠控制</td>
+        <td>节点数只跟回合/Team/Call 数量有关，跟轮数无关。全量给之后，<code>?node=</code> 深链一定能定位，不用"先加载才能跳"</td>
+      </tr>
+      <tr>
+        <td><strong>节点事件</strong><br><code>events[]</code></td>
+        <td>一个 Call 几十到几百条；全会话上万条</td>
+        <td><strong>按节点区间分页</strong>：<code>first_seq..last_seq</code>，默认 50 条一段</td>
+        <td>一条事件的 payload 里有工具输出，平均几百字节、大的几 MB。全量拉一个跑一天的会话就是几十 MB</td>
+      </tr>
+      <tr>
+        <td><strong>单条 payload</strong></td>
+        <td>几百字节 ~ 几 MB</td>
+        <td><strong>按需</strong>：默认 512 字节摘要，点开单条才取</td>
+        <td>工具输出是主要来源；列表不需要看全文</td>
+      </tr>
     </tbody>
   </table>
+
+  <h3>14.8.1 树的展开规则</h3>
+  <dl class="spec">
+    <dt>默认展开</dt><dd>只展开到 FlowTurn 层。一个会话可能有 20 个 FlowTurn，全部摊开会让树本身变成滚动条地狱</dd>
+    <dt>展开 = 显示子节点</dt><dd>数据已在前端（骨架全量），点开只是改 CSS，不发请求，所以是瞬时的</dd>
+    <dt>第三层以下默认折叠</dt><dd>AgentTurn 的 round 数量可能几十（<code>MaxAgentRounds</code> 默认 200），必须用户主动点</dd>
+    <dt>折叠态记在 URL</dt><dd><code>?open=ft_fa13d378,tt_5eed9d</code>：刷新、返回、分享都保持同一视图</dd>
+    <dt>全部展开 / 全部折叠</dt><dd>工具栏两个按钮。全部展开时对超过 500 个节点的子树改成"展开前 N 层"并提示</dd>
+    <dt>状态点</dt><dd>节点左侧的点表示该子树的终态：绿=全部成功、红=有失败、琥珀=有等待/中断、蓝=运行中。折叠状态下也能一眼看出哪棵子树有问题</dd>
+  </dl>
+
+  <h3>14.8.2 事件列表的分页与折叠</h3>
+  <table>
+    <thead><tr><th>机制</th><th>规则</th></tr></thead>
+    <tbody>
+      <tr><td>分页</td><td>点节点 → 取该节点区间前 50 条；底部「加载更多（还有 128 条）」，按 <code>seq</code> 递增追加</td></tr>
+      <tr><td>同类折叠</td><td>连续 5 条以上同类型事件折成一行：<code>tool_call.completed ×12（Grep）</code>，点开还原</td></tr>
+      <tr><td>工具输出折叠</td><td>超过 3 行折成「展开 N 行」；失败的工具默认展开——排查时最关心它</td></tr>
+      <tr><td>跳转定位</td><td>从时间轴或对话点进来，若目标事件不在前 50 条内，自动按 <code>seq</code> 定位到所在页并滚到该条</td></tr>
+      <tr><td>虚拟滚动</td><td>已加载但超出视口的事件不建 DOM；超过 500 行时只渲染视口 ±30 行</td></tr>
+    </tbody>
+  </table>
+
+  <h3>14.8.3 量级：为什么必须分页</h3>
+  <table>
+    <thead><tr><th>场景</th><th>FlowTurn</th><th>TeamTurn</th><th>Call</th><th>round</th><th>事件量</th><th>全量渲染的后果</th></tr></thead>
+    <tbody>
+      <tr><td>一次问答</td><td>1</td><td>1</td><td>1</td><td>2</td><td>~10</td><td>无压力</td></tr>
+      <tr><td>一次构建排查</td><td>4</td><td>6</td><td>9</td><td>23</td><td>~180</td><td>可接受</td></tr>
+      <tr><td>跑一天的长任务</td><td>~20</td><td>~60</td><td>~90</td><td>~600</td><td><strong>~7000</strong></td><td>DOM 节点百万级，页面卡死</td></tr>
+      <tr><td>理论极值</td><td>1</td><td>100<br><small>MaxTeamTurns</small></td><td>×N</td><td>200<br><small>MaxAgentRounds</small></td><td>万级</td><td>浏览器直接崩</td></tr>
+    </tbody>
+  </table>
+  <p>
+    上限来自 <code>RuntimeLimits</code>：<code>MaxTeamTurns</code> 默认 100、<code>MaxAgentRounds</code> 默认 200、<code>MaxCallsPerTeamTurn</code> 也有上限。
+    也就是说：<strong>树骨架的规模是可控的，事件的规模不可控</strong>——这正是分层的依据。
+  </p>
+
+  <h3>14.8.4 深链与未加载内容</h3>
+  <table>
+    <thead><tr><th>链接</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td><code>?node=call_answer</code></td><td>骨架全量 → 节点一定存在 → 展开其所有祖先 → 选中 → 事件区间首屏加载</td></tr>
+      <tr><td><code>?seq=47</code></td><td>先按 nodes 找包含 47 的最深节点 → 展开 → 加载该节点区间 → 滚到 47 并高亮</td></tr>
+      <tr><td><code>?seq=47&amp;mode=chat</code></td><td>对话模式里定位到包含该 seq 的消息块</td></tr>
+      <tr><td>事件尚未加载</td><td>显示「正在加载 seq 47 附近…」的占位行，不显示错误——这是正常的分页行为，不是失败</td></tr>
+    </tbody>
+  </table>
+
+  <h3>14.8.5 实时追加与阅读位置</h3>
+  <ul>
+    <li>新事件到达 → 更新对应节点的 <code>last_seq</code> 与 KPI；树上的状态点随之变化。</li>
+    <li>如果当前展开的节点包含该事件，追加到事件列表末尾。</li>
+    <li><strong>用户不在底部时不自动滚动</strong>：顶部出现「有 N 条新事件」提示条，点击才跳到底部。回溯历史时最忌被新内容顶走。</li>
+    <li>折叠状态、滚动位置、选中节点在三种呈现之间切换时保持不变。</li>
+  </ul>
 
   <h3>14.9 阶段</h3>
   <table>
@@ -2533,7 +2641,8 @@ proxy_read_timeout 3600s;</pre>
   var panels = Array.prototype.slice.call(document.querySelectorAll(".td-panel"));
 
   tnodes.forEach(function (node) {
-    node.addEventListener("click", function () {
+    node.addEventListener("click", function (event) {
+      if (event.target && event.target.classList.contains("tnode-toggle")) { return; }
       tnodes.forEach(function (other) { other.setAttribute("aria-selected", "false"); });
       node.setAttribute("aria-selected", "true");
       var want = node.getAttribute("data-detail");
@@ -2541,6 +2650,31 @@ proxy_read_timeout 3600s;</pre>
       panels.forEach(function (panel) {
         panel.hidden = panel.getAttribute("data-panel") !== (hasPanel ? want : "call");
       });
+    });
+  });
+
+  /* ---------- 原型：追踪树的折叠 ---------- */
+  function hideDescendants(id, hidden) {
+    var stack = [id];
+    while (stack.length) {
+      var current = stack.pop();
+      tnodes.forEach(function (node) {
+        if (node.getAttribute("data-parent") !== current) { return; }
+        node.style.display = hidden ? "none" : "";
+        var childId = node.getAttribute("data-node");
+        if (childId) { stack.push(childId); }
+      });
+    }
+  }
+
+  tnodes.forEach(function (node) {
+    var toggle = node.querySelector(".tnode-toggle");
+    if (!toggle || toggle.classList.contains("leaf")) { return; }
+    toggle.addEventListener("click", function (event) {
+      event.stopPropagation();
+      var collapsed = node.classList.toggle("collapsed");
+      var id = node.getAttribute("data-node");
+      if (id) { hideDescendants(id, collapsed); }
     });
   });
 
