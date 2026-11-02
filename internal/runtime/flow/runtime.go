@@ -904,15 +904,20 @@ func (r *Runtime) runTurnWithOrigin(
 			recentActivations = recentActivations[len(recentActivations)-recentActivationWindow:]
 		}
 		if teamTurns+len(ready) > r.limits.MaxTeamTurns {
-			limitErr := fmt.Errorf("flow turn exceeded max team turns: %d (%s)",
-				r.limits.MaxTeamTurns,
-				describeActivationBurst(teamTurns+len(ready), activationCounts, recentActivations))
+			limitErr := &limitError{
+				Name:     "max_team_turns",
+				Value:    r.limits.MaxTeamTurns,
+				Observed: teamTurns + len(ready),
+				TopPairs: topActivationPairs(activationCounts),
+				Recent:   recentActivations,
+				Detail:   "usually a routing cycle; raise settings.json runtime.max_team_turns only if the hand-offs are legitimate",
+			}
 			logging.Error("flow turn exceeded max team turns", map[string]any{
 				"flow_session_id": session.ID,
 				"flow_turn_id":    turn.ID,
-				"activated":       teamTurns + len(ready),
-				"top_pairs":       topActivationPairs(activationCounts),
-				"recent":          recentActivations,
+				"activated":       limitErr.Observed,
+				"top_pairs":       limitErr.TopPairs,
+				"recent":          limitErr.Recent,
 				"error":           limitErr.Error(),
 			})
 			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, limitErr)
@@ -1717,35 +1722,43 @@ func (r *Runtime) finishTurn(
 			})
 		}
 	}
+	payload := map[string]any{
+		"session": result.Session,
+		"turn":    result.Turn,
+		"error":   result.Error,
+		// reply and origin are hoisted to the top level because a caller
+		// relaying the answer of an unattended turn reads them without
+		// decoding the turn record.
+		"reply":  replyPayloadField(replyForCaller, result.Turn.Intermediate),
+		"origin": result.Turn.Origin,
+		// origin says how the turn was woken (a mailbox message), not who
+		// wrote the text. Consumers attributing a message to its producer
+		// must read team.
+		"team": result.FinalReplyTeam,
+		// Contributors is the turn's provenance: which Team said what, and
+		// which Team asked it. A reply written by the coordinating Team is a
+		// restatement of other Teams' results; without this a consumer can
+		// only see the writer and has to guess the source.
+		"contributors": contributorPayload(result.TeamResults, result.Turn.Intermediate),
+		"intermediate": result.Turn.Intermediate,
+		// Deliveries travel with the turn event: they are results the user
+		// must see as their own messages, independent of the reply above.
+		"deliveries": deliveryPayload(result.Deliveries),
+	}
+	// A tripped backstop carries structured facts alongside its message, so a
+	// reader can mark the turn, highlight the looping edges, or count how often
+	// a limit fires without parsing the error string back into fields.
+	var limit *limitError
+	if errors.As(runErr, &limit) {
+		payload["limit"] = limit.Payload()
+	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          eventType,
 			FlowSessionID: result.Session.ID,
 			FlowTurnID:    result.Turn.ID,
 		},
-		Payload: map[string]any{
-			"session": result.Session,
-			"turn":    result.Turn,
-			"error":   result.Error,
-			// reply and origin are hoisted to the top level because a caller
-			// relaying the answer of an unattended turn reads them without
-			// decoding the turn record.
-			"reply":  replyPayloadField(replyForCaller, result.Turn.Intermediate),
-			"origin": result.Turn.Origin,
-			// origin says how the turn was woken (a mailbox message), not who
-			// wrote the text. Consumers attributing a message to its producer
-			// must read team.
-			"team": result.FinalReplyTeam,
-			// Contributors is the turn's provenance: which Team said what, and
-			// which Team asked it. A reply written by the coordinating Team is a
-			// restatement of other Teams' results; without this a consumer can
-			// only see the writer and has to guess the source.
-			"contributors": contributorPayload(result.TeamResults, result.Turn.Intermediate),
-			"intermediate": result.Turn.Intermediate,
-			// Deliveries travel with the turn event: they are results the user
-			// must see as their own messages, independent of the reply above.
-			"deliveries": deliveryPayload(result.Deliveries),
-		},
+		Payload: payload,
 	}); err != nil {
 		return result, err
 	}
@@ -2678,21 +2691,4 @@ func topActivationPairs(counts map[string]int) []string {
 		out = append(out, fmt.Sprintf("%s ×%d", p.name, p.n))
 	}
 	return out
-}
-
-// describeActivationBurst explains which activations consumed the budget.
-// A backstop that only prints its threshold cannot be acted on: the reader
-// needs to know whether one Team re-activated itself, whether two Teams are
-// ping-ponging, or whether a wide fan-out simply exceeded the cap.
-func describeActivationBurst(total int, counts map[string]int, recent []string) string {
-	parts := []string{fmt.Sprintf("activated %d", total)}
-	if top := topActivationPairs(counts); len(top) > 0 {
-		parts = append(parts, "top: "+strings.Join(top, ", "))
-	}
-	if len(recent) > 0 {
-		parts = append(parts, "recent: "+strings.Join(recent, " → "))
-	}
-	parts = append(parts,
-		"usually a routing cycle; raise settings.json runtime.max_team_turns only if the hand-offs are legitimate")
-	return strings.Join(parts, "; ")
 }
