@@ -631,6 +631,65 @@ textarea.box:focus { border-color: var(--c-accent); outline: none; box-shadow: 0
 .raw-table .layer { font-size: var(--fs-11); color: var(--c-text-muted); }
 .raw-table .sum { color: var(--c-text-muted); }
 
+
+/* ============ 会话记录：KPI + 时间轴 + 三渲染 ============ */
+.rec-kpi {
+  display: grid; grid-template-columns: repeat(7, minmax(0,1fr));
+  gap: 1px; background: var(--c-border); border-bottom: 1px solid var(--c-border);
+}
+@media (max-width: 1100px) { .rec-kpi { grid-template-columns: repeat(4, minmax(0,1fr)); } }
+.kpi { background: var(--c-bg); padding: var(--s2) var(--s3); }
+.kpi-k { font-size: var(--fs-11); color: var(--c-text-faint); white-space: nowrap; }
+.kpi-v { font-size: var(--fs-16); font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; line-height: 1.3; }
+.kpi-v small { font-size: var(--fs-11); font-weight: 400; color: var(--c-text-muted); }
+
+.rec-timeline { padding: var(--s3) var(--s5) var(--s2); border-bottom: 1px solid var(--c-border); }
+.rec-timeline-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: 6px; flex-wrap: wrap; }
+.rec-timeline-title { font-size: var(--fs-11); color: var(--c-text-faint); text-transform: uppercase; letter-spacing: .06em; }
+.rec-play { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.rec-play button {
+  appearance: none; border: 1px solid var(--c-border-strong); background: var(--c-bg);
+  color: var(--c-text); font: inherit; font-size: var(--fs-11); line-height: 1;
+  padding: 3px 7px; border-radius: var(--r-sm); cursor: pointer;
+}
+.rec-play button:hover { background: var(--c-bg-subtle); }
+.rec-play button.on { background: var(--c-accent); border-color: var(--c-accent); color: #fff; }
+
+.minimap { position: relative; height: 26px; border-radius: var(--r-sm); overflow: hidden; background: var(--c-bg-sunken); display: flex; }
+.minimap i { display: block; height: 100%; min-width: 2px; cursor: pointer; opacity: .85; }
+.minimap i:hover { opacity: 1; outline: 1px solid var(--c-text); outline-offset: -1px; }
+.mm-user   { background: #3b82f6; }
+.mm-step   { background: #22c55e; }
+.mm-tool   { background: #f59e0b; }
+.mm-compact{ background: #a855f7; }
+.mm-error  { background: #ef4444; }
+.mm-retry  { background: #eab308; }
+.mm-command{ background: #06b6d4; }
+.mm-wakeup { background: #d97706; }
+.minimap-cursor {
+  position: absolute; top: 0; bottom: 0; width: 2px; background: var(--c-text);
+  box-shadow: 0 0 0 1px var(--c-bg); pointer-events: none; transition: left .12s ease;
+}
+.mm-legend { display: flex; gap: var(--s3); flex-wrap: wrap; margin-top: 6px; font-size: var(--fs-11); color: var(--c-text-muted); }
+.mm-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.mm-legend b { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+.rec-modes { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s5); border-bottom: 1px solid var(--c-border); background: var(--c-bg-subtle); }
+.seg { display: inline-flex; border: 1px solid var(--c-border-strong); border-radius: var(--r-sm); overflow: hidden; }
+.seg button {
+  appearance: none; border: 0; background: var(--c-bg); color: var(--c-text-muted);
+  font: inherit; font-size: var(--fs-12); padding: 4px var(--s3); cursor: pointer;
+  border-right: 1px solid var(--c-border);
+}
+.seg button:last-child { border-right: 0; }
+.seg button:hover { background: var(--c-bg-subtle); color: var(--c-text); }
+.seg button[aria-pressed="true"] { background: var(--c-accent); color: #fff; font-weight: 550; }
+.rec-modes .spacer { flex: 1; }
+.rec-modes .hint { margin: 0; }
+
+.rec-pane { display: none; }
+.rec-pane.active { display: block; }
+
 </style>
 </head>
 <body>
@@ -665,7 +724,7 @@ textarea.box:focus { border-color: var(--c-accent); outline: none; box-shadow: 0
     <a href="#security">11 · 安全</a>
     <a href="#phases">12 · 阶段与验收</a>
     <a href="#edges">13 · 边界与异常</a>
-    <a href="#trace">14 · 全量追踪</a>
+    <a href="#trace">14 · 会话记录</a>
   </div>
 </nav>
 
@@ -801,8 +860,9 @@ heron-ai           → 进程 B（TUI），又 build 了一个 runtime，也写�
 <section id="prototype">
   <h2><span class="num">3</span>可交互原型</h2>
   <p class="lead">
-    下面是一个可点的原型，四个页面用顶部标签切换。所有数据是假的，但布局、密度、状态样式按真实规格做。
-    把浏览器窗口缩小到 900px 以下可以看到列表与详情的降级布局。
+    四个入口：会话列表 / 会话记录 / 定时任务 / 状态。重点是<strong>会话记录</strong>——
+    一份数据（33 个事件）用三种方式呈现（对话 / 结构 / 原始），切换不重新请求，
+    顶部 KPI 与时间轴在三种呈现里都常驻。时间轴的色块可点，播放按钮可逐站回放。
   </p>
 
   <div class="frame">
@@ -814,11 +874,9 @@ heron-ai           → 进程 B（TUI），又 build 了一个 runtime，也写�
 
     <div class="frame-tabs" role="tablist">
       <button class="frame-tab" role="tab" aria-selected="true" data-screen="s-list">会话列表</button>
-      <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-detail">会话详情</button>
+      <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-record">会话记录</button>
       <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-wakeups">定时任务</button>
-      <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-trace">追踪</button>
       <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-status">状态</button>
-      <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-raw">事件流</button>
     </div>
 
     <div class="frame-body">
@@ -901,20 +959,76 @@ heron-ai           → 进程 B（TUI），又 build 了一个 runtime，也写�
         </div>
       </div>
 
-      <!-- ==================== 会话详情 ==================== -->
-      <div class="screen" id="s-detail">
+      <!-- ==================== 会话记录（一份数据，三种渲染） ==================== -->
+      <div class="screen" id="s-record">
         <div class="app-bar">
-          <div class="app-brand">heron-ai <small>default · /srv/miora</small></div>
+          <div class="app-brand">heron-ai <small>fs_a1b2c3 · default · /srv/miora</small></div>
           <div class="app-actions">
-            <span class="tag mono">fs_a1b2c3</span>
-            <button class="btn sm">状态</button>
+            <span class="tag ok">waiting_input</span>
+            <button class="btn sm">导出 Markdown</button>
+            <button class="btn sm">导出 JSONL</button>
           </div>
         </div>
 
-        <div class="banner" id="banner-detail" hidden>
-          <span>连接断开，3 秒后重连…（已有内容保留，不会清空）</span>
+        <div class="rec-kpi">
+          <div class="kpi"><div class="kpi-k">回合</div><div class="kpi-v">3</div></div>
+          <div class="kpi"><div class="kpi-k">步骤</div><div class="kpi-v">18</div></div>
+          <div class="kpi"><div class="kpi-k">工具调用</div><div class="kpi-v">3 <small>· 1 失败</small></div></div>
+          <div class="kpi"><div class="kpi-k">总耗时</div><div class="kpi-v">15.2s</div></div>
+          <div class="kpi"><div class="kpi-k">Token</div><div class="kpi-v">12.4k <small>in 8.2k</small></div></div>
+          <div class="kpi"><div class="kpi-k">压缩</div><div class="kpi-v">1 <small>18.4k→6.1k</small></div></div>
+          <div class="kpi"><div class="kpi-k">模型</div><div class="kpi-v" style="font-size:var(--fs-12)">claude-sonnet-4.6</div></div>
         </div>
 
+        <div class="rec-timeline">
+          <div class="rec-timeline-head">
+            <span class="rec-timeline-title">时间轴 · 33 个事件</span>
+            <div class="rec-play">
+              <button type="button" id="play-prev" title="上一个站点">◀</button>
+              <button type="button" id="play-toggle" title="播放">▶ 播放</button>
+              <button type="button" id="play-next" title="下一个站点">▶</button>
+              <button type="button" class="on" data-speed="1">1x</button>
+              <button type="button" data-speed="2">2x</button>
+              <button type="button" data-speed="4">4x</button>
+            </div>
+          </div>
+          <div class="minimap" id="minimap">
+            <i class="mm-user"    style="flex:2" data-seq="3"  title="用户输入 · seq 3"></i>
+            <i class="mm-step"    style="flex:3" data-seq="4"  title="TeamTurn + AgentTurn · seq 4-5"></i>
+            <i class="mm-step"    style="flex:2" data-seq="6"  title="模型响应 round 0 · seq 6"></i>
+            <i class="mm-tool"    style="flex:3" data-seq="7"  title="Bash 失败 · seq 7-8"></i>
+            <i class="mm-compact" style="flex:1" data-seq="9"  title="上下文压缩 · seq 9"></i>
+            <i class="mm-step"    style="flex:4" data-seq="10" title="邮箱投递 · seq 10-13"></i>
+            <i class="mm-step"    style="flex:2" data-seq="16" title="记录发布 · seq 16"></i>
+            <i class="mm-error"   style="flex:2" data-seq="18" title="回合结束，标记 intermediate · seq 18"></i>
+            <i class="mm-step"    style="flex:1" data-seq="20" title="记录消费 · seq 20"></i>
+            <i class="mm-wakeup"  style="flex:2" data-seq="22" title="定时检查触发 · seq 22-23"></i>
+            <i class="mm-tool"    style="flex:2" data-seq="26" title="Bash 重试成功 · seq 26"></i>
+            <i class="mm-step"    style="flex:6" data-seq="33" title="唤醒回合收尾 · seq 33"></i>
+            <div class="minimap-cursor" id="minimap-cursor" style="left:0%"></div>
+          </div>
+          <div class="mm-legend">
+            <span><b class="mm-user"></b>用户</span>
+            <span><b class="mm-step"></b>步骤</span>
+            <span><b class="mm-tool"></b>工具</span>
+            <span><b class="mm-compact"></b>压缩</span>
+            <span><b class="mm-error"></b>错误 / 中断</span>
+            <span><b class="mm-wakeup"></b>定时检查</span>
+          </div>
+        </div>
+
+        <div class="rec-modes">
+          <div class="seg" role="group" aria-label="呈现方式">
+            <button type="button" data-pane="chat" aria-pressed="true">对话</button>
+            <button type="button" data-pane="tree" aria-pressed="false">结构</button>
+            <button type="button" data-pane="raw" aria-pressed="false">原始</button>
+          </div>
+          <span class="hint" id="rec-hint">同一份记录，三种呈现。切换不重新请求数据。</span>
+          <span class="spacer"></span>
+          <button class="btn sm" type="button">在记录中搜索</button>
+        </div>
+
+        <div class="rec-pane active" data-pane="chat">
         <div class="detail-head">
           <span class="back">← 列表</span>
           <div>
@@ -1050,75 +1164,9 @@ packages/common/workspace-template/pnpm-lock.yaml:1:lockfileVersion: '9.0'
           </div>
           <div class="hint">连接正常 · 已收到 seq 33 · 最近事件 2 秒前</div>
         </div>
-      </div>
-
-      <!-- ==================== 定时任务 ==================== -->
-      <div class="screen" id="s-wakeups">
-        <div class="app-bar">
-          <div class="app-brand">heron-ai <small>定时任务</small></div>
-          <div class="app-actions"><span class="tag">全局 2 待触发</span></div>
         </div>
 
-        <div class="wakeup-table">
-          <div class="wakeup-row head">
-            <div>会话 / 备注</div><div>计划触发</div><div>状态</div><div></div>
-          </div>
-
-          <div class="wakeup-row">
-            <div>
-              <div>修复 miora 沙箱镜像构建失败</div>
-              <div class="wakeup-note">检查 mock 构建是否跑偏；如正常则向用户汇报一行进展</div>
-            </div>
-            <div class="wakeup-when">06:12<small>还有 4 分 12 秒</small></div>
-            <div><span class="tag warn">scheduled</span></div>
-            <div><button class="btn sm">取消</button></div>
-          </div>
-
-          <div class="wakeup-row">
-            <div>
-              <div>调研 ACP 协议在沙箱场景的可行性</div>
-              <div class="wakeup-note">两小时后看调研是否收敛，没收敛就缩小范围</div>
-            </div>
-            <div class="wakeup-when">08:40<small>还有 2 小时</small></div>
-            <div><span class="tag warn">scheduled</span></div>
-            <div><button class="btn sm">取消</button></div>
-          </div>
-
-          <div class="wakeup-row">
-            <div>
-              <div>修复 miora 沙箱镜像构建失败</div>
-              <div class="wakeup-note">检查 mock 构建是否跑偏</div>
-              <div class="wakeup-why">用户 70 秒前说过话，落在 5 分钟静默窗口内，已顺延</div>
-            </div>
-            <div class="wakeup-when">06:05<small>已推延至 06:10</small></div>
-            <div><span class="tag">skipped</span></div>
-            <div></div>
-          </div>
-
-          <div class="wakeup-row">
-            <div>
-              <div>补齐 sandbox-proxy 的失败重试</div>
-              <div class="wakeup-note">看 CI 是否绿</div>
-              <div class="wakeup-why">单链已达 20 次上限</div>
-            </div>
-            <div class="wakeup-when">昨天 18:40<small>不再触发</small></div>
-            <div><span class="tag danger">expired</span></div>
-            <div></div>
-          </div>
-        </div>
-      </div>
-
-
-      <!-- ==================== 追踪（执行树） ==================== -->
-      <div class="screen" id="s-trace">
-        <div class="app-bar">
-          <div class="app-brand">heron-ai <small>追踪 · fs_a1b2c3</small></div>
-          <div class="app-actions">
-            <span class="tag mono">2 个 FlowTurn</span>
-            <button class="btn sm">导出 JSON</button>
-          </div>
-        </div>
-
+        <div class="rec-pane" data-pane="tree">
         <div class="trace-layout">
           <div class="trace-tree">
             <div class="trace-filters">
@@ -1334,18 +1382,9 @@ packages/common/workspace-template/pnpm-lock.yaml:1:lockfileVersion: '9.0'
             </div>
           </div>
         </div>
-      </div>
-
-      <!-- ==================== 全量事件流 ==================== -->
-      <div class="screen" id="s-raw">
-        <div class="app-bar">
-          <div class="app-brand">heron-ai <small>事件流 · fs_a1b2c3</small></div>
-          <div class="app-actions">
-            <span class="tag mono">seq 1–33 · 33 条</span>
-            <button class="btn sm">导出 JSONL</button>
-          </div>
         </div>
 
+        <div class="rec-pane" data-pane="raw">
         <div class="raw-wrap">
           <div class="trace-filters" style="padding-left:0">
             <button class="chip" aria-pressed="true">全部 33</button>
@@ -1385,7 +1424,67 @@ packages/common/workspace-template/pnpm-lock.yaml:1:lockfileVersion: '9.0'
             显示 18 / 33 条。表格按 seq 递增，跨三层合并；点任意行展开完整 payload。
           </div>
         </div>
+        </div>
       </div>
+
+
+      <!-- ==================== 定时任务 ==================== -->
+      <div class="screen" id="s-wakeups">
+        <div class="app-bar">
+          <div class="app-brand">heron-ai <small>定时任务</small></div>
+          <div class="app-actions"><span class="tag">全局 2 待触发</span></div>
+        </div>
+
+        <div class="wakeup-table">
+          <div class="wakeup-row head">
+            <div>会话 / 备注</div><div>计划触发</div><div>状态</div><div></div>
+          </div>
+
+          <div class="wakeup-row">
+            <div>
+              <div>修复 miora 沙箱镜像构建失败</div>
+              <div class="wakeup-note">检查 mock 构建是否跑偏；如正常则向用户汇报一行进展</div>
+            </div>
+            <div class="wakeup-when">06:12<small>还有 4 分 12 秒</small></div>
+            <div><span class="tag warn">scheduled</span></div>
+            <div><button class="btn sm">取消</button></div>
+          </div>
+
+          <div class="wakeup-row">
+            <div>
+              <div>调研 ACP 协议在沙箱场景的可行性</div>
+              <div class="wakeup-note">两小时后看调研是否收敛，没收敛就缩小范围</div>
+            </div>
+            <div class="wakeup-when">08:40<small>还有 2 小时</small></div>
+            <div><span class="tag warn">scheduled</span></div>
+            <div><button class="btn sm">取消</button></div>
+          </div>
+
+          <div class="wakeup-row">
+            <div>
+              <div>修复 miora 沙箱镜像构建失败</div>
+              <div class="wakeup-note">检查 mock 构建是否跑偏</div>
+              <div class="wakeup-why">用户 70 秒前说过话，落在 5 分钟静默窗口内，已顺延</div>
+            </div>
+            <div class="wakeup-when">06:05<small>已推延至 06:10</small></div>
+            <div><span class="tag">skipped</span></div>
+            <div></div>
+          </div>
+
+          <div class="wakeup-row">
+            <div>
+              <div>补齐 sandbox-proxy 的失败重试</div>
+              <div class="wakeup-note">看 CI 是否绿</div>
+              <div class="wakeup-why">单链已达 20 次上限</div>
+            </div>
+            <div class="wakeup-when">昨天 18:40<small>不再触发</small></div>
+            <div><span class="tag danger">expired</span></div>
+            <div></div>
+          </div>
+        </div>
+      </div>
+
+
 
       <!-- ==================== 状态 ==================== -->
       <div class="screen" id="s-status">
@@ -2049,156 +2148,182 @@ proxy_read_timeout 3600s;</pre>
 
 
 <section id="trace">
-  <h2><span class="num">14</span>全量追踪</h2>
+  <h2><span class="num">14</span>会话记录：一份数据，三种呈现</h2>
   <p class="lead">
-    对话视图只回答了「说了什么」。要回答「引擎到底做了什么」，必须把执行树和全部事件摆出来——
-    这不是加一个页面，是把已经存在但被拍平的数据恢复成结构。
+    上一版把会话拆成三个视图、三个接口（history / trace / events），要拼起来才看得懂一次执行。
+    这是错的。引擎那边本来就是<strong>一份只增不改的记录</strong>——三层事件文件、session 级 seq、
+    完整的 scope 链；界面不该把它切开。
   </p>
 
-  <h3>14.1 数据盘点：53 类事件，对话层只用到 10 个</h3>
+  <h3>14.1 为什么必须是一份</h3>
+  <div class="grid c3">
+    <div class="card">
+      <div class="card-kicker">对照</div>
+      <h4>DeepSeek Harness 的做法</h4>
+      <p>一份 append-only 的会话日志记录模型看到的一切（系统提示、每轮思考、工具参数与结果、子 agent 调度、每次上下文注入），轨迹视图在一个页面里回溯。第三方插件把它渲染成横向时间轴 + minimap + 逐站回放。</p>
+    </div>
+    <div class="card">
+      <div class="card-kicker">heron 的现状</div>
+      <h4>数据已经是一份</h4>
+      <p><code>sessionID</code> 一个目录、三层 jsonl、<code>seq</code> 全局递增、<code>EventHeader</code> 带完整 scope 链。<code>eval.SessionFacts</code> 的注释就写着「the merged three-layer timeline」。</p>
+    </div>
+    <div class="card">
+      <div class="card-kicker">结论</div>
+      <h4>切分是在界面层自找麻烦</h4>
+      <p>三个接口意味着三次加载、三套分页、三份缓存，还得自己对齐时间。用户想知道「第 8 条事件前后发生了什么」，却要在三个页面之间跳。</p>
+    </div>
+  </div>
+
+  <h3>14.2 数据盘点：47 类事件都在这一份里</h3>
   <table>
-    <thead><tr><th>分组</th><th>事件</th><th>条数</th><th>当前展示</th><th>该去哪</th></tr></thead>
+    <thead><tr><th>分组</th><th>事件</th><th>条数</th><th>在记录里怎么出现</th></tr></thead>
     <tbody>
-      <tr><td>会话 / 回合</td><td><code>flow_session.*</code> <code>flow_turn.*</code></td><td>7</td><td>2</td><td>追踪 + 事件流</td></tr>
-      <tr><td>Team</td><td><code>team_session.*</code> <code>team_turn.*</code></td><td>7</td><td>1</td><td>追踪（TeamTurn 节点）</td></tr>
-      <tr><td>Call</td><td><code>agent_turn.*</code> <code>command_turn.*</code> <code>webhook_turn.*</code></td><td>10</td><td>2</td><td>追踪（Call 节点）</td></tr>
-      <tr><td>Agent</td><td><code>agent_session.*</code> <code>agent.feedback</code></td><td>3</td><td>0</td><td>追踪 + 事件流</td></tr>
-      <tr><td>工具 / 上下文</td><td><code>tool_call.*</code> <code>context.compacted</code></td><td>4</td><td>2</td><td>对话（工具行）+ 追踪（压缩）</td></tr>
-      <tr><td>邮箱</td><td><code>mailbox.message.*</code> <code>mailbox.batch.*</code></td><td>5</td><td>0</td><td>追踪（邮箱节点）</td></tr>
-      <tr><td>记录</td><td><code>shared_record.*</code></td><td>2</td><td>0</td><td>追踪（记录节点）</td></tr>
-      <tr><td>审批</td><td><code>approval.requested / resolved</code></td><td>2</td><td>0</td><td>对话（审批条）+ 追踪（生命周期）</td></tr>
-      <tr><td>恢复</td><td><code>recovery.requested / completed</code></td><td>2</td><td>0</td><td>追踪（中断与重试）</td></tr>
-      <tr><td>定时唤醒</td><td><code>wakeup.*</code></td><td>5</td><td>4</td><td>对话（标记）+ 定时任务页</td></tr>
-      <tr><td colspan="2"><strong>合计</strong></td><td><strong>47</strong></td><td><strong>11</strong></td><td></td></tr>
+      <tr><td>会话 / 回合</td><td><code>flow_session.*</code> <code>flow_turn.*</code></td><td>7</td><td>记录的回合边界；对话模式的段落分隔</td></tr>
+      <tr><td>Team</td><td><code>team_session.*</code> <code>team_turn.*</code></td><td>7</td><td>结构模式的 TeamTurn 节点</td></tr>
+      <tr><td>Call</td><td><code>*_turn.started/completed</code>（agent/command/webhook）</td><td>10</td><td>结构模式的 Call 节点</td></tr>
+      <tr><td>Agent</td><td><code>agent_session.*</code> <code>agent.feedback</code></td><td>3</td><td>结构模式的 AgentTurn 与转录归属</td></tr>
+      <tr><td>工具 / 上下文</td><td><code>tool_call.*</code> <code>context.compacted</code></td><td>4</td><td>对话模式的工具行；时间轴的紫色压缩块</td></tr>
+      <tr><td>邮箱</td><td><code>mailbox.*</code></td><td>5</td><td>结构模式的邮箱节点</td></tr>
+      <tr><td>记录</td><td><code>shared_record.*</code></td><td>2</td><td>结构模式的记录节点</td></tr>
+      <tr><td>审批</td><td><code>approval.*</code></td><td>2</td><td>对话模式的审批条 + 结构模式的节点</td></tr>
+      <tr><td>恢复</td><td><code>recovery.*</code></td><td>2</td><td>时间轴的黄色重试块</td></tr>
+      <tr><td>定时唤醒</td><td><code>wakeup.*</code></td><td>5</td><td>时间轴的琥珀块 + 对话模式的「定时检查」</td></tr>
     </tbody>
   </table>
   <p>
-    另外三类数据不在事件流里，需要时链接过去、不内嵌：
-    <code>.agents/data/logs/*.log</code>（执行日志）、<code>agent-transcripts/</code>（模型对话全文）、
-    <code>state.json</code>（会话状态快照）。
+    <strong>一条都不丢</strong>：原始模式里就是这 47 类的完整列表；结构模式把它们归到节点；对话模式只挑其中 11 类渲染成人能读的消息。
+    三种呈现读的是同一份数组。另外三类数据（<code>logs/</code>、<code>agent-transcripts/</code>、<code>state.json</code>）不在事件流里，挂链接、不内嵌。
   </p>
 
-  <h3>14.2 执行树：引擎已经有，别重造</h3>
-  <p>
-    <code>internal/eval/correlation.go</code> 里已经有一个把事件流折叠成执行树的实现：
-    <code>NewGraph(events []storage.SessionEvent) *Graph</code>，六类节点——
-  </p>
-  <div class="grid c3">
-    <div class="card"><h4>flow_session</h4><p>会话根。所有节点最终都挂在它下面。</p></div>
-    <div class="card"><h4>flow_turn</h4><p>一次请求/唤醒的完整回合。承载 <code>origin</code>、路由、输入。</p></div>
-    <div class="card"><h4>team_session</h4><p>Team 的长期状态，跨 turn 存活，所以挂在 flow_session 而不是某个 turn 上。</p></div>
-    <div class="card"><h4>team_turn</h4><p>一次 Team 执行：批次、<code>depends_on</code>、限流、路由。</p></div>
-    <div class="card"><h4>call_turn</h4><p>一次 Call 执行，<code>call_type</code> 区分 agent / command / webhook。</p></div>
-    <div class="card"><h4>agent_session</h4><p>Agent 的转录归属，从 <code>agent_session.created</code> 的 payload 里取。</p></div>
-  </div>
-
-  <p>每个节点带这些字段，直接够渲染：</p>
+  <h3>14.3 执行树：引擎已经有，别重造</h3>
+  <p><code>internal/eval/correlation.go</code> 的 <code>NewGraph(events) *Graph</code> 把时间线折成六类节点，字段直接够渲染：</p>
   <table>
     <thead><tr><th>字段</th><th>用途</th></tr></thead>
     <tbody>
-      <tr><td><code>Parent</code> / <code>Children</code></td><td>建树。<strong>归属按生命周期而非因果</strong>：team_session 挂 flow_session，team_turn 挂 flow_turn</td></tr>
-      <tr><td>五级 scope id</td><td><code>FlowSessionID / FlowTurnID / TeamSessionID / TeamTurnID / TeamID / CallID / AgentID</code>，任一节点都能回答"我跑在哪个 FlowTurn 里"</td></tr>
+      <tr><td><code>Parent</code> / <code>Children</code></td><td>建树。<strong>归属按生命周期</strong>：team_session 挂 flow_session，team_turn 挂 flow_turn</td></tr>
+      <tr><td>五级 scope id</td><td>任一节点都能回答「我跑在哪个 FlowTurn / 哪个 Team / 哪个 Call 里」</td></tr>
       <tr><td><code>Status</code></td><td>运行 / 完成 / 等待输入 / 等待工具 / 等待审批 / 失败</td></tr>
-      <tr><td><code>StartedAt</code> / <code>FinishedAt</code></td><td>耗时。<code>waiting_*</code> 也算结束——回合离开了 running，但可续</td></tr>
-      <tr><td><code>FirstSeq</code> / <code>LastSeq</code></td><td><strong>事件区间</strong>。点击节点就能取出它名下的事件；也只给最具体的那个节点记账，TeamTurn 的区间不覆盖它 Call 的事件</td></tr>
+      <tr><td><code>StartedAt</code> / <code>FinishedAt</code></td><td>耗时。<code>waiting_*</code> 也算离开 running，但可续</td></tr>
+      <tr><td><code>FirstSeq</code> / <code>LastSeq</code></td><td><strong>事件区间</strong>：点节点就能取出它名下的事件，且只给最具体的节点记账</td></tr>
       <tr><td><code>Attempt</code> / <code>RecoveryOf</code></td><td>重试与恢复的谱系</td></tr>
     </tbody>
   </table>
 
-  <div class="note">
+  <h3>14.4 三种呈现，一份游标</h3>
+  <table>
+    <thead><tr><th>呈现</th><th>看什么</th><th>切换时保留</th></tr></thead>
+    <tbody>
+      <tr><td><strong>对话</strong></td><td>人能读的消息流：输入、回复、工具行、交付物、审批</td><td rowspan="3">同一份事件数组；当前选中的 <code>seq</code>；滚动位置按 seq 还原</td></tr>
+      <tr><td><strong>结构</strong></td><td>执行树 + 节点详情（该节点名下的事件列表）</td></tr>
+      <tr><td><strong>原始</strong></td><td>合并后的完整事件表，含 payload</td></tr>
+    </tbody>
+  </table>
+  <p>
+    切换只换渲染函数，不重新请求。选中项跨呈现保持：在结构里点 <code>round 0</code>，切到原始会自动滚到 <code>seq 6</code>；
+    在对话里点一条工具行，切到结构会选中它所在的 round。
+  </p>
+
+  <h3>14.5 时间轴与回放</h3>
+  <dl class="spec">
+    <dt>minimap</dt><dd>一条水平色带，每段宽度按事件的真实耗时占比；颜色区分类型（用户=蓝、步骤=绿、工具=橙、压缩=紫、错误/中断=红、重试=黄、命令=青、定时检查=琥珀）。点任意色块跳到该站点。</dd>
+    <dt>游标</dt><dd>竖线指示"当前看到哪里"。拖动或按键移动时，主区自动定位到对应内容。</dd>
+    <dt>逐站</dt><dd><code>◀</code> / <code>▶</code> 上一步 / 下一步；键盘 <code>←</code> <code>→</code> 同效。</dd>
+    <dt>播放</dt><dd>自动按 1x / 2x / 4x 走完全程，用于快速浏览一次长执行的节奏。</dd>
+    <dt>KPI</dt><dd>回合数、步骤数、工具调用（含失败数）、总耗时、token（含输入）、压缩次数、模型。常驻在三种呈现之上。</dd>
+    <dt>搜索</dt><dd><code>/</code> 聚焦，输入工具名、参数、错误信息或事件类型；命中项在三种呈现里统一高亮。</dd>
+    <dt>导出</dt><dd>Markdown（人读的回溯文档）与 JSONL（原始记录）。导出的是同一份数据。</dd>
+  </dl>
+
+  <h3>14.6 原始请求：模型到底看到了什么</h3>
+  <p>
+    这是回溯里最容易被忽略、但排查 prompt 问题时最有用的一块。heron 已经有数据：
+    <code>AgentTranscript</code> 存在 <code>.agents/data/agent-transcripts/&lt;id&gt;.json</code>，
+    按 <code>flow_session_id + team_id + call_id + agent_id</code> 分文件，含累积的 <code>Messages</code> 与
+    <code>SystemHash</code>（系统提示变更检测）。
+  </p>
+  <p>记录页里，每个 <code>agent.model_response</code> 站点可以展开「原始请求」面板，显示：</p>
+  <ul>
+    <li>该轮之前重建的消息列表（从 transcript 截取到该轮）；</li>
+    <li>系统提示与工具目录（按 <code>SystemHash</code> 取对应版本的摘要）；</li>
+    <li>本次请求与上次的差异：新增/移除了哪些工具、注入了哪些 context 块；</li>
+    <li>token 明细（输入 / 输出 / 缓存命中）。</li>
+  </ul>
+  <div class="note warn">
     <div>
-      <strong>排序可以直接用 seq</strong>
-      <code>JSONLSessionWriter</code> 的 <code>nextSeq</code> 是按 <code>sessionID</code> 记的，不区分 layer——三层文件（<code>flow.jsonl</code> / <code>team.jsonl</code> / <code>agent.jsonl</code>）合并后按 seq 排就是全局时间线。不需要额外的时间戳排序，也不会有并列。
+      <strong>一个已知的精度限制</strong>
+      transcript 是「累积的消息列表」，不是「每次请求的完整快照」。要精确还原某一轮发了什么，需要按该轮的
+      <code>agent_turn_id</code> 截取前缀并重建系统提示。如果后续要做像素级复现，应在 <code>agent.model_response</code>
+      里补一条 <code>request_digest</code>（message 数、system hash、工具名列表、token），成本很低但能让重建免于猜测。
     </div>
   </div>
 
-  <h3>14.3 三个视图的分工</h3>
-  <table>
-    <thead><tr><th>视图</th><th>回答什么</th><th>数据</th><th>典型用户</th></tr></thead>
-    <tbody>
-      <tr><td><strong>对话</strong> <code>/s/{id}</code></td><td>说了什么、结果是什么</td><td>对话投影（11 类事件）</td><td>日常使用</td></tr>
-      <tr><td><strong>追踪</strong> <code>/s/{id}/trace</code></td><td>谁在什么时候做了什么、卡在哪</td><td>执行树 + 每节点事件</td><td>排查"为什么慢/为什么错"</td></tr>
-      <tr><td><strong>事件流</strong> <code>/s/{id}/events</code></td><td>原始的每一条事件</td><td>全量 47 类，含 payload</td><td>对账、复现、导出</td></tr>
-    </tbody>
-  </table>
-
-  <h3>14.4 对话 ↔ 追踪的双向跳转</h3>
-  <ul>
-    <li><strong>对话 → 追踪</strong>：每条消息的右上角「查看追踪」，跳到该回合的 FlowTurn 节点（用消息对应的 <code>flow_turn_id</code> 定位）。</li>
-    <li><strong>追踪 → 对话</strong>：节点详情里的「在对话中查看」，滚到对应消息。</li>
-    <li><strong>工具行 → 追踪</strong>：工具调用行尾的 <code>seq</code> 可点，直接选中该 <code>tool_call</code> 事件所在的 round。</li>
-    <li><strong>不做的</strong>：不做"追踪里内嵌对话气泡"。两个视图的数据结构不同，互相嵌入会让两边都难维护。</li>
-  </ul>
-
-  <h3>14.5 加载与性能</h3>
-  <table>
-    <thead><tr><th>问题</th><th>做法</th></tr></thead>
-    <tbody>
-      <tr><td>会话跑一天有几千条事件</td><td>追踪页默认只折叠到 FlowTurn 层；点开才拉该子树（<code>?root={node_id}</code>），不一次全取</td></tr>
-      <tr><td>事件流页太重</td><td>服务端分页 <code>?after_seq=&amp;limit=200</code>；只渲染 200 行，滚动到底再取</td></tr>
-      <tr><td>payload 很大（工具输出几 MB）</td><td>列表只显示摘要；点开单条才取完整 payload（<code>?include_payload=1</code>），超过 256 KB 截断并提示下载</td></tr>
-      <tr><td>实时追加</td><td>追踪页订阅同一条 SSE；新事件到达时按 <code>seq</code> 归到对应节点，已展开的节点就地追加</td></tr>
-      <tr><td>深链</td><td><code>/s/{id}/trace?node=call_answer</code>、<code>?focus=seq:8</code> 可直接定位，便于贴给别人看</td></tr>
-    </tbody>
-  </table>
-
-  <h3>14.6 新增 API</h3>
-  <pre><span class="k">GET</span> /api/sessions/{id}/trace?root={node_id}&amp;depth=2
+  <h3>14.7 一个主接口，不是三个</h3>
+  <pre><span class="k">GET</span> /api/sessions/{id}/record?after_seq=0&amp;limit=500
 
 <span class="k">200</span>
 {
-  "nodes": [
-    {
-      "id": "call_answer",
-      "kind": "call_turn",
-      "parent": "tt_5eed9d",
-      "children": ["at_b31c"],
-      "scope": {"flow_session_id": "fs_a1b2c3", "flow_turn_id": "ft_fa13d378",
-                "team_session_id": "fs_a1b2c3:default", "team_turn_id": "tt_5eed9d",
-                "team_id": "default", "call_id": "answer", "agent_id": "assistant"},
-      "status": "completed",
-      "started_at": "2026-11-02T04:12:03.342Z",
-      "finished_at": "2026-11-02T04:12:08.710Z",
-      "first_seq": 4,
-      "last_seq": 19,
-      "attempt": 1,
-      "recovery_of": ""
-    }
+  "session": {"id": "fs_a1b2c3", "status": "waiting_input", "flow_id": "default"},
+  "events": [
+    {"seq": 47, "type": "tool_call.failed", "layer": "agent",
+     "flow_turn_id": "ft_fa13d378", "team_turn_id": "tt_5eed9d", "call_turn_id": "ct_9a1",
+     "created_at": "2026-11-02T04:12:07.820Z",
+     "payload": {"tool_name": "Bash", "error": "exit=2 …"}}
   ],
-  "facts": {
-    "tokens": {"input": 8200, "output": 4200},
-    "tool_calls": 3,
-    "tool_failures": 1,
-    "compactions": 1,
-    "records": 1,
-    "mailbox_messages": 2
-  }
-}
-
-<span class="k">GET</span> /api/sessions/{id}/events?after_seq=0&amp;limit=200&amp;types=tool_call.failed,approval.*&amp;include_payload=0
-<span class="k">200</span> { "events": [ … ], "next_seq": 201, "total": 33 }</pre>
+  "nodes": [ {"id": "ft_fa13d378", "kind": "flow_turn", "parent": "fs_a1b2c3",
+              "first_seq": 3, "last_seq": 18, "status": "waiting_input",
+              "started_at": "…", "finished_at": "…", "attempt": 1} ],
+  "facts": {"turns": 3, "steps": 18, "tool_calls": 3, "tool_failures": 1,
+            "tokens": {"input": 8200, "output": 4200}, "compactions": 1,
+            "models": ["claude-sonnet-4.6"]},
+  "next_seq": 501,
+  "latest_seq": 502
+}</pre>
+  <p>三个配套参数，都不是新接口：</p>
+  <table>
+    <thead><tr><th>参数 / 通道</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>after_seq</code> + <code>limit</code></td><td>分页读历史。默认 500 条一段，前端按 seq 拼接成同一份数组</td></tr>
+      <tr><td><code>include_payload=seq:7,8</code></td><td>payload 按需取（工具输出可能几 MB）。默认只返回 512 字节摘要</td></tr>
+      <tr><td><code>/api/stream?follow=1</code> + <code>Last-Event-ID</code></td><td>增量：新事件追加到同一份记录，前端不重拉</td></tr>
+    </tbody>
+  </table>
   <p>
-    <code>trace</code> 直接复用 <code>eval.NewGraph</code> 与 <code>SessionFacts</code>，只做 JSON 投影；
-    <code>events</code> 复用 <code>storage.Replay</code> + 过滤。两者都是只读，不碰 runtime 状态。
+    <code>record</code> 的内部实现：<code>storage.Replay</code> 读三层 → <code>eval.NewGraph</code> 建树 →
+    <code>eval.SessionFacts</code> 算 KPI。全部只读，不碰 runtime 状态。
   </p>
 
-  <h3>14.7 阶段</h3>
+  <h3>14.8 加载与性能</h3>
+  <table>
+    <thead><tr><th>问题</th><th>做法</th></tr></thead>
+    <tbody>
+      <tr><td>跑一天的会话几千条事件</td><td>首次只取最近 500 条 + <code>latest_seq</code>；向上滚动加载更早的，按 seq 前插</td></tr>
+      <tr><td>三种呈现同时存在</td><td>只有当前呈现渲染 DOM；另外两个保留数据不建节点（切换时重建，实测 &lt; 50ms）</td></tr>
+      <tr><td>原始模式行数太多</td><td>虚拟滚动，只渲染视口内约 60 行</td></tr>
+      <tr><td>payload 很大</td><td>默认摘要 512 字节；点开单条才取全量，超 256 KB 截断并给下载链接</td></tr>
+      <tr><td>实时追加打断阅读</td><td>用户停留在历史位置时，新事件只更新顶部「有 N 条新事件」提示，不自动滚动</td></tr>
+      <tr><td>深链</td><td><code>/s/{id}?seq=47&amp;mode=tree</code> 直接定位到某条事件的某种呈现</td></tr>
+    </tbody>
+  </table>
+
+  <h3>14.9 阶段</h3>
   <table>
     <thead><tr><th>阶段</th><th>内容</th><th>验收</th></tr></thead>
     <tbody>
-      <tr><td><strong>P2</strong></td><td>追踪页（树 + 节点详情）、<code>/trace</code> 接口</td><td>打开一个跑完的会话，能看到 FlowTurn → TeamTurn → Call → AgentTurn → Round 五层，点节点能看到它名下的事件</td></tr>
-      <tr><td><strong>P2</strong></td><td>事件流页、<code>/events</code> 接口</td><td>47 类事件都能看到，按层/类型/失败过滤生效，导出 JSONL 与环境里 <code>flow.jsonl</code> 逐行一致</td></tr>
-      <tr><td><strong>P3</strong></td><td>对话 ↔ 追踪跳转、深链</td><td>从一条消息跳到它的 FlowTurn 节点；把链接贴给别人，打开就停在同一节点</td></tr>
-      <tr><td><strong>P4</strong></td><td>大 payload 按需加载、子树懒加载</td><td>一个 5000 事件的会话，首屏加载 < 300ms</td></tr>
+      <tr><td><strong>P1b</strong></td><td><code>/record</code> 接口；记录页三呈现；KPI</td><td>打开一个跑完的会话，能在对话/结构/原始之间切换且不重新请求；KPI 与 <code>eval.SessionFacts</code> 对得上</td></tr>
+      <tr><td><strong>P2</strong></td><td>时间轴 minimap + 逐站 + 播放 + 搜索</td><td>点色块跳到该站点；播放能按 1x 走完；<code>/</code> 搜索命中三种呈现</td></tr>
+      <tr><td><strong>P2</strong></td><td>原始请求面板（transcript 重建）</td><td>展开任一 <code>model_response</code> 能看到该轮的消息前缀、系统提示版本、工具目录、token 明细</td></tr>
+      <tr><td><strong>P3</strong></td><td>对话 ↔ 结构 ↔ 原始 的选中同步；深链</td><td>在结构里点 round 0，切到原始自动滚到 seq 6；把链接贴给别人，打开停在同一位置</td></tr>
+      <tr><td><strong>P4</strong></td><td>分页 + 虚拟滚动 + payload 按需</td><td>5000 条事件的会话首屏 &lt; 300ms，滚动不卡</td></tr>
     </tbody>
   </table>
 
   <div class="note danger">
     <div>
-      <strong>这一节纠正了上一版的判断</strong>
-      上一版把「展示 agent 做了什么」理解成"把对话渲染出来"，于是 47 类事件只画了 11 类，
-      执行结构被拍平成一条消息列表。但实际上引擎早就有执行树抽象（<code>eval.Graph</code>），
-      只是没暴露给界面。追踪视图不是新造数据，是把已有的结构还原出来。
+      <strong>这一节修正了上一版的两个判断</strong>
+      ① 把「展示 agent 做了什么」理解成"把对话渲染出来"，47 类事件只画 11 类；
+      ② 发现数据不完整后，又把它拆成三个视图、三个接口——等于在界面层复制了三份索引。
+      正确的形态是：<strong>引擎的一份记录 → 一个接口 → 一个页面 → 三种渲染</strong>。
+      追踪不是另一个产品，它是同一条记录的另一种读法。
     </div>
   </div>
 </section>
@@ -2238,11 +2363,9 @@ proxy_read_timeout 3600s;</pre>
   var urlBar = document.getElementById("frame-url");
   var URLS = {
     "s-list": "http://127.0.0.1:8080/",
-    "s-detail": "http://127.0.0.1:8080/s/fs_a1b2c3",
+    "s-record": "http://127.0.0.1:8080/s/fs_a1b2c3",
     "s-wakeups": "http://127.0.0.1:8080/wakeups",
-    "s-trace": "http://127.0.0.1:8080/s/fs_a1b2c3/trace",
-    "s-status": "http://127.0.0.1:8080/status",
-    "s-raw": "http://127.0.0.1:8080/s/fs_a1b2c3/events"
+    "s-status": "http://127.0.0.1:8080/status"
   };
 
   function showScreen(id) {
@@ -2332,7 +2455,7 @@ proxy_read_timeout 3600s;</pre>
 
   function sendDraft() {
     if (!box || box.value.trim() === "") { return; }
-    var timeline = document.querySelector("#s-detail .timeline");
+    var timeline = document.querySelector('#s-record .rec-pane[data-pane="chat"] .timeline');
     if (!timeline) { return; }
 
     var wrap = document.createElement("div");
@@ -2420,6 +2543,89 @@ proxy_read_timeout 3600s;</pre>
       });
     });
   });
+
+  /* ---------- 原型：会话记录的三种呈现 ---------- */
+  var paneButtons = Array.prototype.slice.call(document.querySelectorAll(".seg button[data-pane]"));
+  var panes = Array.prototype.slice.call(document.querySelectorAll("#s-record .rec-pane"));
+  var recHint = document.getElementById("rec-hint");
+  var HINTS = {
+    chat: "同一份记录，三种呈现。切换不重新请求数据。",
+    tree: "结构视图：FlowTurn → TeamTurn → Call → AgentTurn → Round，点节点看它名下的事件。",
+    raw: "原始视图：三层事件按 seq 合并后的完整列表。点任意行展开 payload。"
+  };
+
+  function showPane(name) {
+    paneButtons.forEach(function (button) {
+      button.setAttribute("aria-pressed", button.getAttribute("data-pane") === name ? "true" : "false");
+    });
+    panes.forEach(function (pane) {
+      pane.classList.toggle("active", pane.getAttribute("data-pane") === name);
+    });
+    if (recHint && HINTS[name]) { recHint.textContent = HINTS[name]; }
+  }
+
+  paneButtons.forEach(function (button) {
+    button.addEventListener("click", function () { showPane(button.getAttribute("data-pane")); });
+  });
+
+  /* ---------- 原型：时间轴回放 ---------- */
+  var stations = Array.prototype.slice.call(document.querySelectorAll("#minimap i"));
+  var cursor = document.getElementById("minimap-cursor");
+  var playPrev = document.getElementById("play-prev");
+  var playNext = document.getElementById("play-next");
+  var playToggle = document.getElementById("play-toggle");
+  var speedButtons = Array.prototype.slice.call(document.querySelectorAll(".rec-play [data-speed]"));
+  var stationIndex = 0;
+  var playTimer = null;
+  var speed = 1;
+
+  function selectStation(index) {
+    if (!stations.length) { return; }
+    stationIndex = Math.max(0, Math.min(stations.length - 1, index));
+    stations.forEach(function (item, i) {
+      item.style.opacity = i === stationIndex ? "1" : ".55";
+      item.style.outline = i === stationIndex ? "1px solid var(--c-text)" : "";
+      item.style.outlineOffset = "-1px";
+    });
+    if (cursor) {
+      var total = stations.length;
+      var pct = total === 1 ? 0 : (stationIndex / (total - 1)) * 100;
+      cursor.style.left = "calc(" + pct + "% - 1px)";
+    }
+  }
+
+  stations.forEach(function (item, i) {
+    item.addEventListener("click", function () { stopPlay(); selectStation(i); });
+  });
+  if (playPrev) { playPrev.addEventListener("click", function () { stopPlay(); selectStation(stationIndex - 1); }); }
+  if (playNext) { playNext.addEventListener("click", function () { stopPlay(); selectStation(stationIndex + 1); }); }
+
+  function stopPlay() {
+    if (playTimer) { clearInterval(playTimer); playTimer = null; }
+    if (playToggle) { playToggle.textContent = "▶ 播放"; playToggle.classList.remove("on"); }
+  }
+
+  if (playToggle) {
+    playToggle.addEventListener("click", function () {
+      if (playTimer) { stopPlay(); return; }
+      playToggle.textContent = "⏸ 暂停";
+      playToggle.classList.add("on");
+      playTimer = setInterval(function () {
+        if (stationIndex >= stations.length - 1) { stopPlay(); return; }
+        selectStation(stationIndex + 1);
+      }, 900 / speed);
+    });
+  }
+
+  speedButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      speed = Number(button.getAttribute("data-speed")) || 1;
+      speedButtons.forEach(function (other) { other.classList.toggle("on", other === button); });
+      if (playTimer) { stopPlay(); playToggle.click(); }
+    });
+  });
+
+  if (stations.length) { selectStation(0); }
 
   /* ---------- 文档：目录高亮 ---------- */
   var links = Array.prototype.slice.call(document.querySelectorAll(".toc a"));

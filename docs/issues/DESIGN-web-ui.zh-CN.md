@@ -315,25 +315,31 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 
 列表的 `Active` 来自 `sessionlist` 按 `flow_turn.*` 事件的派生判断（不读 `session.status`——它在 `flow.jsonl` 里停在 `running` 不回写）。页面只显示，不重新推导。
 
-### 4.8 全量追踪：对话只是投影，不是全部
+### 4.8 会话记录：一份数据，三种呈现
 
-引擎产生 **47 类事件**，而对话视图只用到 11 类。剩下的是执行结构：Team 批次、Call、AgentTurn 的每一轮、邮箱消息、共享记录、上下文压缩、审批生命周期、恢复与重试。
+引擎那边本来就是**一份只增不改的记录**：一个 `sessionID` 目录、三层 jsonl（flow/team/agent）、`seq` 全局递增、`EventHeader` 带完整 scope 链。`eval.SessionFacts` 的注释就写着「the merged three-layer timeline」。
 
-这些不展示，"agent 做了什么"就只回答了一半。所以除对话页外，还需要两个视图：
+所以界面不该把它切开。上一版拆成三个视图、三个接口（history / trace / events），等于在界面层复制了三份索引——用户想知道「第 8 条事件前后发生了什么」，却要在三个页面之间跳。
 
-| 视图 | 回答什么 | 数据 |
+正确形态：**一份记录 → 一个接口 → 一个页面 → 三种渲染**。
+
+| 呈现 | 看什么 | 切换时保留 |
 |---|---|---|
-| 对话 `/s/{id}` | 说了什么、结果是什么 | 对话投影（11 类事件） |
-| **追踪** `/s/{id}/trace` | 谁在什么时候做了什么、卡在哪 | 执行树 + 每节点事件 |
-| **事件流** `/s/{id}/events` | 原始的每一条事件 | 全量 47 类，含 payload |
+| 对话 | 人能读的消息流（11 类事件） | 同一份事件数组、当前选中 seq、按 seq 还原的滚动位置 |
+| 结构 | 执行树 + 节点详情（`eval.NewGraph`） | 同上 |
+| 原始 | 合并后的完整事件表（47 类，含 payload） | 同上 |
 
-**执行树不用新造**：`internal/eval/correlation.go` 已经有 `NewGraph(events) *Graph`，六类节点（flow_session / flow_turn / team_session / team_turn / call_turn / agent_session），每个节点带五个 scope id、状态、起止时间、`FirstSeq/LastSeq`（事件区间）、`Attempt/RecoveryOf`（重试与恢复谱系）。追踪页只做 JSON 投影。
+顶部常驻的还有：
 
-**排序直接用 seq**：`JSONLSessionWriter.nextSeq` 按 `sessionID` 记，不区分 layer。三层文件（`flow.jsonl` / `team.jsonl` / `agent.jsonl`）合并后按 seq 排就是全局时间线，没有并列也不需要再按时间戳排。
+- **KPI**：回合、步骤、工具调用（含失败）、总耗时、token、压缩次数、模型；
+- **时间轴 minimap**：色带按真实耗时占比，颜色区分用户/步骤/工具/压缩/错误/重试/定时检查，点色块跳站点；
+- **回放**：`◀` `▶` 逐站、1x/2x/4x 播放、`/` 搜索、导出 Markdown 与 JSONL。
 
-**双向跳转**：消息 →「查看追踪」定位到对应 FlowTurn 节点；节点 →「在对话中查看」滚到消息；工具行尾的 seq 可点，直接选中所在的 round。
+**原始请求面板**是回溯里最有用的一块：`AgentTranscript` 已存在 `.agents/data/agent-transcripts/`，按 `flow_session_id + team_id + call_id + agent_id` 分文件，含累积的 `Messages` 与 `SystemHash`。展开任一 `agent.model_response` 能看到该轮的消息前缀、系统提示版本、工具目录、token 明细。
 
-界面细节（树的形态、节点详情字段、加载策略、API 契约）见 HTML 版 §14。
+**一个精度限制**：transcript 是累积列表，不是每次请求的快照。要精确复现某一轮，需按 `agent_turn_id` 截取前缀并重建系统提示。后续可在 `agent.model_response` 里补一条 `request_digest`（message 数、system hash、工具名列表、token），成本低但能让重建免于猜测。
+
+界面细节（三种呈现的布局、时间轴、节点详情字段、加载策略）见 HTML 版 §14。
 
 ---
 
@@ -343,8 +349,7 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 |---|---|---|---|
 | `/api/sessions` | GET | `sessionlist.List`（`list.go:47`） | 列表，支持 `?active=1`、`?limit=` |
 | `/api/sessions/{id}/history` | GET | `sessionlist.History`（`history.go:47`） | 历史，支持 `?after_seq=` |
-| `/api/sessions/{id}/trace` | GET | `eval.NewGraph` + `SessionFacts` | 执行树，支持 `?root=`、`?depth=` |
-| `/api/sessions/{id}/events` | GET | `storage.Replay` | 全量事件，支持 `?after_seq=`、`?limit=`、`?types=`、`?include_payload=` |
+| `/api/sessions/{id}/record` | GET | `storage.Replay` + `eval.NewGraph` + `eval.SessionFacts` | **唯一的记录接口**：合并三层事件 + 执行树 + KPI。分页 `?after_seq=&limit=`，payload 按需 `?include_payload=seq:7`；增量走 `/api/stream?follow=1` |
 | `/api/wakeups` | GET | runtime 的 wakeup index | 支持 `?session_id=`、`?status=` |
 | `/api/wakeups/{id}` | DELETE | `Runtime.CancelWakeup` | 页面取消定时 |
 | `/api/login` | POST | token 校验 | 换 cookie（仅非 loopback） |
@@ -374,7 +379,8 @@ connect 的价值收窄为「IM 平台接入 + 多用户/权限/展示」，不�
 | 阶段 | 内容 | 验收（可复现） |
 |---|---|---|
 | **P0 只读可看** | 静态托管 + `/api/sessions` + `/api/sessions/{id}/history` + 列表页 + 详情页（历史 + SSE 实时） | `--serve` 起一个会话并让它跑，浏览器打开：会话出现在列表，点进去能看到历史与**正在产生**的输出（工具调用逐条出现） |
-| **P1b 追踪** | `/api/sessions/{id}/trace` + `/api/sessions/{id}/events`；追踪页（树 + 节点详情）；事件流页 | 打开一个跑完的会话，能看到 FlowTurn → TeamTurn → Call → AgentTurn → Round 五层；47 类事件都能按层/类型过滤，导出 JSONL 与 `flow.jsonl` 逐行一致 |
+| **P1b 会话记录** | `/api/sessions/{id}/record`；记录页三呈现（对话/结构/原始）；KPI | 打开一个跑完的会话，三种呈现之间切换不重新请求；KPI 与 `eval.SessionFacts` 对得上 |
+| **P2 时间轴** | minimap + 逐站 + 播放 + 搜索 + 原始请求面板 | 点色块跳到站点；播放按 1x 走完；展开任一 `model_response` 能看到该轮消息前缀与系统提示版本 |
 | **P1 能操作** | 发消息、审批、取消；输入框与审批条 | 页面发一句 → CLI 侧同一会话看到；触发审批时页面出现审批条，允许后会话继续 |
 | **P2 主动能力可见** | `/api/wakeups` + 取消；定时任务面板；`origin=wakeup` 样式与未读 | 登记 2 分钟唤醒 → 页面显示"2 分钟后"→ 到点出现带标识的检查回合，列表页出现未读徽标 |
 | **P3 执行权收敛** | 拆 `buildCurrentRuntime` 与"起 HTTP / 跑 TUI"；无参数时同进程双前端；新增 `attach` | 两个终端（`--serve` + `attach`）共享一个引擎，页面实时同步；`flow.jsonl` 的 seq 连续无重复；Ctrl-C 后端口释放 |
