@@ -2448,8 +2448,8 @@ proxy_read_timeout 3600s;</pre>
     <tbody>
       <tr>
         <td><code>max_team_turns</code></td><td>100</td>
-        <td><strong>两条路径两个窗口</strong>：同步路径按「本回合」计；mailbox 路径按「整个会话」累计</td>
-        <td>同步：该回合失败；mailbox：消息标 dead，会话不再派活</td>
+        <td><strong>按单个 FlowTurn</strong> 计。会话级对应项已被刻意删除</td>
+        <td>该回合失败，会话可以开始新的回合</td>
       </tr>
       <tr>
         <td><code>max_calls_per_team_turn</code></td><td>100</td>
@@ -2463,6 +2463,11 @@ proxy_read_timeout 3600s;</pre>
       </tr>
     </tbody>
   </table>
+  <p>
+    <strong>为什么没有会话级上限</strong>：曾经有一条「会话累计 TeamTurn 数」的检查，但 mailbox 里跑的只有用户排队输入，
+    这条限制实际等于「一个会话里用户能聊多少轮」——聊够 100 轮后会话不再接受输入。防 runaway 的职责交给
+    单回合上限与「同一对 Team 反复派活」的计数，而不是会话总量。
+  </p>
   <p>
     所以「树的节点数」受 <code>max_team_turns</code> 与 <code>max_calls_per_team_turn</code> 约束，量级可控；
     而「事件数」还要乘 <code>max_agent_rounds</code>，量级不可控——<strong>这正是分层（骨架全量 / 事件分页 / payload 按需）的依据</strong>。

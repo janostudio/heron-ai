@@ -349,9 +349,11 @@ agent 的输出包含任意文本、代码块，有时是模型生成的 HTML/JS
 
 | 限制 | 默认 | 计量窗口 | 超限后果 |
 |---|---|---|---|
-| `max_team_turns` | 100 | **两条路径两个窗口**：同步路径按本回合计；mailbox 路径按整个会话累计 | 同步：回合失败；mailbox：消息标 dead，会话不再派活 |
+| `max_team_turns` | 100 | **按单个 FlowTurn**；会话级对应项已被刻意删除 | 该回合失败，会话可开始新回合 |
 | `max_calls_per_team_turn` | 100 | 单个 TeamTurn | 不失败，转 `coordinate` 交激活方决策 |
 | `max_agent_rounds` | 200 | 单个 AgentTurn（与 `loop.max_rounds`、`budget.max_model_rounds` 取最小） | 回合结束（截断） |
+
+为什么没有会话级上限：曾有一条「会话累计 TeamTurn 数」的检查，但 mailbox 里跑的只有用户排队输入，这条限制实际等于「一个会话里用户能聊多少轮」——聊够 100 轮后不再接受输入。防 runaway 交给单回合上限与「同一对 Team 反复派活」的计数。
 
 所以：树的节点数受前两者约束、量级可控；事件数还要乘轮数、量级不可控——这正是分层的依据。
 
