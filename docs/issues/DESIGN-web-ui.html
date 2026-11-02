@@ -1,0 +1,1908 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>heron-ai 服务化部署与 Web 页面 · 设计稿</title>
+<style>
+/* ============================================================
+   设计令牌（Design Tokens）
+   所有尺寸走 4px 网格；颜色只从这里取，组件里不写裸值。
+   ============================================================ */
+:root {
+  /* 中性色阶 */
+  --c-bg:            #ffffff;
+  --c-bg-subtle:     #f7f8fa;
+  --c-bg-sunken:     #eef0f4;
+  --c-bg-elevated:   #ffffff;
+  --c-border:        #e4e7ec;
+  --c-border-strong: #cfd4dc;
+  --c-text:          #101828;
+  --c-text-muted:    #667085;
+  --c-text-faint:    #98a2b3;
+
+  /* 语义色 */
+  --c-accent:        #2456e6;
+  --c-accent-hover:  #1c46bd;
+  --c-accent-soft:   #eef3ff;
+  --c-ok:            #067647;
+  --c-ok-soft:       #ecfdf3;
+  --c-warn:          #b54708;
+  --c-warn-soft:     #fffaeb;
+  --c-warn-line:     #f79009;
+  --c-danger:        #b42318;
+  --c-danger-soft:   #fef3f2;
+  --c-neutral-soft:  #f2f4f7;
+
+  /* 排版 */
+  --f-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+            "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  /* 尾部的中文字体是回退：mono 元素里一旦混入中文，不至于渲染成方块。
+     代价是这些中文不等宽——所以「含中文的标签」一律不用 mono，见各组件规格。 */
+  --f-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+            "Liberation Mono", "PingFang SC", "Hiragino Sans GB",
+            "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", monospace;
+  --fs-11: 11px;  --fs-12: 12px;  --fs-13: 13px;  --fs-14: 14px;
+  --fs-16: 16px;  --fs-20: 20px;  --fs-24: 24px;
+  --lh-tight: 1.35; --lh-base: 1.6;
+
+  /* 间距（4px 网格） */
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 20px; --s6: 24px; --s8: 32px; --s10: 40px; --s12: 48px;
+
+  /* 形状 */
+  --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-full: 999px;
+  --shadow-sm: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.10);
+  --shadow-md: 0 4px 8px -2px rgba(16,24,40,.10), 0 2px 4px -2px rgba(16,24,40,.06);
+  --shadow-lg: 0 12px 16px -4px rgba(16,24,40,.08), 0 4px 6px -2px rgba(16,24,40,.03);
+}
+
+html[data-theme="dark"] {
+  --c-bg:            #0d1117;
+  --c-bg-subtle:     #161b22;
+  --c-bg-sunken:     #21262d;
+  --c-bg-elevated:   #161b22;
+  --c-border:        #30363d;
+  --c-border-strong: #3d444d;
+  --c-text:          #e6edf3;
+  --c-text-muted:    #9198a1;
+  --c-text-faint:    #6e7681;
+
+  --c-accent:        #4c8dff;
+  --c-accent-hover:  #6aa1ff;
+  --c-accent-soft:   #121f3d;
+  --c-ok:            #3fb950;
+  --c-ok-soft:       #0f2a1a;
+  --c-warn:          #d29922;
+  --c-warn-soft:     #2a1f07;
+  --c-warn-line:     #d29922;
+  --c-danger:        #f85149;
+  --c-danger-soft:   #2d1214;
+  --c-neutral-soft:  #21262d;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.4);
+  --shadow-md: 0 4px 8px -2px rgba(0,0,0,.5);
+  --shadow-lg: 0 12px 16px -4px rgba(0,0,0,.6);
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  font-family: var(--f-sans);
+  font-size: var(--fs-14);
+  line-height: var(--lh-base);
+  color: var(--c-text);
+  background: var(--c-bg);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--c-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre, .mono { font-family: var(--f-mono); font-size: 0.92em; }
+:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; border-radius: var(--r-sm); }
+
+/* ============================================================
+   文档骨架：左侧目录 + 右侧内容
+   ============================================================ */
+.doc { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
+
+.toc {
+  position: sticky; top: 0; align-self: start;
+  height: 100vh; overflow-y: auto;
+  padding: var(--s5) var(--s4);
+  border-right: 1px solid var(--c-border);
+  background: var(--c-bg-subtle);
+}
+.toc-brand { font-weight: 650; font-size: var(--fs-14); letter-spacing: -.01em; }
+.toc-sub { color: var(--c-text-muted); font-size: var(--fs-12); margin-top: 2px; margin-bottom: var(--s5); }
+.toc-group { margin-top: var(--s5); }
+.toc-group-title {
+  font-size: var(--fs-11); font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--c-text-faint);
+  margin-bottom: var(--s2);
+}
+.toc a {
+  display: block; padding: 5px var(--s2); margin-left: calc(var(--s2) * -1);
+  border-radius: var(--r-sm); color: var(--c-text-muted); font-size: var(--fs-13);
+}
+.toc a:hover { background: var(--c-bg-sunken); color: var(--c-text); text-decoration: none; }
+.toc a.active { background: var(--c-accent-soft); color: var(--c-accent); font-weight: 550; }
+
+.main { padding: var(--s8) var(--s8) var(--s12); max-width: 1120px; }
+
+.doc-head { border-bottom: 1px solid var(--c-border); padding-bottom: var(--s5); margin-bottom: var(--s8); }
+.doc-kicker {
+  display: inline-flex; align-items: center; gap: var(--s2);
+  font-size: var(--fs-12); color: var(--c-text-muted);
+  background: var(--c-bg-subtle); border: 1px solid var(--c-border);
+  padding: 2px var(--s2); border-radius: var(--r-full); margin-bottom: var(--s3);
+}
+.dot { width: 6px; height: 6px; border-radius: var(--r-full); background: var(--c-warn-line); }
+h1 { font-size: var(--fs-24); line-height: var(--lh-tight); letter-spacing: -.02em; margin: 0 0 var(--s2); }
+.doc-desc { color: var(--c-text-muted); margin: 0; max-width: 68ch; }
+
+section { margin-bottom: var(--s12); scroll-margin-top: var(--s5); }
+h2 {
+  font-size: var(--fs-20); letter-spacing: -.01em; line-height: var(--lh-tight);
+  margin: 0 0 var(--s2); padding-top: var(--s2);
+  display: flex; align-items: baseline; gap: var(--s2);
+}
+h2 .num {
+  font-size: var(--fs-12); font-weight: 600; color: var(--c-accent);
+  background: var(--c-accent-soft); border-radius: var(--r-sm);
+  padding: 1px 6px; font-family: var(--f-mono);
+}
+h3 { font-size: var(--fs-16); margin: var(--s6) 0 var(--s3); letter-spacing: -.01em; }
+h4 { font-size: var(--fs-14); margin: var(--s5) 0 var(--s2); color: var(--c-text); }
+.lead { color: var(--c-text-muted); margin: 0 0 var(--s4); max-width: 72ch; }
+p { margin: 0 0 var(--s3); }
+
+/* 表格 */
+table { width: 100%; border-collapse: collapse; margin: var(--s3) 0 var(--s5); font-size: var(--fs-13); }
+th, td { text-align: left; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--c-border); vertical-align: top; }
+th { font-weight: 600; color: var(--c-text-muted); font-size: var(--fs-12); background: var(--c-bg-subtle); }
+tbody tr:hover { background: var(--c-bg-subtle); }
+td code, th code { background: var(--c-bg-sunken); padding: 1px 5px; border-radius: var(--r-sm); }
+
+/* 代码块 */
+pre {
+  background: var(--c-bg-subtle); border: 1px solid var(--c-border);
+  border-radius: var(--r-md); padding: var(--s3) var(--s4);
+  overflow-x: auto; margin: var(--s3) 0 var(--s5);
+  font-size: var(--fs-12); line-height: 1.55;
+}
+pre .k { color: var(--c-accent); }
+pre .c { color: var(--c-text-faint); }
+
+/* 提示条 */
+.note {
+  display: grid; grid-template-columns: 3px 1fr; gap: var(--s3);
+  background: var(--c-bg-subtle); border: 1px solid var(--c-border);
+  border-radius: var(--r-md); padding: var(--s3) var(--s4);
+  margin: var(--s4) 0; font-size: var(--fs-13);
+}
+.note::before { content: ""; background: var(--c-accent); border-radius: var(--r-full); }
+.note.warn::before { background: var(--c-warn-line); }
+.note.danger::before { background: var(--c-danger); }
+.note strong { display: block; margin-bottom: 2px; }
+
+/* 标签 */
+.tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--fs-11); font-weight: 500; line-height: 1.6;
+  padding: 1px 7px; border-radius: var(--r-full);
+  background: var(--c-neutral-soft); color: var(--c-text-muted);
+  white-space: nowrap;
+}
+.tag.accent { background: var(--c-accent-soft); color: var(--c-accent); }
+.tag.warn   { background: var(--c-warn-soft);   color: var(--c-warn); }
+.tag.ok     { background: var(--c-ok-soft);     color: var(--c-ok); }
+.tag.danger { background: var(--c-danger-soft); color: var(--c-danger); }
+.tag.mono { font-family: var(--f-mono); }
+
+/* 卡片网格 */
+.grid { display: grid; gap: var(--s3); }
+.grid.c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 980px) { .grid.c2, .grid.c3 { grid-template-columns: 1fr; } }
+
+.card {
+  border: 1px solid var(--c-border); border-radius: var(--r-md);
+  padding: var(--s4); background: var(--c-bg-elevated);
+}
+.card h4 { margin-top: 0; }
+.card p:last-child { margin-bottom: 0; }
+.card-kicker { font-size: var(--fs-11); letter-spacing: .06em; text-transform: uppercase; color: var(--c-text-faint); margin-bottom: var(--s2); }
+
+/* ============================================================
+   页面原型外壳：模拟一个浏览器窗口
+   ============================================================ */
+.frame {
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--c-bg);
+  box-shadow: var(--shadow-lg);
+  margin: var(--s4) 0 var(--s5);
+}
+.frame-bar {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  background: var(--c-bg-sunken);
+  border-bottom: 1px solid var(--c-border);
+}
+.frame-dots { display: flex; gap: 6px; margin-right: var(--s2); }
+.frame-dots i { width: 10px; height: 10px; border-radius: var(--r-full); background: var(--c-border-strong); display: block; }
+.frame-url {
+  flex: 1; font-family: var(--f-mono); font-size: var(--fs-11);
+  color: var(--c-text-muted); background: var(--c-bg);
+  border: 1px solid var(--c-border); border-radius: var(--r-sm);
+  padding: 3px var(--s2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.frame-tabs { display: flex; gap: 2px; padding: var(--s2) var(--s3) 0; background: var(--c-bg-subtle); border-bottom: 1px solid var(--c-border); flex-wrap: wrap; }
+.frame-tab {
+  appearance: none; border: 1px solid transparent; border-bottom: none;
+  background: transparent; color: var(--c-text-muted);
+  font: inherit; font-size: var(--fs-12); cursor: pointer;
+  padding: 5px var(--s3); border-radius: var(--r-sm) var(--r-sm) 0 0;
+}
+.frame-tab:hover { color: var(--c-text); background: var(--c-bg-sunken); }
+.frame-tab[aria-selected="true"] {
+  background: var(--c-bg); color: var(--c-text); font-weight: 550;
+  border-color: var(--c-border); margin-bottom: -1px; padding-bottom: 6px;
+}
+.frame-body { min-height: 520px; }
+.screen { display: none; }
+.screen.active { display: block; }
+
+/* 应用内顶栏 */
+.app-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s3); padding: var(--s3) var(--s5);
+  border-bottom: 1px solid var(--c-border); background: var(--c-bg);
+}
+.app-brand { display: flex; align-items: baseline; gap: var(--s2); font-weight: 650; letter-spacing: -.01em; }
+.app-brand small { font-weight: 400; color: var(--c-text-muted); font-size: var(--fs-12); }
+.app-actions { display: flex; align-items: center; gap: var(--s2); }
+
+/* 断线横幅 */
+.banner {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) var(--s5); font-size: var(--fs-12);
+  background: var(--c-warn-soft); color: var(--c-warn);
+  border-bottom: 1px solid var(--c-warn-line);
+}
+.banner[hidden] { display: none; }
+
+/* 会话列表 */
+.list-wrap { padding: var(--s4) var(--s5) var(--s6); }
+.list-tools { display: flex; gap: var(--s2); margin-bottom: var(--s3); }
+.chip {
+  appearance: none; border: 1px solid var(--c-border); background: var(--c-bg);
+  color: var(--c-text-muted); font: inherit; font-size: var(--fs-12);
+  padding: 3px var(--s3); border-radius: var(--r-full); cursor: pointer;
+}
+.chip:hover { border-color: var(--c-border-strong); color: var(--c-text); }
+.chip[aria-pressed="true"] { background: var(--c-accent-soft); border-color: var(--c-accent); color: var(--c-accent); font-weight: 550; }
+
+.session-row {
+  display: grid; grid-template-columns: 18px minmax(0,1fr) auto;
+  gap: var(--s3); align-items: start;
+  padding: var(--s3) var(--s3); border-radius: var(--r-md);
+  border: 1px solid transparent; cursor: pointer;
+}
+.session-row:hover { background: var(--c-bg-subtle); border-color: var(--c-border); }
+.session-row .mark { padding-top: 5px; }
+.session-title { font-weight: 550; letter-spacing: -.005em; display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.session-meta { color: var(--c-text-muted); font-size: var(--fs-12); margin-top: 2px; }
+.session-right { text-align: right; font-size: var(--fs-12); color: var(--c-text-faint); white-space: nowrap; }
+
+.status-dot { width: 8px; height: 8px; border-radius: var(--r-full); display: inline-block; }
+.status-dot.idle { background: var(--c-border-strong); }
+.status-dot.running { background: var(--c-accent); box-shadow: 0 0 0 3px var(--c-accent-soft); }
+.status-dot.waiting { background: var(--c-warn-line); }
+.status-dot.failed { background: var(--c-danger); }
+
+.unread {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: var(--fs-11); font-weight: 600;
+  background: var(--c-warn-soft); color: var(--c-warn);
+  border: 1px solid var(--c-warn-line); border-radius: var(--r-full);
+  padding: 0 6px;
+}
+
+/* 会话详情 */
+.detail-head {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: var(--s3) var(--s5); border-bottom: 1px solid var(--c-border);
+  background: var(--c-bg);
+}
+.back { color: var(--c-text-muted); font-size: var(--fs-13); }
+.detail-title { font-weight: 600; letter-spacing: -.01em; }
+.detail-sub { color: var(--c-text-muted); font-size: var(--fs-12); margin-top: 1px; }
+
+.timeline { padding: var(--s5) var(--s5) var(--s3); display: flex; flex-direction: column; gap: var(--s4); }
+
+.msg { display: grid; grid-template-columns: 88px minmax(0,1fr); gap: var(--s3); }
+.msg-role {
+  font-size: var(--fs-11); color: var(--c-text-faint); text-align: right; padding-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.msg-body { min-width: 0; }
+.msg-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: 2px; flex-wrap: wrap; }
+.msg-time { font-size: var(--fs-11); color: var(--c-text-faint); font-family: var(--f-mono); }
+
+/* intermediate 回合：整体降权，左侧虚线 */
+.msg.intermediate { opacity: .72; }
+.msg.intermediate .msg-body {
+  border-left: 2px dashed var(--c-border-strong);
+  padding-left: var(--s3); margin-left: 2px;
+}
+
+/* wakeup 回合：琥珀竖条 + 标签 */
+.msg.wakeup .msg-body {
+  border-left: 2px solid var(--c-warn-line);
+  padding-left: var(--s3); margin-left: 2px;
+}
+.wakeup-label {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--fs-11); font-weight: 600; color: var(--c-warn);
+  background: var(--c-warn-soft); border: 1px solid var(--c-warn-line);
+  border-radius: var(--r-full); padding: 0 7px;
+}
+
+/* 工具调用行 */
+.tool {
+  border: 1px solid var(--c-border); border-radius: var(--r-md);
+  background: var(--c-bg-subtle); overflow: hidden;
+  margin: var(--s2) 0;
+}
+.tool-head {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 6px var(--s3); font-size: var(--fs-12);
+  cursor: pointer; user-select: none;
+}
+.tool-head:hover { background: var(--c-bg-sunken); }
+.tool-name { font-family: var(--f-mono); font-weight: 550; }
+.tool-arg {
+  font-family: var(--f-mono); color: var(--c-text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46ch;
+}
+.tool-meta { margin-left: auto; color: var(--c-text-faint); font-size: var(--fs-11); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tool-body {
+  border-top: 1px solid var(--c-border); background: var(--c-bg);
+  padding: var(--s2) var(--s3); font-family: var(--f-mono);
+  font-size: var(--fs-11); white-space: pre-wrap; overflow-x: auto;
+  color: var(--c-text-muted); max-height: 240px; overflow-y: auto;
+}
+.tool[data-open="false"] .tool-body { display: none; }
+.chev { transition: transform .12s ease; color: var(--c-text-faint); }
+.tool[data-open="true"] .chev { transform: rotate(90deg); }
+
+/* 交付物块 */
+.deliveries {
+  border: 1px solid var(--c-border); border-radius: var(--r-md);
+  margin-top: var(--s2); overflow: hidden;
+}
+.deliveries-head {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 6px var(--s3); font-size: var(--fs-12); color: var(--c-text-muted);
+  background: var(--c-bg-subtle); cursor: pointer;
+}
+.delivery {
+  padding: var(--s2) var(--s3); border-top: 1px solid var(--c-border);
+  font-size: var(--fs-13);
+}
+.delivery-team { font-size: var(--fs-11); color: var(--c-text-faint); font-family: var(--f-mono); margin-bottom: 2px; }
+
+/* 输入区 */
+.composer { border-top: 1px solid var(--c-border); padding: var(--s3) var(--s5) var(--s4); background: var(--c-bg); }
+.approval {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  border: 1px solid var(--c-warn-line); background: var(--c-warn-soft);
+  border-radius: var(--r-md); padding: var(--s2) var(--s3); margin-bottom: var(--s3);
+  font-size: var(--fs-12); color: var(--c-warn);
+}
+.approval .grow { flex: 1; min-width: 160px; }
+.btn {
+  appearance: none; font: inherit; font-size: var(--fs-12); font-weight: 550;
+  border-radius: var(--r-sm); padding: 4px var(--s3); cursor: pointer;
+  border: 1px solid var(--c-border-strong); background: var(--c-bg); color: var(--c-text);
+}
+.btn:hover { background: var(--c-bg-subtle); }
+.btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: #fff; }
+.btn.primary:hover { background: var(--c-accent-hover); }
+.btn.danger { color: var(--c-danger); border-color: var(--c-danger); background: var(--c-bg); }
+.btn.sm { font-size: var(--fs-11); padding: 2px var(--s2); }
+.input-row { display: flex; gap: var(--s2); align-items: flex-end; }
+textarea.box {
+  flex: 1; resize: vertical; min-height: 64px; max-height: 200px;
+  font: inherit; font-size: var(--fs-13); line-height: var(--lh-base);
+  padding: var(--s2) var(--s3); border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-md); background: var(--c-bg); color: var(--c-text);
+}
+textarea.box:focus { border-color: var(--c-accent); outline: none; box-shadow: 0 0 0 3px var(--c-accent-soft); }
+.hint { font-size: var(--fs-11); color: var(--c-text-faint); margin-top: 6px; }
+
+/* 定时任务列表 */
+.wakeup-table { padding: var(--s4) var(--s5) var(--s6); }
+.wakeup-row {
+  display: grid; grid-template-columns: minmax(0,1fr) 172px 96px 84px;
+  gap: var(--s3); align-items: start;
+  padding: var(--s3); border-bottom: 1px solid var(--c-border); font-size: var(--fs-13);
+}
+.wakeup-row.head {
+  align-items: center; color: var(--c-text-muted);
+  font-size: var(--fs-11); letter-spacing: .06em; text-transform: uppercase;
+}
+.wakeup-when { font-variant-numeric: tabular-nums; }
+.wakeup-when small { display: block; color: var(--c-text-muted); font-size: var(--fs-11); }
+.wakeup-why { color: var(--c-warn); font-size: var(--fs-12); margin-top: 3px; }
+.wakeup-row:hover { background: var(--c-bg-subtle); }
+.wakeup-note { color: var(--c-text-muted); font-size: var(--fs-12); margin-top: 2px; }
+.countdown { font-size: var(--fs-12); font-variant-numeric: tabular-nums; }
+
+/* 状态页 */
+.stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: var(--s3); padding: var(--s4) var(--s5); }
+@media (max-width: 900px) { .stat-grid { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+.stat { border: 1px solid var(--c-border); border-radius: var(--r-md); padding: var(--s3); }
+.stat-label { font-size: var(--fs-11); color: var(--c-text-faint); text-transform: uppercase; letter-spacing: .06em; }
+.stat-value { font-size: var(--fs-24); font-weight: 600; letter-spacing: -.02em; line-height: 1.25; }
+.stat-hint { font-size: var(--fs-11); color: var(--c-text-muted); }
+
+/* 规格标注 */
+.spec {
+  display: grid; grid-template-columns: 132px minmax(0,1fr);
+  gap: var(--s2) var(--s3); font-size: var(--fs-12);
+  border: 1px solid var(--c-border); border-radius: var(--r-md);
+  padding: var(--s3) var(--s4); background: var(--c-bg-subtle); margin: var(--s3) 0 var(--s4);
+}
+.spec dt { color: var(--c-text-muted); font-size: var(--fs-12); }
+.spec dd { margin: 0; }
+.swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; border: 1px solid rgba(0,0,0,.08); }
+
+/* 主题切换（放在文档头部，不浮动：浮动按钮会遮挡正文） */
+.doc-head-top { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); margin-bottom: var(--s3); }
+.theme-btn {
+  border: 1px solid var(--c-border-strong); background: var(--c-bg-elevated);
+  color: var(--c-text); font: inherit; font-size: var(--fs-12);
+  padding: 5px var(--s3); border-radius: var(--r-full);
+  cursor: pointer; white-space: nowrap;
+}
+.theme-btn:hover { background: var(--c-bg-subtle); }
+
+
+/* 架构图（用 HTML 渲染，不用 ASCII：中文在等宽字体里宽度不等于 2 个半角） */
+.arch { margin: var(--s4) 0 var(--s5); }
+.arch-host {
+  border: 1px solid var(--c-border-strong); border-radius: var(--r-md);
+  background: var(--c-bg-subtle); padding: var(--s4);
+}
+.arch-label { font-weight: 600; font-size: var(--fs-13); margin-bottom: var(--s3); }
+.arch-row { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.arch-chip {
+  font-family: var(--f-mono); font-size: var(--fs-12);
+  background: var(--c-bg); border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-sm); padding: 2px var(--s2);
+}
+.arch-sep { color: var(--c-text-faint); }
+.arch-note { color: var(--c-text-muted); font-size: var(--fs-12); margin-top: var(--s2); }
+.arch-exits { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: var(--s2); margin-top: var(--s4); }
+@media (max-width: 760px) { .arch-exits { grid-template-columns: 1fr; } }
+.arch-exit {
+  border: 1px dashed var(--c-border-strong); border-radius: var(--r-sm);
+  padding: var(--s2) var(--s3); font-size: var(--fs-12); font-weight: 550;
+}
+.arch-exit span { font-family: var(--f-mono); font-weight: 400; color: var(--c-text-muted); }
+.arch-clients { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: var(--s2); margin-top: var(--s3); }
+@media (max-width: 760px) { .arch-clients { grid-template-columns: 1fr; } }
+.arch-client {
+  border: 1px solid var(--c-border); border-radius: var(--r-md);
+  background: var(--c-bg); padding: var(--s3); position: relative;
+}
+.arch-client::before {
+  content: ""; position: absolute; top: -9px; left: 50%; width: 1px; height: 8px;
+  background: var(--c-border-strong);
+}
+.arch-client-name { font-weight: 550; font-size: var(--fs-13); }
+.arch-client-where { color: var(--c-text-muted); font-size: var(--fs-12); margin-top: 2px; }
+
+/* 时序步骤（同样不用 ASCII） */
+.steps { list-style: none; margin: var(--s4) 0 var(--s5); padding: 0 0 0 var(--s5); position: relative; }
+.steps::before {
+  content: ""; position: absolute; left: 5px; top: 6px; bottom: 6px;
+  width: 1px; background: var(--c-border-strong);
+}
+.step { position: relative; padding-bottom: var(--s4); }
+.step:last-child { padding-bottom: 0; }
+.step::before {
+  content: ""; position: absolute; left: calc(var(--s5) * -1 + 1px); top: 5px;
+  width: 9px; height: 9px; border-radius: var(--r-full);
+  background: var(--c-bg); border: 2px solid var(--c-border-strong);
+}
+.step.accent::before { border-color: var(--c-accent); }
+.step.warn::before { border-color: var(--c-warn-line); }
+.step-title { font-size: var(--fs-13); font-weight: 550; }
+.step-body { font-size: var(--fs-12); color: var(--c-text-muted); margin-top: 2px; }
+.step-body code { background: var(--c-bg-sunken); padding: 1px 5px; border-radius: var(--r-sm); }
+.step-branch { margin-top: var(--s2); display: grid; gap: 3px; font-size: var(--fs-12); }
+.step-branch div { color: var(--c-text-muted); }
+.step-branch b { color: var(--c-text); font-weight: 600; }
+
+
+/* 代码结构树（替掉 ASCII 树：中文宽度不等于 2 个半角） */
+.tree { margin: var(--s3) 0 var(--s5); font-size: var(--fs-12); }
+.tree-root {
+  font-family: var(--f-mono); font-weight: 600; font-size: var(--fs-13);
+  padding: var(--s2) var(--s3); background: var(--c-bg-subtle);
+  border: 1px solid var(--c-border); border-radius: var(--r-sm) var(--r-sm) 0 0;
+}
+.tree-item {
+  display: grid; grid-template-columns: 16px minmax(0,1fr) auto;
+  gap: var(--s2); align-items: baseline;
+  padding: var(--s2) var(--s3); border: 1px solid var(--c-border);
+  border-top: none; background: var(--c-bg);
+}
+.tree-item:last-child { border-radius: 0 0 var(--r-sm) var(--r-sm); }
+.tree-branch { font-family: var(--f-mono); color: var(--c-text-faint); }
+.tree-what { font-family: var(--f-mono); }
+.tree-what em { font-family: var(--f-sans); }
+.tree-what em { font-style: normal; color: var(--c-text-muted); }
+.tree-note { color: var(--c-text-muted); font-size: var(--fs-12); white-space: nowrap; }
+
+</style>
+</head>
+<body>
+<div class="doc">
+
+<nav class="toc">
+  <div class="toc-brand">heron-ai</div>
+  <div class="toc-sub">服务化部署与 Web 页面 · 设计稿 v2</div>
+
+  <div class="toc-group">
+    <div class="toc-group-title">背景</div>
+    <a href="#why">0 · 这份稿子改了什么</a>
+    <a href="#position">1 · 定位：不是页面，是服务</a>
+    <a href="#constraint">2 · 唯一约束：执行权</a>
+  </div>
+  <div class="toc-group">
+    <div class="toc-group-title">界面设计</div>
+    <a href="#prototype">3 · 可交互原型</a>
+    <a href="#tokens">4 · 设计令牌</a>
+    <a href="#components">5 · 组件规格</a>
+    <a href="#states">6 · 状态矩阵</a>
+  </div>
+  <div class="toc-group">
+    <div class="toc-group-title">行为</div>
+    <a href="#events">7 · 事件 → 界面映射</a>
+    <a href="#flows">8 · 关键交互时序</a>
+    <a href="#api">9 · API 契约</a>
+  </div>
+  <div class="toc-group">
+    <div class="toc-group-title">交付</div>
+    <a href="#deploy">10 · 部署形态</a>
+    <a href="#security">11 · 安全</a>
+    <a href="#phases">12 · 阶段与验收</a>
+    <a href="#edges">13 · 边界与异常</a>
+  </div>
+</nav>
+
+<main class="main">
+
+<header class="doc-head">
+  <div class="doc-head-top">
+    <div class="doc-kicker"><span class="dot"></span>设计稿 · 未实现</div>
+    <button class="theme-btn" id="theme-toggle" type="button">切换暗色</button>
+  </div>
+  <h1>heron-ai 服务化部署与 Web 页面</h1>
+  <p class="doc-desc">
+    把 heron-ai 从「前台 CLI 工具」变成「可部署的服务」，页面是它的基本入口。
+    本稿侧重界面与交互的细节规格；技术决策与取舍见
+    <code>DESIGN-web-ui.zh-CN.md</code>。
+  </p>
+</header>
+
+<section id="why">
+  <h2><span class="num">0</span>这份稿子改了什么</h2>
+  <p class="lead">
+    上一版把页面写成「定时唤醒的配套」，需求起点是"看不到唤醒产出"。那是把基础设施降级成功能补丁。
+    这一版换起点：heron-ai 现在只能当前台 CLI 用，缺的是<strong>能部署成一个服务</strong>。
+  </p>
+  <div class="grid c3">
+    <div class="card">
+      <div class="card-kicker">旧起点</div>
+      <h4>看不到 agent 做了什么</h4>
+      <p>于是页面被当成 wakeup 的展示层。做完之后，服务化的问题一个没解决：谁持执行权、多前端怎么共享、怎么访问。</p>
+    </div>
+    <div class="card">
+      <div class="card-kicker">新起点</div>
+      <h4>只有前台进程形态</h4>
+      <p>关掉终端就没了；没有别人能连的入口；CLI 与 HTTP 各自 build 一个 runtime，会写坏同一个 session。</p>
+    </div>
+    <div class="card">
+      <div class="card-kicker">结论</div>
+      <h4>服务化的三个要件</h4>
+      <p>常驻与优雅退出（已有）、唯一的执行权（缺）、可访问的入口（缺）。页面是第三件的一半，另一半是 API。</p>
+    </div>
+  </div>
+</section>
+
+<section id="position">
+  <h2><span class="num">1</span>定位：不是页面，是服务</h2>
+  <p class="lead">服务化之后，用户面对的不再是"一个命令"，而是"一个地址 + 一组前端"。三个前端共享一个执行宿主。</p>
+
+  <h3>1.1 执行宿主与前端</h3>
+  <div class="arch">
+    <div class="arch-host">
+      <div class="arch-label">heron-ai serve · 唯一执行宿主</div>
+      <div class="arch-row">
+        <span class="arch-chip">Runtime</span>
+        <span class="arch-sep">→</span>
+        <span class="arch-chip">WakeupScheduler</span>
+        <span class="arch-sep">→</span>
+        <span class="arch-chip">SessionWriter</span>
+      </div>
+      <div class="arch-note">唯一持有 runtime 与 session 写权</div>
+      <div class="arch-exits">
+        <div class="arch-exit">HTTP + SSE <span>/api/*</span></div>
+        <div class="arch-exit">静态页面 <span>go:embed</span></div>
+      </div>
+    </div>
+    <div class="arch-clients">
+      <div class="arch-client">
+        <div class="arch-client-name">TUI 客户端</div>
+        <div class="arch-client-where">本机进程内，或 attach 远端</div>
+      </div>
+      <div class="arch-client">
+        <div class="arch-client-name">浏览器</div>
+        <div class="arch-client-where">本地 / 局域网 / 反代</div>
+      </div>
+      <div class="arch-client">
+        <div class="arch-client-name">机器消费者</div>
+        <div class="arch-client-where">curl / SDK / IM 网关</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>1.2 四种启动方式，一个内核</h3>
+  <table>
+    <thead><tr><th>命令</th><th>执行宿主</th><th>前端</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>heron-ai</code></td><td>本进程</td><td>进程内 TUI + 浏览器</td><td>本机日常：终端干活，顺手开页面</td></tr>
+      <tr><td><code>heron-ai --serve</code></td><td>本进程</td><td>无（纯 HTTP/SSE）</td><td>部署：systemd / 容器常驻</td></tr>
+      <tr><td><code>heron-ai attach &lt;url&gt;</code></td><td>远端 serve</td><td>进程内 TUI</td><td>连远端，本地不起 runtime</td></tr>
+      <tr><td><code>heron-ai -prompt</code></td><td>本进程</td><td>无</td><td>脚本 / CI，跑完退出</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <div>
+      <strong>无参数不等于另一种模式</strong>
+      它建一次 bundle，然后用同一份 bundle 起 HTTP 并跑 TUI。所以进程内 TUI 就是 serve 的一个前端，Ctrl-C 时一起退、不留后台残留。
+    </div>
+  </div>
+</section>
+
+<section id="constraint">
+  <h2><span class="num">2</span>唯一约束：执行权必须收敛</h2>
+  <p class="lead">
+    <code>runTUIWithSession</code>（<code>cmd/server/main.go:905</code>）在自己的进程里
+    <code>buildCurrentRuntime</code>，而 <code>JSONLSessionWriter.nextSeq</code> 是进程内存的。
+    两个进程写同一个 <code>flow.jsonl</code>，各自从 1 开始分配 seq，事件流直接乱掉。
+  </p>
+  <pre><span class="c">heron-ai --serve   → 进程 A，持有 runtime，写 .agents/data/sessions/&lt;id&gt;/flow.jsonl
+heron-ai           → 进程 B（TUI），又 build 了一个 runtime，也写同一个文件
+                     ✗ seq 冲撞
+                     ✗ 页面与终端看到两份状态</span></pre>
+  <p>所以页面不能是"再起一个进程"，CLI 也必须进到那个执行宿主里。落点是把当前互斥的两个分支拆开：</p>
+  <div class="tree">
+    <div class="tree-root">buildCurrentRuntime → bundle</div>
+    <div class="tree-item">
+      <span class="tree-branch">├─</span>
+      <span class="tree-what">serveRuntime(bundle, host, port, token)</span>
+      <span class="tree-note">只起 HTTP</span>
+    </div>
+    <div class="tree-item">
+      <span class="tree-branch">├─</span>
+      <span class="tree-what">runTUIOnBundle(bundle)</span>
+      <span class="tree-note">只跑 TUI</span>
+    </div>
+    <div class="tree-item">
+      <span class="tree-branch">└─</span>
+      <span class="tree-what"><em>无参数时两者都调用，共享同一个 bundle</em></span>
+      <span class="tree-note"></span>
+    </div>
+  </div>
+</section>
+
+
+<section id="prototype">
+  <h2><span class="num">3</span>可交互原型</h2>
+  <p class="lead">
+    下面是一个可点的原型，四个页面用顶部标签切换。所有数据是假的，但布局、密度、状态样式按真实规格做。
+    把浏览器窗口缩小到 900px 以下可以看到列表与详情的降级布局。
+  </p>
+
+  <div class="frame">
+    <div class="frame-bar">
+      <div class="frame-dots"><i></i><i></i><i></i></div>
+      <div class="frame-url" id="frame-url">http://127.0.0.1:8080/</div>
+      <button class="btn sm" id="btn-disconnect">模拟断线</button>
+    </div>
+
+    <div class="frame-tabs" role="tablist">
+      <button class="frame-tab" role="tab" aria-selected="true" data-screen="s-list">会话列表</button>
+      <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-detail">会话详情</button>
+      <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-wakeups">定时任务</button>
+      <button class="frame-tab" role="tab" aria-selected="false" data-screen="s-status">状态</button>
+    </div>
+
+    <div class="frame-body">
+
+      <!-- ==================== 会话列表 ==================== -->
+      <div class="screen active" id="s-list">
+        <div class="app-bar">
+          <div class="app-brand">heron-ai <small>default · /srv/miora</small></div>
+          <div class="app-actions">
+            <span class="tag warn">2 个定时任务待触发</span>
+            <button class="btn sm">状态</button>
+          </div>
+        </div>
+
+        <div class="banner" id="banner-list" hidden>
+          <span>连接断开，3 秒后重连…（已有内容保留，不会清空）</span>
+        </div>
+
+        <div class="list-wrap">
+          <div class="list-tools">
+            <button class="chip" aria-pressed="true">全部 4</button>
+            <button class="chip" aria-pressed="false">运行中 1</button>
+            <button class="chip" aria-pressed="false">等待输入 2</button>
+            <button class="chip" aria-pressed="false">失败 0</button>
+          </div>
+
+          <div class="session-row">
+            <div class="mark"><span class="status-dot waiting"></span></div>
+            <div>
+              <div class="session-title">
+                修复 miora 沙箱镜像构建失败
+                <span class="unread">未读 1</span>
+              </div>
+              <div class="session-meta">
+                3 轮 · 12.4k tok · 最后活动 3 分钟前 ·
+                <span style="color:var(--c-warn)">5 分钟后有一次定时检查</span>
+              </div>
+            </div>
+            <div class="session-right">
+              <div class="mono">fs_a1b2c3</div>
+              <div>等待输入</div>
+            </div>
+          </div>
+
+          <div class="session-row">
+            <div class="mark"><span class="status-dot running"></span></div>
+            <div>
+              <div class="session-title">调研 ACP 协议在沙箱场景的可行性</div>
+              <div class="session-meta">7 轮 · 28.1k tok · 正在执行 <span class="mono">team-research</span></div>
+            </div>
+            <div class="session-right">
+              <div class="mono">fs_d4e5f6</div>
+              <div>运行中</div>
+            </div>
+          </div>
+
+          <div class="session-row">
+            <div class="mark"><span class="status-dot idle"></span></div>
+            <div>
+              <div class="session-title">升级 workspace 模板到 v3</div>
+              <div class="session-meta">5 轮 · 19.6k tok · 最后活动 2 小时前</div>
+            </div>
+            <div class="session-right">
+              <div class="mono">fs_7a8b9c</div>
+              <div>等待输入</div>
+            </div>
+          </div>
+
+          <div class="session-row">
+            <div class="mark"><span class="status-dot idle"></span></div>
+            <div>
+              <div class="session-title">补齐 sandbox-proxy 的失败重试</div>
+              <div class="session-meta">2 轮 · 6.2k tok · 最后活动 昨天 18:40</div>
+            </div>
+            <div class="session-right">
+              <div class="mono">fs_9d0e1f</div>
+              <div>等待输入</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== 会话详情 ==================== -->
+      <div class="screen" id="s-detail">
+        <div class="app-bar">
+          <div class="app-brand">heron-ai <small>default · /srv/miora</small></div>
+          <div class="app-actions">
+            <span class="tag mono">fs_a1b2c3</span>
+            <button class="btn sm">状态</button>
+          </div>
+        </div>
+
+        <div class="banner" id="banner-detail" hidden>
+          <span>连接断开，3 秒后重连…（已有内容保留，不会清空）</span>
+        </div>
+
+        <div class="detail-head">
+          <span class="back">← 列表</span>
+          <div>
+            <div class="detail-title">修复 miora 沙箱镜像构建失败</div>
+            <div class="detail-sub">
+              等待输入 · 3 轮 · 12.4k tok ·
+              <span style="color:var(--c-warn)">下次定时检查 06:12（5 分钟后）</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="timeline">
+
+          <!-- 用户消息 -->
+          <div class="msg">
+            <div class="msg-role">你</div>
+            <div class="msg-body">
+              <div class="msg-head"><span class="msg-time">04:12</span></div>
+              <div class="msg-text">升级沙箱镜像到最新的基础层，构建失败的话先看是不是 workspace 模板不兼容。</div>
+            </div>
+          </div>
+
+          <!-- intermediate：助手把活派下去了 -->
+          <div class="msg intermediate">
+            <div class="msg-role">助手</div>
+            <div class="msg-body">
+              <div class="msg-head">
+                <span class="msg-time">04:12</span>
+                <span class="tag">已转给 team-sandbox</span>
+                <span class="tag">中间回合</span>
+              </div>
+              <div class="msg-text">已交给 team-sandbox 执行构建与兼容性排查，完成后我会汇报结果。</div>
+            </div>
+          </div>
+
+          <!-- 工具调用（折叠态 + 展开态各一例） -->
+          <div class="msg">
+            <div class="msg-role">team-sandbox</div>
+            <div class="msg-body">
+              <div class="msg-head"><span class="msg-time">04:14</span></div>
+
+              <div class="tool" data-open="false">
+                <div class="tool-head">
+                  <span class="chev">▸</span>
+                  <span class="tool-name">Bash</span>
+                  <span class="tool-arg">make build IMAGE=miora-sandbox:latest</span>
+                  <span class="tool-meta">失败 · 4.2s</span>
+                </div>
+                <div class="tool-body">Step 14/21 : RUN pnpm install --frozen-lockfile
+ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with "frozen-lockfile"
+because pnpm-lock.yaml is not up to date with package.json
+
+note: If you need to update the lockfile, run "pnpm install".
+make: *** [Makefile:42: build] Error 1</div>
+              </div>
+
+              <div class="tool" data-open="true">
+                <div class="tool-head">
+                  <span class="chev">▸</span>
+                  <span class="tool-name">Grep</span>
+                  <span class="tool-arg">"pnpm-lock" packages/common/workspace-template</span>
+                  <span class="tool-meta">成功 · 0.1s</span>
+                </div>
+                <div class="tool-body">packages/common/workspace-template/package.json:18:  "packageManager": "pnpm@9.12.0"
+packages/common/workspace-template/pnpm-lock.yaml:1:lockfileVersion: '9.0'
+
+2 matches</div>
+              </div>
+
+              <div class="tool" data-open="false">
+                <div class="tool-head">
+                  <span class="chev">▸</span>
+                  <span class="tool-name">Edit</span>
+                  <span class="tool-arg">packages/common/workspace-template/package.json</span>
+                  <span class="tool-meta">成功 · 0.0s</span>
+                </div>
+                <div class="tool-body">- "packageManager": "pnpm@9.12.0"
++ "packageManager": "pnpm@9.15.4"</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- wakeup 回合 -->
+          <div class="msg wakeup">
+            <div class="msg-role">助手</div>
+            <div class="msg-body">
+              <div class="msg-head">
+                <span class="wakeup-label">定时检查</span>
+                <span class="msg-time">06:12</span>
+                <span class="tag">你不在时</span>
+              </div>
+              <div class="msg-text">下游已跑 2 小时 0 分，最近 41 分钟没有新的工具调用。
+期间新增 1 条交付物（镜像构建日志），但构建仍未成功。
+已让 team-sandbox 复述当前卡点；如果你希望我改为回滚到上一版基础层，回一句就行。</div>
+
+              <div class="deliveries">
+                <div class="deliveries-head">
+                  <span class="chev">▸</span>
+                  <span>3 条交付物</span>
+                </div>
+                <div class="delivery">
+                  <div class="delivery-team">team-sandbox</div>
+                  镜像构建日志：pnpm 锁文件与 package.json 不一致（已修复，重试中）
+                </div>
+                <div class="delivery">
+                  <div class="delivery-team">team-sandbox</div>
+                  workspace 模板兼容性检查：v3 模板要求 pnpm ≥ 9.15
+                </div>
+                <div class="delivery">
+                  <div class="delivery-team">coordinator</div>
+                  已把「回滚基础层」列为备选方案，等你确认
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div class="composer">
+          <div class="approval" id="approval-bar">
+            <span class="tag warn">待审批</span>
+            <span class="grow"><span class="mono">Bash</span> 请求执行：<span class="mono">docker push miora-sandbox:latest</span></span>
+            <button class="btn sm" data-approval="deny">拒绝</button>
+            <button class="btn sm primary" data-approval="allow">允许</button>
+          </div>
+
+          <div class="input-row">
+            <textarea class="box" id="composer-box" rows="2" placeholder="回复这个会话…（Enter 发送，Shift+Enter 换行）"></textarea>
+            <div style="display:flex;flex-direction:column;gap:var(--s2)">
+              <button class="btn primary" id="btn-send">发送</button>
+              <button class="btn danger" id="btn-cancel">取消回合</button>
+            </div>
+          </div>
+          <div class="hint">连接正常 · 已收到 seq 33 · 最近事件 2 秒前</div>
+        </div>
+      </div>
+
+      <!-- ==================== 定时任务 ==================== -->
+      <div class="screen" id="s-wakeups">
+        <div class="app-bar">
+          <div class="app-brand">heron-ai <small>定时任务</small></div>
+          <div class="app-actions"><span class="tag">全局 2 待触发</span></div>
+        </div>
+
+        <div class="wakeup-table">
+          <div class="wakeup-row head">
+            <div>会话 / 备注</div><div>计划触发</div><div>状态</div><div></div>
+          </div>
+
+          <div class="wakeup-row">
+            <div>
+              <div>修复 miora 沙箱镜像构建失败</div>
+              <div class="wakeup-note">检查 mock 构建是否跑偏；如正常则向用户汇报一行进展</div>
+            </div>
+            <div class="wakeup-when">06:12<small>还有 4 分 12 秒</small></div>
+            <div><span class="tag warn">scheduled</span></div>
+            <div><button class="btn sm">取消</button></div>
+          </div>
+
+          <div class="wakeup-row">
+            <div>
+              <div>调研 ACP 协议在沙箱场景的可行性</div>
+              <div class="wakeup-note">两小时后看调研是否收敛，没收敛就缩小范围</div>
+            </div>
+            <div class="wakeup-when">08:40<small>还有 2 小时</small></div>
+            <div><span class="tag warn">scheduled</span></div>
+            <div><button class="btn sm">取消</button></div>
+          </div>
+
+          <div class="wakeup-row">
+            <div>
+              <div>修复 miora 沙箱镜像构建失败</div>
+              <div class="wakeup-note">检查 mock 构建是否跑偏</div>
+              <div class="wakeup-why">用户 70 秒前说过话，落在 5 分钟静默窗口内，已顺延</div>
+            </div>
+            <div class="wakeup-when">06:05<small>已推延至 06:10</small></div>
+            <div><span class="tag">skipped</span></div>
+            <div></div>
+          </div>
+
+          <div class="wakeup-row">
+            <div>
+              <div>补齐 sandbox-proxy 的失败重试</div>
+              <div class="wakeup-note">看 CI 是否绿</div>
+              <div class="wakeup-why">单链已达 20 次上限</div>
+            </div>
+            <div class="wakeup-when">昨天 18:40<small>不再触发</small></div>
+            <div><span class="tag danger">expired</span></div>
+            <div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== 状态 ==================== -->
+      <div class="screen" id="s-status">
+        <div class="app-bar">
+          <div class="app-brand">heron-ai <small>状态</small></div>
+          <div class="app-actions"><span class="tag ok">ready</span></div>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat">
+            <div class="stat-label">待触发定时</div>
+            <div class="stat-value">2</div>
+            <div class="stat-hint">最近一次 4 分 12 秒后</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">已加载会话</div>
+            <div class="stat-value">4</div>
+            <div class="stat-hint">其中 1 个运行中</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">运行时长</div>
+            <div class="stat-value">6h 12m</div>
+            <div class="stat-hint">自 00:04 启动</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">事件流延迟</div>
+            <div class="stat-value">12ms</div>
+            <div class="stat-hint">收到 seq 33，本地 2 秒前</div>
+          </div>
+        </div>
+
+        <div class="wakeup-table">
+          <div class="wakeup-row head" style="grid-template-columns:148px minmax(0,1fr) 96px">
+            <div>时间</div><div>事件</div><div>会话</div>
+          </div>
+          <div class="wakeup-row" style="grid-template-columns:148px minmax(0,1fr) 96px">
+            <div class="countdown">06:12:04</div><div><span class="mono">wakeup.fired</span> · 定时检查已触发</div><div class="mono">fs_a1b2c3</div>
+          </div>
+          <div class="wakeup-row" style="grid-template-columns:148px minmax(0,1fr) 96px">
+            <div class="countdown">06:12:04</div><div><span class="mono">flow_turn.started</span> · origin=wakeup</div><div class="mono">fs_a1b2c3</div>
+          </div>
+          <div class="wakeup-row" style="grid-template-columns:148px minmax(0,1fr) 96px">
+            <div class="countdown">06:12:11</div><div><span class="mono">tool_call.failed</span> · Bash（构建仍失败）</div><div class="mono">fs_a1b2c3</div>
+          </div>
+          <div class="wakeup-row" style="grid-template-columns:148px minmax(0,1fr) 96px">
+            <div class="countdown">06:12:19</div><div><span class="mono">flow_turn.waiting_input</span> · reply 已生成，1 条 delivery</div><div class="mono">fs_a1b2c3</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="note">
+    <div>
+      <strong>原型的边界</strong>
+      这里只演示静态布局与状态样式，不连后端。真实页面里"工具调用逐条出现""定时器倒计时""未读徽标"都由 SSE 驱动，映射关系见第 7 节。
+    </div>
+  </div>
+</section>
+
+
+<section id="tokens">
+  <h2><span class="num">4</span>设计令牌</h2>
+  <p class="lead">颜色、字号、间距只从这套令牌取，组件里不写裸值。亮/暗两套通过 <code>data-theme</code> 切换，跟随系统偏好。</p>
+
+  <h3>4.1 语义色</h3>
+  <table>
+    <thead><tr><th>令牌</th><th>亮色</th><th>用途</th><th>不要用在哪</th></tr></thead>
+    <tbody>
+      <tr><td><code>--c-accent</code></td><td><span class="swatch" style="background:#2456e6"></span>#2456E6</td><td>主按钮、链接、选中态、运行中指示</td><td>状态告警（那是 warn/danger）</td></tr>
+      <tr><td><code>--c-ok</code></td><td><span class="swatch" style="background:#067647"></span>#067647</td><td>工具成功、ready、通过</td><td>正文文字</td></tr>
+      <tr><td><code>--c-warn</code></td><td><span class="swatch" style="background:#b54708"></span>#B54708</td><td>定时检查、待审批、需要人看一眼</td><td>错误（错误用 danger）</td></tr>
+      <tr><td><code>--c-warn-line</code></td><td><span class="swatch" style="background:#f79009"></span>#F79009</td><td>wakeup 回合的左侧竖条、待审批边框</td><td>大面积填充</td></tr>
+      <tr><td><code>--c-danger</code></td><td><span class="swatch" style="background:#b42318"></span>#B42318</td><td>失败、取消、拒绝</td><td>普通提示</td></tr>
+      <tr><td><code>--c-text-muted</code></td><td><span class="swatch" style="background:#667085"></span>#667085</td><td>次要信息、元数据</td><td>正文主色</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.2 排版</h3>
+  <table>
+    <thead><tr><th>层级</th><th>字号 / 行高</th><th>用在哪</th></tr></thead>
+    <tbody>
+      <tr><td>页面标题</td><td><code>24 / 1.35</code>，字重 600，字距 -0.02em</td><td>会话标题</td></tr>
+      <tr><td>区块标题</td><td><code>16 / 1.35</code>，字重 600</td><td>面板标题</td></tr>
+      <tr><td>正文</td><td><code>14 / 1.6</code></td><td>消息正文、表单</td></tr>
+      <tr><td>次要</td><td><code>13 / 1.6</code></td><td>元数据、说明</td></tr>
+      <tr><td>小字</td><td><code>12 / 1.6</code></td><td>标签、时间、表格</td></tr>
+      <tr><td>微字</td><td><code>11 / 1.6</code></td><td>徽标、路径、工具参数</td></tr>
+      <tr><td>等宽</td><td><code>ui-monospace</code>，0.92em 相对</td><td>工具名、会话 id、时间戳</td></tr>
+    </tbody>
+  </table>
+  <p><strong>为什么时间戳用等宽</strong>：时间列在列表里上下对齐，比例字体的冒号宽度不一致会让整列看起来在抖。</p>
+
+  <h3>4.3 间距与形状</h3>
+  <div class="grid c2">
+    <div class="card">
+      <h4>4px 网格</h4>
+      <p>所有内外边距取 4 的倍数：4 / 8 / 12 / 16 / 20 / 24 / 32 / 40 / 48。组件之间最小间距 8，块之间 16，区块之间 32。</p>
+    </div>
+    <div class="card">
+      <h4>圆角</h4>
+      <p>小控件 4（按钮、输入框内元素）、卡片与工具块 8、浏览器外壳 12、标签与徽标全圆。</p>
+    </div>
+  </div>
+
+  <h3>4.4 密度</h3>
+  <table>
+    <thead><tr><th>位置</th><th>高度</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>会话行</td><td>最小 56，随内容增长</td><td>两行结构：标题 + 元数据</td></tr>
+      <tr><td>工具调用行（折叠）</td><td>32</td><td>超过 10 个时默认全折叠</td></tr>
+      <tr><td>输入框</td><td>64（2 行）→ 最大 200</td><td>超出滚动，不自动撑满视口</td></tr>
+      <tr><td>审批条</td><td>40</td><td>紧贴输入框上方，不浮层</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="components">
+  <h2><span class="num">5</span>组件规格</h2>
+  <p class="lead">六个核心组件。每个都给出结构、字段来源与状态样式，实现时按这里的字段映射，不要另造结构。</p>
+
+  <h3>5.1 会话行 <code>.session-row</code></h3>
+  <dl class="spec">
+    <dt>栅格</dt><dd><code>18px | 1fr | auto</code>，列间距 12</dd>
+    <dt>第一列</dt><dd>状态点：<code>idle</code> 灰 / <code>running</code> 蓝（带 3px 光晕）/ <code>waiting</code> 琥珀 / <code>failed</code> 红</dd>
+    <dt>标题行</dt><dd><code>sessionlist.Session.Title</code>，右侧可跟 <strong>未读 N</strong> 徽标</dd>
+    <dt>元数据行</dt><dd><code>{Turns}</code> 轮 · <code>{Tokens}</code> tok · 最后活动 <code>{相对时间}</code>，有定时器时追加琥珀色「N 分钟后有一次定时检查」</dd>
+    <dt>右列</dt><dd>会话 id（等宽，11px，faint）+ 状态文案</dd>
+    <dt>点击</dt><dd>整行进详情；右键/长按不做任何事（V1 不提供上下文菜单）</dd>
+  </dl>
+  <p><strong>相对时间规则</strong>：小于 1 分钟「刚刚」；小于 1 小时「N 分钟前」；今天内「HH:MM」；昨天「昨天 HH:MM」；更早「MM-DD」。这条规则同样用于详情里的消息时间。</p>
+
+  <h3>5.2 消息块 <code>.msg</code></h3>
+  <dl class="spec">
+    <dt>栅格</dt><dd><code>56px | 1fr</code>：左列角色名右对齐，右列内容</dd>
+    <dt>角色来源</dt><dd>用户显示「你」；Team 产生的消息显示 <code>team_id</code>；协调者显示「助手」</dd>
+    <dt>变体 · 普通</dt><dd>无装饰，正文 <code>14/1.6</code></dd>
+    <dt>变体 · intermediate</dt><dd>整体 <code>opacity:.72</code> + 左侧 2px 虚线；含义是「这一步不是答案」，不参与未读计数</dd>
+    <dt>变体 · wakeup</dt><dd>左侧 2px 琥珀实线 + 「定时检查」徽标 + 「你不在时」标签；<strong>参与未读</strong></dd>
+    <dt>正文渲染</dt><dd><code>textContent</code> + 白名单 markdown（代码块、粗体、列表、链接）。禁止 <code>innerHTML</code></dd>
+  </dl>
+
+  <h3>5.3 工具调用 <code>.tool</code></h3>
+  <dl class="spec">
+    <dt>折叠行</dt><dd><span class="mono">▸</span> 工具名 · 参数摘要 · …… · 状态 · 耗时</dd>
+    <dt>参数摘要</dt><dd>取工具入参里最有辨识度的一个字段：Bash 取 command，Read/Edit/Write 取路径，Grep 取 pattern，单个值超过 46ch 截断加省略号</dd>
+    <dt>状态文案</dt><dd>成功 · 失败 · 进行中（进行中时行尾显示脉动点，不显示耗时）</dd>
+    <dt>展开体</dt><dd>等宽 11px，最大高 240 滚动；<strong>超过 3 行时默认折叠</strong>，头部显示「展开 N 行」</dd>
+    <dt>来源事件</dt><dd><code>tool_call.started / completed / failed</code>，见第 7 节</dd>
+  </dl>
+
+  <h3>5.4 交付物 <code>.deliveries</code></h3>
+  <dl class="spec">
+    <dt>位置</dt><dd>挂在产生它的回合正文下方，不单独成页</dd>
+    <dt>头部</dt><dd>「N 条交付物」，可折叠，默认展开</dd>
+    <dt>单条</dt><dd>第一行 <code>team_id</code>（等宽 11px faint），第二行正文</dd>
+    <dt>来源</dt><dd><code>payload.deliveries[]</code>：<code>{text, team_id, message_id}</code></dd>
+    <dt>为什么要单独成块</dt><dd>交付物是用户必须看到的独立结果，不是协调者的评论。混进 reply 会让「谁说的」丢失</dd>
+  </dl>
+
+  <h3>5.5 审批条 <code>.approval</code></h3>
+  <dl class="spec">
+    <dt>位置</dt><dd>输入框上方，占一整行；有 <code>pending_approvals</code> 才出现，多个时纵向堆叠</dd>
+    <dt>内容</dt><dd>工具名 + 完整命令/路径 + 「允许 / 拒绝」</dd>
+    <dt>拒绝</dt><dd>点开后出现原因输入（可选），提交后条消失</dd>
+    <dt>来源</dt><dd><code>payload.pending_approvals[]</code>，或 <code>/api/status</code> 的返回</dd>
+    <dt>不做的</dt><dd>不做 toast、不做角标弹窗——审批是阻塞动作，必须留在视线里</dd>
+  </dl>
+
+  <h3>5.6 断线横幅 <code>.banner</code></h3>
+  <dl class="spec">
+    <dt>文案</dt><dd>「连接断开，N 秒后重连…（已有内容保留，不会清空）」</dd>
+    <dt>位置</dt><dd>顶栏下方，通栏；恢复后自动消失</dd>
+    <dt>关键行为</dt><dd><strong>不清空已有内容</strong>。重连成功后用 <code>Last-Event-ID</code> 续传，补齐断线期间的事件</dd>
+  </dl>
+</section>
+
+<section id="states">
+  <h2><span class="num">6</span>状态矩阵</h2>
+  <p class="lead">每个页面在四种非正常状态下长什么样。这些状态不写进设计就会在实现时各写各的。</p>
+  <table>
+    <thead><tr><th>页面</th><th>加载中</th><th>空</th><th>错误</th><th>断线</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>会话列表</td>
+        <td>骨架行 3 条（灰条占位），不显示「加载中」文字</td>
+        <td>「还没有会话。在终端里 <code>heron-ai</code> 发起一个，这里会实时出现。」</td>
+        <td>整块错误卡 + 「重试」按钮，保留筛选条</td>
+        <td>顶部横幅；列表保留，暂停刷新</td>
+      </tr>
+      <tr>
+        <td>会话详情</td>
+        <td>先渲染历史（来自 HTTP），SSE 接入前显示「正在同步…」小字</td>
+        <td>会话存在但无消息：显示输入框 + 一句「从这里开始」</td>
+        <td>历史拉取失败：整块重试；SSE 失败：横幅 + 定时重连</td>
+        <td>横幅；已渲染消息保留；输入框可用但发送后提示「等待重连」</td>
+      </tr>
+      <tr>
+        <td>定时任务</td>
+        <td>表格骨架 2 行</td>
+        <td>「没有待触发的定时任务。模型需要时会自己登记。」</td>
+        <td>错误卡 + 重试</td>
+        <td>横幅；列表最后已知状态 + 「数据可能不是最新」</td>
+      </tr>
+      <tr>
+        <td>状态页</td>
+        <td>数字位显示 <code>—</code></td>
+        <td>不适用</td>
+        <td><code>/api/health</code> 非 200：整页改为「引擎可能已退出」，附排查命令</td>
+        <td>与错误同：health 探测失败即视为不可达</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>6.1 回合状态与视觉</h3>
+  <table>
+    <thead><tr><th>会话状态</th><th>状态点</th><th>输入框</th><th>额外提示</th></tr></thead>
+    <tbody>
+      <tr><td><code>waiting_input</code></td><td>琥珀</td><td>可用</td><td>有定时器时显示下次触发时间</td></tr>
+      <tr><td><code>running</code></td><td>蓝（脉动）</td><td>可用，发送后排队</td><td>显示「正在执行，消息会排队」</td></tr>
+      <tr><td><code>waiting_tool</code></td><td>琥珀</td><td>可用，发送后排队</td><td>显示当前运行中的工具名</td></tr>
+      <tr><td><code>waiting_approval</code></td><td>琥珀</td><td>禁用</td><td>审批条出现，输入框置灰</td></tr>
+      <tr><td><code>failed</code></td><td>红</td><td>可用</td><td>顶部错误摘要 + 「查看日志」链接</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="events">
+  <h2><span class="num">7</span>事件 → 界面映射</h2>
+  <p class="lead">
+    页面只消费会话事件流（<code>/api/stream?follow=1</code>），不轮询、不猜测。每条事件驱动哪一块、怎么合并，全部列在这里。
+  </p>
+
+  <div class="note warn">
+    <div>
+      <strong>帧形状（真机验证过的坑）</strong>
+      <code>data:</code> 里是<strong>扁平事件头 + 嵌套 payload</strong>。<code>seq / type / flow_turn_id / created_at</code> 在顶层；
+      <code>origin / reply / intermediate / deliveries / contributors</code> 在 <code>payload</code> 内。
+      把 <code>flow_turn_id</code> 当 payload 字段读会拿到空串，去重与日志同时失效。
+    </div>
+  </div>
+
+  <table>
+    <thead><tr><th>事件 <code>type</code></th><th>驱动什么</th><th>关键字段</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>flow_turn.started</code></td>
+        <td>时间线开新块；会话行状态点转蓝</td>
+        <td>顶层 <code>flow_turn_id</code>；<code>payload.input</code>（用户回合时显示为「你」的气泡）</td>
+      </tr>
+      <tr>
+        <td><code>agent.model_response</code></td>
+        <td>追加助手正文（流式则逐字追加，否则整段）</td>
+        <td><code>payload.text</code>、<code>payload.round</code></td>
+      </tr>
+      <tr>
+        <td><code>tool_call.started</code></td>
+        <td>插入折叠工具行，状态「进行中」</td>
+        <td><code>tool_name</code>、<code>arguments</code>、<code>tool_call_id</code></td>
+      </tr>
+      <tr>
+        <td><code>tool_call.completed</code> / <code>failed</code></td>
+        <td>更新同一 <code>tool_call_id</code> 的行：状态与耗时；失败时展开体自动打开</td>
+        <td><code>content</code> / <code>error</code></td>
+      </tr>
+      <tr>
+        <td><code>flow_turn.waiting_input</code></td>
+        <td>回合收尾：按 <code>origin</code> 决定样式（<code>user</code> 普通 / <code>wakeup</code> 琥珀 / 其它 intermediate 灰）；非当前会话时累加未读</td>
+        <td><code>payload.origin</code>、<code>reply</code>、<code>intermediate</code>、<code>deliveries</code></td>
+      </tr>
+      <tr>
+        <td><code>wakeup.created</code></td>
+        <td>列表页追加「N 分钟后有一次定时检查」；定时页插入一行 <code>scheduled</code></td>
+        <td><code>payload.wakeup.{id, fire_at, note, team_id}</code></td>
+      </tr>
+      <tr>
+        <td><code>wakeup.fired</code></td>
+        <td>定时页该行转 <code>fired</code>；详情页标题栏倒计时改为「正在检查」</td>
+        <td>同上</td>
+      </tr>
+      <tr>
+        <td><code>wakeup.skipped</code></td>
+        <td>定时页该行显示 <code>skipped</code> + <strong>具体原因</strong>；倒计时更新为新的 <code>fire_at</code></td>
+        <td><code>payload.reason</code>（如「用户 70 秒前说过话，落在 5 分钟静默窗口内」）</td>
+      </tr>
+      <tr>
+        <td><code>wakeup.expired</code> / <code>cancelled</code></td>
+        <td>定时页该行置灰，不再倒计时</td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td><code>agent.pending_approval</code></td>
+        <td>审批条出现，输入框置灰</td>
+        <td><code>tool_name</code>、<code>arguments</code>、<code>request_id</code></td>
+      </tr>
+      <tr>
+        <td><code>team_turn.completed</code></td>
+        <td>会话行元数据里的「正在执行 X」清除</td>
+        <td><code>team_id</code>、<code>status</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>7.1 合并与去重规则</h3>
+  <ul>
+    <li><strong>按 <code>seq</code> 严格递增渲染</strong>：收到小于等于已渲染最大 seq 的帧直接丢弃（重连 replay 会重发）。</li>
+    <li><strong>工具行按 <code>tool_call_id</code> 复用</strong>：<code>started</code> 建行，后续 <code>completed/failed</code> 只更新不新增。</li>
+    <li><strong>回合按 <code>flow_turn_id</code> 归组</strong>：同一回合的 <code>model_response</code> 与工具行都挂在该回合块下。</li>
+    <li><strong>未读</strong>：当前不在该会话页面时，<code>flow_turn.waiting_input</code> 且 <code>intermediate=false</code> 才 +1；进入会话即清零。intermediate 不计。</li>
+    <li><strong>去重键</strong>：<code>event_id</code>（每帧自带），用于兜底防重复渲染。</li>
+  </ul>
+</section>
+
+
+<section id="flows">
+  <h2><span class="num">8</span>关键交互时序</h2>
+  <p class="lead">四条最容易做错的路径。每条都标出「用户看到什么」与「发什么请求」，实现时按这个顺序写。</p>
+
+  <h3>8.1 打开会话（历史 + 增量）</h3>
+  <ol class="steps">
+    <li class="step accent">
+      <div class="step-title">拉历史：<code>GET /api/sessions/{id}/history</code></div>
+      <div class="step-body">渲染已有消息，并记住 <code>max_seq = 33</code>——它是下一步的断点。</div>
+    </li>
+    <li class="step accent">
+      <div class="step-title">接增量：<code>GET /api/stream?session_id={id}&amp;follow=1</code></div>
+      <div class="step-body">请求头带 <code>Last-Event-ID: 33</code>，只要 33 之后的事件。</div>
+    </li>
+    <li class="step">
+      <div class="step-title">收到 <code>seq 34…</code> 起逐条追加</div>
+      <div class="step-body">之后不再重拉历史，也不重新渲染整页。</div>
+    </li>
+  </ol>
+  <div class="note">
+    <div><strong>为什么不是"先连流再拉历史"</strong>先连流会在历史到达时重排一次，页面闪一下。先历史后增量，页面只追加。</div>
+  </div>
+
+  <h3>8.2 发消息</h3>
+  <ol class="steps">
+    <li class="step accent">
+      <div class="step-title">本地立刻插入一条「你」的气泡，标 <code>pending</code></div>
+      <div class="step-body">浅灰、不可编辑。交互不等网络。</div>
+    </li>
+    <li class="step accent">
+      <div class="step-title">提交：<code>POST /api/sessions/turn?session_id={id}</code></div>
+      <div class="step-body">请求体 <code>{"input": "…"}</code>。</div>
+      <div class="step-branch">
+        <div><b>2xx</b> → 气泡转正（去掉 pending 标记）</div>
+        <div><b>4xx</b> → 气泡标红 + 错误文案 + 「重试」按钮，保留原文不清空</div>
+        <div><b>超时 / 断网</b> → 气泡标「待发送」，重连后自动重发一次，仍失败转手动</div>
+      </div>
+    </li>
+    <li class="step warn">
+      <div class="step-title">后续内容全部来自 SSE，不用 POST 响应体渲染</div>
+      <div class="step-body">POST 响应里也有 <code>Reply / FinalReply</code>，用它渲染正文会与 SSE 重复一次。POST 只用来判断"受理成功/失败"。</div>
+    </li>
+  </ol>
+  <p><strong>注意</strong>：POST 响应里也有 <code>Reply/FinalReply</code>，但页面不用它渲染正文——否则 SSE 再来一次就是重复。POST 只用来判断"受理成功/失败"。</p>
+
+  <h3>8.3 审批</h3>
+  <ol class="steps">
+    <li class="step warn">
+      <div class="step-title">SSE 推来 <code>agent.pending_approval</code></div>
+      <div class="step-body">审批条出现；输入框置灰；页面标题加「待审批」标记。</div>
+    </li>
+    <li class="step accent">
+      <div class="step-title">点「允许」→ <code>POST /api/approvals</code></div>
+      <div class="step-body"><code>{"request_id":"…","approved":true,"reason":""}</code>；按钮进入 disabled，文案「提交中…」。</div>
+    </li>
+    <li class="step">
+      <div class="step-title">点「拒绝」→ 展开原因输入（可选）→ 同一接口，<code>approved:false</code></div>
+      <div class="step-body">原因会进 <code>reason</code> 字段，模型能看到拒绝理由并换做法。</div>
+    </li>
+    <li class="step warn">
+      <div class="step-title">审批条只在拿到明确结果后消失</div>
+      <div class="step-body">成功则收起；失败则保留并提示错误，可重试。不做超时自动收起、不做 toast——审批是阻塞语义。</div>
+    </li>
+  </ol>
+  <p>审批条不做自动消失。它消失的唯一条件是拿到明确结果，因为审批是阻塞语义。</p>
+
+  <h3>8.4 断线重连</h3>
+  <ol class="steps">
+    <li class="step warn">
+      <div class="step-title">SSE 断开</div>
+      <div class="step-body">横幅出现「连接断开，3 秒后重连…」；<b>已有消息保留</b>，不清屏。</div>
+    </li>
+    <li class="step accent">
+      <div class="step-title">退避重连：1s → 2s → 4s → 8s → 16s → 30s（上限）</div>
+      <div class="step-body">每次带 ±20% 抖动，避免多个标签页同时重连打满引擎。</div>
+    </li>
+    <li class="step accent">
+      <div class="step-title">重连带 <code>Last-Event-ID</code> = 本地最大 seq</div>
+      <div class="step-body">引擎从该 seq 之后 replay，不是全量重放。</div>
+    </li>
+    <li class="step">
+      <div class="step-title">连上 → 横幅消失，补渲染断线期间的事件</div>
+      <div class="step-body">补渲染同样按 <code>seq</code> 递增，丢弃重复。</div>
+    </li>
+    <li class="step warn">
+      <div class="step-title">连续 6 次失败（约 1 分钟）→ 停止自动重连</div>
+      <div class="step-body">横幅改为「无法连接引擎」+「重试」按钮 +「查看 <code>/api/health</code>」链接。</div>
+    </li>
+  </ol>
+
+  <h3>8.5 取消回合</h3>
+  <ol class="steps">
+    <li class="step">
+      <div class="step-title">点「取消回合」→ 内联二次确认</div>
+      <div class="step-body">按钮文案变为「确认取消？」，3 秒内不点则复原。不用弹窗。</div>
+    </li>
+    <li class="step accent">
+      <div class="step-title">确认后 <code>POST /api/cancel?session_id={id}</code></div>
+      <div class="step-body">成功后该回合标「已取消」，未完成的工具行标「中止」。</div>
+    </li>
+    <li class="step">
+      <div class="step-title">若返回 <code>409</code>（回合已结束）</div>
+      <div class="step-body">提示「该回合已结束」，同时刷新会话状态，避免界面停在旧状态。</div>
+    </li>
+  </ol>
+</section>
+
+<section id="api">
+  <h2><span class="num">9</span>API 契约</h2>
+  <p class="lead">页面需要的五个接口。已存在的直接复用，只列出页面真正用到的字段。</p>
+
+  <h3>9.1 会话列表（新增）</h3>
+  <pre><span class="k">GET</span> /api/sessions?active=1&amp;limit=50
+
+<span class="k">200</span>
+{
+  "sessions": [
+    {
+      "id": "fs_a1b2c3",
+      "title": "修复 miora 沙箱镜像构建失败",
+      "turns": 3,
+      "tokens": 12400,
+      "active": false,
+      "updated_at": "2026-11-02T06:09:12Z",
+      "status": "waiting_input",
+      "pending_wakeups": 1
+    }
+  ]
+}</pre>
+  <p>数据源：<code>sessionlist.List</code>。新增的 <code>status</code> 与 <code>pending_wakeups</code> 由 runtime 补齐（sessionlist 只读事件文件，不知道内存里的定时器）。</p>
+
+  <h3>9.2 会话历史（新增）</h3>
+  <pre><span class="k">GET</span> /api/sessions/{id}/history?after_seq=0&amp;limit=200
+
+<span class="k">200</span>
+{
+  "turns": [
+    {
+      "input": "升级沙箱镜像到最新的基础层…",
+      "origin": "user",
+      "started_at": "2026-11-02T04:12:03Z",
+      "messages": [
+        {"team_id": "team-sandbox", "call_id": "build", "reply": "…",
+         "ops": [{"tool": "Bash", "ok": false, "duration_ms": 4200}]}
+      ],
+      "usage": {"input": 8200, "output": 1200}
+    }
+  ],
+  "max_seq": 33
+}</pre>
+  <p>数据源：<code>sessionlist.History</code>。页面用 <code>max_seq</code> 作为 SSE 的 <code>Last-Event-ID</code>。</p>
+
+  <h3>9.3 定时任务（新增）</h3>
+  <pre><span class="k">GET</span> /api/wakeups?session_id=fs_a1b2c3&amp;status=scheduled
+
+<span class="k">200</span>
+{
+  "wakeups": [
+    {
+      "id": "wk_775e85ac",
+      "flow_session_id": "fs_a1b2c3",
+      "team_id": "default",
+      "fire_at": "2026-11-02T06:12:03Z",
+      "note": "检查 mock 构建是否跑偏",
+      "status": "scheduled",
+      "chain": 1,
+      "last_reason": ""
+    }
+  ]
+}
+
+<span class="k">DELETE</span> /api/wakeups/{id}   → 204</pre>
+  <p>需要在 runtime 上补一个只读访问器：现在 <code>WakeupStats</code> 只返回计数 <code>(pending, sessions)</code>，要加 <code>Wakeups(ctx, sessionID) []types.WakeupRecord</code>。取消复用现成的 <code>Runtime.CancelWakeup</code>。</p>
+
+  <h3>9.4 实时事件（已存在）</h3>
+  <pre><span class="k">GET</span> /api/stream?session_id=fs_a1b2c3&amp;follow=1
+<span class="k">Header</span> Last-Event-ID: 33
+
+id: 34
+data: {"seq":34,"event_id":"fs_a1b2c3-34","type":"tool_call.started",
+       "flow_session_id":"fs_a1b2c3","flow_turn_id":"ft_eda854",
+       "created_at":"2026-11-02T06:12:05Z",
+       "payload":{"tool_name":"Bash","tool_call_id":"call_1",
+                  "arguments":{"command":"make build"}}}</pre>
+  <p>页面解析时<strong>先取顶层 <code>seq/type/flow_turn_id</code>，再取 <code>payload</code></strong>。这是唯一一处最容易写错的地方。</p>
+
+  <h3>9.5 健康与鉴权</h3>
+  <pre><span class="k">GET</span>  /api/health          → {"ready":true,"pending_wakeups":2,"sessions_loaded":4}
+<span class="k">POST</span> /api/login           {"token":"..."} → Set-Cookie: heron_session=…; HttpOnly; SameSite=Strict
+<span class="k">POST</span> /api/sessions/turn?session_id={id}   {"input":"…"}
+<span class="k">POST</span> /api/approvals       {"request_id":"…","approved":true,"reason":""}
+<span class="k">POST</span> /api/cancel?session_id={id}</pre>
+  <p>cookie 模式下，所有写操作需带 <code>X-Requested-With: fetch</code>（CSRF 双提交）。</p>
+</section>
+
+<section id="deploy">
+  <h2><span class="num">10</span>部署形态</h2>
+  <p class="lead">页面能用不等于能部署。这一节是"把它放到服务器上跑一周"的最小要求。</p>
+
+  <div class="grid c2">
+    <div class="card">
+      <div class="card-kicker">systemd</div>
+      <h4>常驻进程</h4>
+      <pre style="margin-bottom:0">ExecStart=/usr/local/bin/heron-ai --serve \
+  --host 127.0.0.1 --port 8080
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=always</pre>
+    </div>
+    <div class="card">
+      <div class="card-kicker">反代</div>
+      <h4>SSE 必须关缓冲</h4>
+      <pre style="margin-bottom:0">proxy_pass http://127.0.0.1:8080;
+proxy_http_version 1.1;
+proxy_buffering off;
+proxy_read_timeout 3600s;</pre>
+    </div>
+  </div>
+
+  <table>
+    <thead><tr><th>项</th><th>要求</th><th>原因</th></tr></thead>
+    <tbody>
+      <tr><td>监听地址</td><td>默认 <code>127.0.0.1</code>；对外必须配 token</td><td>非 loopback 时引擎强制 Bearer；页面再走登录</td></tr>
+      <tr><td>数据目录</td><td><code>.agents/data/</code> 必须持久化（容器要挂卷）</td><td>会话、转录、日志都在里面；容器重建不挂卷等于清库</td></tr>
+      <tr><td>副本数</td><td>固定 1</td><td>多副本写同一份数据 = seq 撞车。多实例只能是「一目录一实例、不同端口」</td></tr>
+      <tr><td>停止超时</td><td><code>TimeoutStopSec</code> &gt; 引擎的 10s drain</td><td>让优雅关闭先跑完，SIGKILL 只作兜底</td></tr>
+      <tr><td>SSE 反代</td><td><code>proxy_buffering off</code> + 读超时 ≥ 1h</td><td>否则事件攒在代理里，页面"很久不动然后一次刷出"</td></tr>
+      <tr><td>子路径</td><td>不支持（V1）</td><td>前后端都用绝对路径；要挂 <code>/heron/</code> 需独立改造</td></tr>
+      <tr><td>升级</td><td>停旧 → 换二进制 → 起新</td><td>状态不在内存；未触发的定时器由启动时 <code>RecoverWakeups</code> 捡回</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <div>
+      <strong>观测三件套</strong>
+      <code>/api/health</code> 看 <code>pending_wakeups</code> 是否在动；<code>.agents/data/logs/YYYY-MM-DD.log</code> 看执行；<code>/status</code> 页看事件流延迟——延迟持续上升基本就是被反代缓冲了。
+    </div>
+  </div>
+</section>
+
+<section id="security">
+  <h2><span class="num">11</span>安全</h2>
+  <p class="lead">这个页面背后是一个能跑 Bash、能写文件的 agent。它的 XSS 不是"弹个窗"，是执行权转移。</p>
+
+  <h3>11.1 三条硬规则</h3>
+  <div class="grid c3">
+    <div class="card">
+      <h4>禁止 innerHTML</h4>
+      <p>一律 <code>textContent</code> 或转义后插入。markdown 只渲染白名单子集（代码块、粗体、列表、链接）。链接强制 <code>rel="noopener noreferrer"</code> 且只允许 <code>http/https</code>。</p>
+    </div>
+    <div class="card">
+      <h4>CSP</h4>
+      <p><code>default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data:</code>。页面里不写内联 <code>&lt;script&gt;</code>、不写 <code>onclick</code> 属性。</p>
+    </div>
+    <div class="card">
+      <h4>token 不进 URL</h4>
+      <p>不放 query（会进历史、Referer、代理日志）。对外模式走 <code>POST /api/login</code> 换 <code>HttpOnly; SameSite=Strict</code> cookie。</p>
+    </div>
+  </div>
+
+  <h3>11.2 攻击面清单</h3>
+  <table>
+    <thead><tr><th>面</th><th>风险</th><th>措施</th></tr></thead>
+    <tbody>
+      <tr><td>模型输出</td><td>HTML/JS 注入</td><td>纯文本渲染 + 白名单 markdown + CSP</td></tr>
+      <tr><td>工具输出</td><td>同上，且可能是 ANSI 转义序列</td><td>剥离 ANSI 后按纯文本渲染</td></tr>
+      <tr><td>静态路由</td><td>路径穿越读文件</td><td>只从 <code>go:embed</code> 的 FS 读；未命中一律 404，不退化成 <code>http.Dir</code></td></tr>
+      <tr><td>写操作</td><td>CSRF（第三方页面代发）</td><td>cookie 模式要求 <code>X-Requested-With</code>；<code>SameSite=Strict</code></td></tr>
+      <tr><td>非 loopback 暴露</td><td>无认证访问能执行命令的界面</td><td>强制 token + 登录；启动时打印醒目警告</td></tr>
+      <tr><td>会话越权</td><td>多用户时看到别人的会话</td><td>V1 是单用户模型，<strong>明确不支持多租户</strong>（见第 13 节）</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="phases">
+  <h2><span class="num">12</span>阶段与验收</h2>
+  <table>
+    <thead><tr><th>阶段</th><th>内容</th><th>验收（可复现）</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>P0</strong><br>只读可看</td>
+        <td>静态托管 + <code>/api/sessions</code> + <code>/api/sessions/{id}/history</code> + 列表页 + 详情页（历史 + SSE 实时）</td>
+        <td><code>--serve</code> 起一个会话并让它跑；浏览器打开能看到该会话出现在列表，点进去能看到历史与<strong>正在产生</strong>的输出（工具调用逐条出现）</td>
+      </tr>
+      <tr>
+        <td><strong>P1</strong><br>能操作</td>
+        <td>发消息、审批、取消；输入框与审批条</td>
+        <td>页面发一句 → CLI 侧同一会话看到；触发审批时页面出现审批条，允许后会话继续</td>
+      </tr>
+      <tr>
+        <td><strong>P2</strong><br>主动能力可见</td>
+        <td><code>/api/wakeups</code> + 取消；定时任务页；<code>origin=wakeup</code> 样式与未读</td>
+        <td>登记 2 分钟唤醒 → 页面显示「2 分钟后」→ 到点出现带琥珀标识的检查回合，列表页出现未读徽标</td>
+      </tr>
+      <tr>
+        <td><strong>P3</strong><br>执行权收敛</td>
+        <td>拆 <code>buildCurrentRuntime</code> 与「起 HTTP / 跑 TUI」；无参数时同进程双前端；新增 <code>attach</code></td>
+        <td>两个终端（<code>--serve</code> + <code>attach</code>）共享一个引擎，页面实时同步；<code>flow.jsonl</code> 的 seq 连续无重复；Ctrl-C 后端口释放</td>
+      </tr>
+      <tr>
+        <td><strong>P4</strong><br>部署物料</td>
+        <td><code>serve.lock</code> 单实例保护、systemd unit、Dockerfile、反代示例、升级说明</td>
+        <td>按文档部署一遍：常驻、反代后页面可用、<code>kill -9</code> 后 systemd 拉起且定时器被 recover</td>
+      </tr>
+      <tr>
+        <td><strong>P5</strong><br>外发</td>
+        <td>delivery webhook（webhook / exec）</td>
+        <td>本地 echo 服务当 target，唤醒结论被 POST 出去，含 <code>turn_id/origin/deliveries</code></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>P0 单独可用：只读页面已经解决"看不到 agent 在干什么"。P3 动 CLI 主路径，风险最高，建议单独评审后再合。</p>
+</section>
+
+<section id="edges">
+  <h2><span class="num">13</span>边界与异常</h2>
+  <p class="lead">这些情况不写清楚，实现时会各写各的，最后变成线上事故。</p>
+
+  <table>
+    <thead><tr><th>情形</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td>会话在另一个进程里正跑着</td><td>不该发生（执行权唯一）。若 <code>serve.lock</code> 检测到第二实例，直接启动失败并提示用 <code>attach</code></td></tr>
+      <tr><td>会话文件被外部清理</td><td><code>/history</code> 返回空 → 页面显示「会话数据不存在」+ 返回列表；不自动重建</td></tr>
+      <tr><td>事件流出现未知 <code>type</code></td><td>忽略，不报错，不渲染占位（前向兼容：新版本引擎加事件时旧页面不崩）</td></tr>
+      <tr><td>同一回合事件乱序到达</td><td>按 <code>seq</code> 排序后再渲染；本地维护「已渲染最大 seq」，小于等于它的丢弃</td></tr>
+      <tr><td>消息正文超长（&gt; 50KB）</td><td>折叠为「展开全文」，避免一次插入几万字符卡住渲染</td></tr>
+      <tr><td>单会话事件超过 2000 条</td><td>只保留最近 1000 个 DOM 节点，更早的折叠为「更早的 N 条消息」</td></tr>
+      <tr><td>定时器在一个已删除的会话上触发</td><td>引擎侧已处理（<code>wakeup.expired</code>）；页面把该行标灰</td></tr>
+      <tr><td>浏览器不支持 SSE</td><td>退化为 3 秒轮询 <code>/api/sessions/{id}/history?after_seq=N</code>，并在页脚提示「实时更新已降级」</td></tr>
+      <tr><td>多标签页打开同一会话</td><td>各自独立连接；写操作不互斥（后发者覆盖不了前者，因为服务端是队列语义）；未读状态按标签页各自维护</td></tr>
+      <tr><td>用户在没有 serve 的情况下直接 <code>heron-ai</code></td><td>进程内同时起 HTTP 与 TUI，页面可访问；Ctrl-C 一起退出，端口释放</td></tr>
+      <tr><td>多人访问（多用户）</td><td><strong>V1 明确不支持</strong>：没有会话归属、没有只读角色、没有审计。要么部署在内网单用户机器，要么等独立的多租户设计</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note danger">
+    <div>
+      <strong>一个必须承认的缺口</strong>
+      现在整份设计是单用户模型：谁能访问页面，谁就能操作这个能跑 Bash 的 agent。
+      如果目标是把页面开给一个团队用，还需要一层「会话 → 用户映射 + 只读/可写权限 + 审计日志」，
+      那不是 P4 的部署物料，而是一个独立设计。
+    </div>
+  </div>
+</section>
+
+</main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- 主题 ---------- */
+  var root = document.documentElement;
+  var toggle = document.getElementById("theme-toggle");
+
+  function applyTheme(theme) {
+    root.setAttribute("data-theme", theme);
+    toggle.textContent = theme === "dark" ? "切换亮色" : "切换暗色";
+  }
+
+  var stored = null;
+  try { stored = localStorage.getItem("heron-design-theme"); } catch (e) { stored = null; }
+  if (!stored && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+    stored = "dark";
+  }
+  applyTheme(stored === "dark" ? "dark" : "light");
+
+  toggle.addEventListener("click", function () {
+    var next = root.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    applyTheme(next);
+    try { localStorage.setItem("heron-design-theme", next); } catch (e) { /* 忽略 */ }
+  });
+
+  /* ---------- 原型：页签切换 ---------- */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".frame-tab"));
+  var screens = Array.prototype.slice.call(document.querySelectorAll(".screen"));
+  var urlBar = document.getElementById("frame-url");
+  var URLS = {
+    "s-list": "http://127.0.0.1:8080/",
+    "s-detail": "http://127.0.0.1:8080/s/fs_a1b2c3",
+    "s-wakeups": "http://127.0.0.1:8080/wakeups",
+    "s-status": "http://127.0.0.1:8080/status"
+  };
+
+  function showScreen(id) {
+    screens.forEach(function (el) { el.classList.toggle("active", el.id === id); });
+    tabs.forEach(function (tab) {
+      tab.setAttribute("aria-selected", tab.getAttribute("data-screen") === id ? "true" : "false");
+    });
+    if (urlBar && URLS[id]) { urlBar.textContent = URLS[id]; }
+  }
+
+  tabs.forEach(function (tab) {
+    tab.addEventListener("click", function () { showScreen(tab.getAttribute("data-screen")); });
+  });
+
+  /* ---------- 原型：工具行折叠 ---------- */
+  document.addEventListener("click", function (event) {
+    var head = event.target.closest ? event.target.closest(".tool-head, .deliveries-head") : null;
+    if (!head) { return; }
+    var host = head.parentElement;
+    if (host.classList.contains("tool")) {
+      host.setAttribute("data-open", host.getAttribute("data-open") === "true" ? "false" : "true");
+    } else if (host.classList.contains("deliveries")) {
+      var open = host.getAttribute("data-open") !== "false";
+      host.setAttribute("data-open", open ? "false" : "true");
+      Array.prototype.forEach.call(host.querySelectorAll(".delivery"), function (item) {
+        item.style.display = open ? "none" : "";
+      });
+    }
+  });
+
+  /* ---------- 原型：断线模拟 ---------- */
+  var btnDisconnect = document.getElementById("btn-disconnect");
+  var banners = [document.getElementById("banner-list"), document.getElementById("banner-detail")];
+  var offline = false;
+  var timer = null;
+
+  btnDisconnect.addEventListener("click", function () {
+    offline = !offline;
+    if (timer) { clearTimeout(timer); timer = null; }
+
+    banners.forEach(function (banner) {
+      if (!banner) { return; }
+      if (offline) {
+        banner.hidden = false;
+        banner.firstElementChild.textContent = "连接断开，3 秒后重连…（已有内容保留，不会清空）";
+      } else {
+        banner.hidden = true;
+      }
+    });
+    btnDisconnect.textContent = offline ? "模拟恢复" : "模拟断线";
+
+    if (offline) {
+      timer = setTimeout(function () {
+        banners.forEach(function (banner) {
+          if (banner && !banner.hidden) {
+            banner.firstElementChild.textContent = "已恢复连接，正在补齐断线期间的事件…";
+          }
+        });
+        setTimeout(function () {
+          banners.forEach(function (banner) { if (banner) { banner.hidden = true; } });
+          offline = false;
+          btnDisconnect.textContent = "模拟断线";
+        }, 1200);
+      }, 3000);
+    }
+  });
+
+  /* ---------- 原型：审批 ---------- */
+  var approvalBar = document.getElementById("approval-bar");
+  document.addEventListener("click", function (event) {
+    var target = event.target.closest ? event.target.closest("[data-approval]") : null;
+    if (!target || !approvalBar) { return; }
+    var allowed = target.getAttribute("data-approval") === "allow";
+    approvalBar.querySelector(".grow").textContent =
+      allowed ? "已允许，等待工具执行…" : "已拒绝，已告知模型换一种做法";
+    Array.prototype.forEach.call(approvalBar.querySelectorAll("button"), function (button) {
+      button.disabled = true;
+    });
+    setTimeout(function () {
+      approvalBar.style.display = "none";
+    }, 1400);
+  });
+
+  /* ---------- 原型：发送 ---------- */
+  var box = document.getElementById("composer-box");
+  var btnSend = document.getElementById("btn-send");
+
+  function sendDraft() {
+    if (!box || box.value.trim() === "") { return; }
+    var timeline = document.querySelector("#s-detail .timeline");
+    if (!timeline) { return; }
+
+    var wrap = document.createElement("div");
+    wrap.className = "msg";
+
+    var role = document.createElement("div");
+    role.className = "msg-role";
+    role.textContent = "你";
+
+    var body = document.createElement("div");
+    body.className = "msg-body";
+
+    var head = document.createElement("div");
+    head.className = "msg-head";
+
+    var time = document.createElement("span");
+    time.className = "msg-time";
+    time.textContent = "刚刚";
+
+    var pending = document.createElement("span");
+    pending.className = "tag";
+    pending.textContent = "发送中";
+
+    var text = document.createElement("div");
+    text.className = "msg-text";
+    text.textContent = box.value;   /* 纯文本，绝不 innerHTML */
+
+    head.appendChild(time);
+    head.appendChild(pending);
+    body.appendChild(head);
+    body.appendChild(text);
+    wrap.appendChild(role);
+    wrap.appendChild(body);
+    timeline.appendChild(wrap);
+
+    box.value = "";
+    timeline.scrollIntoView({ block: "end" });
+
+    setTimeout(function () { pending.textContent = "已受理"; }, 700);
+  }
+
+  if (btnSend) { btnSend.addEventListener("click", sendDraft); }
+  if (box) {
+    box.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendDraft();
+      }
+    });
+  }
+
+  /* ---------- 原型：取消回合（内联二次确认） ---------- */
+  var btnCancel = document.getElementById("btn-cancel");
+  if (btnCancel) {
+    btnCancel.addEventListener("click", function () {
+      if (btnCancel.getAttribute("data-armed") === "true") {
+        btnCancel.textContent = "已发送取消";
+        btnCancel.setAttribute("data-armed", "false");
+        setTimeout(function () { btnCancel.textContent = "取消回合"; }, 1600);
+        return;
+      }
+      btnCancel.setAttribute("data-armed", "true");
+      btnCancel.textContent = "确认取消？";
+      setTimeout(function () {
+        if (btnCancel.getAttribute("data-armed") === "true") {
+          btnCancel.setAttribute("data-armed", "false");
+          btnCancel.textContent = "取消回合";
+        }
+      }, 3000);
+    });
+  }
+
+  /* ---------- 文档：目录高亮 ---------- */
+  var links = Array.prototype.slice.call(document.querySelectorAll(".toc a"));
+  var sections = links
+    .map(function (link) { return document.querySelector(link.getAttribute("href")); })
+    .filter(Boolean);
+
+  if ("IntersectionObserver" in window && sections.length) {
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) { return; }
+        links.forEach(function (link) {
+          link.classList.toggle("active", link.getAttribute("href") === "#" + entry.target.id);
+        });
+      });
+    }, { rootMargin: "-20% 0px -70% 0px", threshold: 0 });
+    sections.forEach(function (section) { observer.observe(section); });
+  }
+})();
+</script>
+
+</body>
+</html>
