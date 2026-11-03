@@ -159,6 +159,202 @@
     return "";
   }
 
+  /* ---------- markdown ---------- */
+  /* A deliberately small renderer: headings, lists, fenced code, quotes, tables,
+   * rules, and inline code/bold/italic/strikethrough/links. Enough for what
+   * models actually emit, small enough to read in review.
+   *
+   * It builds DOM nodes and never touches innerHTML. The input is model output,
+   * and the model sits in front of an agent that can run commands — HTML in the
+   * text is shown as text, not parsed.
+   */
+  function renderMarkdown(source) {
+    var root = el("div", { class: "md" });
+    var lines = String(source === null || source === undefined ? "" : source)
+      .replace(/\r\n?/g, "\n")
+      .split("\n");
+    var i = 0;
+
+    while (i < lines.length) {
+      var line = lines[i];
+
+      if (/^```/.test(line)) {
+        var lang = line.slice(3).trim();
+        var code = [];
+        i += 1;
+        while (i < lines.length && !/^```/.test(lines[i])) {
+          code.push(lines[i]);
+          i += 1;
+        }
+        i += 1; // closing fence (a missing one just ends the block)
+        root.appendChild(codeBlock(code.join("\n"), lang));
+        continue;
+      }
+
+      var heading = line.match(/^(#{1,6})\s+(.*)$/);
+      if (heading) {
+        root.appendChild(el("h" + heading[1].length, null, inlineNodes(heading[2])));
+        i += 1;
+        continue;
+      }
+
+      if (/^\s*([-*_])\s*\1\s*\1[\s\S]*$/.test(line) && line.replace(/[\s\-*_]/g, "") === "") {
+        root.appendChild(el("hr"));
+        i += 1;
+        continue;
+      }
+
+      if (/^>\s?/.test(line)) {
+        var quoted = [];
+        while (i < lines.length && /^>\s?/.test(lines[i])) {
+          quoted.push(lines[i].replace(/^>\s?/, ""));
+          i += 1;
+        }
+        root.appendChild(el("blockquote", null, renderMarkdown(quoted.join("\n"))));
+        continue;
+      }
+
+      if (line.indexOf("|") >= 0 && i + 1 < lines.length && isTableDivider(lines[i + 1])) {
+        var header = splitRow(line);
+        i += 2;
+        var rows = [];
+        while (i < lines.length && lines[i].indexOf("|") >= 0 && lines[i].trim()) {
+          rows.push(splitRow(lines[i]));
+          i += 1;
+        }
+        root.appendChild(tableNode(header, rows));
+        continue;
+      }
+
+      if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
+        var ordered = /^\s*\d+[.)]\s+/.test(line);
+        var list = el(ordered ? "ol" : "ul");
+        while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) {
+          var item = lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, "");
+          list.appendChild(el("li", null, inlineNodes(item)));
+          i += 1;
+        }
+        root.appendChild(list);
+        continue;
+      }
+
+      if (!line.trim()) {
+        i += 1;
+        continue;
+      }
+
+      // Paragraph: consecutive plain lines until a blank line or a block start.
+      var paragraph = [line];
+      i += 1;
+      while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) {
+        paragraph.push(lines[i]);
+        i += 1;
+      }
+      root.appendChild(el("p", null, inlineNodes(paragraph.join("\n"))));
+    }
+
+    return root;
+  }
+
+  function isBlockStart(line) {
+    return /^```/.test(line) || /^#{1,6}\s/.test(line) || /^>\s?/.test(line) ||
+      /^\s*([-*+]|\d+[.)])\s+/.test(line) || line.indexOf("|") >= 0;
+  }
+
+  function isTableDivider(line) {
+    return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.indexOf("-") >= 0;
+  }
+
+  function splitRow(line) {
+    return line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(function (cell) {
+      return cell.trim();
+    });
+  }
+
+  function tableNode(header, rows) {
+    var table = el("table", { class: "md-table" });
+    var head = el("thead", null, el("tr", null));
+    header.forEach(function (cell) {
+      head.firstChild.appendChild(el("th", null, inlineNodes(cell)));
+    });
+    table.appendChild(head);
+    var body = el("tbody");
+    rows.forEach(function (row) {
+      var tr = el("tr");
+      for (var index = 0; index < Math.max(row.length, header.length); index += 1) {
+        tr.appendChild(el("td", null, inlineNodes(row[index] || "")));
+      }
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    return table;
+  }
+
+  /* Inline runs inside one line of text. No nesting: models rarely need
+   * bold-inside-link, and supporting it would cost more than it is worth here. */
+  function inlineNodes(source) {
+    var fragment = document.createDocumentFragment();
+    var pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(~~[^~]+~~)|(\[[^\]]+\]\((https?:\/\/[^)\s]+)\))/g;
+    var last = 0;
+    var match;
+    while ((match = pattern.exec(source)) !== null) {
+      if (match.index > last) { fragment.appendChild(text(source.slice(last, match.index))); }
+      last = match.index + match[0].length;
+      if (match[1]) {
+        fragment.appendChild(el("code", null, match[1].slice(1, -1)));
+      } else if (match[2] || match[3]) {
+        fragment.appendChild(el("strong", null, match[2] ? match[2].slice(2, -2) : match[3].slice(2, -2)));
+      } else if (match[4]) {
+        fragment.appendChild(el("em", null, match[4].slice(1, -1)));
+      } else if (match[5]) {
+        fragment.appendChild(el("del", null, match[5].slice(2, -2)));
+      } else if (match[6]) {
+        fragment.appendChild(el("a", {
+          href: match[7],
+          target: "_blank",
+          rel: "noopener noreferrer"
+        }, match[6].replace(/^\[|\]\(.*\)$/g, "")));
+      }
+    }
+    if (last < source.length) { fragment.appendChild(text(source.slice(last))); }
+    return fragment;
+  }
+
+  function codeBlock(code, lang) {
+    var copy = el("button", { type: "button", class: "code-copy" }, "\u590d\u5236");
+    copy.addEventListener("click", function () { copyText(code, copy); });
+    return el("div", { class: "code-block" },
+      el("div", { class: "code-head" },
+        el("span", { class: "code-lang" }, lang || "text"),
+        copy),
+      el("pre", null, el("code", null, code)));
+  }
+
+  /* Clipboard with a fallback: the page is also served over plain HTTP on a LAN
+   * address, where navigator.clipboard is unavailable (it needs a secure
+   * context). */
+  function copyText(value, button) {
+    function done() {
+      if (!button) { return; }
+      if (!button.dataset.original) { button.dataset.original = button.textContent; }
+      button.textContent = "\u5df2\u590d\u5236";
+      setTimeout(function () { button.textContent = button.dataset.original; }, 1200);
+    }
+    function fallback() {
+      var area = el("textarea", { class: "copy-area" });
+      area.value = value;
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand("copy"); done(); } catch (error) { /* nothing else to try */ }
+      document.body.removeChild(area);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(done, fallback);
+      return;
+    }
+    fallback();
+  }
+
   /* ---------- auth ---------- */
   /* The server leaves the page itself open and guards /api/. That split is what
    * makes a token field possible: the browser can load this script and ask for
@@ -583,6 +779,7 @@
     var filePicker = el("input", { type: "file", multiple: "multiple", class: "composer-file" });
     var attachButton = el("button", { type: "button", class: "composer-attach" }, "\u9644\u4ef6");
     var sendButton = el("button", { type: "button", class: "composer-send" }, "\u53d1\u9001");
+    var stopButton = el("button", { type: "button", class: "composer-stop hidden" }, "\u505c\u6b62");
     var status = el("span", { class: "composer-status" }, "");
 
     var box = el("div", { class: "composer" },
@@ -593,7 +790,8 @@
         filePicker,
         status,
         el("span", { class: "composer-hint" }, "Enter \u53d1\u9001 \u00b7 Shift+Enter \u6362\u884c"),
-        sendButton));
+        sendButton,
+        stopButton));
 
     function refreshChips() {
       clear(chips);
@@ -638,8 +836,8 @@
       busy = value;
       input.disabled = value;
       attachButton.disabled = value;
-      sendButton.disabled = value;
-      sendButton.textContent = value ? "\u6267\u884c\u4e2d\u2026" : "\u53d1\u9001";
+      sendButton.classList.toggle("hidden", value);
+      stopButton.classList.toggle("hidden", !value);
       status.textContent = text || "";
     }
 
@@ -649,6 +847,9 @@
     }
 
     var liveRun = null;
+    /* Bumped on every send and on every stop. A POST that answers after the
+     * reader already stopped (or started another turn) must not touch the UI. */
+    var runToken = 0;
 
     function submit() {
       if (busy) { return; }
@@ -656,6 +857,8 @@
       if (!value && pending.length === 0) { return; }
       var payload = { input: value };
       if (pending.length) { payload.attachments = pending.slice(); }
+
+      var token = ++runToken;
 
       /* Subscribe before posting. The turn starts the moment the request
        * lands; a stream opened afterwards would miss its opening events. The
@@ -683,10 +886,12 @@
           });
         })
         .then(function () {
+          if (token !== runToken) { return; }
           setBusy(false, "");
           // The POST answers when the turn is over, so the stream has nothing
           // left to add. Give the last frame a beat, then close it.
           setTimeout(function () {
+            if (token !== runToken) { return; }
             var missed = liveRun ? liveRun.count() === 0 : true;
             if (liveRun) { liveRun.settleAll(); liveRun.stop(); liveRun = null; }
             if (missed) {
@@ -699,8 +904,37 @@
         })
         .catch(function (error) {
           if (error && error.unauthorized) { return; }
+          if (token !== runToken) { return; }
           if (liveRun) { liveRun.stop(); liveRun = null; }
           setBusy(false, "\u53d1\u9001\u5931\u8d25\uff1a" + error.message);
+        });
+    }
+
+    /* Stopping is two things, and only the first one is fully ours to do:
+     * drop the client stream, and ask the server to cancel the session. The
+     * server marks the session cancelled; whether the in-flight model call dies
+     * with it depends on ctx propagation inside the runtime, which this page
+     * cannot see. So the copy says "停止" and reports what the server answered,
+     * rather than claiming the work definitely ended. */
+    function stop() {
+      if (!busy) { return; }
+      runToken += 1;
+      if (liveRun) { liveRun.settleAll(); liveRun.stop(); liveRun = null; }
+      setBusy(false, "\u6b63\u5728\u8bf7\u6c42\u505c\u6b62\u2026");
+      apiFetch("/api/cancel?session_id=" + encodeURIComponent(sessionID), { method: "POST" })
+        .then(function (response) {
+          if (response.ok) { return response.json(); }
+          return response.text().then(function (text) {
+            throw new Error((text || "").trim() || ("HTTP " + response.status));
+          });
+        })
+        .then(function () {
+          scrollToBottom = true;
+          renderRecord(sessionID);
+        })
+        .catch(function (error) {
+          if (error && error.unauthorized) { return; }
+          setBusy(false, "\u505c\u6b62\u5931\u8d25\uff1a" + error.message);
         });
     }
 
@@ -882,20 +1116,24 @@
         if (!reply.body) { return; }
         view.lastText = reply.body;
         view.lastSeqOfCall[call] = event.seq;
-        var body = el("div", { class: "body" }, reply.body);
+        var body = el("div", { class: "body markdown" }, renderMarkdown(reply.body));
         if (reply.raw) {
           body.appendChild(el("details", { class: "raw-reply" },
             el("summary", null, "\u539f\u59cb\u8f93\u51fa"),
             el("pre", null, reply.raw)));
         }
         var speaker = speakerLabel(event);
-        view.body.appendChild(el("div", { class: "msg from-agent" },
+        var message = el("div", { class: "msg from-agent" },
           el("div", { class: "who" },
             speaker.team ? el("span", { class: "who-team" }, speaker.team + " / ") : null,
             speaker.agent || "\u52a9\u624b",
             stamp(event.created_at),
             el("span", { class: "took-slot", "data-call": call })),
-          body));
+          body);
+        var copy = el("button", { type: "button", class: "copy-msg", title: "\u590d\u5236\u8fd9\u6761\u56de\u590d" }, "\u590d\u5236");
+        copy.addEventListener("click", function () { copyText(reply.body, copy); });
+        message.appendChild(copy);
+        view.body.appendChild(message);
         return;
       }
 
@@ -904,9 +1142,13 @@
         var node = el("details", { class: "tool running" },
           el("summary", null,
             el("span", { class: "name" }, payload.tool_name || "tool"),
-            el("span", { class: "arg" }, payload.arguments ? JSON.stringify(payload.arguments) : ""),
+            el("span", { class: "arg" }, toolSummary(payload.tool_name, payload.arguments || {})),
             el("span", { class: "state" }, "\u8fdb\u884c\u4e2d")),
-          el("pre", null, ""));
+          el("div", { class: "tool-body" },
+            payload.arguments && Object.keys(payload.arguments).length
+              ? el("pre", { class: "args" }, JSON.stringify(payload.arguments, null, 2))
+              : null,
+            el("pre", { class: "out" }, "")));
         view.tools[key] = node;
         view.body.appendChild(node);
         return;
@@ -917,7 +1159,7 @@
         target.classList.remove("running");
         var label = target.querySelector(".state");
         if (label) { label.textContent = event.type === "tool_call.failed" ? "\u5931\u8d25" : "\u6210\u529f"; }
-        var pre = target.querySelector("pre");
+        var pre = target.querySelector("pre.out");
         if (pre) {
           pre.textContent = event.type === "tool_call.failed"
             ? (payload.error || "")
@@ -944,7 +1186,7 @@
       } else if (view.reply && view.reply.trim() !== view.lastText.trim()) {
         view.body.appendChild(el("div", { class: "msg from-agent" },
           el("div", { class: "who" }, "\u56de\u5408\u7b54\u590d", stamp(event.created_at)),
-          el("div", { class: "body" }, view.reply)));
+          el("div", { class: "body markdown" }, renderMarkdown(view.reply))));
       }
       if (view.intermediate) { view.tags.appendChild(tag("\u4e2d\u95f4\u56de\u5408")); }
       if (view.origin === "wakeup") { view.tags.appendChild(tag("\u5b9a\u65f6\u68c0\u67e5", "warn")); }
@@ -1145,6 +1387,9 @@
         turn.origin === "wakeup" ? "warn" : null));
     }
     if (turn.intermediate) { head.appendChild(tag("\u4e2d\u95f4\u56de\u5408")); }
+    if (turn.error && String(turn.error).toLowerCase().indexOf("cancel") >= 0) {
+      head.appendChild(tag("\u5df2\u4e2d\u65ad", "warn"));
+    }
     if (turn.limit) { head.appendChild(tag("\u88ab " + turn.limit.name + " \u7ec8\u6b62", "danger")); }
     var turnSpan = elapsed(turn.startedAt, turn.endedAt);
     if (turnSpan) { head.appendChild(el("span", { class: "turn-span" }, turnSpan)); }
@@ -1166,7 +1411,7 @@
         var view = modelReply(payload);
         if (view.body) {
           lastText = view.body;
-          var body = el("div", { class: "body" }, view.body);
+          var body = el("div", { class: "body markdown" }, renderMarkdown(view.body));
           if (view.raw) {
             body.appendChild(el("details", { class: "raw-reply" },
               el("summary", null, "\u539f\u59cb\u8f93\u51fa"),
@@ -1175,13 +1420,17 @@
           var speaker = speakerLabel(event);
           var span = spans[event.call_turn_id || ""] || {};
           var took = lastSeqOfCall[event.call_turn_id || ""] === event.seq ? elapsed(span.start, span.end) : "";
-          box.appendChild(el("div", { class: "msg from-agent" },
+          var message = el("div", { class: "msg from-agent" },
             el("div", { class: "who" },
               speaker.team ? el("span", { class: "who-team" }, speaker.team + " / ") : null,
               speaker.agent || "\u52a9\u624b",
               stamp(event.created_at),
               took ? el("span", { class: "took", title: "\u8fd9\u4e2a agent \u8fd9\u4e00\u8f6e\u7684\u8017\u65f6" }, took) : null),
-            body));
+            body);
+          var copy = el("button", { type: "button", class: "copy-msg", title: "\u590d\u5236\u8fd9\u6761\u56de\u590d" }, "\u590d\u5236");
+          copy.addEventListener("click", function () { copyText(view.body, copy); });
+          message.appendChild(copy);
+          box.appendChild(message);
         }
         return;
       }
@@ -1195,7 +1444,7 @@
         if (!node) { return; }
         var state = node.querySelector(".state");
         if (state) { state.textContent = event.type === "tool_call.failed" ? "\u5931\u8d25" : "\u6210\u529f"; }
-        var pre = node.querySelector("pre");
+        var pre = node.querySelector("pre.out");
         if (pre) {
           var output = event.type === "tool_call.failed"
             ? (payload.error || "")
@@ -1224,19 +1473,37 @@
       // so it is labelled by level rather than by agent.
       box.appendChild(el("div", { class: "msg from-agent" + (turn.intermediate ? " intermediate" : "") },
         el("div", { class: "who" }, "\u56de\u5408\u7b54\u590d", stamp(turn.endedAt)),
-        el("div", { class: "body" }, turn.reply)));
+        el("div", { class: "body markdown" }, renderMarkdown(turn.reply))));
     }
     return box;
   }
 
+  /* A tool call reads better as "what did it act on" than as a JSON blob: Bash
+   * wants its command, Read/Write their path, Team its description. The full
+   * arguments stay available in the expanded body. */
+  function toolSummary(name, args) {
+    var value = args || {};
+    if (typeof value === "string") { return value.slice(0, 160); }
+    if (value.command) { return String(value.command).split("\n")[0].slice(0, 160); }
+    if (value.file_path) { return value.file_path; }
+    if (value.pattern) { return value.pattern + (value.path ? "  " + value.path : ""); }
+    if (value.description) { return value.description.slice(0, 160); }
+    if (value.query) { return String(value.query).slice(0, 160); }
+    var json = JSON.stringify(value);
+    if (!json || json === "{}") { return ""; }
+    return json.slice(0, 120);
+  }
+
   function appendTool(box, call) {
-    var args = call.arguments ? JSON.stringify(call.arguments) : "";
+    var args = call.arguments || {};
     var node = el("details", { class: "tool" },
       el("summary", null,
         el("span", { class: "name" }, call.tool_name || "tool"),
-        el("span", { class: "arg" }, args),
+        el("span", { class: "arg" }, toolSummary(call.tool_name, args)),
         el("span", { class: "state" }, "\u8fdb\u884c\u4e2d")),
-      el("pre", null, ""));
+      el("div", { class: "tool-body" },
+        Object.keys(args).length ? el("pre", { class: "args" }, JSON.stringify(args, null, 2)) : null,
+        el("pre", { class: "out" }, "")));
     box.appendChild(node);
     return node;
   }

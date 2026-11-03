@@ -265,9 +265,20 @@ await run("record: single agent", async () => {
   const who = (await page.locator(".msg .who").allTextContents()).map(speakerOf);
   checkEqual("消息发送者", who.join("|"), "你|default / coordinator");
 
-  const body = await page.locator(".msg.from-agent .body").first().innerText();
-  check("正文是可读答复", body.includes("当前目录下有一个 .agents 目录。"), body.slice(0, 40));
-  check("正文不含信封字段", !body.includes("intent_hint") && !body.includes('"reply"'), body.slice(0, 40));
+  const body = page.locator(".msg.from-agent .body").first();
+  const bodyText = await body.innerText();
+  check("正文是可读答复", bodyText.includes(".agents"), bodyText.slice(0, 40));
+  check("正文不含信封字段", !bodyText.includes("intent_hint") && !bodyText.includes('"reply"'), bodyText.slice(0, 40));
+
+  checkEqual("markdown 粗体", await body.locator("strong").count(), 1);
+  checkEqual("markdown 列表项", await body.locator("li").count(), 2);
+  checkEqual("markdown 代码块", await body.locator(".code-block").count(), 1);
+  checkEqual("代码块语言", await body.locator(".code-lang").first().innerText(), "bash");
+  check("代码块内容完整", (await body.locator(".code-block code").first().textContent()).includes("ls -la"));
+  checkEqual("代码块带复制按钮", await body.locator(".code-copy").count(), 1);
+  checkEqual("markdown 表格", await body.locator(".md-table").count(), 1);
+  checkEqual("表格单元格数", await body.locator(".md-table td").count(), 2);
+  checkEqual("消息带复制按钮", await page.locator(".msg.from-agent .copy-msg").count(), 1);
 
   const raw = page.locator("details.raw-reply");
   checkEqual("原始输出折叠数量", await raw.count(), 1);
@@ -283,7 +294,9 @@ await run("record: single agent", async () => {
 
   checkEqual("工具行数量", await page.locator(".tool").count(), 1);
   checkEqual("工具状态", await page.locator(".tool .state").first().innerText(), "成功");
-  check("工具输出已填入", (await page.locator(".tool pre").first().textContent()).includes("drwxr-xr-x"));
+  check("工具输出已填入", (await page.locator(".tool pre.out").first().textContent()).includes("drwxr-xr-x"));
+  checkEqual("工具摘要显示命令而非 JSON", await page.locator(".tool .arg").first().innerText(), "ls -la");
+  check("完整参数保留在展开区", (await page.locator(".tool pre.args").first().textContent()).includes("\"command\""));
 
   checkEqual("回合最终答复不重复渲染", await page.locator(".msg.from-agent").count(), 1);
   check("无 console error", errors.length === 0, errors.join(" | "));
@@ -359,11 +372,13 @@ await run("live stream", async () => {
   await page.waitForSelector(".turn.live", { timeout: 5000 });
   check("订阅了会话事件流", streamServed);
   check("发送时出现 live 回合", await page.locator(".turn.live").count() === 1);
+  check("执行中显示停止按钮", await page.locator(".composer-stop").isVisible());
+  check("执行中隐藏发送按钮", await page.locator(".composer-send").isHidden());
 
   // Frames land 120ms apart; the tool row arrives in the third one.
   await page.waitForSelector(".turn.live .tool", { timeout: 5000 });
   checkEqual("实时工具行状态", await page.locator(".turn.live .tool .state").last().innerText(), "成功");
-  check("实时工具输出已填入", (await page.locator(".turn.live .tool pre").last().textContent()).includes("drwxr-xr-x"));
+  check("实时工具输出已填入", (await page.locator(".turn.live .tool pre.out").last().textContent()).includes("drwxr-xr-x"));
 
   const step = await page.locator(".turn.live .step").last().innerText();
   check("team 派发行带 team 名", step.includes("live-probe"), step);
