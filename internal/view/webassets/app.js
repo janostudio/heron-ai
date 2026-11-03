@@ -84,6 +84,32 @@
     return d.toTimeString().slice(0, 8);
   }
 
+  /* Wall-clock gap between two timestamps. Minutes stay readable with the
+     seconds attached: a probe that ran 8m33s should not read as "8m". */
+  function elapsed(startISO, endISO) {
+    var start = new Date(startISO).getTime();
+    var end = new Date(endISO).getTime();
+    if (isNaN(start) || isNaN(end) || end < start) { return ""; }
+    var ms = end - start;
+    if (ms < 1000) { return ms + "ms"; }
+    if (ms < 60000) { return (ms / 1000).toFixed(1) + "s"; }
+    var minutes = Math.floor(ms / 60000);
+    var seconds = Math.round((ms % 60000) / 1000);
+    return minutes + "m" + (seconds ? seconds + "s" : "");
+  }
+
+  /* Timestamp chip that goes on a message header. The clock alone is what the
+     eye needs; the full timestamp (with date) stays in the tooltip so a
+     transcript that spans days is still decidable. */
+  function stamp(iso) {
+    if (!iso) { return null; }
+    var text = clock(iso);
+    if (!text) { return null; }
+    var when = new Date(iso);
+    var title = isNaN(when.getTime()) ? iso : when.toLocaleString();
+    return el("span", { class: "when", title: title }, text);
+  }
+
   function duration(node) {
     if (!node.started_at) { return ""; }
     var start = new Date(node.started_at).getTime();
@@ -163,11 +189,13 @@
   /* apiFetch attaches the bearer token and turns 401 into the login screen.
    * Every data request goes through it: a bare fetch would fail with an
    * unreadable error whenever the token is missing or stale. */
-  function apiFetch(path) {
-    var headers = {};
+  function apiFetch(path, options) {
+    var init = options || {};
+    var headers = init.headers || {};
     var token = readToken();
     if (token) { headers.Authorization = "Bearer " + token; }
-    return fetch(path, { headers: headers }).then(function (response) {
+    init.headers = headers;
+    return fetch(path, init).then(function (response) {
       if (response.status === 401) { return rejected(new Error("HTTP 401")); }
       return response;
     });
@@ -324,6 +352,12 @@
     var body = el("div", { id: "record-body" });
     app.appendChild(body);
     showMode(body, "chat");
+
+    app.appendChild(renderComposer(sessionID));
+    if (scrollToBottom) {
+      scrollToBottom = false;
+      window.scrollTo(0, document.body.scrollHeight);
+    }
   }
 
   function modeButton(mode, label, pressed) {
@@ -415,6 +449,188 @@
     return el("span", null, el("b", { class: cls }), label);
   }
 
+  /* ---------- composer ---------- */
+  /* The page was read-only; this sends a turn into the session already on
+   * screen, using the same body the CLI bridge posts:
+   * POST /api/sessions/turn?session_id=… with {input, attachments}.
+   *
+   * That call is synchronous — it answers when the whole flow turn finishes,
+   * which for a dispatching turn is minutes. So the send button locks and says
+   * so; a second message typed meanwhile would land in a turn that is still
+   * running.
+   */
+  var MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+  var scrollToBottom = false;
+
+  function attachmentKind(mime) {
+    if (!mime) { return "file"; }
+    if (mime.indexOf("image/") === 0) { return "image"; }
+    if (mime.indexOf("audio/") === 0) { return "audio"; }
+    if (mime.indexOf("video/") === 0) { return "video"; }
+    return "file";
+  }
+
+  function humanSize(bytes) {
+    if (!bytes) { return "0B"; }
+    if (bytes < 1024) { return bytes + "B"; }
+    if (bytes < 1024 * 1024) { return Math.round(bytes / 1024) + "KB"; }
+    return (bytes / 1024 / 1024).toFixed(1) + "MB";
+  }
+
+  function readBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var result = String(reader.result || "");
+        var comma = result.indexOf(",");
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.onerror = function () { reject(reader.error || new Error("\u8bfb\u53d6\u5931\u8d25")); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderComposer(sessionID) {
+    var pending = [];
+    var busy = false;
+
+    var chips = el("div", { class: "chips" });
+    var input = el("textarea", {
+      class: "composer-input",
+      rows: "1",
+      placeholder: "\u53d1\u6d88\u606f\u7ed9\u8fd9\u4e2a\u4f1a\u8bdd\u3002Enter \u53d1\u9001\uff0cShift+Enter \u6362\u884c\uff1b\u53ef\u76f4\u63a5\u7c98\u8d34\u56fe\u7247\u6216\u62d6\u5165\u6587\u4ef6\u3002"
+    });
+    var filePicker = el("input", { type: "file", multiple: "multiple", class: "composer-file" });
+    var attachButton = el("button", { type: "button", class: "composer-attach" }, "\u9644\u4ef6");
+    var sendButton = el("button", { type: "button", class: "composer-send" }, "\u53d1\u9001");
+    var status = el("span", { class: "composer-status" }, "");
+
+    var box = el("div", { class: "composer" },
+      chips,
+      input,
+      el("div", { class: "composer-bar" },
+        attachButton,
+        filePicker,
+        status,
+        el("span", { class: "composer-hint" }, "Enter \u53d1\u9001 \u00b7 Shift+Enter \u6362\u884c"),
+        sendButton));
+
+    function refreshChips() {
+      clear(chips);
+      chips.style.display = pending.length ? "" : "none";
+      pending.forEach(function (item, index) {
+        var remove = el("button", { type: "button", class: "chip-x", title: "\u79fb\u9664" }, "\u00d7");
+        remove.addEventListener("click", function () {
+          pending.splice(index, 1);
+          refreshChips();
+        });
+        chips.appendChild(el("span", { class: "chip" },
+          el("span", { class: "chip-kind" }, item.kind),
+          el("span", { class: "chip-name" }, item.name),
+          el("span", { class: "chip-size" }, humanSize(item.size_bytes)),
+          remove));
+      });
+    }
+
+    function addFiles(files) {
+      if (!files || !files.length) { return; }
+      Array.prototype.forEach.call(files, function (file) {
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          status.textContent = "\u300c" + file.name + "\u300d \u8d85\u8fc7 " + humanSize(MAX_ATTACHMENT_BYTES) + "\uff0c\u672a\u6dfb\u52a0\u3002";
+          return;
+        }
+        readBase64(file).then(function (data) {
+          pending.push({
+            name: file.name || "pasted",
+            mime_type: file.type || "application/octet-stream",
+            kind: attachmentKind(file.type),
+            size_bytes: file.size || 0,
+            data_base64: data
+          });
+          refreshChips();
+        }).catch(function (error) {
+          status.textContent = "\u8bfb\u53d6\u300c" + file.name + "\u300d\u5931\u8d25\uff1a" + error.message;
+        });
+      });
+    }
+
+    function setBusy(value, text) {
+      busy = value;
+      input.disabled = value;
+      attachButton.disabled = value;
+      sendButton.disabled = value;
+      sendButton.textContent = value ? "\u6267\u884c\u4e2d\u2026" : "\u53d1\u9001";
+      status.textContent = text || "";
+    }
+
+    function autosize() {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight || 0, 180) + "px";
+    }
+
+    function submit() {
+      if (busy) { return; }
+      var value = input.value.trim();
+      if (!value && pending.length === 0) { return; }
+      var payload = { input: value };
+      if (pending.length) { payload.attachments = pending.slice(); }
+      setBusy(true, "\u5df2\u53d1\u9001\uff0c\u6b63\u5728\u6267\u884c\u2026\u6d3e\u53d1\u7c7b\u56de\u5408\u53ef\u80fd\u8981\u7b49\u51e0\u5206\u949f\u3002");
+      apiFetch("/api/sessions/turn?session_id=" + encodeURIComponent(sessionID), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      })
+        .then(function (response) {
+          if (response.ok) { return response.json(); }
+          return response.text().then(function (text) {
+            throw new Error((text || "").trim() || ("HTTP " + response.status));
+          });
+        })
+        .then(function () {
+          scrollToBottom = true;
+          renderRecord(sessionID);
+        })
+        .catch(function (error) {
+          if (error && error.unauthorized) { return; }
+          setBusy(false, "\u53d1\u9001\u5931\u8d25\uff1a" + error.message);
+        });
+    }
+
+    input.addEventListener("keydown", function (event) {
+      // isComposing: an Enter that confirms an IME candidate must not send.
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        submit();
+      }
+    });
+    input.addEventListener("input", autosize);
+    sendButton.addEventListener("click", submit);
+    attachButton.addEventListener("click", function () { filePicker.click(); });
+    filePicker.addEventListener("change", function () {
+      addFiles(filePicker.files);
+      filePicker.value = "";
+    });
+    box.addEventListener("paste", function (event) {
+      var files = (event.clipboardData && event.clipboardData.files) || [];
+      if (!files.length) { return; } // plain text keeps the browser default
+      event.preventDefault();
+      addFiles(files);
+    });
+    box.addEventListener("dragover", function (event) {
+      event.preventDefault();
+      box.classList.add("dragging");
+    });
+    box.addEventListener("dragleave", function () { box.classList.remove("dragging"); });
+    box.addEventListener("drop", function (event) {
+      event.preventDefault();
+      box.classList.remove("dragging");
+      if (event.dataTransfer && event.dataTransfer.files) { addFiles(event.dataTransfer.files); }
+    });
+
+    refreshChips();
+    return box;
+  }
+
   /* ---------- chat ---------- */
   function renderChat(record) {
     var wrap = el("div", { class: "chat" });
@@ -438,20 +654,24 @@
       if (!map[key]) {
         map[key] = {
           id: key, events: [], input: "", origin: "", reply: "",
-          error: "", intermediate: false, limit: null
+          error: "", intermediate: false, limit: null, startedAt: "", endedAt: ""
         };
         order.push(map[key]);
       }
       var turn = map[key];
       turn.events.push(event);
       var payload = event.payload || {};
-      if (event.type === "flow_turn.started" && payload.input) { turn.input = payload.input; }
+      if (event.type === "flow_turn.started") {
+        if (payload.input) { turn.input = payload.input; }
+        turn.startedAt = event.created_at || turn.startedAt;
+      }
       if (event.type === "flow_turn.waiting_input" || event.type === "flow_turn.completed") {
         turn.origin = payload.origin || turn.origin;
         turn.reply = payload.reply || turn.reply;
         turn.error = payload.error || turn.error;
         turn.intermediate = payload.intermediate === true;
         if (payload.limit) { turn.limit = payload.limit; }
+        turn.endedAt = event.created_at || turn.endedAt;
       }
     });
     return order;
@@ -510,6 +730,27 @@
     if (turn.error) { cls += " failed"; }
     var box = el("div", { class: cls });
 
+    /* Per-call spans, so a message can say how long its agent actually ran.
+     * agent_turn.started/completed carry the same call_turn_id as the messages;
+     * a call that never completed (still running, or the turn was cut) simply
+     * has no end and shows no duration. */
+    var spans = {};
+    var lastSeqOfCall = {};
+    turn.events.forEach(function (event) {
+      var call = event.call_turn_id || "";
+      if (!call) { return; }
+      if (event.type === "agent_turn.started") {
+        spans[call] = { start: event.created_at || "", end: "" };
+      }
+      if (event.type === "agent_turn.completed") {
+        if (!spans[call]) { spans[call] = { start: "", end: "" }; }
+        spans[call].end = event.created_at || "";
+      }
+      if (event.type === "agent.model_response") {
+        lastSeqOfCall[call] = event.seq;
+      }
+    });
+
     var head = el("div", { class: "turn-head" }, el("span", { class: "t" }, shortId(turn.id)));
     if (turn.origin) {
       head.appendChild(tag(
@@ -518,11 +759,15 @@
     }
     if (turn.intermediate) { head.appendChild(tag("\u4e2d\u95f4\u56de\u5408")); }
     if (turn.limit) { head.appendChild(tag("\u88ab " + turn.limit.name + " \u7ec8\u6b62", "danger")); }
+    var turnSpan = elapsed(turn.startedAt, turn.endedAt);
+    if (turnSpan) { head.appendChild(el("span", { class: "turn-span" }, turnSpan)); }
     box.appendChild(head);
 
     if (turn.input) {
-      box.appendChild(el("div", { class: "msg" },
-        el("div", { class: "who" }, "\u4f60"),
+      box.appendChild(el("div", { class: "msg from-user" },
+        el("div", { class: "who" },
+          "\u4f60",
+          stamp(turn.startedAt)),
         el("div", { class: "body" }, turn.input)));
     }
 
@@ -541,10 +786,14 @@
               el("pre", null, view.raw)));
           }
           var speaker = speakerLabel(event);
-          box.appendChild(el("div", { class: "msg" },
+          var span = spans[event.call_turn_id || ""] || {};
+          var took = lastSeqOfCall[event.call_turn_id || ""] === event.seq ? elapsed(span.start, span.end) : "";
+          box.appendChild(el("div", { class: "msg from-agent" },
             el("div", { class: "who" },
               speaker.team ? el("span", { class: "who-team" }, speaker.team + " / ") : null,
-              speaker.agent || "\u52a9\u624b"),
+              speaker.agent || "\u52a9\u624b",
+              stamp(event.created_at),
+              took ? el("span", { class: "took", title: "\u8fd9\u4e2a agent \u8fd9\u4e00\u8f6e\u7684\u8017\u65f6" }, took) : null),
             body));
         }
         return;
@@ -586,8 +835,8 @@
       // When it does differ it is the turn's closing answer — one level above
       // the individual agent messages, possibly a coordinator summary of them —
       // so it is labelled by level rather than by agent.
-      box.appendChild(el("div", { class: "msg" + (turn.intermediate ? " intermediate" : "") },
-        el("div", { class: "who" }, "\u56de\u5408\u7b54\u590d"),
+      box.appendChild(el("div", { class: "msg from-agent" + (turn.intermediate ? " intermediate" : "") },
+        el("div", { class: "who" }, "\u56de\u5408\u7b54\u590d", stamp(turn.endedAt)),
         el("div", { class: "body" }, turn.reply)));
     }
     return box;
