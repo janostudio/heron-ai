@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -455,26 +456,41 @@ func (noopLogger) Info(string, map[string]any)  {}
 func (noopLogger) Warn(string, map[string]any)  {}
 func (noopLogger) Error(string, map[string]any) {}
 
-var defaultLogger Logger = noopLogger{}
+// defaultLogger is the process-wide logger. It sits behind an atomic pointer:
+// tests rebuild runtimes whose background goroutines keep logging while the
+// next test swaps the logger in — a plain variable raced on exactly that.
+var defaultLogger = func() *atomic.Pointer[Logger] {
+	var initial Logger = noopLogger{}
+	var pointer atomic.Pointer[Logger]
+	pointer.Store(&initial)
+	return &pointer
+}()
 
 // SetDefault replaces the process-wide logger used by the package-level
 // Debug/Info/Warn/Error functions.
 func SetDefault(l Logger) {
-	if l == nil {
-		defaultLogger = noopLogger{}
-		return
+	var value Logger = noopLogger{}
+	if l != nil {
+		value = l
 	}
-	defaultLogger = l
+	defaultLogger.Store(&value)
+}
+
+func current() Logger {
+	if pointer := defaultLogger.Load(); pointer != nil {
+		return *pointer
+	}
+	return noopLogger{}
 }
 
 // Debug logs a debug message via the default logger.
-func Debug(msg string, fields map[string]any) { defaultLogger.Debug(msg, fields) }
+func Debug(msg string, fields map[string]any) { current().Debug(msg, fields) }
 
 // Info logs an info message via the default logger.
-func Info(msg string, fields map[string]any) { defaultLogger.Info(msg, fields) }
+func Info(msg string, fields map[string]any) { current().Info(msg, fields) }
 
 // Warn logs a warn message via the default logger.
-func Warn(msg string, fields map[string]any) { defaultLogger.Warn(msg, fields) }
+func Warn(msg string, fields map[string]any) { current().Warn(msg, fields) }
 
 // Error logs an error message via the default logger.
-func Error(msg string, fields map[string]any) { defaultLogger.Error(msg, fields) }
+func Error(msg string, fields map[string]any) { current().Error(msg, fields) }
