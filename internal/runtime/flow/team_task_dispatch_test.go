@@ -179,3 +179,47 @@ func TestTaskCatalogSeesOnlyOwnTasks(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "not found"))
 }
+
+// TestScenarioTwoReposThenReturn is the S1 acceptance scenario end to end at
+// the flow boundary: two unrelated repos run as two task instances, the caller
+// comes back to the first one, and abandoning the second leaves the first alone.
+func TestScenarioTwoReposThenReturn(t *testing.T) {
+	rt, fake := newPerTaskRuntime(t)
+	session, _ := mailboxTestSession(t)
+	writeFlowSession(t, rt, session)
+	ctx := context.Background()
+
+	// 1. 两个仓库并行。
+	a := dispatchTask(t, rt, session.ID, "repoA-143", "fs:default")
+	b := dispatchTask(t, rt, session.ID, "repoB-207", "fs:default")
+	require.Equal(t, "done", a.Status)
+	require.Equal(t, "done", b.Status)
+	require.NotEqual(t, a.TeamSessionID, b.TeamSessionID)
+
+	// 2. 回到 A 继续：同一实例，轮次 +1。
+	again := dispatchTask(t, rt, session.ID, "repoA-143", "fs:default")
+	require.Equal(t, a.TeamSessionID, again.TeamSessionID)
+	require.False(t, again.Reopened)
+
+	// 3. 放弃 B：A 不受影响，B 变 closed。
+	spec := types.TaskCatalogSpec{FlowSessionID: session.ID, CallerTeamSessionID: "fs:default"}
+	closed, err := rt.CloseTask(ctx, spec, "repoB-207")
+	require.NoError(t, err)
+	require.Equal(t, types.SessionClosed, closed.Status)
+
+	aInfo, err := rt.GetTask(ctx, spec, "repoA-143")
+	require.NoError(t, err)
+	require.Equal(t, types.SessionCompleted, aInfo.Status, "closing B must not touch A")
+	require.Equal(t, 2, aInfo.DispatchCount)
+
+	tasks, err := rt.ListTasks(ctx, spec)
+	require.NoError(t, err)
+	require.Len(t, tasks, 2, "both tasks remain visible after the close")
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	require.Len(t, fake.devSessions, 3)
+	require.Equal(t, a.TeamSessionID, fake.devSessions[2].ID,
+		"the third dispatch is A's instance again")
+	require.Equal(t, 2, fake.devSessions[2].DispatchCount)
+}
