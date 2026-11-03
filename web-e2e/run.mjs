@@ -58,8 +58,17 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === "/api/stream") {
     streamServed = true;
+    // Honour Last-Event-ID like the real endpoint: a subscriber that resumes
+    // must not get frames it already has, otherwise the page would render the
+    // same turn twice and no frontend fix could ever prove itself here.
+    const last = parseInt(req.headers["last-event-id"] || "0", 10) || 0;
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
-    const frames = files.stream.split("\n\n").filter((frame) => frame.trim());
+    const frames = files.stream.split("\n\n")
+      .filter((frame) => frame.trim())
+      .filter((frame) => {
+        const match = frame.match(/^id:\s*(\d+)/m);
+        return !match || parseInt(match[1], 10) > last;
+      });
     for (const frame of frames) {
       res.write(frame + "\n\n");
       await new Promise((resolve) => setTimeout(resolve, STREAM_FRAME_DELAY_MS));
@@ -435,10 +444,23 @@ await run("live stream", async () => {
   await page.waitForFunction(() => document.querySelectorAll(".turn.live").length === 0, null, { timeout: 8000 });
   checkEqual("回合结束后不再高亮", await page.locator(".turn.live").count(), 0);
 
+
   const finalStep = await page.locator(".turn .step").last().innerText();
   check("team 派发行补上完成与耗时", finalStep.includes("完成") && finalStep.includes("21"), finalStep);
   const agentText = await page.locator(".turn .msg.from-agent .body").last().innerText();
   check("agent 消息实时出现", agentText.includes("实时渲染的这条消息应该边跑边出现"), agentText.slice(0, 40));
+  // Two failure modes this guards: switching tabs must not drop what the live
+  // stream added, and a second send must not replay it.
+  await page.click('.seg button[data-mode="tree"]');
+  await page.click('.seg button[data-mode="chat"]');
+  check("切走再切回，实时回合仍在", await page.locator(".turn").count() >= 2,
+    await page.locator(".turn").count());
+  const secondSend = page.locator(".composer-input");
+  await secondSend.fill("第二次发送");
+  await secondSend.press("Enter");
+  await page.waitForTimeout(1500);
+  const whoTexts = (await page.locator(".msg.from-user .body").allTextContents()).join("|");
+  checkEqual("第二次发送不重放历史", (whoTexts.match(/实时用例/g) || []).length, 1);
   check("无 console error", errors.length === 0, errors.join(" | "));
   await context.close();
 });

@@ -1315,6 +1315,11 @@
     function onEvent(event) {
       if (!event || !event.type) { return; }
       seen++;
+      /* Write the event back into the loaded record, or the next send would
+       * resume the stream from a stale seq and replay everything already on
+       * screen — and switching tabs (which re-renders from currentRecord)
+       * would drop every live message. */
+      if (currentRecord) { (currentRecord.events = currentRecord.events || []).push(event); }
       var flowTurnID = event.flow_turn_id || "flow";
       var view = turnFor(flowTurnID);
       if (event.type === "flow_turn.waiting_input" || event.type === "flow_turn.completed") {
