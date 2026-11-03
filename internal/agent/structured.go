@@ -12,12 +12,26 @@ type StructuredOutputManager struct{}
 
 const defaultStructuredOutputTokens = 4096
 
-// structuredModelConfig prevents a model registry's large general-purpose
-// output/reasoning defaults from consuming the entire budget before a small
-// machine-readable JSON decision is emitted.
+// structuredModelConfig tunes the model call for a structured agent.
+//
+// Two-phase by default (the same split OpenAI Agents SDK makes for output_type):
+// during the tool loop the model keeps its normal sampling settings and gets no
+// provider-level JSON mode. Some OpenAI-compatible gateways stop emitting
+// tool_calls once response_format is present, so a routing agent told to
+// produce a JSON envelope would never call Team and would fabricate "已派给…"
+// inside the envelope instead (measured: four consecutive turns, tool_calls
+// null, one of them a dispatch the user waited on). The schema remains
+// authoritative at the end of the loop — ParseAndValidate checks the final
+// text and the existing retry feeds validation errors back.
+//
+// Output budget stays capped: an envelope is small, and the truncated-reply
+// path (isStructuredOutputTruncated) already knows how to recover when a
+// provider still overruns it.
+//
+// enforce_provider_format opts back into single-phase behaviour for gateways
+// that cannot produce JSON without response_format.
 func structuredModelConfig(agent types.AgentConfig) types.ModelConfig {
 	config := agent.Model
-	config.ResponseFormat = agent.Structured
 	if agent.Structured == nil {
 		return config
 	}
@@ -29,19 +43,22 @@ func structuredModelConfig(agent types.AgentConfig) types.ModelConfig {
 		limit = *explicit
 	}
 	config.MaxOutputTokens = &limit
-	if config.Temperature == nil {
-		value := 0.0
-		config.Temperature = &value
-	}
-	if config.TopP == nil {
-		value := 1.0
-		config.TopP = &value
-	}
 
-	// Structured routing Agents should not inherit high reasoning defaults
-	// unless they explicitly configure reasoning on the Agent.
-	if config.Reasoning == nil {
-		config.Reasoning = &types.ReasoningConfig{Type: "none"}
+	if agent.Structured.EnforceProviderFormat {
+		config.ResponseFormat = agent.Structured
+		if config.Temperature == nil {
+			value := 0.0
+			config.Temperature = &value
+		}
+		if config.TopP == nil {
+			value := 1.0
+			config.TopP = &value
+		}
+		// Structured routing Agents should not inherit high reasoning defaults
+		// unless they explicitly configure reasoning on the Agent.
+		if config.Reasoning == nil {
+			config.Reasoning = &types.ReasoningConfig{Type: "none"}
+		}
 	}
 	return config
 }

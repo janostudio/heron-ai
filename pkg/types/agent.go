@@ -170,6 +170,12 @@ type StructuredOutput struct {
 	Type            string         `yaml:"type" json:"type"`
 	Schema          map[string]any `yaml:"schema" json:"schema"`
 	MaxOutputTokens int            `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	// EnforceProviderFormat opts back into sending response_format (and the
+	// matching sampling overrides) on every loop round. Default off: JSON mode
+	// suppresses tool_calls on some OpenAI-compatible gateways, and an agent
+	// that must call tools before emitting its envelope would never call them
+	// — it would fabricate "已派给…" inside the JSON instead.
+	EnforceProviderFormat bool `yaml:"enforce_provider_format,omitempty" json:"enforce_provider_format,omitempty"`
 }
 
 type HITLConfig struct {
