@@ -259,3 +259,32 @@ func TestListTaskTreesGroupsByContext(t *testing.T) {
 	require.ElementsMatch(t, []int{1, 2}, sizes,
 		"the sub-task must sit in its dispatcher's tree")
 }
+
+// TestWakeInheritsTaskContext: a resident dispatcher woken by a task result
+// judges that task with the task's context, which is what lets it read the
+// records the task produced — while its own output stays session-wide.
+func TestWakeInheritsTaskContext(t *testing.T) {
+	rt, fake := newPerTaskRuntime(t)
+	session, turn := mailboxTestSession(t)
+	writeFlowSession(t, rt, session)
+	ctx := context.Background()
+
+	msg, err := rt.enqueueResultMessage(ctx, session, turn,
+		addr("default", ""),
+		map[string]any{
+			"team_result":     types.TeamTurnResult{Reply: "dev finished"},
+			"task_context_id": "fs:dev:1",
+		})
+	require.NoError(t, err)
+
+	rt.runMessageTurn(ctx, session, msg)
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	require.NotEmpty(t, fake.allSessions)
+	seen := fake.allSessions[0]
+	require.Equal(t, "fs:dev:1", seen.TaskContextID,
+		"the woken resident turn must carry the task context it is judging")
+	require.False(t, seen.IsPerTask(),
+		"the dispatcher stays resident; only its read view follows the task")
+}

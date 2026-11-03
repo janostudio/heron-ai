@@ -24,9 +24,14 @@ type fakeTeamRuntime struct {
 	// devSessions records the TeamSession each "dev" turn saw, in order. It is
 	// how the per_task tests pin instance reuse without asserting on events.
 	devSessions []types.TeamSession
+	// allSessions records every turn's TeamSession, whatever the Team.
+	allSessions []types.TeamSession
 }
 
 func (f *fakeTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
+	f.mu.Lock()
+	f.allSessions = append(f.allSessions, req.TeamSession)
+	f.mu.Unlock()
 	switch req.TeamTurn.TeamID {
 	case "dev":
 		f.mu.Lock()

@@ -1670,7 +1670,7 @@ func teamFailureRecord(flowTurn types.FlowTurn, execution teamExecution) *types.
 			TeamID:        execution.activation.teamID,
 			TeamTurnID:    teamResult.Turn.ID,
 			TeamSessionID: execution.session.ID,
-			TaskContextID: execution.session.TaskContextID,
+			TaskContextID: recordTaskContextOf(execution.session),
 		},
 		Summary:   fmt.Sprintf("Team %q failed: %s", execution.activation.teamID, reason),
 		Data:      data,
@@ -2505,6 +2505,15 @@ func fixedTargets(binding types.FlowTeamBinding) []string {
 func teamInput(input string, spec types.InputSpec) string {
 	if spec.UserMessage {
 		return input
+	}
+	return ""
+}
+
+// recordTaskContextOf mirrors the rule used for call records: only per_task
+// instances isolate their output; the coordination layer stays session-wide.
+func recordTaskContextOf(session types.TeamSession) string {
+	if session.IsPerTask() {
+		return session.TaskContextID
 	}
 	return ""
 }
