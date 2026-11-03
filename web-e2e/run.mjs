@@ -112,7 +112,7 @@ function speakerOf(text) {
  * deliberately not mocked here: it is served by the local HTTP server above so
  * that frames arrive over time. */
 function apiRouter(options = {}) {
-  const state = { sent: null };
+  const state = { sent: null, created: null, createdUrl: "" };
   const handler = async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -124,6 +124,16 @@ function apiRouter(options = {}) {
     }
     if (url.pathname === "/api/sessions" && request.method() === "GET") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(files.sessions) });
+    }
+    if (url.pathname === "/api/sessions" && request.method() === "POST") {
+      const body = request.postData();
+      state.createdUrl = request.url();
+      state.created = body ? JSON.parse(body) : null;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ Session: { id: "fs_created_from_ui" }, Reply: "ok" }),
+      });
     }
     if (url.pathname.startsWith("/api/sessions/") && url.pathname.endsWith("/record")) {
       const id = url.pathname.split("/")[3];
@@ -220,7 +230,33 @@ await run("loopback without token", async () => {
   await context.close();
 });
 
-/* ---------- 3. single-agent record ---------- */
+/* ---------- 3. new session from the list page ---------- */
+await run("new session", async () => {
+  const { context, page, state, errors } = await newPage(browser, {});
+  await page.goto(`${base}/`);
+  await page.waitForSelector(".rows", { timeout: 5000 });
+
+  checkEqual("列表页有新建入口", await page.locator(".new-toggle").count(), 1);
+  check("表单默认收起", await page.locator(".new-form").isHidden());
+
+  await page.click(".new-toggle");
+  check("点开后出现输入框", await page.locator(".new-input").isVisible());
+
+  await page.fill(".new-input", "新建会话的第一句");
+  await page.click(".new-submit");
+
+  await page.waitForURL(/\/s\/fs_created_from_ui$/, { timeout: 5000 });
+  check("提交后跳到新会话", page.url().endsWith("/s/fs_created_from_ui"));
+  check("请求发到 /api/sessions", state.createdUrl.endsWith("/api/sessions"));
+  checkEqual("请求体 input", state.created && state.created.input, "新建会话的第一句");
+
+  await page.waitForSelector(".chat .turn", { timeout: 5000 });
+  check("详情页渲染出该会话", await page.locator(".turn").count() >= 1);
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- 4. single-agent record ---------- */
 await run("record: single agent", async () => {
   const { context, page, errors } = await newPage(browser, {});
   await page.goto(`${base}/s/fs_single_agent`);
@@ -254,7 +290,7 @@ await run("record: single agent", async () => {
   await context.close();
 });
 
-/* ---------- 4. multi-agent record: team prefixes disambiguate ---------- */
+/* ---------- 5. multi-agent record: team prefixes disambiguate ---------- */
 await run("record: multiple agents", async () => {
   const { context, page, errors } = await newPage(browser, {});
   await page.goto(`${base}/s/fs_multi_agent`);
@@ -270,7 +306,7 @@ await run("record: multiple agents", async () => {
   await context.close();
 });
 
-/* ---------- 5. composer: text, paste, Enter ---------- */
+/* ---------- 6. composer: text, paste, Enter ---------- */
 await run("composer", async () => {
   const { context, page, state, errors } = await newPage(browser, {});
   await page.goto(`${base}/s/fs_single_agent`);
@@ -307,7 +343,7 @@ await run("composer", async () => {
   await context.close();
 });
 
-/* ---------- 6. live stream: the turn grows while it runs ---------- */
+/* ---------- 7. live stream: the turn grows while it runs ---------- */
 await run("live stream", async () => {
   streamServed = false;
   // The POST is held open long enough for every frame to arrive, the way a real

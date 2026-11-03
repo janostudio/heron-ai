@@ -27,6 +27,7 @@ CHROMIUM_PATH=~/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome node ru
 |---|---|
 | token gate | 服务端 401 时弹登录框；填 token 后进列表并落到 localStorage |
 | loopback without token | 服务端不要求 token 时**不**弹登录框（回环默认模式） |
+| new session | 列表页有新建入口、表单默认收起、提交后请求体为 `{input}`、跳到 `/s/<新 id>` 并渲染出该会话 |
 | record: single agent | 发送者标签、正文取 `reply` 而非信封、原始输出折叠默认收起、每条消息时间、agent 耗时、回合耗时、工具行状态与输出、回合答复不重复 |
 | record: multiple agents | 同一回合内 `default / coordinator`、`probe / terrain`、`facts / inspect`、`repo-info / inspect`、`analyze`（team 同名只显示一次） |
 | composer | Enter 发送、请求体 `{input}`、粘附件生成 chip、请求体 `attachments[].data_base64` |

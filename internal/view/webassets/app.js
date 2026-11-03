@@ -260,12 +260,92 @@
     app.appendChild(el("p", null, link("/", "\u2190 \u8fd4\u56de\u4f1a\u8bdd\u5217\u8868")));
   }
 
+  /* ---------- new session ---------- */
+  /* POST /api/sessions without a session id starts a new flow session: the body
+   * carries the first turn, and the answer only comes back once that turn is
+   * done. There is no "create empty session" call — the first message is what
+   * creates it — so the button has to warn that it may take a while instead of
+   * pretending to be instant. */
+  function renderNewSession() {
+    var busy = false;
+    var input = el("textarea", {
+      class: "new-input",
+      rows: "2",
+      placeholder: "\u7b2c\u4e00\u53e5\u8981\u505a\u4ec0\u4e48\uff1f\u8fd9\u4f1a\u521b\u5efa\u4f1a\u8bdd\u5e76\u7acb\u5373\u5f00\u59cb\u7b2c\u4e00\u8f6e\u3002"
+    });
+    var submit = el("button", { type: "button", class: "new-submit" }, "\u521b\u5efa\u5e76\u5f00\u59cb");
+    var cancel = el("button", { type: "button", class: "new-cancel" }, "\u53d6\u6d88");
+    var status = el("span", { class: "new-status" }, "");
+    var toggle = el("button", { type: "button", class: "new-toggle" }, "\uff0b \u65b0\u5efa\u4f1a\u8bdd");
+    var form = el("div", { class: "new-form hidden" },
+      input,
+      el("div", { class: "new-bar" }, submit, cancel, status));
+    var box = el("div", { class: "new-session" }, toggle, form);
+
+    function setOpen(value) {
+      form.classList.toggle("hidden", !value);
+      toggle.classList.toggle("hidden", value);
+      if (value) {
+        input.focus();
+        return;
+      }
+      status.textContent = "";
+    }
+
+    toggle.addEventListener("click", function () { setOpen(true); });
+    cancel.addEventListener("click", function () { if (!busy) { setOpen(false); } });
+
+    function create() {
+      if (busy) { return; }
+      var value = input.value.trim();
+      if (!value) { input.focus(); return; }
+      busy = true;
+      submit.disabled = true;
+      submit.textContent = "\u521b\u5efa\u4e2d\u2026";
+      status.textContent = "\u9996\u8f6e\u6b63\u5728\u6267\u884c\uff0c\u8dd1\u5b8c\u4f1a\u81ea\u52a8\u6253\u5f00\uff1b\u6d3e\u53d1\u7c7b\u4efb\u52a1\u53ef\u80fd\u8981\u51e0\u5206\u949f\u3002";
+      apiFetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: value })
+      })
+        .then(function (response) {
+          if (response.ok) { return response.json(); }
+          return response.text().then(function (text) {
+            throw new Error((text || "").trim() || ("HTTP " + response.status));
+          });
+        })
+        .then(function (result) {
+          var id = result && result.Session && result.Session.id;
+          if (!id) { throw new Error("\u54cd\u5e94\u91cc\u6ca1\u6709\u4f1a\u8bdd ID"); }
+          navigate("/s/" + encodeURIComponent(id));
+        })
+        .catch(function (error) {
+          if (error && error.unauthorized) { return; }
+          busy = false;
+          submit.disabled = false;
+          submit.textContent = "\u521b\u5efa\u5e76\u5f00\u59cb";
+          status.textContent = "\u521b\u5efa\u5931\u8d25\uff1a" + error.message;
+        });
+    }
+
+    submit.addEventListener("click", create);
+    input.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        create();
+      }
+    });
+
+    return box;
+  }
+
   /* ---------- list ---------- */
   function renderList() {
     clear(app);
     app.appendChild(el("div", { class: "top" },
       el("h1", null, "heron-ai"),
       el("span", { class: "muted" }, "\u4f1a\u8bdd\u5217\u8868")));
+    app.appendChild(renderNewSession());
 
     apiFetch("/api/sessions")
       .then(function (response) {
@@ -276,7 +356,7 @@
         var sessions = payload.sessions || [];
         if (sessions.length === 0) {
           app.appendChild(el("div", { class: "empty" },
-            "\u8fd8\u6ca1\u6709\u4f1a\u8bdd\u3002\u5728\u7ec8\u7aef\u91cc\u8fd0\u884c heron-ai \u53d1\u8d77\u4e00\u4e2a\uff0c\u8fd9\u91cc\u4f1a\u51fa\u73b0\u3002"));
+            "\u8fd8\u6ca1\u6709\u4f1a\u8bdd\u3002\u70b9\u4e0a\u9762\u7684\u300c\u65b0\u5efa\u4f1a\u8bdd\u300d\u5f00\u59cb\u7b2c\u4e00\u4e2a\u3002"));
           return;
         }
         var rows = el("div", { class: "rows" });
