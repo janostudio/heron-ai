@@ -16,9 +16,13 @@ import (
 // it becomes part of the published contract and needs the same treatment as
 // CallResult below.
 type AgentRequest struct {
-	FlowSessionID      string
-	FlowTurnID         string
-	TeamID             string
+	FlowSessionID string
+	FlowTurnID    string
+	TeamID        string
+	// TeamSessionID is the Team instance this turn belongs to. Transcripts are
+	// keyed by it, so two per_task instances of the same Team get separate
+	// conversations while a resident instance keeps the historical key.
+	TeamSessionID      string
 	TeamTurnID         string
 	CallID             string
 	CallTurnID         string

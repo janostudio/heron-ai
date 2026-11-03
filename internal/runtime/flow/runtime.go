@@ -1159,10 +1159,21 @@ type activation struct {
 	// activated and is where the Team's result, failure and escalation go. Empty
 	// means nothing activated it: it is the Flow's entry, so there is no one to
 	// return to.
-	activator          string
-	force              bool
-	attempt            int
-	recoveryOf         string
+	activator  string
+	force      bool
+	attempt    int
+	recoveryOf string
+	// sessionSeq is the per_task instance ordinal. 0 means the resident
+	// session, so a route activation (which carries no ord) cannot silently
+	// run a Team whose binding asks for one instance per task.
+	sessionSeq int
+	// taskKey and taskContextID are the task identity of a per_task dispatch.
+	// They are empty for resident activations.
+	taskKey       string
+	taskContextID string
+	// dispatchedBy is the instance that handed this task over. Ownership is
+	// fixed to it: continue/close/reopen are refused for everybody else.
+	dispatchedBy       *types.TeamSessionRef
 	resumeCallID       string
 	resumeCheckpointID string
 	resumeInput        string
@@ -1255,6 +1266,17 @@ func limitActivations(items []activation, max int) ([]activation, []activation) 
 // so the routing that put this activation on the queue and the Team it now
 // runs are guaranteed to come from the same generation. This runs inside the
 // turn's parallel batch, so it must not re-read the store.
+// teamSessionID derives a Team instance id. Resident sessions keep the
+// historical two-part id (so existing transcripts and state files still
+// resolve); per_task sessions append their ordinal, which is what makes two
+// tasks of the same Team independent.
+func teamSessionID(flowSessionID, teamID string, seq int) string {
+	if seq > 0 {
+		return fmt.Sprintf("%s:%s:%d", flowSessionID, teamID, seq)
+	}
+	return fmt.Sprintf("%s:%s", flowSessionID, teamID)
+}
+
 func (r *Runtime) executeTeamTurn(
 	ctx context.Context,
 	defs *types.Definitions,
@@ -1279,13 +1301,34 @@ func (r *Runtime) executeTeamTurn(
 		return execution, fmt.Errorf("team definition %q not found", binding.TeamID)
 	}
 
+	lifecycle := binding.EffectiveLifecycle()
+	if lifecycle.IsPerTask() && current.sessionSeq <= 0 {
+		return execution, fmt.Errorf(
+			"team %q uses lifecycle per_task and must be dispatched as a task (Team tool with task_key), not activated by route",
+			current.teamID)
+	}
+	if !lifecycle.IsPerTask() && current.sessionSeq > 0 {
+		return execution, fmt.Errorf(
+			"team %q is resident but the activation carried instance %d",
+			current.teamID, current.sessionSeq)
+	}
 	teamSession := types.TeamSession{
-		ID:            fmt.Sprintf("%s:%s", session.ID, current.teamID),
-		FlowSessionID: session.ID,
-		TeamID:        current.teamID,
-		Status:        types.SessionRunning,
-		CreatedAt:     session.CreatedAt,
-		UpdatedAt:     time.Now().UTC(),
+		ID:               teamSessionID(session.ID, current.teamID, current.sessionSeq),
+		FlowSessionID:    session.ID,
+		TeamID:           current.teamID,
+		TeamDefinitionID: binding.TeamID,
+		SessionSeq:       current.sessionSeq,
+		Lifecycle:        lifecycle,
+		DispatchedBy:     current.dispatchedBy,
+		TaskKey:          current.taskKey,
+		TaskContextID:    current.taskContextID,
+		Status:           types.SessionRunning,
+		CreatedAt:        session.CreatedAt,
+		UpdatedAt:        time.Now().UTC(),
+	}
+	if lifecycle.IsPerTask() && teamSession.TaskContextID == "" {
+		// A dispatched task roots its own task context; descendants inherit it.
+		teamSession.TaskContextID = teamSession.ID
 	}
 	teamTurn := types.TeamTurn{
 		ID:            newID("tt"),

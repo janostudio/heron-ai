@@ -2595,6 +2595,7 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 				"description":       {Type: "string", Description: "A short (3-5 word) description of the task, shown to the user while it runs"},
 				"prompt":            {Type: "string", Description: "The task for the Team to perform: goal, evidence, scope, acceptance criteria, authorization"},
 				"subagent_type":     {Type: "string", Description: "The Team to hand the work to"},
+				"task_key":          {Type: "string", Description: "Business key of this task (e.g. repoA-143). Required when the target Team uses lifecycle per_task: the same key continues the same Team instance later."},
 				"run_in_background": {Type: "boolean", Description: "Run the Team without blocking this turn (default true)"},
 			},
 			Required: []string{"description", "prompt", "subagent_type"},

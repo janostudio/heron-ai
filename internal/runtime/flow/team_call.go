@@ -38,19 +38,38 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 		return types.TeamCallOutcome{}, err
 	}
 	defs := r.definitions.Snapshot()
-	if _, ok := defs.Flow.Teams[spec.TeamID]; !ok {
+	binding, ok := defs.Flow.Teams[spec.TeamID]
+	if !ok {
 		return types.TeamCallOutcome{
 			Status: "failed",
 			Error:  fmt.Sprintf("team %q is not configured in flow", spec.TeamID),
 		}, nil
 	}
-	if !r.tryMarkTeamBusy(session.ID, spec.TeamID) {
+	lifecycle := binding.EffectiveLifecycle()
+	seq := 0
+	if lifecycle.IsPerTask() {
+		if strings.TrimSpace(spec.TaskKey) == "" {
+			return types.TeamCallOutcome{
+				Status: "failed",
+				Error:  fmt.Sprintf("team %q uses lifecycle per_task; task_key is required so the task can be found again", spec.TeamID),
+			}, nil
+		}
+		next, seqErr := r.nextTeamSessionSeq(ctx, session.ID, spec.TeamID)
+		if seqErr != nil {
+			return types.TeamCallOutcome{
+				Status: "failed",
+				Error:  fmt.Sprintf("allocate an instance of team %q: %v", spec.TeamID, seqErr),
+			}, nil
+		}
+		seq = next
+	}
+	if !r.tryMarkTeamBusySeq(session.ID, spec.TeamID, seq) {
 		return types.TeamCallOutcome{
 			Status: "failed",
 			Error:  fmt.Sprintf("team %q is already running in this session", spec.TeamID),
 		}, nil
 	}
-	defer r.clearTeamBusy(session.ID, spec.TeamID)
+	defer r.clearTeamBusySeq(session.ID, spec.TeamID, seq)
 
 	now := time.Now().UTC()
 	input := teamCallInputText(spec.Item)
@@ -66,7 +85,13 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 		StartedAt:     now,
 	}
 	execution, runErr := r.executeTeamTurn(ctx, defs, session, flowTurn,
-		activation{teamID: spec.TeamID, callerTeam: spec.CallerTeam},
+		activation{
+			teamID:       spec.TeamID,
+			callerTeam:   spec.CallerTeam,
+			sessionSeq:   seq,
+			taskKey:      strings.TrimSpace(spec.TaskKey),
+			dispatchedBy: spec.DispatchedBy,
+		},
 		input, nil, now, nil)
 	if runErr != nil {
 		return types.TeamCallOutcome{Status: "failed", Error: runErr.Error()}, nil

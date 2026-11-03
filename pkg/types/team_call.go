@@ -25,6 +25,13 @@ type TeamCallSpec struct {
 	// CallID and AgentTurnID name the calling Agent, for provenance in events.
 	CallID      string
 	AgentTurnID string
+	// TaskKey is the business key of the task. Required when the callee binding
+	// uses lifecycle per_task: it is what lets a later dispatch find and
+	// continue the same instance.
+	TaskKey string
+	// DispatchedBy names the calling Team instance. The callee's ownership is
+	// fixed to it: only this instance may continue, close or reopen the task.
+	DispatchedBy *TeamSessionRef
 	// Item is the task handed to the callee.
 	Item any
 	// Summary is a short description of the task, for display while it runs.

@@ -71,6 +71,10 @@ func (t *TeamTool) Parameters() map[string]any {
 			"type":        "string",
 			"description": "The Team to hand the work to",
 		},
+		"task_key": map[string]any{
+			"type":        "string",
+			"description": "Business key of this task (e.g. repoA-143). Required when the target Team uses lifecycle per_task: the same key continues the same Team instance later.",
+		},
 		"run_in_background": map[string]any{
 			"type":        "boolean",
 			"description": "Run the Team without blocking this turn (default true)",
@@ -113,6 +117,7 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 	}
 	spec := teamCallSpecFromContext(ctx, teamID, item)
 	spec.Summary = summary
+	spec.TaskKey = strings.TrimSpace(stringParam(params, "task_key"))
 
 	if t.tasks == nil {
 		// No durable task runner (unit tests, or an engine built without one):
@@ -167,12 +172,15 @@ func (t *TeamTool) executeRunTask(ctx context.Context, args map[string]any) (*ty
 	if t == nil || t.runner == nil {
 		return teamError("Team tool is not configured"), nil
 	}
+	rawDispatchedBy, _ := args["dispatched_by"].(map[string]any)
 	spec := types.TeamCallSpec{
 		FlowSessionID: stringParam(args, "flow_session_id"),
 		CallerTeam:    stringParam(args, "caller_team"),
 		TeamID:        stringParam(args, "team_id"),
 		CallID:        stringParam(args, "call_id"),
 		AgentTurnID:   stringParam(args, "agent_turn_id"),
+		TaskKey:       stringParam(args, "task_key"),
+		DispatchedBy:  dispatchedByFromArguments(rawDispatchedBy),
 		Item:          args["item"],
 	}
 	if spec.TeamID == "" {
@@ -220,19 +228,55 @@ func teamCallSpecFromContext(ctx context.Context, teamID string, item any) types
 		spec.CallerTeam = identity.req.TeamID
 		spec.CallID = identity.req.CallID
 		spec.AgentTurnID = identity.req.AgentTurnID
+		if identity.req.TeamSessionID != "" {
+			spec.DispatchedBy = &types.TeamSessionRef{
+				TeamSessionID: identity.req.TeamSessionID,
+				CallID:        identity.req.CallID,
+				AgentTurnID:   identity.req.AgentTurnID,
+			}
+		}
 	}
 	return spec
 }
 
 func teamRunArguments(spec types.TeamCallSpec) map[string]any {
-	return map[string]any{
+	arguments := map[string]any{
 		"flow_session_id": spec.FlowSessionID,
 		"caller_team":     spec.CallerTeam,
 		"team_id":         spec.TeamID,
 		"call_id":         spec.CallID,
 		"agent_turn_id":   spec.AgentTurnID,
+		"task_key":        spec.TaskKey,
 		"item":            spec.Item,
 	}
+	if spec.DispatchedBy != nil {
+		arguments["dispatched_by"] = map[string]any{
+			"team_session_id": spec.DispatchedBy.TeamSessionID,
+			"call_id":         spec.DispatchedBy.CallID,
+			"agent_turn_id":   spec.DispatchedBy.AgentTurnID,
+			"tool_call_id":    spec.DispatchedBy.ToolCallID,
+		}
+	}
+	return arguments
+}
+
+// dispatchedByFromArguments rebuilds the caller reference persisted with a
+// durable TeamRun task. Values arrive as float64/string after the JSON round
+// trip through the task store.
+func dispatchedByFromArguments(raw map[string]any) *types.TeamSessionRef {
+	if raw == nil {
+		return nil
+	}
+	ref := &types.TeamSessionRef{
+		TeamSessionID: stringFromArgs(raw, "team_session_id"),
+		CallID:        stringFromArgs(raw, "call_id"),
+		AgentTurnID:   stringFromArgs(raw, "agent_turn_id"),
+		ToolCallID:    stringFromArgs(raw, "tool_call_id"),
+	}
+	if ref.TeamSessionID == "" {
+		return nil
+	}
+	return ref
 }
 
 func teamTaskID(spec types.TeamCallSpec) string {

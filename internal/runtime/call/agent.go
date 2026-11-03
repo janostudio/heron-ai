@@ -58,6 +58,7 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		FlowSessionID:      req.FlowSession.ID,
 		FlowTurnID:         req.FlowTurn.ID,
 		TeamID:             req.TeamTurn.TeamID,
+		TeamSessionID:      req.TeamSession.ID,
 		TeamTurnID:         req.TeamTurn.ID,
 		CallID:             req.Call.ID,
 		CallTurnID:         req.CallTurnID,

@@ -32,6 +32,9 @@ import (
 type teamKey struct {
 	sessionID string
 	teamID    string
+	// seq is the per_task instance ordinal (0 for the resident session), so two
+	// tasks of the same Team are two independent execution slots.
+	seq int
 }
 
 func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, targetTeam string, msg types.MailboxMessage) {
@@ -133,12 +136,18 @@ func (r *Runtime) drainTeamInbox(ctx context.Context, session types.FlowSession,
 // concurrency guard that keeps a Team from running two rounds at once; another
 // session running the same Team is a different slot (see teamKey).
 func (r *Runtime) tryMarkTeamBusy(sessionID, teamID string) bool {
+	return r.tryMarkTeamBusySeq(sessionID, teamID, 0)
+}
+
+// tryMarkTeamBusySeq is tryMarkTeamBusy for one instance: seq 0 is the
+// resident session, a positive seq is a per_task instance.
+func (r *Runtime) tryMarkTeamBusySeq(sessionID, teamID string, seq int) bool {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
 	if r.busyTeams == nil {
 		r.busyTeams = make(map[teamKey]bool)
 	}
-	key := teamKey{sessionID: sessionID, teamID: teamID}
+	key := teamKey{sessionID: sessionID, teamID: teamID, seq: seq}
 	if r.busyTeams[key] {
 		return false
 	}
@@ -147,9 +156,13 @@ func (r *Runtime) tryMarkTeamBusy(sessionID, teamID string) bool {
 }
 
 func (r *Runtime) clearTeamBusy(sessionID, teamID string) {
+	r.clearTeamBusySeq(sessionID, teamID, 0)
+}
+
+func (r *Runtime) clearTeamBusySeq(sessionID, teamID string, seq int) {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
-	delete(r.busyTeams, teamKey{sessionID: sessionID, teamID: teamID})
+	delete(r.busyTeams, teamKey{sessionID: sessionID, teamID: teamID, seq: seq})
 }
 
 // teamBusy reports whether a Team is executing in one session right now. The

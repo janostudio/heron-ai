@@ -44,6 +44,34 @@ func (r *Runtime) loadTeamSessions(ctx context.Context, sessionID string) (map[s
 	return sessions, nil
 }
 
+// nextTeamSessionSeq returns the next per_task instance ordinal for a Team in
+// one FlowSession.
+//
+// It derives the number from the event stream instead of keeping an in-memory
+// counter: after a restart the next instance must not reuse an id that already
+// owns transcripts and records. Resident sessions are not numbered (seq 0), so
+// this only ever grows the per_task space.
+func (r *Runtime) nextTeamSessionSeq(ctx context.Context, sessionID, teamID string) (int, error) {
+	events, err := r.replayFlowEvents(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	max := 0
+	for _, event := range events {
+		switch event.Type {
+		case types.EventTeamSessionCreated, types.EventTeamSessionUpdated:
+			session, ok := decodeTeamSession(event.Payload)
+			if !ok || session.TeamID != teamID {
+				continue
+			}
+			if session.SessionSeq > max {
+				max = session.SessionSeq
+			}
+		}
+	}
+	return max + 1, nil
+}
+
 // loadAgentSessions folds the session's agent_session events into the latest
 // AgentSession seen for each (Team, Call) pair, keyed by the AgentSession ID.
 func (r *Runtime) loadAgentSessions(ctx context.Context, sessionID string) (map[string]types.AgentSession, error) {
