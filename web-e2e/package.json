@@ -1,0 +1,12 @@
+{
+  "name": "heron-web-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser regression suite for the embedded session viewer",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}

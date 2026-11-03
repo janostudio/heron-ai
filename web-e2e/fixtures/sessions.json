@@ -1,0 +1,20 @@
+{
+  "sessions": [
+    {
+      "id": "fs_single_agent",
+      "title": "示例：单 agent 会话",
+      "turns": 1,
+      "tokens": 1200,
+      "active": false,
+      "updated_at": "2026-11-03T02:00:00Z"
+    },
+    {
+      "id": "fs_multi_agent",
+      "title": "示例：一个回合里多个 agent",
+      "turns": 1,
+      "tokens": 3400,
+      "active": false,
+      "updated_at": "2026-11-03T02:10:00Z"
+    }
+  ]
+}
