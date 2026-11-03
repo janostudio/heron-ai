@@ -51,6 +51,7 @@ func Check(m *Manifest, t *Tree) CheckResult {
 	}
 
 	checkProvides(m, t, &result)
+	checkRequires(m, &result)
 	checkReferences(t, &result)
 	checkSandbox(m, t, &result)
 	result.Models = collectModels(t)
@@ -107,6 +108,24 @@ func checkProvides(m *Manifest, t *Tree, result *CheckResult) {
 // must be self-contained, and there is no fallback to the receiver's local
 // assets: a dangling name has to fail here rather than silently bind to a
 // same-named local asset with different behavior.
+// checkRequires keeps "requires" honest: a package that also ships the asset
+// does not require it, it satisfies it, and pretending otherwise would send the
+// receiver looking for a second copy.
+func checkRequires(m *Manifest, result *CheckResult) {
+	provided := make(map[string]bool, len(m.Provides.Teams))
+	for _, name := range m.Provides.Teams {
+		provided[name] = true
+	}
+	for _, name := range m.Requires.Teams {
+		if provided[name] {
+			result.Problems = append(result.Problems, Problem{
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("manifest %q requires team %q but also provides it", m.Name, name),
+			})
+		}
+	}
+}
+
 func checkReferences(t *Tree, result *CheckResult) {
 	for _, teamID := range sortedKeys(t.Teams) {
 		team := t.Teams[teamID]

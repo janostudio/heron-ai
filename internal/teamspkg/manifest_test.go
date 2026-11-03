@@ -97,3 +97,50 @@ func TestLoadManifestInvalid(t *testing.T) {
 		})
 	}
 }
+
+// TestManifestRuntimeLifecycle pins the binding hint a package may declare. A
+// per_task team that the receiver installs as resident would share context
+// across tasks, which is exactly what the author packaged it to avoid.
+func TestManifestRuntimeLifecycle(t *testing.T) {
+	t.Run("unset means resident", func(t *testing.T) {
+		m, err := LoadManifest([]byte(validManifest))
+		if err != nil {
+			t.Fatalf("LoadManifest: %v", err)
+		}
+		if got := m.Runtime.EffectiveLifecycle(); got != LifecycleResident {
+			t.Fatalf("EffectiveLifecycle = %q, want resident", got)
+		}
+	})
+
+	t.Run("per_task accepted", func(t *testing.T) {
+		m, err := LoadManifest([]byte(validManifest + "runtime:\n  lifecycle: per_task\n"))
+		if err != nil {
+			t.Fatalf("LoadManifest: %v", err)
+		}
+		if got := m.Runtime.EffectiveLifecycle(); got != LifecyclePerTask {
+			t.Fatalf("EffectiveLifecycle = %q, want per_task", got)
+		}
+	})
+
+	t.Run("unknown lifecycle rejected", func(t *testing.T) {
+		_, err := LoadManifest([]byte(validManifest + "runtime:\n  lifecycle: sometimes\n"))
+		if err == nil || !strings.Contains(err.Error(), "not supported") {
+			t.Fatalf("want unsupported lifecycle error, got %v", err)
+		}
+	})
+}
+
+func TestManifestRequiresTeams(t *testing.T) {
+	t.Run("valid name accepted", func(t *testing.T) {
+		if _, err := LoadManifest([]byte(validManifest + "requires:\n  teams: [lint-team]\n")); err != nil {
+			t.Fatalf("requires.teams should parse: %v", err)
+		}
+	})
+
+	t.Run("invalid name rejected", func(t *testing.T) {
+		_, err := LoadManifest([]byte(validManifest + "requires:\n  teams: [\"Bad Name\"]\n"))
+		if err == nil || !strings.Contains(err.Error(), "requires.teams") {
+			t.Fatalf("want requires.teams error, got %v", err)
+		}
+	})
+}

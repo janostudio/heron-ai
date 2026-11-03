@@ -39,7 +39,35 @@ type Manifest struct {
 	License     string   `yaml:"license,omitempty"`
 	Provides    Provides `yaml:"provides"`
 	Requires    Requires `yaml:"requires,omitempty"`
-	Sandbox     Sandbox  `yaml:"sandbox,omitempty"`
+	// Runtime carries the binding the package expects on the receiving side.
+	// It is a hint, not a runtime environment: the receiver still decides where
+	// in its Flow the team sits.
+	Runtime Runtime `yaml:"runtime,omitempty"`
+	Sandbox Sandbox `yaml:"sandbox,omitempty"`
+}
+
+// Runtime is the execution expectation a package declares.
+type Runtime struct {
+	// Lifecycle mirrors the Flow binding's lifecycle: "resident" (default) or
+	// "per_task". A per_task team runs one instance per task, so the receiver's
+	// binding must say so or the shared team silently shares context across
+	// tasks.
+	Lifecycle string `yaml:"lifecycle,omitempty"`
+}
+
+// Lifecycle values a package may declare.
+const (
+	LifecycleResident = "resident"
+	LifecyclePerTask  = "per_task"
+)
+
+// EffectiveLifecycle maps an unset lifecycle to resident, matching the Flow
+// binding's own default.
+func (r Runtime) EffectiveLifecycle() string {
+	if strings.TrimSpace(r.Lifecycle) == "" {
+		return LifecycleResident
+	}
+	return r.Lifecycle
 }
 
 // Provides lists the assets shipped in the package. Every name must exist in
@@ -55,6 +83,10 @@ type Provides struct {
 // matched exactly for now (no solver), so the field is only echoed back.
 type Requires struct {
 	Skills []SkillRequirement `yaml:"skills,omitempty"`
+	// Teams names Teams this package hands work to but does not ship. A Team's
+	// Agents call other Teams through the Team tool, which no static check can
+	// see, so the dependency is declared by the author and reported on install.
+	Teams []string `yaml:"teams,omitempty"`
 }
 
 // SkillRequirement names an external Skill.
@@ -75,6 +107,10 @@ type Sandbox struct {
 // namePattern is the install-scope grammar: the name becomes a directory
 // under _teams/, so anything a filesystem or shell could reinterpret is out.
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// teamNamePattern is the grammar of a Team id inside the tree, which is looser
+// than a package name: existing team ids use underscores (review_team).
+var teamNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // ValidName reports whether name is legal for a package name or install scope.
 //
@@ -120,6 +156,22 @@ func (m *Manifest) validate() error {
 	}
 	if strings.TrimSpace(m.Version) == "" {
 		return fmt.Errorf("manifest %q: version is required", m.Name)
+	}
+	switch lifecycle := m.Runtime.EffectiveLifecycle(); lifecycle {
+	case LifecycleResident, LifecyclePerTask:
+	default:
+		return fmt.Errorf(
+			"manifest %q: runtime.lifecycle %q is not supported (resident|per_task)",
+			m.Name, m.Runtime.Lifecycle,
+		)
+	}
+	for _, name := range m.Requires.Teams {
+		if !teamNamePattern.MatchString(name) {
+			return fmt.Errorf(
+				"manifest %q: requires.teams entry %q must match %s",
+				m.Name, name, teamNamePattern.String(),
+			)
+		}
 	}
 	switch m.Sandbox.Scripts {
 	case "", ScriptsAllow, ScriptsDeny, ScriptsReview:

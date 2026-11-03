@@ -196,3 +196,23 @@ func TestCheckNilInputs(t *testing.T) {
 		t.Fatal("nil manifest must report an error")
 	}
 }
+
+// TestCheckRejectsSelfSatisfiedRequirement: requiring a team the package also
+// ships would send the receiver looking for a second copy that must not exist.
+func TestCheckRejectsSelfSatisfiedRequirement(t *testing.T) {
+	m := mustManifest(t, checkManifest+"requires:\n  teams: [review_team]\n")
+	_, tree := checkFixture(t)
+	result := Check(m, tree)
+	if !result.HasErrors() {
+		t.Fatalf("expected an error for a team that is both provided and required: %+v", result.Problems)
+	}
+	found := false
+	for _, problem := range result.Problems {
+		if strings.Contains(problem.Message, "requires team") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a requires-team problem, got %+v", result.Problems)
+	}
+}

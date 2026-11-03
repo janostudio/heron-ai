@@ -922,8 +922,20 @@ func writeInstallSummary(out io.Writer, manifest *teamspkg.Manifest, result *ins
 	_, _ = fmt.Fprintln(out, "  teams:")
 	_, _ = fmt.Fprintf(out, "    %s:\n", flowAlias(result.Scope))
 	_, _ = fmt.Fprintf(out, "      team: %q\n", result.Scope+"/"+teamID)
+	if manifest.Runtime.EffectiveLifecycle() == teamspkg.LifecyclePerTask {
+		_, _ = fmt.Fprintln(out, "      lifecycle: per_task")
+	}
 	_, _ = fmt.Fprintln(out, "      inputs:")
 	_, _ = fmt.Fprintln(out, "        user_message: true")
+	if manifest.Runtime.EffectiveLifecycle() == teamspkg.LifecyclePerTask {
+		_, _ = fmt.Fprintln(out, "")
+		_, _ = fmt.Fprintln(out, "This team runs one instance per task: dispatch it with a task_key, and")
+		_, _ = fmt.Fprintln(out, "declare TeamSession in the caller if it needs to query or close tasks.")
+	}
+	if len(manifest.Requires.Teams) > 0 {
+		_, _ = fmt.Fprintln(out, "")
+		_, _ = fmt.Fprintf(out, "Requires teams (install separately): %s\n", strings.Join(manifest.Requires.Teams, ", "))
+	}
 }
 
 // flowAlias derives a Flow key from the scope, replacing the characters Flow
