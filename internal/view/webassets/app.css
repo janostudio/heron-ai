@@ -226,3 +226,19 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .chip-size { color: var(--faint); }
 .chip-x { padding: 0; border: 0; background: transparent; color: var(--faint);
   font-size: 13px; line-height: 1; cursor: pointer; }
+
+/* Live turn: the one the event stream is still writing into. */
+.turn.live { border-left-color: var(--accent); }
+.turn.live > .turn-head .turn-span { color: var(--accent); }
+/* Team dispatch. It arrives as a tool call in the data, but it starts a whole
+   subtree, so it gets its own row instead of hiding among the Bash calls. */
+.step { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 8px;
+  padding: 4px 10px; border-left: 2px solid var(--border-strong);
+  border-radius: 0 6px 6px 0; background: var(--bg-subtle);
+  font-size: 12px; color: var(--muted); }
+.step-kind { color: var(--faint); }
+.step-target { font-family: var(--mono); color: var(--text); }
+.step .when { margin-left: auto; font-variant-numeric: tabular-nums; }
+.step-state { color: var(--faint); }
+.tool.running .state { color: var(--warn); }
+.took-slot { color: var(--faint); }
