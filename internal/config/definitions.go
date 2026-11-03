@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -120,7 +121,27 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 		Web:       l.LoadWebSettings(),
 		Workspace: workspace,
 		Env:       l.LoadGlobalEnv(),
+		Script:    l.LoadScriptSettings(),
 	}, nil
+}
+
+// LoadScriptSettings 读取 settings.json 的 tools.script 段。文件或字段缺失
+// 都返回零值，即关闭——这个能力默认不开，开关必须是显式的。
+func (l *ConfigLoader) LoadScriptSettings() types.ScriptConfig {
+	var cfg types.ScriptConfig
+	data, present := l.settingsBytes()
+	if !present {
+		return cfg
+	}
+	var raw struct {
+		Tools struct {
+			Script types.ScriptConfig `json:"script"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &raw); err == nil {
+		cfg = raw.Tools.Script
+	}
+	return cfg
 }
 
 // resolveWorkspace resolves the runtime's single execution backend from

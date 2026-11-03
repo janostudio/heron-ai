@@ -91,20 +91,28 @@ type WriteTool struct {
 func NewWriteTool(ws workspace.Workspace) *WriteTool {
 	return &WriteTool{workspace: ws}
 }
-func (t *WriteTool) Name() string        { return "Write" }
-func (t *WriteTool) Description() string { return "Write file contents" }
+func (t *WriteTool) Name() string { return "Write" }
+func (t *WriteTool) Description() string {
+	return "Write a file in one of three modes. " +
+		"mode=create writes a new file and FAILS if the path already exists. " +
+		"mode=replace (the default) overwrites the whole file. " +
+		"mode=edit replaces old_text with new_text inside an existing file and requires " +
+		"base_revision from a prior Read; old_text must match exactly once. " +
+		"Prefer edit for changing part of a file."
+}
 func (t *WriteTool) NeedsApproval() bool { return false }
 func (t *WriteTool) Execution() types.ToolExecutionSpec {
 	return types.ToolExecutionSpec{Class: types.ToolSerial}
 }
 func (t *WriteTool) Parameters() map[string]any {
 	return map[string]any{
-		"file":          map[string]any{"type": "string", "description": "Path to the file to write", "required": true},
-		"content":       map[string]any{"type": "string", "description": "Full content for replace mode"},
-		"mode":          map[string]any{"type": "string", "description": "create, replace, or edit", "enum": []string{"create", "replace", "edit"}},
-		"base_revision": map[string]any{"type": "string", "description": "Revision returned by Read"},
-		"old_text":      map[string]any{"type": "string", "description": "Exact text to replace in edit mode"},
-		"new_text":      map[string]any{"type": "string", "description": "Replacement text in edit mode"},
+		"file":    map[string]any{"type": "string", "description": "Path to write", "required": true},
+		"content": map[string]any{"type": "string", "description": "Complete file content for create/replace; ignored in edit mode"},
+		"mode": map[string]any{"type": "string", "description": "create = new file only; replace = overwrite whole file (default); edit = surgical old_text replacement",
+			"enum": []string{"create", "replace", "edit"}},
+		"base_revision": map[string]any{"type": "string", "description": "Revision returned by Read. Required for edit mode"},
+		"old_text":      map[string]any{"type": "string", "description": "Exact existing text to replace; must occur exactly once"},
+		"new_text":      map[string]any{"type": "string", "description": "Replacement text for edit mode"},
 	}
 }
 func (t *WriteTool) Execute(ctx context.Context, params map[string]any) (*types.ToolResult, error) {

@@ -51,6 +51,11 @@ type TurnLoop struct {
 	// which is the behaviour the engine has always had, so every test that
 	// builds a loop for an unrelated concern stays unaffected.
 	mcpTools MCPToolProvider
+	// scriptDescriber renders the Script tool's `code` description, catalog
+	// included. It takes the agent's tool whitelist because the catalog must
+	// match what the agent may actually call. Optional: without it the Script
+	// tool never appears in a schema, which keeps the feature off by default.
+	scriptDescriber func(names []string) string
 }
 
 // ModelContextSizer is an optional provider capability. The Agent package
@@ -190,6 +195,10 @@ func (t *TurnLoop) emitAgentEvent(ctx context.Context, req types.AgentRequest, r
 	if t == nil || t.sessionWriter == nil || strings.TrimSpace(req.FlowSessionID) == "" {
 		return
 	}
+	// An inner tool call is still a tool call, and it belongs to the script that
+	// issued it. Tagging here rather than at each emit site keeps the eight call
+	// sites from drifting: a new tool event gets the fields for free.
+	payload = tagScriptEvent(ctx, payload)
 	event := storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          eventType,
@@ -1102,6 +1111,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			}
 			return waitResult, nil
 		}
+		ctx = t.withScriptGate(ctx, agent, req, round, resp.ToolCalls)
 		results := t.executeToolCalls(ctx, agent, req, round, req.MaxParallelTools, resp.ToolCalls)
 		for i, call := range resp.ToolCalls {
 			toolResult := results[i]
@@ -2469,13 +2479,22 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 		},
 		"Write": {
 			Name: "Write", Type: "object",
+			Description: "Write a file in one of three modes. " +
+				"mode=create writes a new file and FAILS if the path already exists. " +
+				"mode=replace (the default) overwrites the whole file, so content must be the complete new text. " +
+				"mode=edit replaces old_text with new_text inside an existing file: old_text must match exactly once " +
+				"(zero matches and multiple matches both fail), and base_revision must be the revision a prior Read returned " +
+				"so a concurrent change is detected instead of silently overwritten. " +
+				"Prefer mode=edit for changing part of a file: replace requires knowing the whole file and silently drops " +
+				"anything you leave out.",
 			Properties: map[string]types.JSONProperty{
-				"file":          {Type: "string", Description: "Path to the file to write"},
-				"content":       {Type: "string", Description: "Full content for replace mode"},
-				"mode":          {Type: "string", Description: "create, replace, or edit", Enum: []string{"create", "replace", "edit"}},
-				"base_revision": {Type: "string", Description: "Revision returned by Read"},
-				"old_text":      {Type: "string", Description: "Exact text to replace in edit mode"},
-				"new_text":      {Type: "string", Description: "Replacement text in edit mode"},
+				"file":    {Type: "string", Description: "Path to write"},
+				"content": {Type: "string", Description: "Complete file content. Required for create and replace; ignored in edit mode (edit derives content from old_text/new_text)"},
+				"mode": {Type: "string", Enum: []string{"create", "replace", "edit"},
+					Description: "create = new file only, fails if it exists; replace = overwrite the whole file (default); edit = surgical replacement of old_text"},
+				"base_revision": {Type: "string", Description: "Revision returned by Read. Required in edit mode, optional elsewhere as an optimistic-lock check"},
+				"old_text":      {Type: "string", Description: "Exact existing text to replace. Required in edit mode; must occur exactly once in the file"},
+				"new_text":      {Type: "string", Description: "Replacement text for edit mode"},
 			},
 			Required: []string{"file"},
 		},
@@ -2654,6 +2673,24 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 			},
 			Required: []string{"action", "spec"},
 		},
+	}
+
+	// Script is registered only when a describer is wired. The describer is what
+	// carries the per-session catalog, so without it the tool would be an empty
+	// promise: a code box with no list of callable tools.
+	if t.scriptDescriber != nil {
+		builtinSchemas[ScriptToolName] = types.JSONSchema{
+			Name: ScriptToolName, Type: "object",
+			Description: "Run a JavaScript program that calls this session's tools synchronously. " +
+				"Intermediate results stay inside the program; only the returned value and console output come back. " +
+				"Use it for batch work: scan many files, aggregate, filter, then return only the conclusion.",
+			Properties: map[string]types.JSONProperty{
+				"code": {Type: "string", Description: t.scriptDescriber(scriptVisibleTools(agent))},
+				"timeout_ms": {Type: "integer", Description: "Compute budget in milliseconds. Tool calls do not count against it. " +
+					"Default 60000, max 600000."},
+			},
+			Required: []string{"code"},
+		}
 	}
 
 	toolNames := append([]string(nil), agent.Tools.Builtin...)

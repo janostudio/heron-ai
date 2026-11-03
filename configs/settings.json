@@ -17,6 +17,15 @@
       "ask": []
     }
   },
+  "tools": {
+    "script": {
+      "enabled": false,
+      "timeout_ms": 60000,
+      "max_steps": 200,
+      "max_output_bytes": 102400,
+      "catalog_budget": 8000
+    }
+  },
   "logging": {
     "level": "info",
     "output": "stdout"
