@@ -12,6 +12,7 @@
   "use strict";
 
   var app = document.getElementById("app");
+  var sidebar = document.getElementById("sidebar");
   var currentRecord = null;
 
   /* ---------- DOM helpers ---------- */
@@ -398,6 +399,7 @@
   }
 
   function renderLogin(message) {
+    if (sidebar) { sidebar.classList.add("hidden"); }
     clear(app);
     var input = el("input", {
       type: "password",
@@ -443,11 +445,13 @@
      * a server that never wanted it. The gate is the API's 401 — apiFetch turns
      * that into the login form, and a clean 200 renders straight through. */
     var match = location.pathname.match(/^\/s\/(.+)$/);
-    if (match) {
-      renderRecord(decodeURIComponent(match[1]));
+    var sessionID = match ? decodeURIComponent(match[1]) : "";
+    renderSidebar(sessionID);
+    if (sessionID) {
+      renderRecord(sessionID);
       return;
     }
-    renderList();
+    renderWelcome();
   }
 
   function fail(message) {
@@ -513,6 +517,9 @@
         .then(function (result) {
           var id = result && result.Session && result.Session.id;
           if (!id) { throw new Error("\u54cd\u5e94\u91cc\u6ca1\u6709\u4f1a\u8bdd ID"); }
+          // The new session is not in the list we already fetched; rebuild it
+          // so the sidebar shows what was just created.
+          sidebarReady = false;
           navigate("/s/" + encodeURIComponent(id));
         })
         .catch(function (error) {
@@ -535,13 +542,74 @@
     return box;
   }
 
-  /* ---------- list ---------- */
-  function renderList() {
-    clear(app);
-    app.appendChild(el("div", { class: "top" },
-      el("h1", null, "heron-ai"),
-      el("span", { class: "muted" }, "\u4f1a\u8bdd\u5217\u8868")));
-    app.appendChild(renderNewSession());
+  /* ---------- sidebar ---------- */
+  /* The list lives beside the transcript instead of replacing it: switching
+   * sessions used to mean a full page jump back to a list, then into another
+   * session. Search filters what is already loaded — the list endpoint returns
+   * every session, so there is nothing to ask the server for. */
+  var sidebarSearch = "";
+  var sidebarReady = false;
+
+  function sessionRow(session, activeID) {
+    return el("a", {
+      class: "row" + (session.id === activeID ? " active" : ""),
+      href: "/s/" + encodeURIComponent(session.id),
+      "data-link": "1",
+      "data-id": session.id
+    },
+      el("span", { class: session.active ? "dot active" : "dot" }),
+      el("span", { class: "row-main" },
+        el("div", { class: "title" }, session.title || "(\u672a\u547d\u540d)"),
+        el("div", { class: "meta" },
+          session.turns + " \u8f6e \u00b7 " + tokenCount(session.tokens) + " tok \u00b7 " + relativeTime(session.updated_at))));
+  }
+
+  function applySidebarFilter(rows, keyword) {
+    var needle = String(keyword || "").trim().toLowerCase();
+    Array.prototype.forEach.call(rows.querySelectorAll(".row"), function (row) {
+      var haystack = (row.textContent + " " + (row.getAttribute("data-id") || "")).toLowerCase();
+      var hit = needle === "" || haystack.indexOf(needle) >= 0;
+      row.classList.toggle("hidden", !hit);
+    });
+  }
+
+  function updateSidebarActive(activeID) {
+    if (!sidebar) { return; }
+    Array.prototype.forEach.call(sidebar.querySelectorAll(".row"), function (row) {
+      var isActive = row.getAttribute("href") === "/s/" + encodeURIComponent(activeID);
+      row.classList.toggle("active", isActive);
+    });
+  }
+
+  function renderSidebar(activeID) {
+    if (!sidebar) { return; }
+    sidebar.classList.remove("hidden");
+
+    // Switching sessions only moves the highlight; re-fetching the list on
+    // every click would make the sidebar flicker and drop the search term.
+    if (sidebarReady) {
+      updateSidebarActive(activeID);
+      return;
+    }
+
+    clear(sidebar);
+    var search = el("input", {
+      class: "side-search",
+      type: "search",
+      placeholder: "\u641c\u7d22\u4f1a\u8bdd",
+      value: sidebarSearch
+    });
+    sidebar.appendChild(el("div", { class: "side-head" },
+      el("a", { class: "side-title", href: "/", "data-link": "1" }, "heron-ai"),
+      search));
+    sidebar.appendChild(renderNewSession());
+    var rows = el("div", { class: "rows side-rows" });
+    sidebar.appendChild(rows);
+
+    search.addEventListener("input", function () {
+      sidebarSearch = search.value;
+      applySidebarFilter(rows, sidebarSearch);
+    });
 
     apiFetch("/api/sessions")
       .then(function (response) {
@@ -550,35 +618,29 @@
       })
       .then(function (payload) {
         var sessions = payload.sessions || [];
+        sidebarReady = true;
         if (sessions.length === 0) {
-          app.appendChild(el("div", { class: "empty" },
+          rows.appendChild(el("div", { class: "empty" },
             "\u8fd8\u6ca1\u6709\u4f1a\u8bdd\u3002\u70b9\u4e0a\u9762\u7684\u300c\u65b0\u5efa\u4f1a\u8bdd\u300d\u5f00\u59cb\u7b2c\u4e00\u4e2a\u3002"));
           return;
         }
-        var rows = el("div", { class: "rows" });
         sessions.forEach(function (session) {
-          rows.appendChild(el("a", {
-            class: "row",
-            href: "/s/" + encodeURIComponent(session.id),
-            "data-link": "1"
-          },
-            el("span", { class: session.active ? "dot active" : "dot" }),
-            el("span", null,
-              el("div", { class: "title" }, session.title || "(\u672a\u547d\u540d)"),
-              el("div", { class: "meta" },
-                session.turns + " \u8f6e \u00b7 " + tokenCount(session.tokens) + " tok \u00b7 " + relativeTime(session.updated_at))),
-            el("span", { class: "right" },
-              el("div", { class: "id" }, session.id),
-              el("div", null, session.active ? "\u8fd0\u884c\u4e2d" : "\u7b49\u5f85\u8f93\u5165"))));
+          rows.appendChild(sessionRow(session, activeID));
         });
-        app.appendChild(rows);
+        applySidebarFilter(rows, sidebarSearch);
       })
       .catch(function (error) {
-        // 401 already swapped in the login form; an error box on top of it
-        // would hide the field the reader has to type into.
         if (error && error.unauthorized) { return; }
-        fail("\u8bfb\u53d6\u4f1a\u8bdd\u5217\u8868\u5931\u8d25\uff1a" + error.message);
+        rows.appendChild(el("div", { class: "empty" },
+          "\u8bfb\u53d6\u4f1a\u8bdd\u5217\u8868\u5931\u8d25\uff1a" + error.message));
       });
+  }
+
+  function renderWelcome() {
+    clear(app);
+    app.appendChild(el("div", { class: "welcome" },
+      el("h1", null, "heron-ai"),
+      el("p", { class: "muted" }, "\u4ece\u5de6\u4fa7\u9009\u4e00\u4e2a\u4f1a\u8bdd\uff0c\u6216\u65b0\u5efa\u4e00\u4e2a\u3002")));
   }
 
   /* ---------- record ---------- */
@@ -621,6 +683,7 @@
     app.appendChild(el("div", { class: "modes" },
       el("div", { class: "seg", role: "group" },
         modeButton("chat", "\u5bf9\u8bdd", true),
+        modeButton("waterfall", "\u65f6\u5e8f", false),
         modeButton("tree", "\u7ed3\u6784", false),
         modeButton("raw", "\u539f\u59cb", false)),
       el("span", { class: "hint", id: "mode-hint" }, "\u540c\u4e00\u4efd\u8bb0\u5f55\uff0c\u4e09\u79cd\u5448\u73b0\u3002")));
@@ -655,6 +718,11 @@
     if (!body || !currentRecord) { return; }
     clear(body);
     var hint = document.getElementById("mode-hint");
+    if (mode === "waterfall") {
+      body.appendChild(renderWaterfall(currentRecord));
+      if (hint) { hint.textContent = "\u65f6\u5e8f\uff1a\u6bcf\u4e2a team \u4e0e call \u7684\u6267\u884c\u533a\u95f4\uff0c\u6a2a\u5411\u4f4d\u7f6e\u5c31\u662f\u5e76\u884c\u5173\u7cfb\u3002"; }
+      return;
+    }
     if (mode === "tree") {
       body.appendChild(renderTree(currentRecord));
       if (hint) { hint.textContent = "\u7ed3\u6784\uff1a\u56de\u5408 \u2192 Team \u2192 Call \u2192 Agent\uff0c\u70b9\u8282\u70b9\u770b\u5b83\u540d\u4e0b\u7684\u4e8b\u4ef6\u3002"; }
@@ -1067,10 +1135,13 @@
 
       if (event.type === "flow_turn.started") {
         view.startedAt = event.created_at || "";
-        if (payload.input) {
-          view.body.appendChild(el("div", { class: "msg from-user" },
+        if (payload.input || turnAttachments(payload).length) {
+          var liveMessage = el("div", { class: "msg from-user" },
             el("div", { class: "who" }, "\u4f60", stamp(event.created_at)),
-            el("div", { class: "body" }, payload.input)));
+            el("div", { class: "body" }, payload.input || ""));
+          var liveAttachments = turnAttachments(payload);
+          if (liveAttachments.length) { liveMessage.appendChild(attachmentChips(liveAttachments)); }
+          view.body.appendChild(liveMessage);
         }
         return;
       }
@@ -1261,6 +1332,10 @@
   }
 
   /* ---------- chat ---------- */
+  /* A session with hundreds of turns would otherwise build every node before
+   * the first paint. Older turns stay one click away instead of in the DOM. */
+  var CHAT_PAGE_SIZE = 40;
+
   function renderChat(record) {
     var wrap = el("div", { class: "chat" });
     var turns = groupByTurn(record.events || []);
@@ -1268,7 +1343,23 @@
       wrap.appendChild(el("div", { class: "empty" }, "\u6ca1\u6709\u53ef\u5c55\u793a\u7684\u5bf9\u8bdd\u5185\u5bb9\u3002"));
       return wrap;
     }
-    turns.forEach(function (turn) { wrap.appendChild(renderTurn(turn)); });
+
+    var hiddenCount = Math.max(0, turns.length - CHAT_PAGE_SIZE);
+    if (hiddenCount > 0) {
+      var older = el("button", { type: "button", class: "load-older" },
+        "\u52a0\u8f7d\u66f4\u65e9\u7684 " + hiddenCount + " \u4e2a\u56de\u5408");
+      older.addEventListener("click", function () {
+        older.remove();
+        var fragment = document.createDocumentFragment();
+        turns.slice(0, hiddenCount).forEach(function (turn) {
+          fragment.appendChild(renderTurn(turn));
+        });
+        wrap.insertBefore(fragment, wrap.firstChild);
+      });
+      wrap.appendChild(older);
+    }
+
+    turns.slice(hiddenCount).forEach(function (turn) { wrap.appendChild(renderTurn(turn)); });
     return wrap;
   }
 
@@ -1283,15 +1374,23 @@
       if (!map[key]) {
         map[key] = {
           id: key, events: [], input: "", origin: "", reply: "",
-          error: "", intermediate: false, limit: null, startedAt: "", endedAt: ""
+          error: "", intermediate: false, limit: null, startedAt: "", endedAt: "",
+          models: [], promptTokens: 0, completionTokens: 0, attachments: []
         };
         order.push(map[key]);
       }
       var turn = map[key];
       turn.events.push(event);
       var payload = event.payload || {};
+      if (event.type === "agent.model_response") {
+        var usage = payload.usage || {};
+        if (payload.model && turn.models.indexOf(payload.model) < 0) { turn.models.push(payload.model); }
+        turn.promptTokens += usage.prompt_tokens || 0;
+        turn.completionTokens += usage.completion_tokens || 0;
+      }
       if (event.type === "flow_turn.started") {
         if (payload.input) { turn.input = payload.input; }
+        turn.attachments = turnAttachments(payload);
         turn.startedAt = event.created_at || turn.startedAt;
       }
       if (event.type === "flow_turn.waiting_input" || event.type === "flow_turn.completed") {
@@ -1304,6 +1403,32 @@
       }
     });
     return order;
+  }
+
+  /* The first turn carries what the user attached, inside
+   * turn.context_blocks[].parts[].media. The transcript used to show only the
+   * text, so a message that was mostly a file looked like a sentence. */
+  function turnAttachments(payload) {
+    var turn = (payload && payload.turn) || {};
+    var blocks = turn.context_blocks || [];
+    var items = [];
+    blocks.forEach(function (block) {
+      (block.parts || []).forEach(function (part) {
+        if (part && part.media) { items.push(part.media); }
+      });
+    });
+    return items;
+  }
+
+  function attachmentChips(items) {
+    var row = el("div", { class: "msg-attachments" });
+    items.forEach(function (item) {
+      row.appendChild(el("span", { class: "chip" },
+        el("span", { class: "chip-kind" }, item.kind || "file"),
+        el("span", { class: "chip-name" }, item.name || "(\u672a\u547d\u540d)"),
+        el("span", { class: "chip-size" }, humanSize(item.size_bytes || 0))));
+    });
+    return row;
   }
 
   /* Who said it: team_id plus the call name carried in call_turn_id
@@ -1393,14 +1518,23 @@
     if (turn.limit) { head.appendChild(tag("\u88ab " + turn.limit.name + " \u7ec8\u6b62", "danger")); }
     var turnSpan = elapsed(turn.startedAt, turn.endedAt);
     if (turnSpan) { head.appendChild(el("span", { class: "turn-span" }, turnSpan)); }
+    if (turn.promptTokens || turn.completionTokens) {
+      head.appendChild(el("span", { class: "turn-usage", title: "\u8f93\u5165 / \u8f93\u51fa token" },
+        (turn.models.length ? turn.models.join(", ") + " \u00b7 " : "") +
+        tokenCount(turn.promptTokens) + " / " + tokenCount(turn.completionTokens) + " tok"));
+    }
     box.appendChild(head);
 
     if (turn.input) {
-      box.appendChild(el("div", { class: "msg from-user" },
+      var userMessage = el("div", { class: "msg from-user" },
         el("div", { class: "who" },
           "\u4f60",
           stamp(turn.startedAt)),
-        el("div", { class: "body" }, turn.input)));
+        el("div", { class: "body" }, turn.input));
+      if (turn.attachments && turn.attachments.length) {
+        userMessage.appendChild(attachmentChips(turn.attachments));
+      }
+      box.appendChild(userMessage);
     }
 
     var tools = {};
@@ -1506,6 +1640,88 @@
         el("pre", { class: "out" }, "")));
     box.appendChild(node);
     return node;
+  }
+
+  /* ---------- waterfall ---------- */
+  /* The tree shows hierarchy but not time: two teams running in parallel look
+   * identical to two teams running one after another. This puts every team turn
+   * and agent turn on a shared axis, so overlap is visible at a glance. */
+  function collectSpans(events) {
+    var spans = {};
+    var order = [];
+
+    function slot(id, label) {
+      if (!spans[id]) {
+        spans[id] = { id: id, label: label || "", start: "", end: "" };
+        order.push(spans[id]);
+      }
+      if (!spans[id].label && label) { spans[id].label = label; }
+      return spans[id];
+    }
+
+    events.forEach(function (event) {
+      var payload = event.payload || {};
+      if (event.type === "team_turn.started" || event.type === "team_turn.completed") {
+        var teamTurn = payload.team_turn || {};
+        var teamID = teamTurn.id || "";
+        if (!teamID) { return; }
+        var team = teamTurn.team_id || event.team_id || "";
+        var teamSlot = slot(teamID, "team " + (team || "?"));
+        if (event.type === "team_turn.started") { teamSlot.start = event.created_at || teamSlot.start; }
+        else { teamSlot.end = event.created_at || teamSlot.end; }
+        return;
+      }
+      if (event.type === "agent_turn.started" || event.type === "agent_turn.completed") {
+        var call = event.call_turn_id || "";
+        if (!call) { return; }
+        var speaker = speakerLabel(event);
+        var label = speaker.team ? speaker.team + " / " + speaker.agent : (speaker.agent || call);
+        var callSlot = slot(call, label);
+        if (event.type === "agent_turn.started") { callSlot.start = event.created_at || callSlot.start; }
+        else { callSlot.end = event.created_at || callSlot.end; }
+      }
+    });
+
+    return order;
+  }
+
+  function renderWaterfall(record) {
+    var wrap = el("div", { class: "waterfall" });
+    var spans = collectSpans((record && record.events) || []);
+    if (spans.length === 0) {
+      wrap.appendChild(el("div", { class: "empty" }, "\u8fd9\u4e2a\u4f1a\u8bdd\u6ca1\u6709 team / call \u65f6\u5e8f\u3002"));
+      return wrap;
+    }
+
+    var starts = [];
+    var ends = [];
+    spans.forEach(function (span) {
+      var start = new Date(span.start).getTime();
+      var end = new Date(span.end || span.start).getTime();
+      if (!isNaN(start)) { starts.push(start); }
+      if (!isNaN(end)) { ends.push(end); }
+    });
+    var origin = starts.length ? Math.min.apply(null, starts) : Date.now();
+    var finish = ends.length ? Math.max.apply(null, ends) : origin;
+    var total = Math.max(1, finish - origin);
+
+    spans.forEach(function (span) {
+      var start = new Date(span.start).getTime();
+      var end = new Date(span.end).getTime();
+      var left = isNaN(start) ? 0 : ((start - origin) / total) * 100;
+      var width = (isNaN(start) || isNaN(end)) ? 1.5 : Math.max(1.5, ((end - start) / total) * 100);
+      var isTeam = span.id.indexOf(":") < 0;
+      wrap.appendChild(el("div", { class: "wf-row" },
+        el("span", { class: "wf-label", title: span.id }, span.label),
+        el("span", { class: "wf-track" },
+          el("i", {
+            class: isTeam ? "wf-team" : "wf-call",
+            style: "left:" + left.toFixed(2) + "%;width:" + width.toFixed(2) + "%"
+          })),
+        el("span", { class: "wf-time" }, elapsed(span.start, span.end) || "\u8fd0\u884c\u4e2d")));
+    });
+
+    return wrap;
   }
 
   /* ---------- tree ---------- */
