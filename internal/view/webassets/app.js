@@ -720,6 +720,7 @@
   function showMode(body, mode) {
     if (!body || !currentRecord) { return; }
     currentMode = mode;
+    stopRunLinks();
     clear(body);
     var hint = document.getElementById("mode-hint");
     if (mode === "run") {
@@ -1717,8 +1718,100 @@
     }
   }
 
+  /* Draws the dispatch links between a team card and its agent cards.
+   *
+   * Canvas rather than SVG: the running links carry a moving dot, and that is a
+   * per-frame redraw — canvas handles it without touching the DOM tree sixty
+   * times a second. Cards stay real DOM elements so they keep their text
+   * selection, hover and semantics; only the lines live on the canvas. */
+  var runLinkFrame = 0;
+
+  function stopRunLinks() {
+    if (runLinkFrame) {
+      cancelAnimationFrame(runLinkFrame);
+      runLinkFrame = 0;
+    }
+  }
+
+  function floatPoint(p0, p1, p2, p3, t) {
+    var u = 1 - t;
+    return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+  }
+
+  function drawRunLinks(wrap, canvas, pairs, phase) {
+    var box = wrap.getBoundingClientRect();
+    if (!box.width || !box.height) { return false; }
+    var ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(box.width * ratio);
+    canvas.height = Math.round(box.height * ratio);
+    canvas.style.width = box.width + "px";
+    canvas.style.height = box.height + "px";
+
+    var context = canvas.getContext("2d");
+    if (!context) { return false; }
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, box.width, box.height);
+
+    var running = false;
+    pairs.forEach(function (pair) {
+      var from = pair.from.getBoundingClientRect();
+      var to = pair.to.getBoundingClientRect();
+      var x1 = from.left - box.left + from.width / 2;
+      var y1 = from.bottom - box.top;
+      var x2 = to.left - box.left + Math.min(18, to.width * 0.15);
+      var y2 = to.top - box.top + to.height / 2;
+      var c1y = y1 + Math.max(16, (y2 - y1) / 2);
+      var c2x = x2 - Math.max(16, (x2 - x1) / 3);
+
+      context.beginPath();
+      context.moveTo(x1, y1);
+      context.bezierCurveTo(x1, c1y, c2x, y2, x2, y2);
+      context.lineWidth = pair.running ? 1.8 : 1;
+      context.strokeStyle = pair.running ? "rgba(36,86,230,.65)" : "rgba(120,130,145,.28)";
+      context.stroke();
+
+      if (!pair.running) { return; }
+      running = true;
+      // Two dots per link, offset so a busy dispatch looks like flow rather
+      // than a single metronome.
+      [0, 0.5].forEach(function (offset) {
+        var t = (phase + offset) % 1;
+        var x = floatPoint(x1, x1, c2x, x2, t);
+        var y = floatPoint(y1, c1y, y2, y2, t);
+        context.beginPath();
+        context.arc(x, y, 2.6, 0, Math.PI * 2);
+        context.fillStyle = "rgba(36,86,230,.95)";
+        context.fill();
+      });
+    });
+
+    return running;
+  }
+
+  function animateRunLinks(wrap, canvas, pairs) {
+    var start = 0;
+    function frame(now) {
+      var phase = ((now - start) / 1800) % 1;
+      var running = drawRunLinks(wrap, canvas, pairs, phase);
+      if (!running) {
+        runLinkFrame = 0;
+        drawRunLinks(wrap, canvas, pairs, 0);
+        return;
+      }
+      runLinkFrame = requestAnimationFrame(frame);
+    }
+    runLinkFrame = requestAnimationFrame(function (now) {
+      start = now;
+      runLinkFrame = requestAnimationFrame(frame);
+    });
+  }
+
   function renderRunners() {
+    stopRunLinks();
     var wrap = el("div", { class: "runboard" });
+    var canvas = el("canvas", { class: "run-links" });
+    wrap.appendChild(canvas);
+
     var running = runState.teams.concat(runState.agents).filter(function (item) {
       return item.status === "running";
     }).length;
@@ -1728,26 +1821,84 @@
         ? el("span", { class: "run-live" }, "\u8fd0\u884c\u4e2d " + running + " \u4e2a")
         : el("span", { class: "muted" }, "\u5f53\u524d\u6ca1\u6709\u5728\u8dd1\u7684 team \u6216 agent\u3002")));
 
-    [["teams", "Team"], ["agents", "Agent"]].forEach(function (group) {
-      var items = runState[group[0]];
-      if (!items.length) { return; }
-      wrap.appendChild(el("div", { class: "run-group-title" }, group[1]));
-      var grid = el("div", { class: "run-grid" });
-      items.forEach(function (item) {
-        grid.appendChild(el("div", { class: "run-card " + item.status, title: item.key },
-          el("span", { class: "run-dot" }),
-          el("span", { class: "run-name" },
-            item.team ? el("span", { class: "run-team" }, item.team + " / ") : null,
-            item.name),
-          el("span", { class: "run-time" },
-            item.status === "running" ? "\u8fd0\u884c\u4e2d" : (elapsed(item.startedAt, item.endedAt) || ""))));
+    var cards = {};
+
+    function card(item) {
+      var node = el("div", { class: "run-card " + item.status, "data-run-key": item.key, title: item.key },
+        el("span", { class: "run-dot" }),
+        el("span", { class: "run-name" },
+          item.team ? el("span", { class: "run-team" }, item.team + " / ") : null,
+          item.name),
+        el("span", { class: "run-time" },
+          item.status === "running" ? "\u8fd0\u884c\u4e2d" : (elapsed(item.startedAt, item.endedAt) || "")));
+      return node;
+    }
+
+    // Each team sits directly above its own agents: the dispatch link is then a
+    // short hop instead of a curve across the whole board, and it never runs
+    // behind the sticky composer.
+    var grouped = {};
+    runState.agents.forEach(function (agent) {
+      var teamKey = agent.key.split(":")[0] || "";
+      if (!grouped[teamKey]) { grouped[teamKey] = []; }
+      grouped[teamKey].push(agent);
+    });
+
+    runState.teams.forEach(function (team) {
+      var block = el("div", { class: "run-block" });
+      var teamCard = card(team);
+      cards[team.key] = teamCard;
+      block.appendChild(teamCard);
+      var children = grouped[team.key] || [];
+      if (children.length) {
+        var childWrap = el("div", { class: "run-children" });
+        children.forEach(function (agent) {
+          var node = card(agent);
+          cards[agent.key] = node;
+          childWrap.appendChild(node);
+        });
+        block.appendChild(childWrap);
+        delete grouped[team.key];
+      }
+      wrap.appendChild(block);
+    });
+
+    // Agents whose team card is not in this session (older or partial events)
+    // still deserve to be listed rather than silently dropped.
+    Object.keys(grouped).forEach(function (teamKey) {
+      var childWrap = el("div", { class: "run-grid" });
+      grouped[teamKey].forEach(function (agent) {
+        var node = card(agent);
+        cards[agent.key] = node;
+        childWrap.appendChild(node);
       });
-      wrap.appendChild(grid);
+      wrap.appendChild(childWrap);
     });
 
     if (!runState.teams.length && !runState.agents.length) {
       wrap.appendChild(el("div", { class: "empty" }, "\u8fd9\u4e2a\u4f1a\u8bdd\u8fd8\u6ca1\u6709 team / agent \u8fd0\u884c\u8fc7\u3002"));
+      return wrap;
     }
+
+    // One link per agent: its team card -> the agent card.
+    var pairs = [];
+    runState.agents.forEach(function (agent) {
+      var teamKey = (agent.key.split(":")[0]) || "";
+      var fromCard = cards[teamKey];
+      var toCard = cards[agent.key];
+      if (!fromCard || !toCard) { return; }
+      pairs.push({ from: fromCard, to: toCard, running: agent.status === "running" });
+    });
+
+    if (pairs.length) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (!wrap.isConnected) { return; }
+          animateRunLinks(wrap, canvas, pairs);
+        });
+      });
+    }
+
     return wrap;
   }
 

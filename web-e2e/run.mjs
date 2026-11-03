@@ -346,8 +346,11 @@ await run("record: multiple agents", async () => {
   await page.waitForSelector(".run-card", { timeout: 3000 });
   check("运行看板列出 team 与 agent", await page.locator(".run-card").count() >= 2,
     await page.locator(".run-card").count());
-  checkEqual("运行看板分成 Team 与 Agent 两组", await page.locator(".run-group-title").count(), 2);
+  checkEqual("每个 team 与其 agent 成块", await page.locator(".run-block").count() >= 1 ? 1 : 0, 1);
+  check("agent 挂在块内", await page.locator(".run-block .run-children .run-card").count() >= 1);
   check("已结束的卡片标为完成", await page.locator(".run-card.completed").count() >= 1);
+  check("画布已铺开用于连线",
+    await page.locator(".run-links").evaluate((node) => node.width > 0 && node.height > 0));
 
   await page.click('.seg button[data-mode="waterfall"]');
   await page.waitForSelector(".wf-row", { timeout: 3000 });
