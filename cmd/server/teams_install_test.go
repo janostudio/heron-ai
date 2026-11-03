@@ -554,3 +554,53 @@ func writeModelsJSON(t *testing.T, root, model string) {
 		t.Fatalf("write models.json: %v", err)
 	}
 }
+
+// TestInstallSummaryCarriesLifecycleAndRequiredTeams: the snippet is the only
+// thing the receiver reads, so it must say when the shared team expects one
+// instance per task, and which teams it does not ship.
+func TestInstallSummaryCarriesLifecycleAndRequiredTeams(t *testing.T) {
+	manifest, err := teamspkg.LoadManifest([]byte(testManifestText() +
+		"runtime:\n  lifecycle: per_task\nrequires:\n  teams: [lint-team]\n"))
+	if err != nil {
+		t.Fatalf("manifest: %v", err)
+	}
+	res := &installResult{
+		Manifest: manifest,
+		Scope:    "review-team",
+		Version:  "1.2.0",
+		Teams:    []string{"review_team"},
+	}
+	var out bytes.Buffer
+	writeInstallSummary(&out, manifest, res)
+	text := out.String()
+
+	for _, want := range []string{
+		"lifecycle: per_task",
+		"dispatch it with a task_key",
+		"Requires teams (install separately): lint-team",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("summary missing %q:\n%s", want, text)
+		}
+	}
+}
+
+// TestInstallSummaryStaysResidentByDefault keeps the common case quiet: no
+// lifecycle line, no task_key paragraph.
+func TestInstallSummaryStaysResidentByDefault(t *testing.T) {
+	manifest, err := teamspkg.LoadManifest([]byte(testManifestText()))
+	if err != nil {
+		t.Fatalf("manifest: %v", err)
+	}
+	res := &installResult{Manifest: manifest, Scope: "review-team", Version: "1.2.0", Teams: []string{"review_team"}}
+	var out bytes.Buffer
+	writeInstallSummary(&out, manifest, res)
+	text := out.String()
+
+	if strings.Contains(text, "lifecycle:") {
+		t.Fatalf("resident package must not suggest a lifecycle line:\n%s", text)
+	}
+	if strings.Contains(text, "task_key") {
+		t.Fatalf("resident package must not mention task_key:\n%s", text)
+	}
+}
