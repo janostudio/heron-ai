@@ -1663,6 +1663,7 @@
   function resetRunState(record) {
     runState = { teams: [], agents: [] };
     ((record && record.events) || []).forEach(applyRunEvent);
+    inferDispatchParents(record);
   }
 
   function runEntry(group, key) {
@@ -1680,42 +1681,76 @@
     return entry;
   }
 
+  /* The board shows entities, not history: one card per team_session and one
+   * per agent_session, with the session's own status. A team that ran four
+   * turns is one card, and it reads "空闲" once nothing is running. */
   function applyRunEvent(event) {
     var type = event.type || "";
     var payload = event.payload || {};
 
-    if (type.indexOf("team_turn.") === 0) {
-      var teamTurn = payload.team_turn || {};
-      /* team_turn.completed carries only team_result — no id in the payload.
-       * The header always does, so read it from there; the payload copy is a
-       * fallback for older events. */
-      var teamID = event.team_turn_id || teamTurn.id || "";
-      if (!teamID) { return; }
-      var teamName = teamTurn.team_id || event.team_id || "?";
-      var teamEntry = upsertRunEntry("teams", teamID, teamName, "");
-      if (type === "team_turn.started") {
-        teamEntry.status = "running";
-        teamEntry.startedAt = event.created_at || teamEntry.startedAt;
-      } else {
-        teamEntry.endedAt = event.created_at || teamEntry.endedAt;
-        teamEntry.status = type === "team_turn.failed" ? "failed" : "completed";
+    if (type.indexOf("team_session.") === 0) {
+      var teamSession = payload.team_session || {};
+      var teamKey = teamSession.id || "";
+      if (!teamKey) { return; }
+      var teamEntry = upsertRunEntry("teams", teamKey, teamSession.team_id || event.team_id || "?", "");
+      if (type === "team_session.created") {
+        teamEntry.startedAt = teamSession.created_at || "";
       }
+      teamEntry.status = teamSession.status || teamEntry.status;
       return;
     }
 
-    if (type.indexOf("agent_turn.") === 0) {
-      var call = event.call_turn_id || "";
-      if (!call) { return; }
-      var speaker = speakerLabel(event);
-      var agentEntry = upsertRunEntry("agents", call, speaker.agent || call, speaker.team);
-      if (type === "agent_turn.started") {
-        agentEntry.status = "running";
-        agentEntry.startedAt = event.created_at || agentEntry.startedAt;
-      } else {
-        agentEntry.endedAt = event.created_at || agentEntry.endedAt;
-        agentEntry.status = type === "agent_turn.failed" ? "failed" : "completed";
+    if (type.indexOf("agent_session.") === 0) {
+      var agentSession = payload.agent_session || {};
+      var agentKey = agentSession.id || "";
+      if (!agentKey) { return; }
+      // team_session_id reads "fs_x:default" — the tail is the team's name.
+      var parts = (agentSession.team_session_id || "").split(":");
+      var agentEntry = upsertRunEntry("agents", agentKey,
+        agentSession.agent_id || agentSession.call_id || "?", parts[parts.length - 1] || "");
+      agentEntry.teamSessionKey = agentSession.team_session_id || "";
+      if (type === "agent_session.created") {
+        agentEntry.startedAt = agentSession.created_at || "";
       }
+      agentEntry.status = agentSession.status || agentEntry.status;
     }
+  }
+
+  /* "任务从哪里指派过来": the caller of the Team tool is the dispatching team.
+   * Walk the events once, remembering which team made the last Team call; the
+   * team_turn that follows it was dispatched by that caller. No explicit
+   * parent field exists in the events, so this is reconstruction — if the
+   * engine later writes one, this can go away. */
+  function inferDispatchParents(record) {
+    var teamsByName = {};
+    runState.teams.forEach(function (team) {
+      if (!teamsByName[team.name]) { teamsByName[team.name] = team; }
+    });
+    var turnTeam = {};
+    var events = (record && record.events) || [];
+    events.forEach(function (event) {
+      if (event.type === "team_turn.started") {
+        var teamTurn = (event.payload || {}).team_turn || {};
+        if (teamTurn.id) { turnTeam[teamTurn.id] = teamTurn.team_id || event.team_id || ""; }
+      }
+    });
+    var pendingCaller = "";
+    events.forEach(function (event) {
+      var payload = event.payload || {};
+      if (event.type === "tool_call.started" && payload.tool_name === "Team") {
+        var callTurn = event.call_turn_id || "";
+        pendingCaller = turnTeam[callTurn.split(":")[0]] || "";
+        return;
+      }
+      if (event.type === "team_turn.started") {
+        var teamTurn = payload.team_turn || {};
+        var entity = teamsByName[teamTurn.team_id || event.team_id || ""] ||
+          teamsByName[turnTeam[event.team_turn_id || teamTurn.id || ""]] || null;
+        if (entity && pendingCaller && pendingCaller !== entity.name) {
+          entity.parent = pendingCaller;
+        }
+      }
+    });
   }
 
   /* Draws the dispatch links between a team card and its agent cards.
@@ -1824,13 +1859,16 @@
     var cards = {};
 
     function card(item) {
+      var label = item.status === "running" ? "\u8fd0\u884c\u4e2d"
+        : item.status === "failed" ? "\u5931\u8d25" : "\u7a7a\u95f2";
       var node = el("div", { class: "run-card " + item.status, "data-run-key": item.key, title: item.key },
         el("span", { class: "run-dot" }),
         el("span", { class: "run-name" },
           item.team ? el("span", { class: "run-team" }, item.team + " / ") : null,
-          item.name),
-        el("span", { class: "run-time" },
-          item.status === "running" ? "\u8fd0\u884c\u4e2d" : (elapsed(item.startedAt, item.endedAt) || "")));
+          item.name,
+          item.parent ? el("span", { class: "run-parent", title: "\u6d3e\u53d1\u6765\u6e90" },
+            " \u2190 " + item.parent) : null),
+        el("span", { class: "run-time" }, label));
       return node;
     }
 
@@ -1839,7 +1877,7 @@
     // behind the sticky composer.
     var grouped = {};
     runState.agents.forEach(function (agent) {
-      var teamKey = agent.key.split(":")[0] || "";
+      var teamKey = agent.teamSessionKey || "";
       if (!grouped[teamKey]) { grouped[teamKey] = []; }
       grouped[teamKey].push(agent);
     });

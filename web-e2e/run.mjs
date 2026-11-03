@@ -348,7 +348,11 @@ await run("record: multiple agents", async () => {
     await page.locator(".run-card").count());
   checkEqual("每个 team 与其 agent 成块", await page.locator(".run-block").count() >= 1 ? 1 : 0, 1);
   check("agent 挂在块内", await page.locator(".run-block .run-children .run-card").count() >= 1);
-  check("已结束的卡片标为完成", await page.locator(".run-card.completed").count() >= 1);
+  check("非运行中的实体显示空闲而非历史耗时",
+    (await page.locator(".run-card.completed").first().innerText()).includes("空闲"));
+  check("team 卡片标注派发来源",
+    (await page.locator(".run-card .run-parent").first().innerText()).includes("default"),
+    await page.locator(".run-card .run-parent").first().innerText());
   check("画布已铺开用于连线",
     await page.locator(".run-links").evaluate((node) => node.width > 0 && node.height > 0));
 

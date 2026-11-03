@@ -94,6 +94,7 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 @keyframes run-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.65); } }
 .run-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-team { color: var(--faint); }
+.run-parent { color: var(--faint); }
 .run-time { color: var(--faint); font-variant-numeric: tabular-nums; }
 
 /* Waterfall: every team and call on one axis, so overlapping work is visible. */
