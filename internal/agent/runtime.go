@@ -2600,6 +2600,15 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 			},
 			Required: []string{"description", "prompt", "subagent_type"},
 		},
+		"TeamSession": {
+			Name: "TeamSession", Type: "object",
+			Description: "Read the tasks you dispatched: status of one task by task_key, or the list of all tasks this Team instance dispatched. Use it before continuing or reporting progress.",
+			Properties: map[string]types.JSONProperty{
+				"action":   {Type: "string", Enum: []string{"status", "list"}, Description: "status: one task by task_key; list: every task this instance dispatched"},
+				"task_key": {Type: "string", Description: "Business key of the task (required for action=status)"},
+			},
+			Required: []string{"action"},
+		},
 		"Collect": {
 			Name: "Collect", Type: "object",
 			Description: "Block until spawned children from asynchronous Spawn calls (wait=false) finish and return their results, aligned with the given handles. Failed children are reported per handle.",

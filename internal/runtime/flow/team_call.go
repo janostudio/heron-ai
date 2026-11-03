@@ -47,6 +47,7 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 	}
 	lifecycle := binding.EffectiveLifecycle()
 	seq := 0
+	plan := taskDispatch{}
 	if lifecycle.IsPerTask() {
 		if strings.TrimSpace(spec.TaskKey) == "" {
 			return types.TeamCallOutcome{
@@ -54,14 +55,15 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 				Error:  fmt.Sprintf("team %q uses lifecycle per_task; task_key is required so the task can be found again", spec.TeamID),
 			}, nil
 		}
-		next, seqErr := r.nextTeamSessionSeq(ctx, session.ID, spec.TeamID)
-		if seqErr != nil {
+		resolved, resolveErr := r.resolveTaskDispatch(ctx, session.ID, spec.TeamID, strings.TrimSpace(spec.TaskKey), spec.DispatchedBy)
+		if resolveErr != nil {
 			return types.TeamCallOutcome{
 				Status: "failed",
-				Error:  fmt.Sprintf("allocate an instance of team %q: %v", spec.TeamID, seqErr),
+				Error:  resolveErr.Error(),
 			}, nil
 		}
-		seq = next
+		plan = resolved
+		seq = plan.sessionSeq
 	}
 	if !r.tryMarkTeamBusySeq(session.ID, spec.TeamID, seq) {
 		return types.TeamCallOutcome{
@@ -86,11 +88,15 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 	}
 	execution, runErr := r.executeTeamTurn(ctx, defs, session, flowTurn,
 		activation{
-			teamID:       spec.TeamID,
-			callerTeam:   spec.CallerTeam,
-			sessionSeq:   seq,
-			taskKey:      strings.TrimSpace(spec.TaskKey),
-			dispatchedBy: spec.DispatchedBy,
+			teamID:        spec.TeamID,
+			callerTeam:    spec.CallerTeam,
+			sessionSeq:    seq,
+			taskKey:       strings.TrimSpace(spec.TaskKey),
+			taskContextID: plan.taskContextID,
+			dispatchedBy:  spec.DispatchedBy,
+			dispatchCount: plan.dispatchCount,
+			reopenCount:   plan.reopenCount,
+			reopened:      plan.reopened,
 		},
 		input, nil, now, nil)
 	if runErr != nil {
@@ -140,9 +146,12 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 		}
 	}
 	outcome := types.TeamCallOutcome{
-		Status: teamCallStatus(execution),
-		Reply:  execution.result.Reply,
-		Error:  execution.result.Error,
+		Status:        teamCallStatus(execution),
+		Reply:         execution.result.Reply,
+		Error:         execution.result.Error,
+		TeamSessionID: execution.session.ID,
+		TaskKey:       spec.TaskKey,
+		Reopened:      plan.reopened,
 	}
 	for _, record := range execution.result.Records {
 		if record.Name != "" {
@@ -371,6 +380,88 @@ func totalToolCalls(result types.TeamTurnResult) int {
 // teamDeclaresTools reports whether any agent call of the given flow binding
 // declares at least one tool. It is what separates "an execution team that said
 // something instead of working" from "a team whose job is to answer", which the
+// taskDispatch is the resolved identity of one per_task dispatch: which
+// instance runs it, and how many rounds it has already taken.
+type taskDispatch struct {
+	sessionSeq    int
+	dispatchCount int
+	reopenCount   int
+	reopened      bool
+	taskContextID string
+}
+
+// resolveTaskDispatch finds the instance a task_key already owns, or allocates
+// the next ordinal.
+//
+// Ownership is fixed to the dispatcher: another instance handing over the same
+// key is refused instead of silently taking the task over. A closed instance is
+// reused (reopened) rather than replaced, which is what keeps one business task
+// in one conversation.
+func (r *Runtime) resolveTaskDispatch(
+	ctx context.Context,
+	sessionID, teamID, taskKey string,
+	dispatcher *types.TeamSessionRef,
+) (taskDispatch, error) {
+	if dispatcher == nil || strings.TrimSpace(dispatcher.TeamSessionID) == "" {
+		return taskDispatch{}, fmt.Errorf(
+			"team %q uses lifecycle per_task; the caller instance is required to own the task", teamID)
+	}
+	events, err := r.replayFlowEvents(ctx, sessionID)
+	if err != nil {
+		return taskDispatch{}, err
+	}
+	latest := make(map[string]types.TeamSession)
+	for _, event := range events {
+		switch event.Type {
+		case types.EventTeamSessionCreated, types.EventTeamSessionUpdated:
+			session, ok := decodeTeamSession(event.Payload)
+			if !ok {
+				continue
+			}
+			latest[session.ID] = session
+		}
+	}
+
+	maxSeq := 0
+	var match *types.TeamSession
+	for _, session := range latest {
+		if session.TeamID != teamID || !session.IsPerTask() {
+			continue
+		}
+		if session.SessionSeq > maxSeq {
+			maxSeq = session.SessionSeq
+		}
+		if session.TaskKey != taskKey {
+			continue
+		}
+		if session.DispatchedBy == nil || session.DispatchedBy.TeamSessionID != dispatcher.TeamSessionID {
+			owner := ""
+			if session.DispatchedBy != nil {
+				owner = session.DispatchedBy.TeamSessionID
+			}
+			return taskDispatch{}, fmt.Errorf(
+				"task %q is owned by %q; only its dispatcher may continue it", taskKey, owner)
+		}
+		copied := session
+		match = &copied
+	}
+
+	if match == nil {
+		return taskDispatch{sessionSeq: maxSeq + 1, dispatchCount: 1}, nil
+	}
+	plan := taskDispatch{
+		sessionSeq:    match.SessionSeq,
+		dispatchCount: match.DispatchCount + 1,
+		reopenCount:   match.ReopenCount,
+		taskContextID: match.TaskContextID,
+	}
+	if match.Status == types.SessionClosed {
+		plan.reopened = true
+		plan.reopenCount = match.ReopenCount + 1
+	}
+	return plan, nil
+}
+
 // no-tool-call failure rule must not treat the same way.
 func teamDeclaresTools(defs *types.Definitions, bindingID string) bool {
 	binding, ok := defs.Flow.Teams[bindingID]

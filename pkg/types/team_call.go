@@ -50,6 +50,42 @@ type TeamCallOutcome struct {
 	Records []string
 	// Error is set when the call itself failed (budget, timeout, crash).
 	Error string
+	// TeamSessionID is the callee instance that ran this call. Empty when the
+	// call failed before an instance existed.
+	TeamSessionID string
+	// TaskKey echoes the business key so the caller keeps the handle it passed.
+	TaskKey string
+	// Reopened reports that an already-closed instance of this task was reused
+	// instead of a new one being created.
+	Reopened bool
+}
+
+// TaskInfo is one dispatched task as its dispatcher sees it: enough to decide
+// what to do next without replaying the event stream.
+type TaskInfo struct {
+	TaskKey       string        `json:"task_key"`
+	TeamID        string        `json:"team_id"`
+	TeamSessionID string        `json:"team_session_id"`
+	Status        SessionStatus `json:"status"`
+	DispatchCount int           `json:"dispatch_count"`
+	ReopenCount   int           `json:"reopen_count"`
+	TaskContextID string        `json:"task_context_id,omitempty"`
+	LastReply     string        `json:"last_reply,omitempty"`
+}
+
+// TaskCatalogSpec scopes a task query to one Flow session and one caller
+// instance: a Team instance sees only the tasks it dispatched.
+type TaskCatalogSpec struct {
+	FlowSessionID       string
+	CallerTeamSessionID string
+}
+
+// TaskCatalog is the read side of the task routing table. The flow runtime
+// derives it from the event stream (the fact source), so a restarted process
+// answers the same questions without a separate index to keep in sync.
+type TaskCatalog interface {
+	ListTasks(ctx context.Context, spec TaskCatalogSpec) ([]TaskInfo, error)
+	GetTask(ctx context.Context, spec TaskCatalogSpec, taskKey string) (TaskInfo, error)
 }
 
 // TeamRunner executes one Team call. The flow runtime implements it: only the

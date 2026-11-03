@@ -15,6 +15,10 @@ const (
 	SessionCompleted       SessionStatus = "completed"
 	SessionFailed          SessionStatus = "failed"
 	SessionCancelled       SessionStatus = "cancelled"
+	// SessionClosed is a soft close: a per_task instance stops accepting work
+	// but keeps its transcript and records, and may be reopened by dispatching
+	// the same task_key again.
+	SessionClosed SessionStatus = "closed"
 )
 
 // FlowSession is the persistent conversation and orchestration context for a

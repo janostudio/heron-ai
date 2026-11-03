@@ -1171,6 +1171,11 @@ type activation struct {
 	// They are empty for resident activations.
 	taskKey       string
 	taskContextID string
+	// dispatchCount counts this round; reopenCount counts how often a closed
+	// instance was reused. Both are bookkeeping for the caller, not gates.
+	dispatchCount int
+	reopenCount   int
+	reopened      bool
 	// dispatchedBy is the instance that handed this task over. Ownership is
 	// fixed to it: continue/close/reopen are refused for everybody else.
 	dispatchedBy       *types.TeamSessionRef
@@ -1188,6 +1193,7 @@ type activation struct {
 type teamExecution struct {
 	activation activation
 	binding    types.FlowTeamBinding
+	session    types.TeamSession
 	result     types.TeamTurnResult
 	next       *types.Route
 }
@@ -1322,6 +1328,8 @@ func (r *Runtime) executeTeamTurn(
 		DispatchedBy:     current.dispatchedBy,
 		TaskKey:          current.taskKey,
 		TaskContextID:    current.taskContextID,
+		DispatchCount:    current.dispatchCount,
+		ReopenCount:      current.reopenCount,
 		Status:           types.SessionRunning,
 		CreatedAt:        session.CreatedAt,
 		UpdatedAt:        time.Now().UTC(),
@@ -1330,6 +1338,7 @@ func (r *Runtime) executeTeamTurn(
 		// A dispatched task roots its own task context; descendants inherit it.
 		teamSession.TaskContextID = teamSession.ID
 	}
+	execution.session = teamSession
 	teamTurn := types.TeamTurn{
 		ID:            newID("tt"),
 		FlowTurnID:    flowTurn.ID,

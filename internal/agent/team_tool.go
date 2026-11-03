@@ -153,13 +153,20 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 			"Do not wait for it and do not re-dispatch the same task.",
 		spec.TeamID,
 	)
+	if spec.TaskKey != "" {
+		content += fmt.Sprintf("\n\n(handle: task_key=%s — keep it to continue the same task)", spec.TaskKey)
+	}
+	metadata := map[string]any{
+		"team_id": spec.TeamID,
+		"wait":    false,
+	}
+	if spec.TaskKey != "" {
+		metadata["task_key"] = spec.TaskKey
+	}
 	return &types.ToolResult{
-		Success: true,
-		Content: string(content),
-		Metadata: map[string]any{
-			"team_id": spec.TeamID,
-			"wait":    false,
-		},
+		Success:  true,
+		Content:  string(content),
+		Metadata: metadata,
 	}, nil
 }
 
@@ -212,11 +219,30 @@ func teamOutcomeResult(teamID string, outcome types.TeamCallOutcome) *types.Tool
 	if len(outcome.Records) > 0 {
 		content += fmt.Sprintf("\n\n(records: %s)", strings.Join(outcome.Records, ", "))
 	}
+	// The handle is the one thing a caller must keep to continue the same task
+	// later: the tool result is the only place it is handed over.
+	if outcome.TaskKey != "" || outcome.TeamSessionID != "" {
+		content += fmt.Sprintf("\n\n(handle: task_key=%s team_session_id=%s", outcome.TaskKey, outcome.TeamSessionID)
+		if outcome.Reopened {
+			content += " reopened=true"
+		}
+		content += ")"
+	}
+	metadata := map[string]any{"status": outcome.Status, "team_id": teamID}
+	if outcome.TaskKey != "" {
+		metadata["task_key"] = outcome.TaskKey
+	}
+	if outcome.TeamSessionID != "" {
+		metadata["team_session_id"] = outcome.TeamSessionID
+	}
+	if outcome.Reopened {
+		metadata["reopened"] = true
+	}
 	return &types.ToolResult{
 		Success:  outcome.Error == "",
 		Content:  content,
 		Error:    outcome.Error,
-		Metadata: map[string]any{"status": outcome.Status, "team_id": teamID},
+		Metadata: metadata,
 	}
 }
 
@@ -342,6 +368,108 @@ func (d *TeamTaskDispatcher) ExecutionSpec(name string) types.ToolExecutionSpec 
 		}
 	}
 	return types.ToolExecutionSpec{Class: types.ToolSerial}
+}
+
+// TeamSessionToolName is the tool a model calls to read the tasks it dispatched.
+//
+// It is the read side of the routing table: the model keeps a task_key (not a
+// session id), and the engine answers what happened to that task. Keeping the
+// lookup here is what lets a restarted or compacted conversation continue a
+// task without replaying its own history.
+const TeamSessionToolName = "TeamSession"
+
+// TeamSessionTool answers status/list queries about dispatched tasks.
+type TeamSessionTool struct {
+	catalog types.TaskCatalog
+}
+
+func NewTeamSessionTool(catalog types.TaskCatalog) *TeamSessionTool {
+	return &TeamSessionTool{catalog: catalog}
+}
+
+// SetCatalog wires the flow runtime after it exists.
+func (t *TeamSessionTool) SetCatalog(catalog types.TaskCatalog) {
+	if t == nil {
+		return
+	}
+	t.catalog = catalog
+}
+
+func (t *TeamSessionTool) Name() string { return TeamSessionToolName }
+
+func (t *TeamSessionTool) Description() string {
+	return "Read the tasks you dispatched: status of one task by task_key, or the list of " +
+		"all tasks this Team instance dispatched. Use it before continuing or reporting progress."
+}
+
+func (t *TeamSessionTool) Parameters() map[string]any {
+	return map[string]any{
+		"action": map[string]any{
+			"type":        "string",
+			"enum":        []string{"status", "list"},
+			"description": "status: one task by task_key; list: every task this instance dispatched",
+		},
+		"task_key": map[string]any{
+			"type":        "string",
+			"description": "Business key of the task (required for action=status)",
+		},
+	}
+}
+
+func (t *TeamSessionTool) NeedsApproval() bool { return false }
+
+func (t *TeamSessionTool) Execute(ctx context.Context, params map[string]any) (*types.ToolResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if t == nil || t.catalog == nil {
+		return teamError("TeamSession is not configured"), nil
+	}
+	identity := spawnIdentityFromContext(ctx)
+	if identity == nil {
+		return teamError("TeamSession is only available inside an Agent execution context"), nil
+	}
+	spec := types.TaskCatalogSpec{
+		FlowSessionID:       identity.req.FlowSessionID,
+		CallerTeamSessionID: identity.req.TeamSessionID,
+	}
+	if spec.CallerTeamSessionID == "" {
+		return teamError("TeamSession requires the calling Team instance"), nil
+	}
+
+	switch action := strings.TrimSpace(stringParam(params, "action")); action {
+	case "status":
+		taskKey := strings.TrimSpace(stringParam(params, "task_key"))
+		if taskKey == "" {
+			return teamError("TeamSession(action=status) requires task_key"), nil
+		}
+		info, err := t.catalog.GetTask(ctx, spec, taskKey)
+		if err != nil {
+			return teamError(err.Error()), nil
+		}
+		return taskJSON(info)
+	case "list":
+		infos, err := t.catalog.ListTasks(ctx, spec)
+		if err != nil {
+			return teamError(err.Error()), nil
+		}
+		if infos == nil {
+			infos = []types.TaskInfo{}
+		}
+		return taskJSON(infos)
+	case "":
+		return teamError("TeamSession requires action=status|list"), nil
+	default:
+		return teamError(fmt.Sprintf("unknown TeamSession action %q (use status or list)", action)), nil
+	}
+}
+
+func taskJSON(value any) (*types.ToolResult, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return teamError(fmt.Sprintf("encode tasks: %v", err)), nil
+	}
+	return &types.ToolResult{Success: true, Content: string(data)}, nil
 }
 
 // ListTeamsToolName is the tool a model calls to discover which Teams it may
