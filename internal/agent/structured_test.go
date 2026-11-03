@@ -9,7 +9,11 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-func TestStructuredModelConfigBoundsOutputAndDisablesInheritedReasoning(t *testing.T) {
+// Two-phase default: the tool loop runs with the model's own sampling settings
+// and no provider-level JSON mode, because response_format suppresses
+// tool_calls on some gateways — a routing agent must be able to call Team
+// before it emits its envelope.
+func TestStructuredModelConfigKeepsToolLoopUnconstrained(t *testing.T) {
 	agent := types.AgentConfig{
 		Model: types.ModelConfig{
 			Model: "hy3-ioa",
@@ -23,13 +27,36 @@ func TestStructuredModelConfigBoundsOutputAndDisablesInheritedReasoning(t *testi
 	config := structuredModelConfig(agent)
 	require.NotNil(t, config.MaxOutputTokens)
 	require.Equal(t, 2048, *config.MaxOutputTokens)
+	require.Nil(t, config.ResponseFormat, "loop rounds must not carry provider JSON mode")
+	require.Nil(t, config.Temperature, "sampling overrides belong to the enforce path only")
+	require.Nil(t, config.TopP)
+	require.Nil(t, config.Reasoning)
+}
+
+// Opt-in for gateways that cannot produce JSON without response_format: the
+// single-phase behaviour (provider JSON mode + sampling overrides) is restored.
+func TestStructuredModelConfigEnforceProviderFormatRestoresOverrides(t *testing.T) {
+	agent := types.AgentConfig{
+		Model: types.ModelConfig{
+			Model: "hy3-ioa",
+		},
+		Structured: &types.StructuredOutput{
+			Type:                  "json",
+			MaxOutputTokens:       2048,
+			EnforceProviderFormat: true,
+		},
+	}
+
+	config := structuredModelConfig(agent)
+	require.NotNil(t, config.MaxOutputTokens)
+	require.Equal(t, 2048, *config.MaxOutputTokens)
+	require.Equal(t, agent.Structured, config.ResponseFormat)
 	require.NotNil(t, config.Reasoning)
 	require.Equal(t, "none", config.Reasoning.Type)
 	require.NotNil(t, config.Temperature)
 	require.Equal(t, 0.0, *config.Temperature)
 	require.NotNil(t, config.TopP)
 	require.Equal(t, 1.0, *config.TopP)
-	require.Equal(t, agent.Structured, config.ResponseFormat)
 }
 
 func TestStructuredModelConfigUsesSafeDefaultOutputBudget(t *testing.T) {
@@ -73,8 +100,6 @@ func TestTurnLoopStructuredOutputStopsOnProviderLength(t *testing.T) {
 	require.Contains(t, result.Error, "structured output truncated")
 	require.NotNil(t, model.lastConfig.MaxOutputTokens)
 	require.Equal(t, 1024, *model.lastConfig.MaxOutputTokens)
-	require.NotNil(t, model.lastConfig.Reasoning)
-	require.Equal(t, "none", model.lastConfig.Reasoning.Type)
 }
 
 func TestTurnLoopRetriesTruncatedStructuredResponse(t *testing.T) {
