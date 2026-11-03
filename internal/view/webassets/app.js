@@ -84,6 +84,32 @@
     return d.toTimeString().slice(0, 8);
   }
 
+  /* Wall-clock gap between two timestamps. Minutes stay readable with the
+     seconds attached: a probe that ran 8m33s should not read as "8m". */
+  function elapsed(startISO, endISO) {
+    var start = new Date(startISO).getTime();
+    var end = new Date(endISO).getTime();
+    if (isNaN(start) || isNaN(end) || end < start) { return ""; }
+    var ms = end - start;
+    if (ms < 1000) { return ms + "ms"; }
+    if (ms < 60000) { return (ms / 1000).toFixed(1) + "s"; }
+    var minutes = Math.floor(ms / 60000);
+    var seconds = Math.round((ms % 60000) / 1000);
+    return minutes + "m" + (seconds ? seconds + "s" : "");
+  }
+
+  /* Timestamp chip that goes on a message header. The clock alone is what the
+     eye needs; the full timestamp (with date) stays in the tooltip so a
+     transcript that spans days is still decidable. */
+  function stamp(iso) {
+    if (!iso) { return null; }
+    var text = clock(iso);
+    if (!text) { return null; }
+    var when = new Date(iso);
+    var title = isNaN(when.getTime()) ? iso : when.toLocaleString();
+    return el("span", { class: "when", title: title }, text);
+  }
+
   function duration(node) {
     if (!node.started_at) { return ""; }
     var start = new Date(node.started_at).getTime();
@@ -163,11 +189,13 @@
   /* apiFetch attaches the bearer token and turns 401 into the login screen.
    * Every data request goes through it: a bare fetch would fail with an
    * unreadable error whenever the token is missing or stale. */
-  function apiFetch(path) {
-    var headers = {};
+  function apiFetch(path, options) {
+    var init = options || {};
+    var headers = init.headers || {};
     var token = readToken();
     if (token) { headers.Authorization = "Bearer " + token; }
-    return fetch(path, { headers: headers }).then(function (response) {
+    init.headers = headers;
+    return fetch(path, init).then(function (response) {
       if (response.status === 401) { return rejected(new Error("HTTP 401")); }
       return response;
     });
@@ -214,10 +242,10 @@
   window.addEventListener("popstate", route);
 
   function route() {
-    if (!readToken()) {
-      renderLogin("");
-      return;
-    }
+    /* No local "is there a token" gate here on purpose: loopback serves run
+     * without a token, and asking for one up front would lock the reader out of
+     * a server that never wanted it. The gate is the API's 401 — apiFetch turns
+     * that into the login form, and a clean 200 renders straight through. */
     var match = location.pathname.match(/^\/s\/(.+)$/);
     if (match) {
       renderRecord(decodeURIComponent(match[1]));
@@ -324,6 +352,12 @@
     var body = el("div", { id: "record-body" });
     app.appendChild(body);
     showMode(body, "chat");
+
+    app.appendChild(renderComposer(sessionID));
+    if (scrollToBottom) {
+      scrollToBottom = false;
+      window.scrollTo(0, document.body.scrollHeight);
+    }
   }
 
   function modeButton(mode, label, pressed) {
@@ -415,6 +449,495 @@
     return el("span", null, el("b", { class: cls }), label);
   }
 
+  /* ---------- composer ---------- */
+  /* The page was read-only; this sends a turn into the session already on
+   * screen, using the same body the CLI bridge posts:
+   * POST /api/sessions/turn?session_id=… with {input, attachments}.
+   *
+   * That call is synchronous — it answers when the whole flow turn finishes,
+   * which for a dispatching turn is minutes. So the send button locks and says
+   * so; a second message typed meanwhile would land in a turn that is still
+   * running.
+   */
+  var MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+  var scrollToBottom = false;
+
+  function attachmentKind(mime) {
+    if (!mime) { return "file"; }
+    if (mime.indexOf("image/") === 0) { return "image"; }
+    if (mime.indexOf("audio/") === 0) { return "audio"; }
+    if (mime.indexOf("video/") === 0) { return "video"; }
+    return "file";
+  }
+
+  function humanSize(bytes) {
+    if (!bytes) { return "0B"; }
+    if (bytes < 1024) { return bytes + "B"; }
+    if (bytes < 1024 * 1024) { return Math.round(bytes / 1024) + "KB"; }
+    return (bytes / 1024 / 1024).toFixed(1) + "MB";
+  }
+
+  function readBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var result = String(reader.result || "");
+        var comma = result.indexOf(",");
+        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+      };
+      reader.onerror = function () { reject(reader.error || new Error("\u8bfb\u53d6\u5931\u8d25")); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderComposer(sessionID) {
+    var pending = [];
+    var busy = false;
+
+    var chips = el("div", { class: "chips" });
+    var input = el("textarea", {
+      class: "composer-input",
+      rows: "1",
+      placeholder: "\u53d1\u6d88\u606f\u7ed9\u8fd9\u4e2a\u4f1a\u8bdd\u3002Enter \u53d1\u9001\uff0cShift+Enter \u6362\u884c\uff1b\u53ef\u76f4\u63a5\u7c98\u8d34\u56fe\u7247\u6216\u62d6\u5165\u6587\u4ef6\u3002"
+    });
+    var filePicker = el("input", { type: "file", multiple: "multiple", class: "composer-file" });
+    var attachButton = el("button", { type: "button", class: "composer-attach" }, "\u9644\u4ef6");
+    var sendButton = el("button", { type: "button", class: "composer-send" }, "\u53d1\u9001");
+    var status = el("span", { class: "composer-status" }, "");
+
+    var box = el("div", { class: "composer" },
+      chips,
+      input,
+      el("div", { class: "composer-bar" },
+        attachButton,
+        filePicker,
+        status,
+        el("span", { class: "composer-hint" }, "Enter \u53d1\u9001 \u00b7 Shift+Enter \u6362\u884c"),
+        sendButton));
+
+    function refreshChips() {
+      clear(chips);
+      chips.style.display = pending.length ? "" : "none";
+      pending.forEach(function (item, index) {
+        var remove = el("button", { type: "button", class: "chip-x", title: "\u79fb\u9664" }, "\u00d7");
+        remove.addEventListener("click", function () {
+          pending.splice(index, 1);
+          refreshChips();
+        });
+        chips.appendChild(el("span", { class: "chip" },
+          el("span", { class: "chip-kind" }, item.kind),
+          el("span", { class: "chip-name" }, item.name),
+          el("span", { class: "chip-size" }, humanSize(item.size_bytes)),
+          remove));
+      });
+    }
+
+    function addFiles(files) {
+      if (!files || !files.length) { return; }
+      Array.prototype.forEach.call(files, function (file) {
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          status.textContent = "\u300c" + file.name + "\u300d \u8d85\u8fc7 " + humanSize(MAX_ATTACHMENT_BYTES) + "\uff0c\u672a\u6dfb\u52a0\u3002";
+          return;
+        }
+        readBase64(file).then(function (data) {
+          pending.push({
+            name: file.name || "pasted",
+            mime_type: file.type || "application/octet-stream",
+            kind: attachmentKind(file.type),
+            size_bytes: file.size || 0,
+            data_base64: data
+          });
+          refreshChips();
+        }).catch(function (error) {
+          status.textContent = "\u8bfb\u53d6\u300c" + file.name + "\u300d\u5931\u8d25\uff1a" + error.message;
+        });
+      });
+    }
+
+    function setBusy(value, text) {
+      busy = value;
+      input.disabled = value;
+      attachButton.disabled = value;
+      sendButton.disabled = value;
+      sendButton.textContent = value ? "\u6267\u884c\u4e2d\u2026" : "\u53d1\u9001";
+      status.textContent = text || "";
+    }
+
+    function autosize() {
+      input.style.height = "auto";
+      input.style.height = Math.min(input.scrollHeight || 0, 180) + "px";
+    }
+
+    var liveRun = null;
+
+    function submit() {
+      if (busy) { return; }
+      var value = input.value.trim();
+      if (!value && pending.length === 0) { return; }
+      var payload = { input: value };
+      if (pending.length) { payload.attachments = pending.slice(); }
+
+      /* Subscribe before posting. The turn starts the moment the request
+       * lands; a stream opened afterwards would miss its opening events. The
+       * stream resumes from the last seq already on screen, so nothing replays. */
+      var chat = document.querySelector("#record-body .chat");
+      if (liveRun) { liveRun.stop(); liveRun = null; }
+      if (chat && currentRecord) { liveRun = startLiveRun(sessionID, chat, currentRecord); }
+
+      input.value = "";
+      autosize();
+      pending = [];
+      refreshChips();
+      setBusy(true, "\u5df2\u53d1\u9001\uff0c\u6b63\u5728\u6267\u884c\u2026\u8fc7\u7a0b\u4f1a\u5b9e\u65f6\u51fa\u73b0\u5728\u5bf9\u8bdd\u91cc\u3002");
+      window.scrollTo(0, document.body.scrollHeight);
+
+      apiFetch("/api/sessions/turn?session_id=" + encodeURIComponent(sessionID), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      })
+        .then(function (response) {
+          if (response.ok) { return response.json(); }
+          return response.text().then(function (text) {
+            throw new Error((text || "").trim() || ("HTTP " + response.status));
+          });
+        })
+        .then(function () {
+          setBusy(false, "");
+          // The POST answers when the turn is over, so the stream has nothing
+          // left to add. Give the last frame a beat, then close it.
+          setTimeout(function () {
+            var missed = liveRun ? liveRun.count() === 0 : true;
+            if (liveRun) { liveRun.settleAll(); liveRun.stop(); liveRun = null; }
+            if (missed) {
+              // The stream never delivered a frame; the record is the fallback
+              // so the reader still sees what happened.
+              scrollToBottom = true;
+              renderRecord(sessionID);
+            }
+          }, 800);
+        })
+        .catch(function (error) {
+          if (error && error.unauthorized) { return; }
+          if (liveRun) { liveRun.stop(); liveRun = null; }
+          setBusy(false, "\u53d1\u9001\u5931\u8d25\uff1a" + error.message);
+        });
+    }
+
+    input.addEventListener("keydown", function (event) {
+      // isComposing: an Enter that confirms an IME candidate must not send.
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        submit();
+      }
+    });
+    input.addEventListener("input", autosize);
+    sendButton.addEventListener("click", submit);
+    attachButton.addEventListener("click", function () { filePicker.click(); });
+    filePicker.addEventListener("change", function () {
+      addFiles(filePicker.files);
+      filePicker.value = "";
+    });
+    box.addEventListener("paste", function (event) {
+      var files = (event.clipboardData && event.clipboardData.files) || [];
+      if (!files.length) { return; } // plain text keeps the browser default
+      event.preventDefault();
+      addFiles(files);
+    });
+    box.addEventListener("dragover", function (event) {
+      event.preventDefault();
+      box.classList.add("dragging");
+    });
+    box.addEventListener("dragleave", function () { box.classList.remove("dragging"); });
+    box.addEventListener("drop", function (event) {
+      event.preventDefault();
+      box.classList.remove("dragging");
+      if (event.dataTransfer && event.dataTransfer.files) { addFiles(event.dataTransfer.files); }
+    });
+
+    refreshChips();
+    return box;
+  }
+
+  /* ---------- live run ---------- */
+  /* Sending a turn used to mean staring at a disabled button for minutes: the
+   * POST answers only when the whole flow turn is done. This subscribes to the
+   * session event stream first, then posts, so the transcript grows while the
+   * turn runs — tool calls, team dispatches and agent messages appear as they
+   * are written.
+   *
+   * The stream is read with fetch + ReadableStream rather than EventSource:
+   * EventSource cannot send the Authorization header, and this endpoint is
+   * behind the bearer token.
+   */
+  function lastSeqOf(record) {
+    var max = 0;
+    ((record && record.events) || []).forEach(function (event) {
+      if (event.seq > max) { max = event.seq; }
+    });
+    return max;
+  }
+
+  function subscribeLive(sessionID, lastSeq, onEvent, onError) {
+    var controller = new AbortController();
+    var stopped = false;
+    apiFetch("/api/stream?session_id=" + encodeURIComponent(sessionID) + "&follow=1", {
+      headers: { "Last-Event-ID": String(lastSeq || 0) },
+      signal: controller.signal
+    })
+      .then(function (response) {
+        if (!response.ok || !response.body) { throw new Error("HTTP " + response.status); }
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = "";
+        function parseFrame(frame) {
+          var payload = [];
+          frame.split("\n").forEach(function (line) {
+            if (line.indexOf("data:") === 0) { payload.push(line.slice(5).trim()); }
+          });
+          if (!payload.length) { return; } // id-only or `event: task` frames
+          try { onEvent(JSON.parse(payload.join("\n"))); } catch (error) { /* skip malformed */ }
+        }
+        function pump() {
+          return reader.read().then(function (chunk) {
+            if (chunk.done) { return; }
+            buffer += decoder.decode(chunk.value, { stream: true });
+            var index;
+            while ((index = buffer.indexOf("\n\n")) >= 0) {
+              var frame = buffer.slice(0, index);
+              buffer = buffer.slice(index + 2);
+              parseFrame(frame);
+            }
+            return pump();
+          });
+        }
+        return pump();
+      })
+      .catch(function (error) {
+        if (stopped) { return; }
+        if (error && error.unauthorized) { return; }
+        if (error && error.name === "AbortError") { return; }
+        onError(error);
+      });
+    return function () { stopped = true; controller.abort(); };
+  }
+
+  /* One flow turn, built event by event. Mirrors renderTurn's markup so a live
+   * turn and the same turn replayed from history look alike. */
+  function createLiveTurn(flowTurnID) {
+    var view = {
+      id: flowTurnID,
+      box: el("div", { class: "turn live" }),
+      head: el("div", { class: "turn-head" }),
+      tags: el("span", { class: "tags" }),
+      timing: el("span", { class: "turn-span", title: "\u8fd0\u884c\u4e2d" }, "\u8fd0\u884c\u4e2d\u2026"),
+      body: el("div", null),
+      tools: {},
+      spans: {},
+      lastSeqOfCall: {},
+      lastText: "",
+      startedAt: "",
+      endedAt: "",
+      reply: "",
+      error: ""
+    };
+    view.head.appendChild(el("span", { class: "t" }, shortId(flowTurnID)));
+    view.head.appendChild(view.tags);
+    view.head.appendChild(view.timing);
+    view.box.appendChild(view.head);
+    view.box.appendChild(view.body);
+
+    view.push = function (event) {
+      var payload = event.payload || {};
+      var call = event.call_turn_id || "";
+
+      if (event.type === "flow_turn.started") {
+        view.startedAt = event.created_at || "";
+        if (payload.input) {
+          view.body.appendChild(el("div", { class: "msg from-user" },
+            el("div", { class: "who" }, "\u4f60", stamp(event.created_at)),
+            el("div", { class: "body" }, payload.input)));
+        }
+        return;
+      }
+
+      if (event.type === "agent_turn.started" && call) {
+        view.spans[call] = { start: event.created_at || "", end: "" };
+        return;
+      }
+      if (event.type === "agent_turn.completed" && call) {
+        if (!view.spans[call]) { view.spans[call] = { start: "", end: "" }; }
+        view.spans[call].end = event.created_at || "";
+        return;
+      }
+
+      if (event.type === "team_turn.started") {
+        var team = (payload.team_turn && payload.team_turn.team_id) || event.team_id || "";
+        var teamID = (payload.team_turn && payload.team_turn.id) || "";
+        var row = el("div", { class: "step team-step", "data-team-turn": teamID },
+          el("span", { class: "step-kind" }, "\u6d3e\u53d1"),
+          el("span", { class: "step-target" }, team || "team"),
+          stamp(event.created_at),
+          el("span", { class: "step-state" }, "\u8fd0\u884c\u4e2d"));
+        view.body.appendChild(row);
+        view["team_" + teamID] = row;
+        return;
+      }
+      if (event.type === "team_turn.completed") {
+        var doneID = (payload.team_turn && payload.team_turn.id) || "";
+        var doneRow = view["team_" + doneID];
+        if (doneRow) {
+          var state = doneRow.querySelector(".step-state");
+          if (state) { state.textContent = "\u5b8c\u6210"; }
+          var took = elapsed(
+            (payload.team_turn && payload.team_turn.started_at) || "",
+            event.created_at || "");
+          if (took) { doneRow.appendChild(el("span", { class: "took" }, took)); }
+        }
+        return;
+      }
+
+      if (event.type === "agent.model_response") {
+        var reply = modelReply(payload);
+        if (!reply.body) { return; }
+        view.lastText = reply.body;
+        view.lastSeqOfCall[call] = event.seq;
+        var body = el("div", { class: "body" }, reply.body);
+        if (reply.raw) {
+          body.appendChild(el("details", { class: "raw-reply" },
+            el("summary", null, "\u539f\u59cb\u8f93\u51fa"),
+            el("pre", null, reply.raw)));
+        }
+        var speaker = speakerLabel(event);
+        view.body.appendChild(el("div", { class: "msg from-agent" },
+          el("div", { class: "who" },
+            speaker.team ? el("span", { class: "who-team" }, speaker.team + " / ") : null,
+            speaker.agent || "\u52a9\u624b",
+            stamp(event.created_at),
+            el("span", { class: "took-slot", "data-call": call })),
+          body));
+        return;
+      }
+
+      if (event.type === "tool_call.started") {
+        var key = payload.tool_call_id || ("seq-" + event.seq);
+        var node = el("details", { class: "tool running" },
+          el("summary", null,
+            el("span", { class: "name" }, payload.tool_name || "tool"),
+            el("span", { class: "arg" }, payload.arguments ? JSON.stringify(payload.arguments) : ""),
+            el("span", { class: "state" }, "\u8fdb\u884c\u4e2d")),
+          el("pre", null, ""));
+        view.tools[key] = node;
+        view.body.appendChild(node);
+        return;
+      }
+      if (event.type === "tool_call.completed" || event.type === "tool_call.failed") {
+        var target = view.tools[payload.tool_call_id || ""];
+        if (!target) { return; }
+        target.classList.remove("running");
+        var label = target.querySelector(".state");
+        if (label) { label.textContent = event.type === "tool_call.failed" ? "\u5931\u8d25" : "\u6210\u529f"; }
+        var pre = target.querySelector("pre");
+        if (pre) {
+          pre.textContent = event.type === "tool_call.failed"
+            ? (payload.error || "")
+            : (typeof payload.content === "string" ? payload.content : JSON.stringify(payload.content || "", null, 2));
+        }
+        if (event.type === "tool_call.failed") { target.open = true; }
+        return;
+      }
+    };
+
+    view.finish = function (event) {
+      var payload = event.payload || {};
+      view.endedAt = event.created_at || "";
+      view.origin = payload.origin || "";
+      view.reply = payload.reply || "";
+      view.error = payload.error || "";
+      view.intermediate = payload.intermediate === true;
+      if (payload.limit) {
+        view.body.appendChild(el("div", { class: "error-box" },
+          "\u9650\u5236 " + payload.limit.name + " \u89e6\u53d1\uff08\u9608\u503c " + payload.limit.value +
+          "\uff0c\u5b9e\u9645 " + payload.limit.observed + "\uff09"));
+      } else if (view.error) {
+        view.body.appendChild(el("div", { class: "error-box" }, view.error));
+      } else if (view.reply && view.reply.trim() !== view.lastText.trim()) {
+        view.body.appendChild(el("div", { class: "msg from-agent" },
+          el("div", { class: "who" }, "\u56de\u5408\u7b54\u590d", stamp(event.created_at)),
+          el("div", { class: "body" }, view.reply)));
+      }
+      if (view.intermediate) { view.tags.appendChild(tag("\u4e2d\u95f4\u56de\u5408")); }
+      if (view.origin === "wakeup") { view.tags.appendChild(tag("\u5b9a\u65f6\u68c0\u67e5", "warn")); }
+      // Durations land once the call actually has an end; until then the
+      // per-message slot stays empty rather than guessing.
+      Object.keys(view.spans).forEach(function (callID) {
+        var span = view.spans[callID];
+        var took = elapsed(span.start, span.end);
+        if (!took) { return; }
+        var slot = view.body.querySelector('.took-slot[data-call="' + callID + '"]');
+        if (slot) { slot.textContent = took; }
+      });
+      var total = elapsed(view.startedAt, view.endedAt);
+      view.timing.textContent = total;
+      view.timing.title = "";
+      view.box.classList.remove("live");
+    };
+
+    /* The closing frame can be missed — the stream may drop right after the
+     * turn ends. The POST already told us the turn is over, so settle rather
+     * than leave a turn pulsing "运行中…" forever. */
+    view.settle = function () {
+      view.box.classList.remove("live");
+      if (view.timing.textContent === "\u8fd0\u884c\u4e2d\u2026") { view.timing.textContent = ""; }
+    };
+
+    return view;
+  }
+
+  function startLiveRun(sessionID, container, record) {
+    var turns = {};
+    var activeTurnID = "";
+    var finished = false;
+    var seen = 0;
+
+    function turnFor(flowTurnID) {
+      if (!turns[flowTurnID]) {
+        turns[flowTurnID] = createLiveTurn(flowTurnID);
+        container.appendChild(turns[flowTurnID].box);
+      }
+      activeTurnID = flowTurnID;
+      return turns[flowTurnID];
+    }
+
+    function onEvent(event) {
+      if (!event || !event.type) { return; }
+      seen++;
+      var flowTurnID = event.flow_turn_id || "flow";
+      var view = turnFor(flowTurnID);
+      if (event.type === "flow_turn.waiting_input" || event.type === "flow_turn.completed") {
+        view.push(event);
+        view.finish(event);
+        finished = true;
+        return;
+      }
+      view.push(event);
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    return {
+      stop: subscribeLive(sessionID, lastSeqOf(record), onEvent, function (error) {
+        if (activeTurnID && turns[activeTurnID]) {
+          turns[activeTurnID].timing.textContent = "\u6d41\u65ad\u5f00\uff1a" + error.message;
+        }
+      }),
+      done: function () { return finished; },
+      count: function () { return seen; },
+      settleAll: function () {
+        Object.keys(turns).forEach(function (id) { turns[id].settle(); });
+      }
+    };
+  }
+
   /* ---------- chat ---------- */
   function renderChat(record) {
     var wrap = el("div", { class: "chat" });
@@ -438,23 +961,74 @@
       if (!map[key]) {
         map[key] = {
           id: key, events: [], input: "", origin: "", reply: "",
-          error: "", intermediate: false, limit: null
+          error: "", intermediate: false, limit: null, startedAt: "", endedAt: ""
         };
         order.push(map[key]);
       }
       var turn = map[key];
       turn.events.push(event);
       var payload = event.payload || {};
-      if (event.type === "flow_turn.started" && payload.input) { turn.input = payload.input; }
+      if (event.type === "flow_turn.started") {
+        if (payload.input) { turn.input = payload.input; }
+        turn.startedAt = event.created_at || turn.startedAt;
+      }
       if (event.type === "flow_turn.waiting_input" || event.type === "flow_turn.completed") {
         turn.origin = payload.origin || turn.origin;
         turn.reply = payload.reply || turn.reply;
         turn.error = payload.error || turn.error;
         turn.intermediate = payload.intermediate === true;
         if (payload.limit) { turn.limit = payload.limit; }
+        turn.endedAt = event.created_at || turn.endedAt;
       }
     });
     return order;
+  }
+
+  /* Who said it: team_id plus the call name carried in call_turn_id
+   * ("<team_turn_id>:<call name>"). One flow turn really can hold several
+   * agents — a coordinator that dispatches keeps the sub-agent's turns inside
+   * the same flow turn — and without this every one of them renders as the same
+   * "助手".
+   *
+   * Agent names are only unique inside a team: `inspect` runs in both the facts
+   * and repo-info teams. So the team belongs in the label, not in a tooltip
+   * that needs a mouse to reveal. When the two names coincide (the analyze
+   * team's analyze call) printing both would just repeat the word. */
+  function speakerLabel(event) {
+    var call = event.call_turn_id || "";
+    var index = call.lastIndexOf(":");
+    var agent = index >= 0 ? call.slice(index + 1) : "";
+    var team = event.team_id || "";
+    if (!team || !agent || team === agent) {
+      return { team: "", agent: agent || team };
+    }
+    return { team: team, agent: agent };
+  }
+
+  /* agent.model_response carries the reply twice: `reply` is what the engine
+   * unwrapped for the caller, `text` is what the model literally emitted —
+   * usually a JSON envelope holding reply/intent_hint/next.action/user_request.
+   * Reading the envelope aloud is noise, so show `reply` and keep `text` behind
+   * a fold; the envelope is the only place intent_hint and next.action survive.
+   *
+   * Older events have no `reply`. For those, unwrap a JSON envelope here rather
+   * than printing the braces. Anything that is not an envelope passes through
+   * untouched. */
+  function modelReply(payload) {
+    var reply = typeof payload.reply === "string" ? payload.reply.trim() : "";
+    var text = typeof payload.text === "string" ? payload.text.trim() : "";
+    if (reply) {
+      return { body: reply, raw: text && text !== reply ? text : "" };
+    }
+    if (text.charAt(0) === "{") {
+      try {
+        var parsed = JSON.parse(text);
+        if (parsed && typeof parsed.reply === "string" && parsed.reply.trim()) {
+          return { body: parsed.reply.trim(), raw: text };
+        }
+      } catch (error) { /* not an envelope: fall through to the raw text */ }
+    }
+    return { body: text, raw: "" };
   }
 
   function renderTurn(turn) {
@@ -462,6 +1036,27 @@
     if (turn.origin === "wakeup") { cls += " wakeup"; }
     if (turn.error) { cls += " failed"; }
     var box = el("div", { class: cls });
+
+    /* Per-call spans, so a message can say how long its agent actually ran.
+     * agent_turn.started/completed carry the same call_turn_id as the messages;
+     * a call that never completed (still running, or the turn was cut) simply
+     * has no end and shows no duration. */
+    var spans = {};
+    var lastSeqOfCall = {};
+    turn.events.forEach(function (event) {
+      var call = event.call_turn_id || "";
+      if (!call) { return; }
+      if (event.type === "agent_turn.started") {
+        spans[call] = { start: event.created_at || "", end: "" };
+      }
+      if (event.type === "agent_turn.completed") {
+        if (!spans[call]) { spans[call] = { start: "", end: "" }; }
+        spans[call].end = event.created_at || "";
+      }
+      if (event.type === "agent.model_response") {
+        lastSeqOfCall[call] = event.seq;
+      }
+    });
 
     var head = el("div", { class: "turn-head" }, el("span", { class: "t" }, shortId(turn.id)));
     if (turn.origin) {
@@ -471,11 +1066,15 @@
     }
     if (turn.intermediate) { head.appendChild(tag("\u4e2d\u95f4\u56de\u5408")); }
     if (turn.limit) { head.appendChild(tag("\u88ab " + turn.limit.name + " \u7ec8\u6b62", "danger")); }
+    var turnSpan = elapsed(turn.startedAt, turn.endedAt);
+    if (turnSpan) { head.appendChild(el("span", { class: "turn-span" }, turnSpan)); }
     box.appendChild(head);
 
     if (turn.input) {
-      box.appendChild(el("div", { class: "msg" },
-        el("div", { class: "who" }, "\u4f60"),
+      box.appendChild(el("div", { class: "msg from-user" },
+        el("div", { class: "who" },
+          "\u4f60",
+          stamp(turn.startedAt)),
         el("div", { class: "body" }, turn.input)));
     }
 
@@ -484,12 +1083,25 @@
     turn.events.forEach(function (event) {
       var payload = event.payload || {};
       if (event.type === "agent.model_response") {
-        var value = typeof payload.text === "string" ? payload.text.trim() : "";
-        if (value) {
-          lastText = value;
-          box.appendChild(el("div", { class: "msg" },
-            el("div", { class: "who" }, "\u52a9\u624b"),
-            el("div", { class: "body" }, value)));
+        var view = modelReply(payload);
+        if (view.body) {
+          lastText = view.body;
+          var body = el("div", { class: "body" }, view.body);
+          if (view.raw) {
+            body.appendChild(el("details", { class: "raw-reply" },
+              el("summary", null, "\u539f\u59cb\u8f93\u51fa"),
+              el("pre", null, view.raw)));
+          }
+          var speaker = speakerLabel(event);
+          var span = spans[event.call_turn_id || ""] || {};
+          var took = lastSeqOfCall[event.call_turn_id || ""] === event.seq ? elapsed(span.start, span.end) : "";
+          box.appendChild(el("div", { class: "msg from-agent" },
+            el("div", { class: "who" },
+              speaker.team ? el("span", { class: "who-team" }, speaker.team + " / ") : null,
+              speaker.agent || "\u52a9\u624b",
+              stamp(event.created_at),
+              took ? el("span", { class: "took", title: "\u8fd9\u4e2a agent \u8fd9\u4e00\u8f6e\u7684\u8017\u65f6" }, took) : null),
+            body));
         }
         return;
       }
@@ -526,8 +1138,12 @@
     } else if (turn.reply && turn.reply.trim() !== lastText.trim()) {
       // The turn's reply is often the last model response restated. Rendering
       // both would show the same paragraph twice with no hint why.
-      box.appendChild(el("div", { class: "msg" + (turn.intermediate ? " intermediate" : "") },
-        el("div", { class: "who" }, "\u52a9\u624b"),
+      //
+      // When it does differ it is the turn's closing answer — one level above
+      // the individual agent messages, possibly a coordinator summary of them —
+      // so it is labelled by level rather than by agent.
+      box.appendChild(el("div", { class: "msg from-agent" + (turn.intermediate ? " intermediate" : "") },
+        el("div", { class: "who" }, "\u56de\u5408\u7b54\u590d", stamp(turn.endedAt)),
         el("div", { class: "body" }, turn.reply)));
     }
     return box;
