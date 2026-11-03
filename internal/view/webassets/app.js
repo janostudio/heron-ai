@@ -12,7 +12,9 @@
   "use strict";
 
   var app = document.getElementById("app");
+  var sidebar = document.getElementById("sidebar");
   var currentRecord = null;
+  var currentMode = "chat";
 
   /* ---------- DOM helpers ---------- */
   function text(value) {
@@ -159,6 +161,202 @@
     return "";
   }
 
+  /* ---------- markdown ---------- */
+  /* A deliberately small renderer: headings, lists, fenced code, quotes, tables,
+   * rules, and inline code/bold/italic/strikethrough/links. Enough for what
+   * models actually emit, small enough to read in review.
+   *
+   * It builds DOM nodes and never touches innerHTML. The input is model output,
+   * and the model sits in front of an agent that can run commands — HTML in the
+   * text is shown as text, not parsed.
+   */
+  function renderMarkdown(source) {
+    var root = el("div", { class: "md" });
+    var lines = String(source === null || source === undefined ? "" : source)
+      .replace(/\r\n?/g, "\n")
+      .split("\n");
+    var i = 0;
+
+    while (i < lines.length) {
+      var line = lines[i];
+
+      if (/^```/.test(line)) {
+        var lang = line.slice(3).trim();
+        var code = [];
+        i += 1;
+        while (i < lines.length && !/^```/.test(lines[i])) {
+          code.push(lines[i]);
+          i += 1;
+        }
+        i += 1; // closing fence (a missing one just ends the block)
+        root.appendChild(codeBlock(code.join("\n"), lang));
+        continue;
+      }
+
+      var heading = line.match(/^(#{1,6})\s+(.*)$/);
+      if (heading) {
+        root.appendChild(el("h" + heading[1].length, null, inlineNodes(heading[2])));
+        i += 1;
+        continue;
+      }
+
+      if (/^\s*([-*_])\s*\1\s*\1[\s\S]*$/.test(line) && line.replace(/[\s\-*_]/g, "") === "") {
+        root.appendChild(el("hr"));
+        i += 1;
+        continue;
+      }
+
+      if (/^>\s?/.test(line)) {
+        var quoted = [];
+        while (i < lines.length && /^>\s?/.test(lines[i])) {
+          quoted.push(lines[i].replace(/^>\s?/, ""));
+          i += 1;
+        }
+        root.appendChild(el("blockquote", null, renderMarkdown(quoted.join("\n"))));
+        continue;
+      }
+
+      if (line.indexOf("|") >= 0 && i + 1 < lines.length && isTableDivider(lines[i + 1])) {
+        var header = splitRow(line);
+        i += 2;
+        var rows = [];
+        while (i < lines.length && lines[i].indexOf("|") >= 0 && lines[i].trim()) {
+          rows.push(splitRow(lines[i]));
+          i += 1;
+        }
+        root.appendChild(tableNode(header, rows));
+        continue;
+      }
+
+      if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
+        var ordered = /^\s*\d+[.)]\s+/.test(line);
+        var list = el(ordered ? "ol" : "ul");
+        while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) {
+          var item = lines[i].replace(/^\s*([-*+]|\d+[.)])\s+/, "");
+          list.appendChild(el("li", null, inlineNodes(item)));
+          i += 1;
+        }
+        root.appendChild(list);
+        continue;
+      }
+
+      if (!line.trim()) {
+        i += 1;
+        continue;
+      }
+
+      // Paragraph: consecutive plain lines until a blank line or a block start.
+      var paragraph = [line];
+      i += 1;
+      while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) {
+        paragraph.push(lines[i]);
+        i += 1;
+      }
+      root.appendChild(el("p", null, inlineNodes(paragraph.join("\n"))));
+    }
+
+    return root;
+  }
+
+  function isBlockStart(line) {
+    return /^```/.test(line) || /^#{1,6}\s/.test(line) || /^>\s?/.test(line) ||
+      /^\s*([-*+]|\d+[.)])\s+/.test(line) || line.indexOf("|") >= 0;
+  }
+
+  function isTableDivider(line) {
+    return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(line) && line.indexOf("-") >= 0;
+  }
+
+  function splitRow(line) {
+    return line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(function (cell) {
+      return cell.trim();
+    });
+  }
+
+  function tableNode(header, rows) {
+    var table = el("table", { class: "md-table" });
+    var head = el("thead", null, el("tr", null));
+    header.forEach(function (cell) {
+      head.firstChild.appendChild(el("th", null, inlineNodes(cell)));
+    });
+    table.appendChild(head);
+    var body = el("tbody");
+    rows.forEach(function (row) {
+      var tr = el("tr");
+      for (var index = 0; index < Math.max(row.length, header.length); index += 1) {
+        tr.appendChild(el("td", null, inlineNodes(row[index] || "")));
+      }
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    return table;
+  }
+
+  /* Inline runs inside one line of text. No nesting: models rarely need
+   * bold-inside-link, and supporting it would cost more than it is worth here. */
+  function inlineNodes(source) {
+    var fragment = document.createDocumentFragment();
+    var pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(~~[^~]+~~)|(\[[^\]]+\]\((https?:\/\/[^)\s]+)\))/g;
+    var last = 0;
+    var match;
+    while ((match = pattern.exec(source)) !== null) {
+      if (match.index > last) { fragment.appendChild(text(source.slice(last, match.index))); }
+      last = match.index + match[0].length;
+      if (match[1]) {
+        fragment.appendChild(el("code", null, match[1].slice(1, -1)));
+      } else if (match[2] || match[3]) {
+        fragment.appendChild(el("strong", null, match[2] ? match[2].slice(2, -2) : match[3].slice(2, -2)));
+      } else if (match[4]) {
+        fragment.appendChild(el("em", null, match[4].slice(1, -1)));
+      } else if (match[5]) {
+        fragment.appendChild(el("del", null, match[5].slice(2, -2)));
+      } else if (match[6]) {
+        fragment.appendChild(el("a", {
+          href: match[7],
+          target: "_blank",
+          rel: "noopener noreferrer"
+        }, match[6].replace(/^\[|\]\(.*\)$/g, "")));
+      }
+    }
+    if (last < source.length) { fragment.appendChild(text(source.slice(last))); }
+    return fragment;
+  }
+
+  function codeBlock(code, lang) {
+    var copy = el("button", { type: "button", class: "code-copy" }, "\u590d\u5236");
+    copy.addEventListener("click", function () { copyText(code, copy); });
+    return el("div", { class: "code-block" },
+      el("div", { class: "code-head" },
+        el("span", { class: "code-lang" }, lang || "text"),
+        copy),
+      el("pre", null, el("code", null, code)));
+  }
+
+  /* Clipboard with a fallback: the page is also served over plain HTTP on a LAN
+   * address, where navigator.clipboard is unavailable (it needs a secure
+   * context). */
+  function copyText(value, button) {
+    function done() {
+      if (!button) { return; }
+      if (!button.dataset.original) { button.dataset.original = button.textContent; }
+      button.textContent = "\u5df2\u590d\u5236";
+      setTimeout(function () { button.textContent = button.dataset.original; }, 1200);
+    }
+    function fallback() {
+      var area = el("textarea", { class: "copy-area" });
+      area.value = value;
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand("copy"); done(); } catch (error) { /* nothing else to try */ }
+      document.body.removeChild(area);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(done, fallback);
+      return;
+    }
+    fallback();
+  }
+
   /* ---------- auth ---------- */
   /* The server leaves the page itself open and guards /api/. That split is what
    * makes a token field possible: the browser can load this script and ask for
@@ -202,6 +400,7 @@
   }
 
   function renderLogin(message) {
+    if (sidebar) { sidebar.classList.add("hidden"); }
     clear(app);
     var input = el("input", {
       type: "password",
@@ -247,11 +446,13 @@
      * a server that never wanted it. The gate is the API's 401 — apiFetch turns
      * that into the login form, and a clean 200 renders straight through. */
     var match = location.pathname.match(/^\/s\/(.+)$/);
-    if (match) {
-      renderRecord(decodeURIComponent(match[1]));
+    var sessionID = match ? decodeURIComponent(match[1]) : "";
+    renderSidebar(sessionID);
+    if (sessionID) {
+      renderRecord(sessionID);
       return;
     }
-    renderList();
+    renderWelcome();
   }
 
   function fail(message) {
@@ -317,6 +518,9 @@
         .then(function (result) {
           var id = result && result.Session && result.Session.id;
           if (!id) { throw new Error("\u54cd\u5e94\u91cc\u6ca1\u6709\u4f1a\u8bdd ID"); }
+          // The new session is not in the list we already fetched; rebuild it
+          // so the sidebar shows what was just created.
+          sidebarReady = false;
           navigate("/s/" + encodeURIComponent(id));
         })
         .catch(function (error) {
@@ -339,13 +543,74 @@
     return box;
   }
 
-  /* ---------- list ---------- */
-  function renderList() {
-    clear(app);
-    app.appendChild(el("div", { class: "top" },
-      el("h1", null, "heron-ai"),
-      el("span", { class: "muted" }, "\u4f1a\u8bdd\u5217\u8868")));
-    app.appendChild(renderNewSession());
+  /* ---------- sidebar ---------- */
+  /* The list lives beside the transcript instead of replacing it: switching
+   * sessions used to mean a full page jump back to a list, then into another
+   * session. Search filters what is already loaded — the list endpoint returns
+   * every session, so there is nothing to ask the server for. */
+  var sidebarSearch = "";
+  var sidebarReady = false;
+
+  function sessionRow(session, activeID) {
+    return el("a", {
+      class: "row" + (session.id === activeID ? " active" : ""),
+      href: "/s/" + encodeURIComponent(session.id),
+      "data-link": "1",
+      "data-id": session.id
+    },
+      el("span", { class: session.active ? "dot active" : "dot" }),
+      el("span", { class: "row-main" },
+        el("div", { class: "title" }, session.title || "(\u672a\u547d\u540d)"),
+        el("div", { class: "meta" },
+          session.turns + " \u8f6e \u00b7 " + tokenCount(session.tokens) + " tok \u00b7 " + relativeTime(session.updated_at))));
+  }
+
+  function applySidebarFilter(rows, keyword) {
+    var needle = String(keyword || "").trim().toLowerCase();
+    Array.prototype.forEach.call(rows.querySelectorAll(".row"), function (row) {
+      var haystack = (row.textContent + " " + (row.getAttribute("data-id") || "")).toLowerCase();
+      var hit = needle === "" || haystack.indexOf(needle) >= 0;
+      row.classList.toggle("hidden", !hit);
+    });
+  }
+
+  function updateSidebarActive(activeID) {
+    if (!sidebar) { return; }
+    Array.prototype.forEach.call(sidebar.querySelectorAll(".row"), function (row) {
+      var isActive = row.getAttribute("href") === "/s/" + encodeURIComponent(activeID);
+      row.classList.toggle("active", isActive);
+    });
+  }
+
+  function renderSidebar(activeID) {
+    if (!sidebar) { return; }
+    sidebar.classList.remove("hidden");
+
+    // Switching sessions only moves the highlight; re-fetching the list on
+    // every click would make the sidebar flicker and drop the search term.
+    if (sidebarReady) {
+      updateSidebarActive(activeID);
+      return;
+    }
+
+    clear(sidebar);
+    var search = el("input", {
+      class: "side-search",
+      type: "search",
+      placeholder: "\u641c\u7d22\u4f1a\u8bdd",
+      value: sidebarSearch
+    });
+    sidebar.appendChild(el("div", { class: "side-head" },
+      el("a", { class: "side-title", href: "/", "data-link": "1" }, "heron-ai"),
+      search));
+    sidebar.appendChild(renderNewSession());
+    var rows = el("div", { class: "rows side-rows" });
+    sidebar.appendChild(rows);
+
+    search.addEventListener("input", function () {
+      sidebarSearch = search.value;
+      applySidebarFilter(rows, sidebarSearch);
+    });
 
     apiFetch("/api/sessions")
       .then(function (response) {
@@ -354,35 +619,29 @@
       })
       .then(function (payload) {
         var sessions = payload.sessions || [];
+        sidebarReady = true;
         if (sessions.length === 0) {
-          app.appendChild(el("div", { class: "empty" },
+          rows.appendChild(el("div", { class: "empty" },
             "\u8fd8\u6ca1\u6709\u4f1a\u8bdd\u3002\u70b9\u4e0a\u9762\u7684\u300c\u65b0\u5efa\u4f1a\u8bdd\u300d\u5f00\u59cb\u7b2c\u4e00\u4e2a\u3002"));
           return;
         }
-        var rows = el("div", { class: "rows" });
         sessions.forEach(function (session) {
-          rows.appendChild(el("a", {
-            class: "row",
-            href: "/s/" + encodeURIComponent(session.id),
-            "data-link": "1"
-          },
-            el("span", { class: session.active ? "dot active" : "dot" }),
-            el("span", null,
-              el("div", { class: "title" }, session.title || "(\u672a\u547d\u540d)"),
-              el("div", { class: "meta" },
-                session.turns + " \u8f6e \u00b7 " + tokenCount(session.tokens) + " tok \u00b7 " + relativeTime(session.updated_at))),
-            el("span", { class: "right" },
-              el("div", { class: "id" }, session.id),
-              el("div", null, session.active ? "\u8fd0\u884c\u4e2d" : "\u7b49\u5f85\u8f93\u5165"))));
+          rows.appendChild(sessionRow(session, activeID));
         });
-        app.appendChild(rows);
+        applySidebarFilter(rows, sidebarSearch);
       })
       .catch(function (error) {
-        // 401 already swapped in the login form; an error box on top of it
-        // would hide the field the reader has to type into.
         if (error && error.unauthorized) { return; }
-        fail("\u8bfb\u53d6\u4f1a\u8bdd\u5217\u8868\u5931\u8d25\uff1a" + error.message);
+        rows.appendChild(el("div", { class: "empty" },
+          "\u8bfb\u53d6\u4f1a\u8bdd\u5217\u8868\u5931\u8d25\uff1a" + error.message));
       });
+  }
+
+  function renderWelcome() {
+    clear(app);
+    app.appendChild(el("div", { class: "welcome" },
+      el("h1", null, "heron-ai"),
+      el("p", { class: "muted" }, "\u4ece\u5de6\u4fa7\u9009\u4e00\u4e2a\u4f1a\u8bdd\uff0c\u6216\u65b0\u5efa\u4e00\u4e2a\u3002")));
   }
 
   /* ---------- record ---------- */
@@ -408,6 +667,7 @@
 
   function paintRecord(sessionID, record) {
     currentRecord = record;
+    resetRunState(record);
     clear(app);
     app.appendChild(el("div", { class: "top" },
       el("h1", null, "heron-ai"),
@@ -425,6 +685,8 @@
     app.appendChild(el("div", { class: "modes" },
       el("div", { class: "seg", role: "group" },
         modeButton("chat", "\u5bf9\u8bdd", true),
+        modeButton("run", "\u8fd0\u884c", false),
+        modeButton("waterfall", "\u65f6\u5e8f", false),
         modeButton("tree", "\u7ed3\u6784", false),
         modeButton("raw", "\u539f\u59cb", false)),
       el("span", { class: "hint", id: "mode-hint" }, "\u540c\u4e00\u4efd\u8bb0\u5f55\uff0c\u4e09\u79cd\u5448\u73b0\u3002")));
@@ -457,8 +719,20 @@
 
   function showMode(body, mode) {
     if (!body || !currentRecord) { return; }
+    currentMode = mode;
+    stopRunLinks();
     clear(body);
     var hint = document.getElementById("mode-hint");
+    if (mode === "run") {
+      body.appendChild(renderRunners());
+      if (hint) { hint.textContent = "\u8fd0\u884c\uff1a\u5f53\u524d\u54ea\u4e9b team / agent \u5728\u8dd1\u3002"; }
+      return;
+    }
+    if (mode === "waterfall") {
+      body.appendChild(renderWaterfall(currentRecord));
+      if (hint) { hint.textContent = "\u65f6\u5e8f\uff1a\u6bcf\u4e2a team \u4e0e call \u7684\u6267\u884c\u533a\u95f4\uff0c\u6a2a\u5411\u4f4d\u7f6e\u5c31\u662f\u5e76\u884c\u5173\u7cfb\u3002"; }
+      return;
+    }
     if (mode === "tree") {
       body.appendChild(renderTree(currentRecord));
       if (hint) { hint.textContent = "\u7ed3\u6784\uff1a\u56de\u5408 \u2192 Team \u2192 Call \u2192 Agent\uff0c\u70b9\u8282\u70b9\u770b\u5b83\u540d\u4e0b\u7684\u4e8b\u4ef6\u3002"; }
@@ -583,6 +857,7 @@
     var filePicker = el("input", { type: "file", multiple: "multiple", class: "composer-file" });
     var attachButton = el("button", { type: "button", class: "composer-attach" }, "\u9644\u4ef6");
     var sendButton = el("button", { type: "button", class: "composer-send" }, "\u53d1\u9001");
+    var stopButton = el("button", { type: "button", class: "composer-stop hidden" }, "\u505c\u6b62");
     var status = el("span", { class: "composer-status" }, "");
 
     var box = el("div", { class: "composer" },
@@ -593,7 +868,8 @@
         filePicker,
         status,
         el("span", { class: "composer-hint" }, "Enter \u53d1\u9001 \u00b7 Shift+Enter \u6362\u884c"),
-        sendButton));
+        sendButton,
+        stopButton));
 
     function refreshChips() {
       clear(chips);
@@ -638,8 +914,8 @@
       busy = value;
       input.disabled = value;
       attachButton.disabled = value;
-      sendButton.disabled = value;
-      sendButton.textContent = value ? "\u6267\u884c\u4e2d\u2026" : "\u53d1\u9001";
+      sendButton.classList.toggle("hidden", value);
+      stopButton.classList.toggle("hidden", !value);
       status.textContent = text || "";
     }
 
@@ -649,6 +925,9 @@
     }
 
     var liveRun = null;
+    /* Bumped on every send and on every stop. A POST that answers after the
+     * reader already stopped (or started another turn) must not touch the UI. */
+    var runToken = 0;
 
     function submit() {
       if (busy) { return; }
@@ -656,6 +935,8 @@
       if (!value && pending.length === 0) { return; }
       var payload = { input: value };
       if (pending.length) { payload.attachments = pending.slice(); }
+
+      var token = ++runToken;
 
       /* Subscribe before posting. The turn starts the moment the request
        * lands; a stream opened afterwards would miss its opening events. The
@@ -683,10 +964,12 @@
           });
         })
         .then(function () {
+          if (token !== runToken) { return; }
           setBusy(false, "");
           // The POST answers when the turn is over, so the stream has nothing
           // left to add. Give the last frame a beat, then close it.
           setTimeout(function () {
+            if (token !== runToken) { return; }
             var missed = liveRun ? liveRun.count() === 0 : true;
             if (liveRun) { liveRun.settleAll(); liveRun.stop(); liveRun = null; }
             if (missed) {
@@ -699,8 +982,37 @@
         })
         .catch(function (error) {
           if (error && error.unauthorized) { return; }
+          if (token !== runToken) { return; }
           if (liveRun) { liveRun.stop(); liveRun = null; }
           setBusy(false, "\u53d1\u9001\u5931\u8d25\uff1a" + error.message);
+        });
+    }
+
+    /* Stopping is two things, and only the first one is fully ours to do:
+     * drop the client stream, and ask the server to cancel the session. The
+     * server marks the session cancelled; whether the in-flight model call dies
+     * with it depends on ctx propagation inside the runtime, which this page
+     * cannot see. So the copy says "停止" and reports what the server answered,
+     * rather than claiming the work definitely ended. */
+    function stop() {
+      if (!busy) { return; }
+      runToken += 1;
+      if (liveRun) { liveRun.settleAll(); liveRun.stop(); liveRun = null; }
+      setBusy(false, "\u6b63\u5728\u8bf7\u6c42\u505c\u6b62\u2026");
+      apiFetch("/api/cancel?session_id=" + encodeURIComponent(sessionID), { method: "POST" })
+        .then(function (response) {
+          if (response.ok) { return response.json(); }
+          return response.text().then(function (text) {
+            throw new Error((text || "").trim() || ("HTTP " + response.status));
+          });
+        })
+        .then(function () {
+          scrollToBottom = true;
+          renderRecord(sessionID);
+        })
+        .catch(function (error) {
+          if (error && error.unauthorized) { return; }
+          setBusy(false, "\u505c\u6b62\u5931\u8d25\uff1a" + error.message);
         });
     }
 
@@ -833,10 +1145,13 @@
 
       if (event.type === "flow_turn.started") {
         view.startedAt = event.created_at || "";
-        if (payload.input) {
-          view.body.appendChild(el("div", { class: "msg from-user" },
+        if (payload.input || turnAttachments(payload).length) {
+          var liveMessage = el("div", { class: "msg from-user" },
             el("div", { class: "who" }, "\u4f60", stamp(event.created_at)),
-            el("div", { class: "body" }, payload.input)));
+            el("div", { class: "body" }, payload.input || ""));
+          var liveAttachments = turnAttachments(payload);
+          if (liveAttachments.length) { liveMessage.appendChild(attachmentChips(liveAttachments)); }
+          view.body.appendChild(liveMessage);
         }
         return;
       }
@@ -882,20 +1197,24 @@
         if (!reply.body) { return; }
         view.lastText = reply.body;
         view.lastSeqOfCall[call] = event.seq;
-        var body = el("div", { class: "body" }, reply.body);
+        var body = el("div", { class: "body markdown" }, renderMarkdown(reply.body));
         if (reply.raw) {
           body.appendChild(el("details", { class: "raw-reply" },
             el("summary", null, "\u539f\u59cb\u8f93\u51fa"),
             el("pre", null, reply.raw)));
         }
         var speaker = speakerLabel(event);
-        view.body.appendChild(el("div", { class: "msg from-agent" },
+        var message = el("div", { class: "msg from-agent" },
           el("div", { class: "who" },
             speaker.team ? el("span", { class: "who-team" }, speaker.team + " / ") : null,
             speaker.agent || "\u52a9\u624b",
             stamp(event.created_at),
             el("span", { class: "took-slot", "data-call": call })),
-          body));
+          body);
+        var copy = el("button", { type: "button", class: "copy-msg", title: "\u590d\u5236\u8fd9\u6761\u56de\u590d" }, "\u590d\u5236");
+        copy.addEventListener("click", function () { copyText(reply.body, copy); });
+        message.appendChild(copy);
+        view.body.appendChild(message);
         return;
       }
 
@@ -904,9 +1223,13 @@
         var node = el("details", { class: "tool running" },
           el("summary", null,
             el("span", { class: "name" }, payload.tool_name || "tool"),
-            el("span", { class: "arg" }, payload.arguments ? JSON.stringify(payload.arguments) : ""),
+            el("span", { class: "arg" }, toolSummary(payload.tool_name, payload.arguments || {})),
             el("span", { class: "state" }, "\u8fdb\u884c\u4e2d")),
-          el("pre", null, ""));
+          el("div", { class: "tool-body" },
+            payload.arguments && Object.keys(payload.arguments).length
+              ? el("pre", { class: "args" }, JSON.stringify(payload.arguments, null, 2))
+              : null,
+            el("pre", { class: "out" }, "")));
         view.tools[key] = node;
         view.body.appendChild(node);
         return;
@@ -917,7 +1240,7 @@
         target.classList.remove("running");
         var label = target.querySelector(".state");
         if (label) { label.textContent = event.type === "tool_call.failed" ? "\u5931\u8d25" : "\u6210\u529f"; }
-        var pre = target.querySelector("pre");
+        var pre = target.querySelector("pre.out");
         if (pre) {
           pre.textContent = event.type === "tool_call.failed"
             ? (payload.error || "")
@@ -944,7 +1267,7 @@
       } else if (view.reply && view.reply.trim() !== view.lastText.trim()) {
         view.body.appendChild(el("div", { class: "msg from-agent" },
           el("div", { class: "who" }, "\u56de\u5408\u7b54\u590d", stamp(event.created_at)),
-          el("div", { class: "body" }, view.reply)));
+          el("div", { class: "body markdown" }, renderMarkdown(view.reply))));
       }
       if (view.intermediate) { view.tags.appendChild(tag("\u4e2d\u95f4\u56de\u5408")); }
       if (view.origin === "wakeup") { view.tags.appendChild(tag("\u5b9a\u65f6\u68c0\u67e5", "warn")); }
@@ -1001,6 +1324,8 @@
         return;
       }
       view.push(event);
+      applyRunEvent(event);
+      refreshRunView();
       window.scrollTo(0, document.body.scrollHeight);
     }
 
@@ -1019,6 +1344,10 @@
   }
 
   /* ---------- chat ---------- */
+  /* A session with hundreds of turns would otherwise build every node before
+   * the first paint. Older turns stay one click away instead of in the DOM. */
+  var CHAT_PAGE_SIZE = 40;
+
   function renderChat(record) {
     var wrap = el("div", { class: "chat" });
     var turns = groupByTurn(record.events || []);
@@ -1026,7 +1355,23 @@
       wrap.appendChild(el("div", { class: "empty" }, "\u6ca1\u6709\u53ef\u5c55\u793a\u7684\u5bf9\u8bdd\u5185\u5bb9\u3002"));
       return wrap;
     }
-    turns.forEach(function (turn) { wrap.appendChild(renderTurn(turn)); });
+
+    var hiddenCount = Math.max(0, turns.length - CHAT_PAGE_SIZE);
+    if (hiddenCount > 0) {
+      var older = el("button", { type: "button", class: "load-older" },
+        "\u52a0\u8f7d\u66f4\u65e9\u7684 " + hiddenCount + " \u4e2a\u56de\u5408");
+      older.addEventListener("click", function () {
+        older.remove();
+        var fragment = document.createDocumentFragment();
+        turns.slice(0, hiddenCount).forEach(function (turn) {
+          fragment.appendChild(renderTurn(turn));
+        });
+        wrap.insertBefore(fragment, wrap.firstChild);
+      });
+      wrap.appendChild(older);
+    }
+
+    turns.slice(hiddenCount).forEach(function (turn) { wrap.appendChild(renderTurn(turn)); });
     return wrap;
   }
 
@@ -1041,15 +1386,23 @@
       if (!map[key]) {
         map[key] = {
           id: key, events: [], input: "", origin: "", reply: "",
-          error: "", intermediate: false, limit: null, startedAt: "", endedAt: ""
+          error: "", intermediate: false, limit: null, startedAt: "", endedAt: "",
+          models: [], promptTokens: 0, completionTokens: 0, attachments: []
         };
         order.push(map[key]);
       }
       var turn = map[key];
       turn.events.push(event);
       var payload = event.payload || {};
+      if (event.type === "agent.model_response") {
+        var usage = payload.usage || {};
+        if (payload.model && turn.models.indexOf(payload.model) < 0) { turn.models.push(payload.model); }
+        turn.promptTokens += usage.prompt_tokens || 0;
+        turn.completionTokens += usage.completion_tokens || 0;
+      }
       if (event.type === "flow_turn.started") {
         if (payload.input) { turn.input = payload.input; }
+        turn.attachments = turnAttachments(payload);
         turn.startedAt = event.created_at || turn.startedAt;
       }
       if (event.type === "flow_turn.waiting_input" || event.type === "flow_turn.completed") {
@@ -1062,6 +1415,32 @@
       }
     });
     return order;
+  }
+
+  /* The first turn carries what the user attached, inside
+   * turn.context_blocks[].parts[].media. The transcript used to show only the
+   * text, so a message that was mostly a file looked like a sentence. */
+  function turnAttachments(payload) {
+    var turn = (payload && payload.turn) || {};
+    var blocks = turn.context_blocks || [];
+    var items = [];
+    blocks.forEach(function (block) {
+      (block.parts || []).forEach(function (part) {
+        if (part && part.media) { items.push(part.media); }
+      });
+    });
+    return items;
+  }
+
+  function attachmentChips(items) {
+    var row = el("div", { class: "msg-attachments" });
+    items.forEach(function (item) {
+      row.appendChild(el("span", { class: "chip" },
+        el("span", { class: "chip-kind" }, item.kind || "file"),
+        el("span", { class: "chip-name" }, item.name || "(\u672a\u547d\u540d)"),
+        el("span", { class: "chip-size" }, humanSize(item.size_bytes || 0))));
+    });
+    return row;
   }
 
   /* Who said it: team_id plus the call name carried in call_turn_id
@@ -1145,17 +1524,29 @@
         turn.origin === "wakeup" ? "warn" : null));
     }
     if (turn.intermediate) { head.appendChild(tag("\u4e2d\u95f4\u56de\u5408")); }
+    if (turn.error && String(turn.error).toLowerCase().indexOf("cancel") >= 0) {
+      head.appendChild(tag("\u5df2\u4e2d\u65ad", "warn"));
+    }
     if (turn.limit) { head.appendChild(tag("\u88ab " + turn.limit.name + " \u7ec8\u6b62", "danger")); }
     var turnSpan = elapsed(turn.startedAt, turn.endedAt);
     if (turnSpan) { head.appendChild(el("span", { class: "turn-span" }, turnSpan)); }
+    if (turn.promptTokens || turn.completionTokens) {
+      head.appendChild(el("span", { class: "turn-usage", title: "\u8f93\u5165 / \u8f93\u51fa token" },
+        (turn.models.length ? turn.models.join(", ") + " \u00b7 " : "") +
+        tokenCount(turn.promptTokens) + " / " + tokenCount(turn.completionTokens) + " tok"));
+    }
     box.appendChild(head);
 
     if (turn.input) {
-      box.appendChild(el("div", { class: "msg from-user" },
+      var userMessage = el("div", { class: "msg from-user" },
         el("div", { class: "who" },
           "\u4f60",
           stamp(turn.startedAt)),
-        el("div", { class: "body" }, turn.input)));
+        el("div", { class: "body" }, turn.input));
+      if (turn.attachments && turn.attachments.length) {
+        userMessage.appendChild(attachmentChips(turn.attachments));
+      }
+      box.appendChild(userMessage);
     }
 
     var tools = {};
@@ -1166,7 +1557,7 @@
         var view = modelReply(payload);
         if (view.body) {
           lastText = view.body;
-          var body = el("div", { class: "body" }, view.body);
+          var body = el("div", { class: "body markdown" }, renderMarkdown(view.body));
           if (view.raw) {
             body.appendChild(el("details", { class: "raw-reply" },
               el("summary", null, "\u539f\u59cb\u8f93\u51fa"),
@@ -1175,13 +1566,17 @@
           var speaker = speakerLabel(event);
           var span = spans[event.call_turn_id || ""] || {};
           var took = lastSeqOfCall[event.call_turn_id || ""] === event.seq ? elapsed(span.start, span.end) : "";
-          box.appendChild(el("div", { class: "msg from-agent" },
+          var message = el("div", { class: "msg from-agent" },
             el("div", { class: "who" },
               speaker.team ? el("span", { class: "who-team" }, speaker.team + " / ") : null,
               speaker.agent || "\u52a9\u624b",
               stamp(event.created_at),
               took ? el("span", { class: "took", title: "\u8fd9\u4e2a agent \u8fd9\u4e00\u8f6e\u7684\u8017\u65f6" }, took) : null),
-            body));
+            body);
+          var copy = el("button", { type: "button", class: "copy-msg", title: "\u590d\u5236\u8fd9\u6761\u56de\u590d" }, "\u590d\u5236");
+          copy.addEventListener("click", function () { copyText(view.body, copy); });
+          message.appendChild(copy);
+          box.appendChild(message);
         }
         return;
       }
@@ -1195,7 +1590,7 @@
         if (!node) { return; }
         var state = node.querySelector(".state");
         if (state) { state.textContent = event.type === "tool_call.failed" ? "\u5931\u8d25" : "\u6210\u529f"; }
-        var pre = node.querySelector("pre");
+        var pre = node.querySelector("pre.out");
         if (pre) {
           var output = event.type === "tool_call.failed"
             ? (payload.error || "")
@@ -1224,21 +1619,377 @@
       // so it is labelled by level rather than by agent.
       box.appendChild(el("div", { class: "msg from-agent" + (turn.intermediate ? " intermediate" : "") },
         el("div", { class: "who" }, "\u56de\u5408\u7b54\u590d", stamp(turn.endedAt)),
-        el("div", { class: "body" }, turn.reply)));
+        el("div", { class: "body markdown" }, renderMarkdown(turn.reply))));
     }
     return box;
   }
 
+  /* A tool call reads better as "what did it act on" than as a JSON blob: Bash
+   * wants its command, Read/Write their path, Team its description. The full
+   * arguments stay available in the expanded body. */
+  function toolSummary(name, args) {
+    var value = args || {};
+    if (typeof value === "string") { return value.slice(0, 160); }
+    if (value.command) { return String(value.command).split("\n")[0].slice(0, 160); }
+    if (value.file_path) { return value.file_path; }
+    if (value.pattern) { return value.pattern + (value.path ? "  " + value.path : ""); }
+    if (value.description) { return value.description.slice(0, 160); }
+    if (value.query) { return String(value.query).slice(0, 160); }
+    var json = JSON.stringify(value);
+    if (!json || json === "{}") { return ""; }
+    return json.slice(0, 120);
+  }
+
   function appendTool(box, call) {
-    var args = call.arguments ? JSON.stringify(call.arguments) : "";
+    var args = call.arguments || {};
     var node = el("details", { class: "tool" },
       el("summary", null,
         el("span", { class: "name" }, call.tool_name || "tool"),
-        el("span", { class: "arg" }, args),
+        el("span", { class: "arg" }, toolSummary(call.tool_name, args)),
         el("span", { class: "state" }, "\u8fdb\u884c\u4e2d")),
-      el("pre", null, ""));
+      el("div", { class: "tool-body" },
+        Object.keys(args).length ? el("pre", { class: "args" }, JSON.stringify(args, null, 2)) : null,
+        el("pre", { class: "out" }, "")));
     box.appendChild(node);
     return node;
+  }
+
+  /* ---------- run board ---------- */
+  /* Answers one question only: which teams and agents are running right now.
+   * Everything else about a turn (what it said, which tools it called, how long
+   * each step took) already has a view; this one is the status board. */
+  var runState = { teams: [], agents: [] };
+
+  function resetRunState(record) {
+    runState = { teams: [], agents: [] };
+    ((record && record.events) || []).forEach(applyRunEvent);
+  }
+
+  function runEntry(group, key) {
+    for (var index = 0; index < runState[group].length; index += 1) {
+      if (runState[group][index].key === key) { return runState[group][index]; }
+    }
+    return null;
+  }
+
+  function upsertRunEntry(group, key, name, team) {
+    var entry = runEntry(group, key);
+    if (entry) { return entry; }
+    entry = { key: key, name: name, team: team, status: "pending", startedAt: "", endedAt: "" };
+    runState[group].push(entry);
+    return entry;
+  }
+
+  function applyRunEvent(event) {
+    var type = event.type || "";
+    var payload = event.payload || {};
+
+    if (type.indexOf("team_turn.") === 0) {
+      var teamTurn = payload.team_turn || {};
+      /* team_turn.completed carries only team_result — no id in the payload.
+       * The header always does, so read it from there; the payload copy is a
+       * fallback for older events. */
+      var teamID = event.team_turn_id || teamTurn.id || "";
+      if (!teamID) { return; }
+      var teamName = teamTurn.team_id || event.team_id || "?";
+      var teamEntry = upsertRunEntry("teams", teamID, teamName, "");
+      if (type === "team_turn.started") {
+        teamEntry.status = "running";
+        teamEntry.startedAt = event.created_at || teamEntry.startedAt;
+      } else {
+        teamEntry.endedAt = event.created_at || teamEntry.endedAt;
+        teamEntry.status = type === "team_turn.failed" ? "failed" : "completed";
+      }
+      return;
+    }
+
+    if (type.indexOf("agent_turn.") === 0) {
+      var call = event.call_turn_id || "";
+      if (!call) { return; }
+      var speaker = speakerLabel(event);
+      var agentEntry = upsertRunEntry("agents", call, speaker.agent || call, speaker.team);
+      if (type === "agent_turn.started") {
+        agentEntry.status = "running";
+        agentEntry.startedAt = event.created_at || agentEntry.startedAt;
+      } else {
+        agentEntry.endedAt = event.created_at || agentEntry.endedAt;
+        agentEntry.status = type === "agent_turn.failed" ? "failed" : "completed";
+      }
+    }
+  }
+
+  /* Draws the dispatch links between a team card and its agent cards.
+   *
+   * Canvas rather than SVG: the running links carry a moving dot, and that is a
+   * per-frame redraw — canvas handles it without touching the DOM tree sixty
+   * times a second. Cards stay real DOM elements so they keep their text
+   * selection, hover and semantics; only the lines live on the canvas. */
+  var runLinkFrame = 0;
+
+  function stopRunLinks() {
+    if (runLinkFrame) {
+      cancelAnimationFrame(runLinkFrame);
+      runLinkFrame = 0;
+    }
+  }
+
+  function floatPoint(p0, p1, p2, p3, t) {
+    var u = 1 - t;
+    return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
+  }
+
+  function drawRunLinks(wrap, canvas, pairs, phase) {
+    var box = wrap.getBoundingClientRect();
+    if (!box.width || !box.height) { return false; }
+    var ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(box.width * ratio);
+    canvas.height = Math.round(box.height * ratio);
+    canvas.style.width = box.width + "px";
+    canvas.style.height = box.height + "px";
+
+    var context = canvas.getContext("2d");
+    if (!context) { return false; }
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.clearRect(0, 0, box.width, box.height);
+
+    var running = false;
+    pairs.forEach(function (pair) {
+      var from = pair.from.getBoundingClientRect();
+      var to = pair.to.getBoundingClientRect();
+      var x1 = from.left - box.left + from.width / 2;
+      var y1 = from.bottom - box.top;
+      var x2 = to.left - box.left + Math.min(18, to.width * 0.15);
+      var y2 = to.top - box.top + to.height / 2;
+      var c1y = y1 + Math.max(16, (y2 - y1) / 2);
+      var c2x = x2 - Math.max(16, (x2 - x1) / 3);
+
+      context.beginPath();
+      context.moveTo(x1, y1);
+      context.bezierCurveTo(x1, c1y, c2x, y2, x2, y2);
+      context.lineWidth = pair.running ? 1.8 : 1;
+      context.strokeStyle = pair.running ? "rgba(36,86,230,.65)" : "rgba(120,130,145,.28)";
+      context.stroke();
+
+      if (!pair.running) { return; }
+      running = true;
+      // Two dots per link, offset so a busy dispatch looks like flow rather
+      // than a single metronome.
+      [0, 0.5].forEach(function (offset) {
+        var t = (phase + offset) % 1;
+        var x = floatPoint(x1, x1, c2x, x2, t);
+        var y = floatPoint(y1, c1y, y2, y2, t);
+        context.beginPath();
+        context.arc(x, y, 2.6, 0, Math.PI * 2);
+        context.fillStyle = "rgba(36,86,230,.95)";
+        context.fill();
+      });
+    });
+
+    return running;
+  }
+
+  function animateRunLinks(wrap, canvas, pairs) {
+    var start = 0;
+    function frame(now) {
+      var phase = ((now - start) / 1800) % 1;
+      var running = drawRunLinks(wrap, canvas, pairs, phase);
+      if (!running) {
+        runLinkFrame = 0;
+        drawRunLinks(wrap, canvas, pairs, 0);
+        return;
+      }
+      runLinkFrame = requestAnimationFrame(frame);
+    }
+    runLinkFrame = requestAnimationFrame(function (now) {
+      start = now;
+      runLinkFrame = requestAnimationFrame(frame);
+    });
+  }
+
+  function renderRunners() {
+    stopRunLinks();
+    var wrap = el("div", { class: "runboard" });
+    var canvas = el("canvas", { class: "run-links" });
+    wrap.appendChild(canvas);
+
+    var running = runState.teams.concat(runState.agents).filter(function (item) {
+      return item.status === "running";
+    }).length;
+
+    wrap.appendChild(el("div", { class: "run-summary" },
+      running > 0
+        ? el("span", { class: "run-live" }, "\u8fd0\u884c\u4e2d " + running + " \u4e2a")
+        : el("span", { class: "muted" }, "\u5f53\u524d\u6ca1\u6709\u5728\u8dd1\u7684 team \u6216 agent\u3002")));
+
+    var cards = {};
+
+    function card(item) {
+      var node = el("div", { class: "run-card " + item.status, "data-run-key": item.key, title: item.key },
+        el("span", { class: "run-dot" }),
+        el("span", { class: "run-name" },
+          item.team ? el("span", { class: "run-team" }, item.team + " / ") : null,
+          item.name),
+        el("span", { class: "run-time" },
+          item.status === "running" ? "\u8fd0\u884c\u4e2d" : (elapsed(item.startedAt, item.endedAt) || "")));
+      return node;
+    }
+
+    // Each team sits directly above its own agents: the dispatch link is then a
+    // short hop instead of a curve across the whole board, and it never runs
+    // behind the sticky composer.
+    var grouped = {};
+    runState.agents.forEach(function (agent) {
+      var teamKey = agent.key.split(":")[0] || "";
+      if (!grouped[teamKey]) { grouped[teamKey] = []; }
+      grouped[teamKey].push(agent);
+    });
+
+    runState.teams.forEach(function (team) {
+      var block = el("div", { class: "run-block" });
+      var teamCard = card(team);
+      cards[team.key] = teamCard;
+      block.appendChild(teamCard);
+      var children = grouped[team.key] || [];
+      if (children.length) {
+        var childWrap = el("div", { class: "run-children" });
+        children.forEach(function (agent) {
+          var node = card(agent);
+          cards[agent.key] = node;
+          childWrap.appendChild(node);
+        });
+        block.appendChild(childWrap);
+        delete grouped[team.key];
+      }
+      wrap.appendChild(block);
+    });
+
+    // Agents whose team card is not in this session (older or partial events)
+    // still deserve to be listed rather than silently dropped.
+    Object.keys(grouped).forEach(function (teamKey) {
+      var childWrap = el("div", { class: "run-grid" });
+      grouped[teamKey].forEach(function (agent) {
+        var node = card(agent);
+        cards[agent.key] = node;
+        childWrap.appendChild(node);
+      });
+      wrap.appendChild(childWrap);
+    });
+
+    if (!runState.teams.length && !runState.agents.length) {
+      wrap.appendChild(el("div", { class: "empty" }, "\u8fd9\u4e2a\u4f1a\u8bdd\u8fd8\u6ca1\u6709 team / agent \u8fd0\u884c\u8fc7\u3002"));
+      return wrap;
+    }
+
+    // One link per agent: its team card -> the agent card.
+    var pairs = [];
+    runState.agents.forEach(function (agent) {
+      var teamKey = (agent.key.split(":")[0]) || "";
+      var fromCard = cards[teamKey];
+      var toCard = cards[agent.key];
+      if (!fromCard || !toCard) { return; }
+      pairs.push({ from: fromCard, to: toCard, running: agent.status === "running" });
+    });
+
+    if (pairs.length) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          if (!wrap.isConnected) { return; }
+          animateRunLinks(wrap, canvas, pairs);
+        });
+      });
+    }
+
+    return wrap;
+  }
+
+  function refreshRunView() {
+    if (currentMode !== "run") { return; }
+    var body = document.getElementById("record-body");
+    if (!body) { return; }
+    clear(body);
+    body.appendChild(renderRunners());
+  }
+
+  /* ---------- waterfall ---------- */
+  /* The tree shows hierarchy but not time: two teams running in parallel look
+   * identical to two teams running one after another. This puts every team turn
+   * and agent turn on a shared axis, so overlap is visible at a glance. */
+  function collectSpans(events) {
+    var spans = {};
+    var order = [];
+
+    function slot(id, label) {
+      if (!spans[id]) {
+        spans[id] = { id: id, label: label || "", start: "", end: "" };
+        order.push(spans[id]);
+      }
+      if (!spans[id].label && label) { spans[id].label = label; }
+      return spans[id];
+    }
+
+    events.forEach(function (event) {
+      var payload = event.payload || {};
+      if (event.type === "team_turn.started" || event.type === "team_turn.completed") {
+        var teamTurn = payload.team_turn || {};
+        var teamID = teamTurn.id || "";
+        if (!teamID) { return; }
+        var team = teamTurn.team_id || event.team_id || "";
+        var teamSlot = slot(teamID, "team " + (team || "?"));
+        if (event.type === "team_turn.started") { teamSlot.start = event.created_at || teamSlot.start; }
+        else { teamSlot.end = event.created_at || teamSlot.end; }
+        return;
+      }
+      if (event.type === "agent_turn.started" || event.type === "agent_turn.completed") {
+        var call = event.call_turn_id || "";
+        if (!call) { return; }
+        var speaker = speakerLabel(event);
+        var label = speaker.team ? speaker.team + " / " + speaker.agent : (speaker.agent || call);
+        var callSlot = slot(call, label);
+        if (event.type === "agent_turn.started") { callSlot.start = event.created_at || callSlot.start; }
+        else { callSlot.end = event.created_at || callSlot.end; }
+      }
+    });
+
+    return order;
+  }
+
+  function renderWaterfall(record) {
+    var wrap = el("div", { class: "waterfall" });
+    var spans = collectSpans((record && record.events) || []);
+    if (spans.length === 0) {
+      wrap.appendChild(el("div", { class: "empty" }, "\u8fd9\u4e2a\u4f1a\u8bdd\u6ca1\u6709 team / call \u65f6\u5e8f\u3002"));
+      return wrap;
+    }
+
+    var starts = [];
+    var ends = [];
+    spans.forEach(function (span) {
+      var start = new Date(span.start).getTime();
+      var end = new Date(span.end || span.start).getTime();
+      if (!isNaN(start)) { starts.push(start); }
+      if (!isNaN(end)) { ends.push(end); }
+    });
+    var origin = starts.length ? Math.min.apply(null, starts) : Date.now();
+    var finish = ends.length ? Math.max.apply(null, ends) : origin;
+    var total = Math.max(1, finish - origin);
+
+    spans.forEach(function (span) {
+      var start = new Date(span.start).getTime();
+      var end = new Date(span.end).getTime();
+      var left = isNaN(start) ? 0 : ((start - origin) / total) * 100;
+      var width = (isNaN(start) || isNaN(end)) ? 1.5 : Math.max(1.5, ((end - start) / total) * 100);
+      var isTeam = span.id.indexOf(":") < 0;
+      wrap.appendChild(el("div", { class: "wf-row" },
+        el("span", { class: "wf-label", title: span.id }, span.label),
+        el("span", { class: "wf-track" },
+          el("i", {
+            class: isTeam ? "wf-team" : "wf-call",
+            style: "left:" + left.toFixed(2) + "%;width:" + width.toFixed(2) + "%"
+          })),
+        el("span", { class: "wf-time" }, elapsed(span.start, span.end) || "\u8fd0\u884c\u4e2d")));
+    });
+
+    return wrap;
   }
 
   /* ---------- tree ---------- */

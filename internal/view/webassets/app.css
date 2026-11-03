@@ -49,7 +49,70 @@ a:hover { text-decoration: underline; }
 code, .mono { font-family: var(--mono); font-size: .92em; }
 .muted { color: var(--muted); }
 .faint { color: var(--faint); }
-.app { max-width: 1180px; margin: 0 auto; padding: 24px 20px 200px; }
+/* Two panes: the session list stays visible while a transcript is open, so
+   switching sessions no longer means going back to a list page. */
+.shell { display: flex; align-items: flex-start; min-height: 100vh; }
+.sidebar { position: sticky; top: 0; flex: 0 0 288px; width: 288px; height: 100vh;
+  overflow-y: auto; padding: 14px 12px; border-right: 1px solid var(--border);
+  background: var(--bg-subtle); }
+.sidebar.hidden { display: none; }
+.side-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.side-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.side-search { flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--border-strong);
+  border-radius: 6px; font: inherit; font-size: 12px; color: var(--text); background: var(--bg); }
+.side-rows .row { padding: 6px 8px; border-radius: 6px; }
+.side-rows .row.active { background: var(--accent-soft); }
+.row-main { min-width: 0; }
+.app { flex: 1; min-width: 0; max-width: 1180px; margin: 0 auto; padding: 24px 20px 200px; }
+.welcome { padding: 18vh 0 0; text-align: center; }
+.welcome h1 { font-size: 20px; margin: 0 0 6px; }
+.turn-usage { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.load-older { display: block; width: 100%; margin-bottom: 14px; padding: 6px; cursor: pointer;
+  border: 1px dashed var(--border-strong); border-radius: 8px;
+  font: inherit; font-size: 12px; color: var(--muted); background: var(--bg-subtle); }
+
+/* Run board: which team/agent is running right now, nothing else. */
+.runboard { position: relative; margin-bottom: 16px; }
+.run-links { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.run-summary, .run-group-title, .run-grid { position: relative; z-index: 1; }
+.run-summary { margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+.run-live { color: var(--accent); font-weight: 550; }
+.run-group-title { margin: 10px 0 6px; font-size: 11px; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--faint); }
+.run-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.run-block { margin-bottom: 12px; }
+.run-children { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px; margin: 8px 0 0 26px; }
+.run-card { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-subtle); font-size: 12px; }
+.run-card.running { border-color: var(--accent); background: var(--accent-soft); }
+.run-card.failed { border-color: var(--danger); }
+.run-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.run-card.completed .run-dot { background: var(--ok); }
+.run-card.failed .run-dot { background: var(--danger); }
+.run-card.running .run-dot { background: var(--accent); animation: run-pulse 1.2s ease-in-out infinite; }
+@keyframes run-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.65); } }
+.run-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-team { color: var(--faint); }
+.run-time { color: var(--faint); font-variant-numeric: tabular-nums; }
+
+/* Waterfall: every team and call on one axis, so overlapping work is visible. */
+.waterfall { margin-bottom: 16px; }
+.wf-row { display: grid; grid-template-columns: 200px 1fr 70px; gap: 10px; align-items: center;
+  margin-bottom: 4px; }
+.wf-label { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.wf-track { position: relative; height: 14px; background: var(--bg-sunken); border-radius: 4px; }
+.wf-track i { position: absolute; top: 0; height: 100%; min-width: 3px; border-radius: 4px; }
+.wf-team { background: var(--accent); opacity: .85; }
+.wf-call { background: var(--ok); opacity: .7; }
+.wf-time { font-size: 11px; color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 900px) {
+  .shell { flex-direction: column; }
+  .sidebar { position: static; flex: none; width: auto; height: auto; max-height: 42vh;
+    border-right: 0; border-bottom: 1px solid var(--border); }
+  .app { padding-bottom: 120px; }
+}
 
 /* header */
 .top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
@@ -260,3 +323,51 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .step-state { color: var(--faint); }
 .tool.running .state { color: var(--warn); }
 .took-slot { color: var(--faint); }
+
+/* Markdown. The renderer only builds plain elements; all styling lives here. */
+.msg .body.markdown { white-space: normal; }
+.md > *:first-child { margin-top: 0; }
+.md > *:last-child { margin-bottom: 0; }
+.md p { margin: 0 0 8px; white-space: pre-wrap; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 14px 0 8px; font-weight: 600; line-height: 1.3; }
+.md h1 { font-size: 18px; }
+.md h2 { font-size: 16px; }
+.md h3 { font-size: 15px; }
+.md h4, .md h5, .md h6 { font-size: 14px; }
+.md ul, .md ol { margin: 0 0 8px; padding-left: 22px; }
+.md li { margin: 2px 0; }
+.md blockquote { margin: 0 0 8px; padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border-strong); color: var(--muted); }
+.md hr { margin: 12px 0; border: 0; border-top: 1px solid var(--border); }
+.md code { padding: 1px 4px; border-radius: 4px; background: var(--bg-sunken);
+  font-family: var(--mono); font-size: .9em; }
+.md-table { margin: 0 0 10px; border-collapse: collapse; font-size: 13px; }
+.md-table th, .md-table td { padding: 5px 8px; border: 1px solid var(--border); text-align: left; }
+.md-table th { background: var(--bg-sunken); }
+
+/* Fenced code keeps its own copy button: the point of showing a command is
+   that it can be taken away. */
+.code-block { margin: 8px 0; overflow: hidden; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg-sunken); }
+.code-head { display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 8px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--faint); }
+.code-lang { font-family: var(--mono); }
+.code-copy { padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: 4px;
+  font: inherit; font-size: 11px; color: var(--muted); background: var(--bg); cursor: pointer; }
+.code-block pre { margin: 0; padding: 10px 12px; max-height: 420px; overflow: auto; }
+.code-block code { padding: 0; background: transparent; font-size: 12px; line-height: 1.5; }
+.copy-area { position: fixed; left: -9999px; top: 0; }
+
+/* Message copy appears on hover so it never competes with the text. */
+.msg { position: relative; }
+.copy-msg { position: absolute; top: 6px; right: 8px; opacity: 0; transition: opacity .12s;
+  padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: 4px;
+  font: inherit; font-size: 11px; color: var(--muted); background: var(--bg); cursor: pointer; }
+.msg:hover .copy-msg, .copy-msg:focus { opacity: 1; }
+.msg.from-agent .who { padding-right: 52px; }
+
+.msg-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.tool-body { border-top: 1px solid var(--border); }
+.tool pre.args { margin: 0; padding: 8px 10px; border: 0; background: var(--bg-sunken); color: var(--muted); }
+.composer-stop { margin-left: auto; padding: 5px 12px; border: 1px solid var(--danger);
+  border-radius: 6px; font: inherit; font-size: 12px; color: #fff; background: var(--danger); cursor: pointer; }
