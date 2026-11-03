@@ -256,7 +256,25 @@ await run("new session", async () => {
   await context.close();
 });
 
-/* ---------- 4. single-agent record ---------- */
+/* ---------- 4. sidebar search ---------- */
+await run("sidebar search", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.goto(`${base}/`);
+  await page.waitForSelector(".row", { timeout: 5000 });
+  checkEqual("侧栏列出全部会话", await page.locator(".row:visible").count(), 2);
+
+  await page.fill(".side-search", "multi");
+  await page.waitForTimeout(150);
+  checkEqual("搜索后只剩匹配项", await page.locator(".row:visible").count(), 1);
+
+  await page.fill(".side-search", "");
+  await page.waitForTimeout(150);
+  checkEqual("清空搜索恢复全部", await page.locator(".row:visible").count(), 2);
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- 5. single-agent record ---------- */
 await run("record: single agent", async () => {
   const { context, page, errors } = await newPage(browser, {});
   await page.goto(`${base}/s/fs_single_agent`);
@@ -279,6 +297,8 @@ await run("record: single agent", async () => {
   checkEqual("markdown 表格", await body.locator(".md-table").count(), 1);
   checkEqual("表格单元格数", await body.locator(".md-table td").count(), 2);
   checkEqual("消息带复制按钮", await page.locator(".msg.from-agent .copy-msg").count(), 1);
+  checkEqual("用户消息回放附件", await page.locator(".msg.from-user .chip").count(), 1);
+  check("附件显示文件名", (await page.locator(".msg.from-user .chip-name").first().innerText()).includes("note.txt"));
 
   const raw = page.locator("details.raw-reply");
   checkEqual("原始输出折叠数量", await raw.count(), 1);
@@ -291,6 +311,13 @@ await run("record: single agent", async () => {
   checkEqual("agent 消息带耗时", await page.locator(".msg .took").count(), 1);
   checkEqual("agent 耗时文本", await page.locator(".msg .took").first().innerText(), "19.0s");
   checkEqual("回合总耗时", await page.locator(".turn .turn-span").first().innerText(), "23.0s");
+  check("侧栏在记录页仍然可见", await page.locator(".sidebar").isVisible());
+  checkEqual("侧栏高亮当前会话", await page.locator(".row.active").count(), 1);
+  check("高亮的是当前会话",
+    (await page.locator(".row.active").getAttribute("href")).includes("fs_single_agent"));
+  check("回合头显示模型与 token",
+    (await page.locator(".turn-usage").first().innerText()).includes("tok"),
+    await page.locator(".turn-usage").first().innerText());
 
   checkEqual("工具行数量", await page.locator(".tool").count(), 1);
   checkEqual("工具状态", await page.locator(".tool .state").first().innerText(), "成功");
@@ -303,7 +330,7 @@ await run("record: single agent", async () => {
   await context.close();
 });
 
-/* ---------- 5. multi-agent record: team prefixes disambiguate ---------- */
+/* ---------- 6. multi-agent record: team prefixes disambiguate ---------- */
 await run("record: multiple agents", async () => {
   const { context, page, errors } = await newPage(browser, {});
   await page.goto(`${base}/s/fs_multi_agent`);
@@ -315,11 +342,19 @@ await run("record: multiple agents", async () => {
   check("同名 agent 靠 team 区分", who.includes("facts / inspect") && who.includes("repo-info / inspect"));
   check("team 与 agent 同名时不重复", who.includes("analyze") && !who.includes("analyze / analyze"));
   checkEqual("每条消息都有时间戳", await page.locator(".msg .when").count(), 7);
+  await page.click('.seg button[data-mode="waterfall"]');
+  await page.waitForSelector(".wf-row", { timeout: 3000 });
+  check("时序视图列出 team 与 call", await page.locator(".wf-row").count() >= 5,
+    await page.locator(".wf-row").count());
+  check("时序区分 team 条与 call 条",
+    (await page.locator(".wf-team").count()) >= 4 && (await page.locator(".wf-call").count()) >= 1);
+  check("时序条带宽度", await page.locator(".wf-track i").first().evaluate((node) => node.style.width) !== "");
+
   check("无 console error", errors.length === 0, errors.join(" | "));
   await context.close();
 });
 
-/* ---------- 6. composer: text, paste, Enter ---------- */
+/* ---------- 7. composer: text, paste, Enter ---------- */
 await run("composer", async () => {
   const { context, page, state, errors } = await newPage(browser, {});
   await page.goto(`${base}/s/fs_single_agent`);
@@ -343,8 +378,8 @@ await run("composer", async () => {
     box.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
   });
   await page.waitForSelector(".chip", { timeout: 3000 });
-  checkEqual("粘贴文件生成附件标签", await page.locator(".chip").count(), 1);
-  check("附件标签显示文件名", (await page.locator(".chip").first().innerText()).includes("note.txt"));
+  checkEqual("粘贴文件生成附件标签", await page.locator(".composer .chip").count(), 1);
+  check("附件标签显示文件名", (await page.locator(".composer .chip-name").first().innerText()).includes("note.txt"));
 
   await page.click(".composer-send");
   await page.waitForTimeout(400);
@@ -356,7 +391,7 @@ await run("composer", async () => {
   await context.close();
 });
 
-/* ---------- 7. live stream: the turn grows while it runs ---------- */
+/* ---------- 8. live stream: the turn grows while it runs ---------- */
 await run("live stream", async () => {
   streamServed = false;
   // The POST is held open long enough for every frame to arrive, the way a real
