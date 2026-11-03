@@ -14,6 +14,7 @@
   var app = document.getElementById("app");
   var sidebar = document.getElementById("sidebar");
   var currentRecord = null;
+  var currentMode = "chat";
 
   /* ---------- DOM helpers ---------- */
   function text(value) {
@@ -666,6 +667,7 @@
 
   function paintRecord(sessionID, record) {
     currentRecord = record;
+    resetRunState(record);
     clear(app);
     app.appendChild(el("div", { class: "top" },
       el("h1", null, "heron-ai"),
@@ -683,6 +685,7 @@
     app.appendChild(el("div", { class: "modes" },
       el("div", { class: "seg", role: "group" },
         modeButton("chat", "\u5bf9\u8bdd", true),
+        modeButton("run", "\u8fd0\u884c", false),
         modeButton("waterfall", "\u65f6\u5e8f", false),
         modeButton("tree", "\u7ed3\u6784", false),
         modeButton("raw", "\u539f\u59cb", false)),
@@ -716,8 +719,14 @@
 
   function showMode(body, mode) {
     if (!body || !currentRecord) { return; }
+    currentMode = mode;
     clear(body);
     var hint = document.getElementById("mode-hint");
+    if (mode === "run") {
+      body.appendChild(renderRunners());
+      if (hint) { hint.textContent = "\u8fd0\u884c\uff1a\u5f53\u524d\u54ea\u4e9b team / agent \u5728\u8dd1\u3002"; }
+      return;
+    }
     if (mode === "waterfall") {
       body.appendChild(renderWaterfall(currentRecord));
       if (hint) { hint.textContent = "\u65f6\u5e8f\uff1a\u6bcf\u4e2a team \u4e0e call \u7684\u6267\u884c\u533a\u95f4\uff0c\u6a2a\u5411\u4f4d\u7f6e\u5c31\u662f\u5e76\u884c\u5173\u7cfb\u3002"; }
@@ -1314,6 +1323,8 @@
         return;
       }
       view.push(event);
+      applyRunEvent(event);
+      refreshRunView();
       window.scrollTo(0, document.body.scrollHeight);
     }
 
@@ -1640,6 +1651,112 @@
         el("pre", { class: "out" }, "")));
     box.appendChild(node);
     return node;
+  }
+
+  /* ---------- run board ---------- */
+  /* Answers one question only: which teams and agents are running right now.
+   * Everything else about a turn (what it said, which tools it called, how long
+   * each step took) already has a view; this one is the status board. */
+  var runState = { teams: [], agents: [] };
+
+  function resetRunState(record) {
+    runState = { teams: [], agents: [] };
+    ((record && record.events) || []).forEach(applyRunEvent);
+  }
+
+  function runEntry(group, key) {
+    for (var index = 0; index < runState[group].length; index += 1) {
+      if (runState[group][index].key === key) { return runState[group][index]; }
+    }
+    return null;
+  }
+
+  function upsertRunEntry(group, key, name, team) {
+    var entry = runEntry(group, key);
+    if (entry) { return entry; }
+    entry = { key: key, name: name, team: team, status: "pending", startedAt: "", endedAt: "" };
+    runState[group].push(entry);
+    return entry;
+  }
+
+  function applyRunEvent(event) {
+    var type = event.type || "";
+    var payload = event.payload || {};
+
+    if (type.indexOf("team_turn.") === 0) {
+      var teamTurn = payload.team_turn || {};
+      /* team_turn.completed carries only team_result — no id in the payload.
+       * The header always does, so read it from there; the payload copy is a
+       * fallback for older events. */
+      var teamID = event.team_turn_id || teamTurn.id || "";
+      if (!teamID) { return; }
+      var teamName = teamTurn.team_id || event.team_id || "?";
+      var teamEntry = upsertRunEntry("teams", teamID, teamName, "");
+      if (type === "team_turn.started") {
+        teamEntry.status = "running";
+        teamEntry.startedAt = event.created_at || teamEntry.startedAt;
+      } else {
+        teamEntry.endedAt = event.created_at || teamEntry.endedAt;
+        teamEntry.status = type === "team_turn.failed" ? "failed" : "completed";
+      }
+      return;
+    }
+
+    if (type.indexOf("agent_turn.") === 0) {
+      var call = event.call_turn_id || "";
+      if (!call) { return; }
+      var speaker = speakerLabel(event);
+      var agentEntry = upsertRunEntry("agents", call, speaker.agent || call, speaker.team);
+      if (type === "agent_turn.started") {
+        agentEntry.status = "running";
+        agentEntry.startedAt = event.created_at || agentEntry.startedAt;
+      } else {
+        agentEntry.endedAt = event.created_at || agentEntry.endedAt;
+        agentEntry.status = type === "agent_turn.failed" ? "failed" : "completed";
+      }
+    }
+  }
+
+  function renderRunners() {
+    var wrap = el("div", { class: "runboard" });
+    var running = runState.teams.concat(runState.agents).filter(function (item) {
+      return item.status === "running";
+    }).length;
+
+    wrap.appendChild(el("div", { class: "run-summary" },
+      running > 0
+        ? el("span", { class: "run-live" }, "\u8fd0\u884c\u4e2d " + running + " \u4e2a")
+        : el("span", { class: "muted" }, "\u5f53\u524d\u6ca1\u6709\u5728\u8dd1\u7684 team \u6216 agent\u3002")));
+
+    [["teams", "Team"], ["agents", "Agent"]].forEach(function (group) {
+      var items = runState[group[0]];
+      if (!items.length) { return; }
+      wrap.appendChild(el("div", { class: "run-group-title" }, group[1]));
+      var grid = el("div", { class: "run-grid" });
+      items.forEach(function (item) {
+        grid.appendChild(el("div", { class: "run-card " + item.status, title: item.key },
+          el("span", { class: "run-dot" }),
+          el("span", { class: "run-name" },
+            item.team ? el("span", { class: "run-team" }, item.team + " / ") : null,
+            item.name),
+          el("span", { class: "run-time" },
+            item.status === "running" ? "\u8fd0\u884c\u4e2d" : (elapsed(item.startedAt, item.endedAt) || ""))));
+      });
+      wrap.appendChild(grid);
+    });
+
+    if (!runState.teams.length && !runState.agents.length) {
+      wrap.appendChild(el("div", { class: "empty" }, "\u8fd9\u4e2a\u4f1a\u8bdd\u8fd8\u6ca1\u6709 team / agent \u8fd0\u884c\u8fc7\u3002"));
+    }
+    return wrap;
+  }
+
+  function refreshRunView() {
+    if (currentMode !== "run") { return; }
+    var body = document.getElementById("record-body");
+    if (!body) { return; }
+    clear(body);
+    body.appendChild(renderRunners());
   }
 
   /* ---------- waterfall ---------- */

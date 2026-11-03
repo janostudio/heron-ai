@@ -71,6 +71,26 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
   border: 1px dashed var(--border-strong); border-radius: 8px;
   font: inherit; font-size: 12px; color: var(--muted); background: var(--bg-subtle); }
 
+/* Run board: which team/agent is running right now, nothing else. */
+.runboard { margin-bottom: 16px; }
+.run-summary { margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+.run-live { color: var(--accent); font-weight: 550; }
+.run-group-title { margin: 10px 0 6px; font-size: 11px; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--faint); }
+.run-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.run-card { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-subtle); font-size: 12px; }
+.run-card.running { border-color: var(--accent); background: var(--accent-soft); }
+.run-card.failed { border-color: var(--danger); }
+.run-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.run-card.completed .run-dot { background: var(--ok); }
+.run-card.failed .run-dot { background: var(--danger); }
+.run-card.running .run-dot { background: var(--accent); animation: run-pulse 1.2s ease-in-out infinite; }
+@keyframes run-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.65); } }
+.run-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-team { color: var(--faint); }
+.run-time { color: var(--faint); font-variant-numeric: tabular-nums; }
+
 /* Waterfall: every team and call on one axis, so overlapping work is visible. */
 .waterfall { margin-bottom: 16px; }
 .wf-row { display: grid; grid-template-columns: 200px 1fr 70px; gap: 10px; align-items: center;

@@ -342,6 +342,13 @@ await run("record: multiple agents", async () => {
   check("同名 agent 靠 team 区分", who.includes("facts / inspect") && who.includes("repo-info / inspect"));
   check("team 与 agent 同名时不重复", who.includes("analyze") && !who.includes("analyze / analyze"));
   checkEqual("每条消息都有时间戳", await page.locator(".msg .when").count(), 7);
+  await page.click('.seg button[data-mode="run"]');
+  await page.waitForSelector(".run-card", { timeout: 3000 });
+  check("运行看板列出 team 与 agent", await page.locator(".run-card").count() >= 2,
+    await page.locator(".run-card").count());
+  checkEqual("运行看板分成 Team 与 Agent 两组", await page.locator(".run-group-title").count(), 2);
+  check("已结束的卡片标为完成", await page.locator(".run-card.completed").count() >= 1);
+
   await page.click('.seg button[data-mode="waterfall"]');
   await page.waitForSelector(".wf-row", { timeout: 3000 });
   check("时序视图列出 team 与 call", await page.locator(".wf-row").count() >= 5,
