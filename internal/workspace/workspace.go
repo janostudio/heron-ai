@@ -653,6 +653,31 @@ type SearchResult struct {
 	Operation types.WorkspaceOperation
 }
 
+// displayPath converts a walk-relative path back into a path relative to the
+// workspace root as the caller supplied it. The permission decision must use
+// the resolved base (symlinks followed), but the paths a model sees should be
+// the ones it can address in its next tool call — which are relative to the
+// root as configured, not as resolved.
+func displayPath(configuredRoot, resolvedBase, rel string) string {
+	if rel == "." {
+		return rel
+	}
+	absolute := filepath.Join(resolvedBase, filepath.FromSlash(rel))
+	// configuredRoot may itself contain a symlink (/tmp -> /private/tmp on
+	// macOS), in which case Rel against the raw spelling fails or produces a
+	// ".."-prefixed path the caller cannot address. Resolve it first; when the
+	// root cannot be resolved, fall back to the raw form.
+	configured, err := filepath.EvalSymlinks(configuredRoot)
+	if err != nil {
+		configured = configuredRoot
+	}
+	display, err := filepath.Rel(configured, absolute)
+	if err != nil || display == ".." || strings.HasPrefix(display, ".."+string(filepath.Separator)) {
+		return rel
+	}
+	return filepath.ToSlash(display)
+}
+
 func (s *localWorkspace) Search(ctx context.Context, req SearchRequest) (SearchResult, error) {
 	if strings.TrimSpace(req.Pattern) == "" {
 		return SearchResult{}, errors.New("search pattern is required")
@@ -665,10 +690,25 @@ func (s *localWorkspace) Search(ctx context.Context, req SearchRequest) (SearchR
 	if err != nil {
 		return SearchResult{}, err
 	}
+	// A search rooted inside a denied tree returns an empty result, not an
+	// error: the walk below is relative to that root, so every path it sees
+	// looks allowed ("secret.md", not "agents/b/knowledge/secret.md") and a
+	// per-file check could never catch it. Refusing here would also turn the
+	// whole turn into a failure for what is just a restrictive search.
+	if !filepath.IsAbs(relativeRoot) && !req.Restrict.permits(relativeRoot) {
+		return SearchResult{}, nil
+	}
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		return SearchResult{}, err
 	}
+	// The walk base has to share fullPath's symlink resolution (see the
+	// comment inside visit).
+	walkBase, err := filepath.EvalSymlinks(fullPath)
+	if err != nil {
+		return SearchResult{}, err
+	}
+
 	var matcher *regexp.Regexp
 	pattern := req.Pattern
 	if req.IgnoreCase {
@@ -702,7 +742,13 @@ func (s *localWorkspace) Search(ctx context.Context, req SearchRequest) (SearchR
 		if err := contextErr(ctx); err != nil {
 			return err
 		}
-		relative, err := filepath.Rel(s.root, path)
+		// Rel against the RESOLVED root, not s.root: fullPath came from
+		// resolve, which has already followed symlinks, so on a system where
+		// the workspace root itself contains a symlink (/tmp -> /private/tmp
+		// on macOS) Rel(s.root, path) yields a ".."-prefixed path that no
+		// prefix rule can match — and the walk below would have leaked every
+		// private file. See TestGrepSearchesKnowledgeBodies.
+		relative, err := filepath.Rel(walkBase, path)
 		if err != nil {
 			return err
 		}
@@ -716,12 +762,14 @@ func (s *localWorkspace) Search(ctx context.Context, req SearchRequest) (SearchR
 			// has to be caught here — otherwise every file inside it is
 			// read from disk before being discarded, which is both wasteful
 			// and one refactor away from returning what it just read.
-			if !filepath.IsAbs(relative) && !req.Restrict.permits(relative) {
+			// No IsAbs guard: a walk that started outside the workspace was
+			// rejected by permitsReadRoot before it began.
+			if !req.Restrict.permits(relative) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !filepath.IsAbs(relative) && !req.Restrict.permits(relative) {
+		if !req.Restrict.permits(relative) {
 			return nil
 		}
 		if req.Include != "" {
@@ -764,7 +812,7 @@ func (s *localWorkspace) Search(ctx context.Context, req SearchRequest) (SearchR
 				result.Truncated = true
 				return filepath.SkipAll
 			}
-			result.Matches = append(result.Matches, SearchMatch{Path: relative, Line: lineNo + 1, Content: line})
+			result.Matches = append(result.Matches, SearchMatch{Path: displayPath(s.root, walkBase, relative), Line: lineNo + 1, Content: line})
 			usedChars += formattedSize
 			if len(result.Matches) >= maxResults {
 				result.Truncated = true
@@ -813,9 +861,27 @@ func (s *localWorkspace) resolve(path string) (string, string, error) {
 	// name ("link/private.md" is not under ".agents/agents"), while the actual
 	// open() followed the link. Returning the resolved path keeps the permission
 	// decision and the IO on the same file.
+	// grantExternal resolves the candidate past symlinks and reports whether a
+	// read-only root covers it. The comparison must happen in resolved space:
+	// roots are stored resolved, while the raw candidate keeps whatever symlink
+	// spelling the caller used (on macOS /tmp is /private/tmp), so comparing
+	// the raw form always misses.
+	grantExternal := func() bool {
+		external, extErr := resolveSymlinksDeepest(clean)
+		return extErr == nil && s.permitsReadRoot(external)
+	}
 	resolved, err := s.resolveWithinWorkspace(clean)
 	if err != nil {
-		if !errors.Is(err, ErrPathOutsideWorkspace) || !s.permitsReadRoot(clean) {
+		// grantExternal resolves the candidate past symlinks and reports
+		// whether a read-only root covers it. The comparison must happen in
+		// resolved space: roots are stored resolved, while the raw candidate
+		// keeps whatever symlink spelling the caller used (on macOS /tmp is
+		// /private/tmp), so comparing the raw form always misses.
+		grantExternal := func() bool {
+			external, extErr := resolveSymlinksDeepest(clean)
+			return extErr == nil && s.permitsReadRoot(external)
+		}
+		if !grantExternal() {
 			return "", "", err
 		}
 		// Outside the workspace but inside a configured read-only root. The
@@ -825,11 +891,6 @@ func (s *localWorkspace) resolve(path string) (string, string, error) {
 		if externalErr != nil {
 			return "", "", externalErr
 		}
-		if !s.permitsReadRoot(external) {
-			// A link inside an allowed root that points outside it must not
-			// widen the grant.
-			return "", "", fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
-		}
 		return external, external, nil
 	}
 	root, err := filepath.EvalSymlinks(s.root)
@@ -838,7 +899,16 @@ func (s *localWorkspace) resolve(path string) (string, string, error) {
 	}
 	relative, err := filepath.Rel(root, resolved)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
+		if !grantExternal() {
+			return "", "", fmt.Errorf("%w: %s", ErrPathOutsideWorkspace, path)
+		}
+		// Granted: return the resolved absolute path as the "relative" form,
+		// the same external-marker convention the read-root branch above uses.
+		external, externalErr := resolveSymlinksDeepest(resolved)
+		if externalErr != nil {
+			return "", "", externalErr
+		}
+		return external, external, nil
 	}
 	return resolved, filepath.ToSlash(relative), nil
 }
