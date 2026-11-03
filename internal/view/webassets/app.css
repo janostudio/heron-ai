@@ -110,8 +110,18 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .turn-head .t { font-size: 12px; color: var(--faint); font-family: var(--mono); }
 .msg { margin-bottom: 10px; }
 .msg .who { font-size: 12px; color: var(--faint); margin-bottom: 2px; }
+/* Team reads as a qualifier on the agent name, not a second headline:
+   agent names are only unique inside their team. */
+.msg .who-team { font-family: var(--mono); font-size: 11px; opacity: .85; }
 .msg .body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.intermediate { opacity: .75; }
+/* The model's literal output — usually a JSON envelope — kept out of the
+   reading path but one click away: intent_hint and next.action only exist
+   there. */
+.raw-reply { margin-top: 6px; }
+.raw-reply summary { cursor: pointer; font-size: 11px; color: var(--faint); }
+.raw-reply pre { margin: 6px 0 0; padding: 8px; background: var(--bg-sunken); border-radius: 4px;
+  font-family: var(--mono); font-size: 11px; max-height: 280px; overflow: auto; white-space: pre-wrap; }
 .tool { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-subtle); margin: 6px 0; }
 .tool summary { cursor: pointer; padding: 5px 10px; font-size: 12px; display: flex; gap: 8px; align-items: baseline; }
 .tool .name { font-family: var(--mono); font-weight: 550; }

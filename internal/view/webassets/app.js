@@ -457,6 +457,53 @@
     return order;
   }
 
+  /* Who said it: team_id plus the call name carried in call_turn_id
+   * ("<team_turn_id>:<call name>"). One flow turn really can hold several
+   * agents — a coordinator that dispatches keeps the sub-agent's turns inside
+   * the same flow turn — and without this every one of them renders as the same
+   * "助手".
+   *
+   * Agent names are only unique inside a team: `inspect` runs in both the facts
+   * and repo-info teams. So the team belongs in the label, not in a tooltip
+   * that needs a mouse to reveal. When the two names coincide (the analyze
+   * team's analyze call) printing both would just repeat the word. */
+  function speakerLabel(event) {
+    var call = event.call_turn_id || "";
+    var index = call.lastIndexOf(":");
+    var agent = index >= 0 ? call.slice(index + 1) : "";
+    var team = event.team_id || "";
+    if (!team || !agent || team === agent) {
+      return { team: "", agent: agent || team };
+    }
+    return { team: team, agent: agent };
+  }
+
+  /* agent.model_response carries the reply twice: `reply` is what the engine
+   * unwrapped for the caller, `text` is what the model literally emitted —
+   * usually a JSON envelope holding reply/intent_hint/next.action/user_request.
+   * Reading the envelope aloud is noise, so show `reply` and keep `text` behind
+   * a fold; the envelope is the only place intent_hint and next.action survive.
+   *
+   * Older events have no `reply`. For those, unwrap a JSON envelope here rather
+   * than printing the braces. Anything that is not an envelope passes through
+   * untouched. */
+  function modelReply(payload) {
+    var reply = typeof payload.reply === "string" ? payload.reply.trim() : "";
+    var text = typeof payload.text === "string" ? payload.text.trim() : "";
+    if (reply) {
+      return { body: reply, raw: text && text !== reply ? text : "" };
+    }
+    if (text.charAt(0) === "{") {
+      try {
+        var parsed = JSON.parse(text);
+        if (parsed && typeof parsed.reply === "string" && parsed.reply.trim()) {
+          return { body: parsed.reply.trim(), raw: text };
+        }
+      } catch (error) { /* not an envelope: fall through to the raw text */ }
+    }
+    return { body: text, raw: "" };
+  }
+
   function renderTurn(turn) {
     var cls = "turn";
     if (turn.origin === "wakeup") { cls += " wakeup"; }
@@ -484,12 +531,21 @@
     turn.events.forEach(function (event) {
       var payload = event.payload || {};
       if (event.type === "agent.model_response") {
-        var value = typeof payload.text === "string" ? payload.text.trim() : "";
-        if (value) {
-          lastText = value;
+        var view = modelReply(payload);
+        if (view.body) {
+          lastText = view.body;
+          var body = el("div", { class: "body" }, view.body);
+          if (view.raw) {
+            body.appendChild(el("details", { class: "raw-reply" },
+              el("summary", null, "\u539f\u59cb\u8f93\u51fa"),
+              el("pre", null, view.raw)));
+          }
+          var speaker = speakerLabel(event);
           box.appendChild(el("div", { class: "msg" },
-            el("div", { class: "who" }, "\u52a9\u624b"),
-            el("div", { class: "body" }, value)));
+            el("div", { class: "who" },
+              speaker.team ? el("span", { class: "who-team" }, speaker.team + " / ") : null,
+              speaker.agent || "\u52a9\u624b"),
+            body));
         }
         return;
       }
@@ -526,8 +582,12 @@
     } else if (turn.reply && turn.reply.trim() !== lastText.trim()) {
       // The turn's reply is often the last model response restated. Rendering
       // both would show the same paragraph twice with no hint why.
+      //
+      // When it does differ it is the turn's closing answer — one level above
+      // the individual agent messages, possibly a coordinator summary of them —
+      // so it is labelled by level rather than by agent.
       box.appendChild(el("div", { class: "msg" + (turn.intermediate ? " intermediate" : "") },
-        el("div", { class: "who" }, "\u52a9\u624b"),
+        el("div", { class: "who" }, "\u56de\u5408\u7b54\u590d"),
         el("div", { class: "body" }, turn.reply)));
     }
     return box;
