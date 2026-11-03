@@ -92,13 +92,14 @@ func transcriptPath(id string) string {
 // transcriptID names one Agent's conversation. It is stable for the whole Flow
 // session: the same Team call in a later turn resolves to the same id, which is
 // what lets the next turn append instead of rebuilding.
+//
+// The Team instance leads the key: a resident instance's id is
+// "<flowSession>:<team>", which reproduces the historical
+// "<flowSession>:<team>:<call>" key exactly, while a per_task instance
+// ("<flowSession>:<team>:<seq>") gets a conversation of its own.
 func transcriptID(req types.AgentRequest) string {
 	if req.FlowSessionID == "" {
 		return ""
-	}
-	team := req.TeamID
-	if team == "" {
-		team = "flow"
 	}
 	call := req.CallID
 	if call == "" {
@@ -106,6 +107,13 @@ func transcriptID(req types.AgentRequest) string {
 	}
 	if call == "" {
 		call = "agent"
+	}
+	if req.TeamSessionID != "" {
+		return fmt.Sprintf("%s:%s", req.TeamSessionID, call)
+	}
+	team := req.TeamID
+	if team == "" {
+		team = "flow"
 	}
 	return fmt.Sprintf("%s:%s:%s", req.FlowSessionID, team, call)
 }

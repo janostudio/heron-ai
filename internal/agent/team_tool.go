@@ -71,6 +71,10 @@ func (t *TeamTool) Parameters() map[string]any {
 			"type":        "string",
 			"description": "The Team to hand the work to",
 		},
+		"task_key": map[string]any{
+			"type":        "string",
+			"description": "Business key of this task (e.g. repoA-143). Required when the target Team uses lifecycle per_task: the same key continues the same Team instance later.",
+		},
 		"run_in_background": map[string]any{
 			"type":        "boolean",
 			"description": "Run the Team without blocking this turn (default true)",
@@ -113,6 +117,7 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 	}
 	spec := teamCallSpecFromContext(ctx, teamID, item)
 	spec.Summary = summary
+	spec.TaskKey = strings.TrimSpace(stringParam(params, "task_key"))
 
 	if t.tasks == nil {
 		// No durable task runner (unit tests, or an engine built without one):
@@ -148,13 +153,20 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 			"Do not wait for it and do not re-dispatch the same task.",
 		spec.TeamID,
 	)
+	if spec.TaskKey != "" {
+		content += fmt.Sprintf("\n\n(handle: task_key=%s — keep it to continue the same task)", spec.TaskKey)
+	}
+	metadata := map[string]any{
+		"team_id": spec.TeamID,
+		"wait":    false,
+	}
+	if spec.TaskKey != "" {
+		metadata["task_key"] = spec.TaskKey
+	}
 	return &types.ToolResult{
-		Success: true,
-		Content: string(content),
-		Metadata: map[string]any{
-			"team_id": spec.TeamID,
-			"wait":    false,
-		},
+		Success:  true,
+		Content:  string(content),
+		Metadata: metadata,
 	}, nil
 }
 
@@ -167,12 +179,15 @@ func (t *TeamTool) executeRunTask(ctx context.Context, args map[string]any) (*ty
 	if t == nil || t.runner == nil {
 		return teamError("Team tool is not configured"), nil
 	}
+	rawDispatchedBy, _ := args["dispatched_by"].(map[string]any)
 	spec := types.TeamCallSpec{
 		FlowSessionID: stringParam(args, "flow_session_id"),
 		CallerTeam:    stringParam(args, "caller_team"),
 		TeamID:        stringParam(args, "team_id"),
 		CallID:        stringParam(args, "call_id"),
 		AgentTurnID:   stringParam(args, "agent_turn_id"),
+		TaskKey:       stringParam(args, "task_key"),
+		DispatchedBy:  dispatchedByFromArguments(rawDispatchedBy),
 		Item:          args["item"],
 	}
 	if spec.TeamID == "" {
@@ -204,11 +219,30 @@ func teamOutcomeResult(teamID string, outcome types.TeamCallOutcome) *types.Tool
 	if len(outcome.Records) > 0 {
 		content += fmt.Sprintf("\n\n(records: %s)", strings.Join(outcome.Records, ", "))
 	}
+	// The handle is the one thing a caller must keep to continue the same task
+	// later: the tool result is the only place it is handed over.
+	if outcome.TaskKey != "" || outcome.TeamSessionID != "" {
+		content += fmt.Sprintf("\n\n(handle: task_key=%s team_session_id=%s", outcome.TaskKey, outcome.TeamSessionID)
+		if outcome.Reopened {
+			content += " reopened=true"
+		}
+		content += ")"
+	}
+	metadata := map[string]any{"status": outcome.Status, "team_id": teamID}
+	if outcome.TaskKey != "" {
+		metadata["task_key"] = outcome.TaskKey
+	}
+	if outcome.TeamSessionID != "" {
+		metadata["team_session_id"] = outcome.TeamSessionID
+	}
+	if outcome.Reopened {
+		metadata["reopened"] = true
+	}
 	return &types.ToolResult{
 		Success:  outcome.Error == "",
 		Content:  content,
 		Error:    outcome.Error,
-		Metadata: map[string]any{"status": outcome.Status, "team_id": teamID},
+		Metadata: metadata,
 	}
 }
 
@@ -220,19 +254,55 @@ func teamCallSpecFromContext(ctx context.Context, teamID string, item any) types
 		spec.CallerTeam = identity.req.TeamID
 		spec.CallID = identity.req.CallID
 		spec.AgentTurnID = identity.req.AgentTurnID
+		if identity.req.TeamSessionID != "" {
+			spec.DispatchedBy = &types.TeamSessionRef{
+				TeamSessionID: identity.req.TeamSessionID,
+				CallID:        identity.req.CallID,
+				AgentTurnID:   identity.req.AgentTurnID,
+			}
+		}
 	}
 	return spec
 }
 
 func teamRunArguments(spec types.TeamCallSpec) map[string]any {
-	return map[string]any{
+	arguments := map[string]any{
 		"flow_session_id": spec.FlowSessionID,
 		"caller_team":     spec.CallerTeam,
 		"team_id":         spec.TeamID,
 		"call_id":         spec.CallID,
 		"agent_turn_id":   spec.AgentTurnID,
+		"task_key":        spec.TaskKey,
 		"item":            spec.Item,
 	}
+	if spec.DispatchedBy != nil {
+		arguments["dispatched_by"] = map[string]any{
+			"team_session_id": spec.DispatchedBy.TeamSessionID,
+			"call_id":         spec.DispatchedBy.CallID,
+			"agent_turn_id":   spec.DispatchedBy.AgentTurnID,
+			"tool_call_id":    spec.DispatchedBy.ToolCallID,
+		}
+	}
+	return arguments
+}
+
+// dispatchedByFromArguments rebuilds the caller reference persisted with a
+// durable TeamRun task. Values arrive as float64/string after the JSON round
+// trip through the task store.
+func dispatchedByFromArguments(raw map[string]any) *types.TeamSessionRef {
+	if raw == nil {
+		return nil
+	}
+	ref := &types.TeamSessionRef{
+		TeamSessionID: stringFromArgs(raw, "team_session_id"),
+		CallID:        stringFromArgs(raw, "call_id"),
+		AgentTurnID:   stringFromArgs(raw, "agent_turn_id"),
+		ToolCallID:    stringFromArgs(raw, "tool_call_id"),
+	}
+	if ref.TeamSessionID == "" {
+		return nil
+	}
+	return ref
 }
 
 func teamTaskID(spec types.TeamCallSpec) string {
@@ -298,6 +368,141 @@ func (d *TeamTaskDispatcher) ExecutionSpec(name string) types.ToolExecutionSpec 
 		}
 	}
 	return types.ToolExecutionSpec{Class: types.ToolSerial}
+}
+
+// TeamSessionToolName is the tool a model calls to read the tasks it dispatched.
+//
+// It is the read side of the routing table: the model keeps a task_key (not a
+// session id), and the engine answers what happened to that task. Keeping the
+// lookup here is what lets a restarted or compacted conversation continue a
+// task without replaying its own history.
+const TeamSessionToolName = "TeamSession"
+
+// TeamSessionTool answers status/list/close requests about dispatched tasks.
+type TeamSessionTool struct {
+	catalog types.TaskCatalog
+	closer  types.TaskCloser
+}
+
+func NewTeamSessionTool(catalog types.TaskCatalog) *TeamSessionTool {
+	return &TeamSessionTool{catalog: catalog}
+}
+
+// SetCatalog wires the flow runtime after it exists.
+func (t *TeamSessionTool) SetCatalog(catalog types.TaskCatalog) {
+	if t == nil {
+		return
+	}
+	t.catalog = catalog
+}
+
+// SetCloser wires the soft-close path (same runtime, separate interface: the
+// read side stays usable without it).
+func (t *TeamSessionTool) SetCloser(closer types.TaskCloser) {
+	if t == nil {
+		return
+	}
+	t.closer = closer
+}
+
+func (t *TeamSessionTool) Name() string { return TeamSessionToolName }
+
+func (t *TeamSessionTool) Description() string {
+	return "Read or close the tasks you dispatched: status of one task by task_key, the list of " +
+		"all tasks this Team instance dispatched, or a soft close (records and transcript are kept; " +
+		"dispatching the same task_key again reopens it)."
+}
+
+func (t *TeamSessionTool) Parameters() map[string]any {
+	return map[string]any{
+		"action": map[string]any{
+			"type":        "string",
+			"enum":        []string{"status", "list", "tree", "close"},
+			"description": "status: one task by task_key; list: every task this instance dispatched; tree: the same tasks grouped by task context; close: soft-close a task and its sub-tasks",
+		},
+		"task_key": map[string]any{
+			"type":        "string",
+			"description": "Business key of the task (required for action=status|close)",
+		},
+	}
+}
+
+func (t *TeamSessionTool) NeedsApproval() bool { return false }
+
+func (t *TeamSessionTool) Execute(ctx context.Context, params map[string]any) (*types.ToolResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if t == nil || t.catalog == nil {
+		return teamError("TeamSession is not configured"), nil
+	}
+	identity := spawnIdentityFromContext(ctx)
+	if identity == nil {
+		return teamError("TeamSession is only available inside an Agent execution context"), nil
+	}
+	spec := types.TaskCatalogSpec{
+		FlowSessionID:       identity.req.FlowSessionID,
+		CallerTeamSessionID: identity.req.TeamSessionID,
+	}
+	if spec.CallerTeamSessionID == "" {
+		return teamError("TeamSession requires the calling Team instance"), nil
+	}
+
+	switch action := strings.TrimSpace(stringParam(params, "action")); action {
+	case "status":
+		taskKey := strings.TrimSpace(stringParam(params, "task_key"))
+		if taskKey == "" {
+			return teamError("TeamSession(action=status) requires task_key"), nil
+		}
+		info, err := t.catalog.GetTask(ctx, spec, taskKey)
+		if err != nil {
+			return teamError(err.Error()), nil
+		}
+		return taskJSON(info)
+	case "list":
+		infos, err := t.catalog.ListTasks(ctx, spec)
+		if err != nil {
+			return teamError(err.Error()), nil
+		}
+		if infos == nil {
+			infos = []types.TaskInfo{}
+		}
+		return taskJSON(infos)
+	case "tree":
+		trees, err := t.catalog.ListTaskTrees(ctx, spec)
+		if err != nil {
+			return teamError(err.Error()), nil
+		}
+		if trees == nil {
+			trees = []types.TaskTree{}
+		}
+		return taskJSON(trees)
+	case "close":
+		if t.closer == nil {
+			return teamError("TeamSession(close) is not configured"), nil
+		}
+		taskKey := strings.TrimSpace(stringParam(params, "task_key"))
+		if taskKey == "" {
+			return teamError("TeamSession(action=close) requires task_key"), nil
+		}
+		info, err := t.closer.CloseTask(ctx, spec, taskKey)
+		if err != nil {
+			return teamError(err.Error()), nil
+		}
+		return taskJSON(info)
+	case "":
+		return teamError("TeamSession requires action=status|list|close"), nil
+	default:
+		return teamError(fmt.Sprintf("unknown TeamSession action %q (use status, list or close)", action)), nil
+	}
+}
+
+func taskJSON(value any) (*types.ToolResult, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return teamError(fmt.Sprintf("encode tasks: %v", err)), nil
+	}
+	return &types.ToolResult{Success: true, Content: string(data)}, nil
 }
 
 // ListTeamsToolName is the tool a model calls to discover which Teams it may

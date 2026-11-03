@@ -2595,9 +2595,19 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 				"description":       {Type: "string", Description: "A short (3-5 word) description of the task, shown to the user while it runs"},
 				"prompt":            {Type: "string", Description: "The task for the Team to perform: goal, evidence, scope, acceptance criteria, authorization"},
 				"subagent_type":     {Type: "string", Description: "The Team to hand the work to"},
+				"task_key":          {Type: "string", Description: "Business key of this task (e.g. repoA-143). Required when the target Team uses lifecycle per_task: the same key continues the same Team instance later."},
 				"run_in_background": {Type: "boolean", Description: "Run the Team without blocking this turn (default true)"},
 			},
 			Required: []string{"description", "prompt", "subagent_type"},
+		},
+		"TeamSession": {
+			Name: "TeamSession", Type: "object",
+			Description: "Read or close the tasks you dispatched: status of one task by task_key, the list of all tasks this Team instance dispatched, or a soft close (records and transcript are kept; dispatching the same task_key again reopens it).",
+			Properties: map[string]types.JSONProperty{
+				"action":   {Type: "string", Enum: []string{"status", "list", "tree", "close"}, Description: "status: one task by task_key; list: every task this instance dispatched; tree: tasks grouped by task context; close: soft-close a task and its sub-tasks"},
+				"task_key": {Type: "string", Description: "Business key of the task (required for action=status|close)"},
+			},
+			Required: []string{"action"},
 		},
 		"Collect": {
 			Name: "Collect", Type: "object",

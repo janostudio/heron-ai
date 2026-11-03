@@ -27,6 +27,12 @@ type ProducerRef struct {
 	TeamTurnID    string `yaml:"team_turn_id,omitempty" json:"team_turn_id,omitempty"`
 	CallID        string `yaml:"call_id,omitempty" json:"call_id,omitempty"`
 	CallTurnID    string `yaml:"call_turn_id,omitempty" json:"call_turn_id,omitempty"`
+	// TeamSessionID is the Team instance that produced the record: two per_task
+	// instances of one Team are different producers.
+	TeamSessionID string `yaml:"team_session_id,omitempty" json:"team_session_id,omitempty"`
+	// TaskContextID is the task context the record belongs to. Empty means the
+	// session-wide layer; readers outside the context do not see it.
+	TaskContextID string `yaml:"task_context_id,omitempty" json:"task_context_id,omitempty"`
 }
 
 // BasisRef points to evidence supporting a record. A workspace basis can be

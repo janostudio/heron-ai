@@ -64,12 +64,21 @@ func main() {
 	authToken := flag.String("auth-token", "", "Bearer token required by --serve (default: $HERON_SERVE_TOKEN)")
 	listFlag := flag.Bool("list", false, "List sessions; pick one interactively to resume it")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
+	checkConfig := flag.Bool("check-config", false, "Load the flow/team/agent definitions, print each Team binding's lifecycle, and exit (0 = valid)")
 	flag.Usage = usage
 	flag.Parse()
 
 	if *versionFlag {
 		fmt.Printf("Heron AI v%s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
 		return
+	}
+
+	// --check-config validates configuration without building a provider or
+	// touching a session. It is the pre-deployment gate: a binding that asks for
+	// lifecycle per_task without inputs.user_message fails the load, and this is
+	// where that shows up before an agent starts.
+	if *checkConfig {
+		os.Exit(checkConfigOnly(*flow))
 	}
 
 	// --list is a metadata command: it must run before any Flow config is
@@ -1222,6 +1231,36 @@ func buildCurrentRuntime(ctx context.Context, flowPath string, o cliOverrides, o
 }
 
 // applyMaxRounds overrides MaxAgentRounds when maxRounds is positive.
+// checkConfigOnly loads the same definitions the runtime loads and prints the
+// resolved lifecycle of every Team binding. Exit code 0 means the configuration
+// is valid; 1 prints the loader's error.
+func checkConfigOnly(flowPath string) int {
+	loader := config.NewConfigLoader(".")
+	defs, err := loader.LoadDefinitions(context.Background(), config.DefinitionsLoadRequest{
+		FlowPath: resolveFlowPath(flowPath),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config invalid: %v\n", err)
+		return 1
+	}
+	names := make([]string, 0, len(defs.Flow.Teams))
+	for name := range defs.Flow.Teams {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	perTask := 0
+	for _, name := range names {
+		binding := defs.Flow.Teams[name]
+		lifecycle := binding.EffectiveLifecycle()
+		if lifecycle.IsPerTask() {
+			perTask++
+		}
+		fmt.Printf("%-12s team=%-12s lifecycle=%s\n", name, binding.TeamID, lifecycle)
+	}
+	fmt.Printf("flow %s: %d bindings ok (%d per_task)\n", defs.Flow.ID, len(names), perTask)
+	return 0
+}
+
 func applyMaxRounds(limits *types.RuntimeLimits, maxRounds int) {
 	if limits == nil || maxRounds <= 0 {
 		return

@@ -485,7 +485,7 @@ func (r *Runtime) RecoveryStatus(ctx context.Context, sessionID string) (types.R
 	if err != nil {
 		return types.RecoveryStatus{}, err
 	}
-	interrupted := interruptedExecutions(replay.Events, r.liveTeamsFor(sessionID))
+	interrupted := interruptedExecutions(replay.Events, r.liveIndexFor(sessionID))
 	history := recoveryHistory(replay.Events)
 	if len(interrupted) > 0 &&
 		session.Status != types.SessionCompleted &&
@@ -1159,10 +1159,34 @@ type activation struct {
 	// activated and is where the Team's result, failure and escalation go. Empty
 	// means nothing activated it: it is the Flow's entry, so there is no one to
 	// return to.
-	activator          string
-	force              bool
-	attempt            int
-	recoveryOf         string
+	activator  string
+	force      bool
+	attempt    int
+	recoveryOf string
+	// sessionSeq is the per_task instance ordinal. 0 means the resident
+	// session, so a route activation (which carries no ord) cannot silently
+	// run a Team whose binding asks for one instance per task.
+	sessionSeq int
+	// taskKey and taskContextID are the task identity of a per_task dispatch.
+	// They are empty for resident activations.
+	taskKey       string
+	taskContextID string
+	// taskDepth is the nesting depth inside the task context (resident
+	// dispatchers start at 1).
+	taskDepth int
+	// authorization is the frozen permission of the task (nil for resident
+	// sessions and for tasks dispatched without a grant).
+	authorization *types.AuthorizationGrant
+	// subscriptions are the sources whose events belong to this task.
+	subscriptions []string
+	// dispatchCount counts this round; reopenCount counts how often a closed
+	// instance was reused. Both are bookkeeping for the caller, not gates.
+	dispatchCount int
+	reopenCount   int
+	reopened      bool
+	// dispatchedBy is the instance that handed this task over. Ownership is
+	// fixed to it: continue/close/reopen are refused for everybody else.
+	dispatchedBy       *types.TeamSessionRef
 	resumeCallID       string
 	resumeCheckpointID string
 	resumeInput        string
@@ -1177,6 +1201,7 @@ type activation struct {
 type teamExecution struct {
 	activation activation
 	binding    types.FlowTeamBinding
+	session    types.TeamSession
 	result     types.TeamTurnResult
 	next       *types.Route
 }
@@ -1255,6 +1280,17 @@ func limitActivations(items []activation, max int) ([]activation, []activation) 
 // so the routing that put this activation on the queue and the Team it now
 // runs are guaranteed to come from the same generation. This runs inside the
 // turn's parallel batch, so it must not re-read the store.
+// teamSessionID derives a Team instance id. Resident sessions keep the
+// historical two-part id (so existing transcripts and state files still
+// resolve); per_task sessions append their ordinal, which is what makes two
+// tasks of the same Team independent.
+func teamSessionID(flowSessionID, teamID string, seq int) string {
+	if seq > 0 {
+		return fmt.Sprintf("%s:%s:%d", flowSessionID, teamID, seq)
+	}
+	return fmt.Sprintf("%s:%s", flowSessionID, teamID)
+}
+
 func (r *Runtime) executeTeamTurn(
 	ctx context.Context,
 	defs *types.Definitions,
@@ -1279,14 +1315,41 @@ func (r *Runtime) executeTeamTurn(
 		return execution, fmt.Errorf("team definition %q not found", binding.TeamID)
 	}
 
-	teamSession := types.TeamSession{
-		ID:            fmt.Sprintf("%s:%s", session.ID, current.teamID),
-		FlowSessionID: session.ID,
-		TeamID:        current.teamID,
-		Status:        types.SessionRunning,
-		CreatedAt:     session.CreatedAt,
-		UpdatedAt:     time.Now().UTC(),
+	lifecycle := binding.EffectiveLifecycle()
+	if lifecycle.IsPerTask() && current.sessionSeq <= 0 {
+		return execution, fmt.Errorf(
+			"team %q uses lifecycle per_task and must be dispatched as a task (Team tool with task_key), not activated by route",
+			current.teamID)
 	}
+	if !lifecycle.IsPerTask() && current.sessionSeq > 0 {
+		return execution, fmt.Errorf(
+			"team %q is resident but the activation carried instance %d",
+			current.teamID, current.sessionSeq)
+	}
+	teamSession := types.TeamSession{
+		ID:               teamSessionID(session.ID, current.teamID, current.sessionSeq),
+		FlowSessionID:    session.ID,
+		TeamID:           current.teamID,
+		TeamDefinitionID: binding.TeamID,
+		SessionSeq:       current.sessionSeq,
+		Lifecycle:        lifecycle,
+		DispatchedBy:     current.dispatchedBy,
+		TaskKey:          current.taskKey,
+		TaskContextID:    current.taskContextID,
+		TaskDepth:        current.taskDepth,
+		Authorization:    current.authorization,
+		Subscriptions:    current.subscriptions,
+		DispatchCount:    current.dispatchCount,
+		ReopenCount:      current.reopenCount,
+		Status:           types.SessionRunning,
+		CreatedAt:        session.CreatedAt,
+		UpdatedAt:        time.Now().UTC(),
+	}
+	if lifecycle.IsPerTask() && teamSession.TaskContextID == "" {
+		// A dispatched task roots its own task context; descendants inherit it.
+		teamSession.TaskContextID = teamSession.ID
+	}
+	execution.session = teamSession
 	teamTurn := types.TeamTurn{
 		ID:            newID("tt"),
 		FlowTurnID:    flowTurn.ID,
@@ -1321,7 +1384,7 @@ func (r *Runtime) executeTeamTurn(
 		return execution, err
 	}
 
-	teamRecords := selectFlowRecordsForBinding(records, binding, scopeSince)
+	teamRecords := selectFlowRecordsForBinding(records, binding, scopeSince, teamSession.TaskContextID)
 	// Record the hand-off before the Team runs: the consumer is what a display
 	// layer needs to draw "B → A" without repeating B's content. Writing it here
 	// (not in the Team) keeps the edge a Flow fact — the Team only knows it
@@ -1606,6 +1669,8 @@ func teamFailureRecord(flowTurn types.FlowTurn, execution teamExecution) *types.
 			FlowTurnID:    flowTurn.ID,
 			TeamID:        execution.activation.teamID,
 			TeamTurnID:    teamResult.Turn.ID,
+			TeamSessionID: execution.session.ID,
+			TaskContextID: recordTaskContextOf(execution.session),
 		},
 		Summary:   fmt.Sprintf("Team %q failed: %s", execution.activation.teamID, reason),
 		Data:      data,
@@ -1823,25 +1888,47 @@ func (r *Runtime) runningTeams(ctx context.Context, sessionID string) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	live := r.liveTeamsFor(sessionID)
+	live := r.liveIndexFor(sessionID)
+	// Per instance, not per Team: one finished per_task instance must not make
+	// a still-running sibling look finished (and the reverse).
 	started := make(map[string]bool)
 	finished := make(map[string]bool)
+	teamOf := make(map[string]string)
 	for _, event := range replay.Events {
+		key := event.TeamSessionID
+		if key == "" {
+			key = "team:" + event.TeamID
+		}
 		switch event.Type {
 		case types.EventTeamTurnStarted:
-			started[event.TeamID] = true
+			started[key] = true
+			teamOf[key] = event.TeamID
 		case types.EventTeamTurnCompleted,
 			types.EventTeamTurnWaitingInput,
 			types.EventTeamTurnWaitingTool,
 			types.EventTeamTurnWaitingApproval:
-			finished[event.TeamID] = true
+			finished[key] = true
 		}
 	}
+	seen := make(map[string]bool)
 	running := make([]string, 0, len(started))
-	for team := range started {
-		if !finished[team] && live[team] {
-			running = append(running, team)
+	for key := range started {
+		if finished[key] {
+			continue
 		}
+		liveNow := live.sessions[key]
+		if strings.HasPrefix(key, "team:") {
+			liveNow = live.teams[teamOf[key]]
+		}
+		if !liveNow {
+			continue
+		}
+		team := teamOf[key]
+		if team == "" || seen[team] {
+			continue
+		}
+		seen[team] = true
+		running = append(running, team)
 	}
 	sort.Strings(running)
 	return running, nil
@@ -1940,7 +2027,29 @@ func sessionStatusForTurn(status types.TurnStatus) types.SessionStatus {
 // running, so they must not be reported as interrupted. Without this, a
 // status query during a dispatched Team's round would mark its session
 // interrupted and refuse further input.
-func interruptedExecutions(events []storage.SessionEvent, liveTeams map[string]bool) []types.InterruptedExecution {
+// liveIndex answers "is this execution still live?" for both current events
+// (keyed by TeamSessionID) and events written before instances existed (no
+// session id, keyed by TeamID).
+type liveIndex struct {
+	sessions map[string]bool
+	teams    map[string]bool
+}
+
+func (l liveIndex) running(event storage.SessionEvent) bool {
+	if event.TeamSessionID != "" {
+		return l.sessions[event.TeamSessionID]
+	}
+	return l.teams[event.TeamID]
+}
+
+func (r *Runtime) liveIndexFor(sessionID string) liveIndex {
+	return liveIndex{
+		sessions: r.liveTeamSessionsFor(sessionID),
+		teams:    r.liveTeamsFor(sessionID),
+	}
+}
+
+func interruptedExecutions(events []storage.SessionEvent, live liveIndex) []types.InterruptedExecution {
 	type started struct {
 		event storage.SessionEvent
 		input string
@@ -2005,7 +2114,7 @@ func interruptedExecutions(events []storage.SessionEvent, liveTeams map[string]b
 			resolvedCalls[turnID] ||
 			resolvedTeams[item.event.TeamTurnID] ||
 			resolvedFlows[item.event.FlowTurnID] ||
-			liveTeams[item.event.TeamID] {
+			live.running(item.event) {
 			continue
 		}
 		execution := interruptedFromEvent("call_turn", item.event, item.input)
@@ -2015,7 +2124,7 @@ func interruptedExecutions(events []storage.SessionEvent, liveTeams map[string]b
 	}
 	for turnID, item := range startedTeams {
 		if completedTeams[turnID] || waitingTeams[turnID] || resolvedTeams[turnID] ||
-			interruptedTeamIDs[turnID] || liveTeams[item.event.TeamID] {
+			interruptedTeamIDs[turnID] || live.running(item.event) {
 			continue
 		}
 		execution := interruptedFromEvent("team_turn", item.event, item.input)
@@ -2040,22 +2149,23 @@ func interruptedFromEvent(kind string, event storage.SessionEvent, input string)
 		reason = "retrying the containing Team/Flow may repeat downstream work"
 	}
 	return types.InterruptedExecution{
-		Kind:         kind,
-		FlowTurnID:   event.FlowTurnID,
-		TeamID:       event.TeamID,
-		TeamTurnID:   event.TeamTurnID,
-		CallID:       event.CallID,
-		CallTurnID:   event.CallTurnID,
-		CallType:     event.CallType,
-		Attempt:      event.Attempt,
-		RecoveryOf:   event.RecoveryOf,
-		StartedSeq:   event.Seq,
-		StartedAt:    event.CreatedAt,
-		Input:        input,
-		CallerTeam:   payloadString(event.Payload, "caller_team"),
-		StartedEvent: event.Type,
-		SafeToRetry:  safe,
-		RetryReason:  reason,
+		Kind:          kind,
+		FlowTurnID:    event.FlowTurnID,
+		TeamID:        event.TeamID,
+		TeamSessionID: event.TeamSessionID,
+		TeamTurnID:    event.TeamTurnID,
+		CallID:        event.CallID,
+		CallTurnID:    event.CallTurnID,
+		CallType:      event.CallType,
+		Attempt:       event.Attempt,
+		RecoveryOf:    event.RecoveryOf,
+		StartedSeq:    event.Seq,
+		StartedAt:     event.CreatedAt,
+		Input:         input,
+		CallerTeam:    payloadString(event.Payload, "caller_team"),
+		StartedEvent:  event.Type,
+		SafeToRetry:   safe,
+		RetryReason:   reason,
 	}
 }
 
@@ -2399,7 +2509,22 @@ func teamInput(input string, spec types.InputSpec) string {
 	return ""
 }
 
+// recordTaskContextOf mirrors the rule used for call records: only per_task
+// instances isolate their output; the coordination layer stays session-wide.
+func recordTaskContextOf(session types.TeamSession) string {
+	if session.IsPerTask() {
+		return session.TaskContextID
+	}
+	return ""
+}
+
+// selectFlowRecords keeps the session-wide contract: only records outside any
+// task context are considered.
 func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec, since time.Time) []types.SharedRecord {
+	return selectFlowRecordsInContext(records, spec, since, "")
+}
+
+func selectFlowRecordsInContext(records []types.SharedRecord, spec types.InputSpec, since time.Time, taskContextID string) []types.SharedRecord {
 	if spec.FlowRecords == nil && spec.Records == nil {
 		return nil
 	}
@@ -2424,13 +2549,20 @@ func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec, since
 		if !since.IsZero() && !record.CreatedAt.IsZero() && record.CreatedAt.Before(since) {
 			continue
 		}
+		// Tasks are isolated by context: a record produced inside one task
+		// context is invisible outside it. Records with no context belong to the
+		// session-wide layer (coordination output) and stay visible to everyone,
+		// which is what keeps a resident coordinator readable to its tasks.
+		if record.Producer.TaskContextID != "" && record.Producer.TaskContextID != taskContextID {
+			continue
+		}
 		selected = append(selected, record)
 	}
 	return selected
 }
 
-func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding, since time.Time) []types.SharedRecord {
-	return selectFlowRecords(records, binding.Inputs, since)
+func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding, since time.Time, taskContextID string) []types.SharedRecord {
+	return selectFlowRecordsInContext(records, binding.Inputs, since, taskContextID)
 }
 
 func recordIDs(records []types.SharedRecord) []string {
@@ -2544,7 +2676,7 @@ func (r *Runtime) closeInterruptedTurns(ctx context.Context, sessionID string) {
 		return
 	}
 	now := time.Now().UTC()
-	for _, item := range interruptedExecutions(replay.Events, r.liveTeamsFor(sessionID)) {
+	for _, item := range interruptedExecutions(replay.Events, r.liveIndexFor(sessionID)) {
 		if item.Kind != "flow_turn" || item.FlowTurnID == "" {
 			continue
 		}

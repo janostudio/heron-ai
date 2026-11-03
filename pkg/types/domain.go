@@ -36,12 +36,20 @@ func (f *Flow) Normalize() {
 // declared by CanActivate, and where its result goes follows from who
 // activated it.
 type FlowTeamBinding struct {
-	ID          string    `yaml:"-" json:"id"`
-	TeamID      string    `yaml:"team" json:"team"`
-	CanActivate []string  `yaml:"can_activate,omitempty" json:"can_activate,omitempty"`
-	DependsOn   []string  `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
-	Inputs      InputSpec `yaml:"inputs,omitempty" json:"inputs,omitempty"`
-	OnProceed   *Route    `yaml:"on_proceed,omitempty" json:"on_proceed,omitempty"`
+	ID          string   `yaml:"-" json:"id"`
+	TeamID      string   `yaml:"team" json:"team"`
+	CanActivate []string `yaml:"can_activate,omitempty" json:"can_activate,omitempty"`
+	DependsOn   []string `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	// Lifecycle selects how many sessions this Team has inside one FlowSession:
+	// "resident" (default, one shared session) or "per_task" (one per task).
+	Lifecycle TeamLifecycleMode `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty"`
+	Inputs    InputSpec         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
+	OnProceed *Route            `yaml:"on_proceed,omitempty" json:"on_proceed,omitempty"`
+}
+
+// EffectiveLifecycle returns the binding's lifecycle, defaulting to resident.
+func (b FlowTeamBinding) EffectiveLifecycle() TeamLifecycleMode {
+	return NormalizeTeamLifecycle(b.Lifecycle)
 }
 
 // UnmarshalYAML decodes a binding and rejects the removed `coordinator` key.
@@ -281,6 +289,25 @@ func (f Flow) Validate() error {
 					return fmt.Errorf("flow %q: team %q on_proceed references unknown team %q", f.ID, name, target)
 				}
 			}
+		}
+		switch lifecycle := team.EffectiveLifecycle(); lifecycle {
+		case TeamLifecycleResident:
+			// The historical shape: nothing to check.
+		case TeamLifecyclePerTask:
+			if name == f.EntryTeamID {
+				return fmt.Errorf(
+					"flow %q: entry team %q cannot use lifecycle per_task: nobody dispatches the entry, so no instance can own a task",
+					f.ID, name)
+			}
+			if !team.Inputs.UserMessage {
+				return fmt.Errorf(
+					"flow %q: team %q uses lifecycle per_task but inputs.user_message is not enabled: the dispatched task text would be dropped",
+					f.ID, name)
+			}
+		default:
+			return fmt.Errorf(
+				"flow %q: team %q: lifecycle %q is not supported (use resident or per_task)",
+				f.ID, name, team.Lifecycle)
 		}
 	}
 	if err := validateAcyclicTeamDependencies(f.Teams); err != nil {

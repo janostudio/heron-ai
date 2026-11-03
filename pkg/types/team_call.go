@@ -25,6 +25,21 @@ type TeamCallSpec struct {
 	// CallID and AgentTurnID name the calling Agent, for provenance in events.
 	CallID      string
 	AgentTurnID string
+	// TaskKey is the business key of the task. Required when the callee binding
+	// uses lifecycle per_task: it is what lets a later dispatch find and
+	// continue the same instance.
+	TaskKey string
+	// Subscriptions are the sources (issue / PR / CI / thread ids) whose later
+	// events belong to this task. Frozen on the first dispatch: a later dispatch
+	// may add none of them silently, because delivery depends on them.
+	Subscriptions []string
+	// Authorization is the permission the caller grants this task. It is frozen
+	// on the first dispatch; a later dispatch of the same task_key may only
+	// repeat it.
+	Authorization *AuthorizationGrant
+	// DispatchedBy names the calling Team instance. The callee's ownership is
+	// fixed to it: only this instance may continue, close or reopen the task.
+	DispatchedBy *TeamSessionRef
 	// Item is the task handed to the callee.
 	Item any
 	// Summary is a short description of the task, for display while it runs.
@@ -43,6 +58,58 @@ type TeamCallOutcome struct {
 	Records []string
 	// Error is set when the call itself failed (budget, timeout, crash).
 	Error string
+	// TeamSessionID is the callee instance that ran this call. Empty when the
+	// call failed before an instance existed.
+	TeamSessionID string
+	// TaskKey echoes the business key so the caller keeps the handle it passed.
+	TaskKey string
+	// Reopened reports that an already-closed instance of this task was reused
+	// instead of a new one being created.
+	Reopened bool
+}
+
+// TaskInfo is one dispatched task as its dispatcher sees it: enough to decide
+// what to do next without replaying the event stream.
+type TaskInfo struct {
+	TaskKey       string        `json:"task_key"`
+	TeamID        string        `json:"team_id"`
+	TeamSessionID string        `json:"team_session_id"`
+	Status        SessionStatus `json:"status"`
+	DispatchCount int           `json:"dispatch_count"`
+	ReopenCount   int           `json:"reopen_count"`
+	TaskContextID string        `json:"task_context_id,omitempty"`
+	LastReply     string        `json:"last_reply,omitempty"`
+}
+
+// TaskCatalogSpec scopes a task query to one Flow session and one caller
+// instance: a Team instance sees only the tasks it dispatched.
+type TaskCatalogSpec struct {
+	FlowSessionID       string
+	CallerTeamSessionID string
+}
+
+// TaskTree groups the tasks of one instance by task context. It is the ops
+// view: one entry per dispatched task tree, so "what is this session working on
+// and how deep did it go" is answerable without scanning every task.
+type TaskTree struct {
+	TaskContextID string     `json:"task_context_id"`
+	Tasks         []TaskInfo `json:"tasks"`
+}
+
+// TaskCatalog is the read side of the task routing table. The flow runtime
+// derives it from the event stream (the fact source), so a restarted process
+// answers the same questions without a separate index to keep in sync.
+type TaskCatalog interface {
+	ListTasks(ctx context.Context, spec TaskCatalogSpec) ([]TaskInfo, error)
+	ListTaskTrees(ctx context.Context, spec TaskCatalogSpec) ([]TaskTree, error)
+	GetTask(ctx context.Context, spec TaskCatalogSpec, taskKey string) (TaskInfo, error)
+}
+
+// TaskCloser soft-closes a task: the instance keeps its transcript and records,
+// but stops accepting work. Reopening happens by dispatching the same task_key
+// again, which is why closing is a state change rather than a delete.
+type TaskCloser interface {
+	CloseTask(ctx context.Context, spec TaskCatalogSpec, taskKey string) (TaskInfo, error)
 }
 
 // TeamRunner executes one Team call. The flow runtime implements it: only the
@@ -68,6 +135,9 @@ type TeamCatalogEntry struct {
 	// Produces is the record the target publishes when it finishes, so a caller
 	// knows what to read next.
 	Produces string `json:"produces,omitempty"`
+	// Lifecycle tells the caller whether handing work over creates a task
+	// instance ("per_task", needs task_key) or reuses the resident session.
+	Lifecycle string `json:"lifecycle,omitempty"`
 }
 
 // TeamCatalogSpec identifies whose view is being read.

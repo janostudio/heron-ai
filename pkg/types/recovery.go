@@ -33,22 +33,26 @@ type RecoveryRequest struct {
 // InterruptedExecution describes a started execution that has no matching
 // completed event in session.jsonl. It is a recovery signal, not a checkpoint.
 type InterruptedExecution struct {
-	Kind         string    `json:"kind"` // flow_turn | team_turn | call_turn
-	FlowTurnID   string    `json:"flow_turn_id,omitempty"`
-	TeamID       string    `json:"team_id,omitempty"`
-	TeamTurnID   string    `json:"team_turn_id,omitempty"`
-	CallID       string    `json:"call_id,omitempty"`
-	CallTurnID   string    `json:"call_turn_id,omitempty"`
-	CallType     CallType  `json:"call_type,omitempty"`
-	Attempt      int       `json:"attempt"`
-	RecoveryOf   string    `json:"recovery_of,omitempty"`
-	StartedSeq   int64     `json:"started_seq,omitempty"`
-	StartedAt    time.Time `json:"started_at,omitempty"`
-	Input        string    `json:"input,omitempty"`
-	CallerTeam   string    `json:"caller_team,omitempty"`
-	StartedEvent string    `json:"started_event"`
-	SafeToRetry  bool      `json:"safe_to_retry"`
-	RetryReason  string    `json:"retry_reason,omitempty"`
+	Kind       string `json:"kind"` // flow_turn | team_turn | call_turn
+	FlowTurnID string `json:"flow_turn_id,omitempty"`
+	TeamID     string `json:"team_id,omitempty"`
+	// TeamSessionID names the instance that was interrupted. Recovery targets
+	// the instance, not the Team: a still-running sibling of the same Team must
+	// not be resumed (or reported) twice.
+	TeamSessionID string    `json:"team_session_id,omitempty"`
+	TeamTurnID    string    `json:"team_turn_id,omitempty"`
+	CallID        string    `json:"call_id,omitempty"`
+	CallTurnID    string    `json:"call_turn_id,omitempty"`
+	CallType      CallType  `json:"call_type,omitempty"`
+	Attempt       int       `json:"attempt"`
+	RecoveryOf    string    `json:"recovery_of,omitempty"`
+	StartedSeq    int64     `json:"started_seq,omitempty"`
+	StartedAt     time.Time `json:"started_at,omitempty"`
+	Input         string    `json:"input,omitempty"`
+	CallerTeam    string    `json:"caller_team,omitempty"`
+	StartedEvent  string    `json:"started_event"`
+	SafeToRetry   bool      `json:"safe_to_retry"`
+	RetryReason   string    `json:"retry_reason,omitempty"`
 }
 
 type RecoveryStatus struct {

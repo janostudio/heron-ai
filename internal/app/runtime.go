@@ -401,6 +401,8 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// registration after that point never reaches a model.
 	toolRegistry.Register(teamTool)
 	toolRegistry.Register(listTeamsTool)
+	teamSessionTool := agent.NewTeamSessionTool(nil)
+	toolRegistry.Register(teamSessionTool)
 	if registerWakeupTools {
 		toolRegistry.Register(scheduleWakeupTool)
 		toolRegistry.Register(cancelWakeupTool)
@@ -464,6 +466,8 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// executor. It is built after the tool registry, hence the late wiring.
 	teamTool.SetRunner(flowRuntime)
 	listTeamsTool.SetCatalog(flowRuntime)
+	teamSessionTool.SetCatalog(flowRuntime)
+	teamSessionTool.SetCloser(flowRuntime)
 	// The flow runtime owns the wake-up records: it is what can append the
 	// events, read the session back after a restart, and start the turn. The
 	// tools only translate a model call into a request.

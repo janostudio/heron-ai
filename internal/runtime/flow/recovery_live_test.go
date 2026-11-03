@@ -32,11 +32,11 @@ func TestInterruptedExecutionsSkipsLiveTeams(t *testing.T) {
 	}
 
 	// Both look interrupted when nothing is known to be running.
-	all := interruptedExecutions(events, nil)
+	all := interruptedExecutions(events, liveIndex{})
 	require.Len(t, all, 2, "started with no completion is interrupted by default")
 
 	// The running Team is excluded; the other still looks interrupted.
-	live := interruptedExecutions(events, map[string]bool{"owner": true})
+	live := interruptedExecutions(events, liveIndex{teams: map[string]bool{"owner": true}})
 	require.Len(t, live, 1)
 	require.Equal(t, "leaf", live[0].TeamID, "only the Team not known to be running is reported")
 }
@@ -58,6 +58,6 @@ func TestInterruptedExecutionsSkipsCallsUnderLiveTeams(t *testing.T) {
 		},
 	}
 
-	require.Len(t, interruptedExecutions(events, nil), 1)
-	require.Empty(t, interruptedExecutions(events, map[string]bool{"owner": true}))
+	require.Len(t, interruptedExecutions(events, liveIndex{}), 1)
+	require.Empty(t, interruptedExecutions(events, liveIndex{teams: map[string]bool{"owner": true}}))
 }

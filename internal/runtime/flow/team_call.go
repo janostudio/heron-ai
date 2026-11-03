@@ -38,19 +38,83 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 		return types.TeamCallOutcome{}, err
 	}
 	defs := r.definitions.Snapshot()
-	if _, ok := defs.Flow.Teams[spec.TeamID]; !ok {
+	binding, ok := defs.Flow.Teams[spec.TeamID]
+	if !ok {
 		return types.TeamCallOutcome{
 			Status: "failed",
 			Error:  fmt.Sprintf("team %q is not configured in flow", spec.TeamID),
 		}, nil
 	}
-	if !r.tryMarkTeamBusy(session.ID, spec.TeamID) {
+	lifecycle := binding.EffectiveLifecycle()
+	seq := 0
+	plan := taskDispatch{}
+	if lifecycle.IsPerTask() {
+		if strings.TrimSpace(spec.TaskKey) == "" {
+			return types.TeamCallOutcome{
+				Status: "failed",
+				Error:  fmt.Sprintf("team %q uses lifecycle per_task; task_key is required so the task can be found again", spec.TeamID),
+			}, nil
+		}
+		resolved, resolveErr := r.resolveTaskDispatch(ctx, session.ID, spec.TeamID, strings.TrimSpace(spec.TaskKey), spec.DispatchedBy)
+		if resolveErr != nil {
+			return types.TeamCallOutcome{
+				Status: "failed",
+				Error:  resolveErr.Error(),
+			}, nil
+		}
+		if resolved.created && spec.Authorization != nil {
+			// Freeze the grant with the task: from here on it is the task's
+			// permission, not the caller's latest opinion.
+			frozen := *spec.Authorization
+			if frozen.GrantedAt.IsZero() {
+				frozen.GrantedAt = time.Now().UTC()
+			}
+			resolved.authorization = &frozen
+		}
+		if !resolved.created && !resolved.authorization.ScopesEqual(spec.Authorization) {
+			return types.TeamCallOutcome{
+				Status: "failed",
+				Error: fmt.Sprintf(
+					"task %q is frozen with a different authorization; continuing it may not change the granted scope",
+					spec.TaskKey),
+			}, nil
+		}
+		plan = resolved
+		seq = plan.sessionSeq
+		if plan.created {
+			limits := defs.Limits.WithDefaults()
+			active, countErr := r.activeTaskCount(ctx, session.ID)
+			if countErr != nil {
+				return types.TeamCallOutcome{
+					Status: "failed",
+					Error:  fmt.Sprintf("count active task instances: %v", countErr),
+				}, nil
+			}
+			if active >= limits.MaxActiveTeamSessions {
+				return types.TeamCallOutcome{
+					Status: "failed",
+					Error: fmt.Sprintf(
+						"session already has %d active task instances (limit %d); close finished tasks with TeamSession(action=close) before dispatching more",
+						active, limits.MaxActiveTeamSessions),
+				}, nil
+			}
+			if plan.depth > limits.MaxTaskContextDepth {
+				return types.TeamCallOutcome{
+					Status: "failed",
+					Error: fmt.Sprintf(
+						"task nesting depth %d exceeds the limit %d; hand the work back to the parent task instead of nesting further",
+						plan.depth, limits.MaxTaskContextDepth),
+				}, nil
+			}
+		}
+	}
+	if !r.tryMarkTeamBusySeq(session.ID, spec.TeamID, seq) {
 		return types.TeamCallOutcome{
 			Status: "failed",
 			Error:  fmt.Sprintf("team %q is already running in this session", spec.TeamID),
 		}, nil
 	}
-	defer r.clearTeamBusy(session.ID, spec.TeamID)
+	defer r.clearTeamBusySeq(session.ID, spec.TeamID, seq)
 
 	now := time.Now().UTC()
 	input := teamCallInputText(spec.Item)
@@ -66,7 +130,20 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 		StartedAt:     now,
 	}
 	execution, runErr := r.executeTeamTurn(ctx, defs, session, flowTurn,
-		activation{teamID: spec.TeamID, callerTeam: spec.CallerTeam},
+		activation{
+			teamID:        spec.TeamID,
+			callerTeam:    spec.CallerTeam,
+			sessionSeq:    seq,
+			taskKey:       strings.TrimSpace(spec.TaskKey),
+			taskContextID: plan.taskContextID,
+			taskDepth:     plan.depth,
+			authorization: plan.authorization,
+			subscriptions: spec.Subscriptions,
+			dispatchedBy:  spec.DispatchedBy,
+			dispatchCount: plan.dispatchCount,
+			reopenCount:   plan.reopenCount,
+			reopened:      plan.reopened,
+		},
 		input, nil, now, nil)
 	if runErr != nil {
 		return types.TeamCallOutcome{Status: "failed", Error: runErr.Error()}, nil
@@ -115,9 +192,12 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 		}
 	}
 	outcome := types.TeamCallOutcome{
-		Status: teamCallStatus(execution),
-		Reply:  execution.result.Reply,
-		Error:  execution.result.Error,
+		Status:        teamCallStatus(execution),
+		Reply:         execution.result.Reply,
+		Error:         execution.result.Error,
+		TeamSessionID: execution.session.ID,
+		TaskKey:       spec.TaskKey,
+		Reopened:      plan.reopened,
 	}
 	for _, record := range execution.result.Records {
 		if record.Name != "" {
@@ -187,8 +267,9 @@ func (r *Runtime) ListTeams(ctx context.Context, spec types.TeamCatalogSpec) ([]
 			continue
 		}
 		entry := types.TeamCatalogEntry{
-			TeamID:   target,
-			Receives: receivesOf(targetBinding.Inputs),
+			TeamID:    target,
+			Receives:  receivesOf(targetBinding.Inputs),
+			Lifecycle: string(targetBinding.EffectiveLifecycle()),
 		}
 		if team, found := defs.Teams[targetBinding.TeamID]; found {
 			entry.Responsibility = teamResponsibility(team)
@@ -346,6 +427,108 @@ func totalToolCalls(result types.TeamTurnResult) int {
 // teamDeclaresTools reports whether any agent call of the given flow binding
 // declares at least one tool. It is what separates "an execution team that said
 // something instead of working" from "a team whose job is to answer", which the
+// taskDispatch is the resolved identity of one per_task dispatch: which
+// instance runs it, and how many rounds it has already taken.
+type taskDispatch struct {
+	sessionSeq    int
+	dispatchCount int
+	reopenCount   int
+	reopened      bool
+	created       bool
+	depth         int
+	taskContextID string
+	authorization *types.AuthorizationGrant
+}
+
+// resolveTaskDispatch finds the instance a task_key already owns, or allocates
+// the next ordinal.
+//
+// Ownership is fixed to the dispatcher: another instance handing over the same
+// key is refused instead of silently taking the task over. A closed instance is
+// reused (reopened) rather than replaced, which is what keeps one business task
+// in one conversation.
+func (r *Runtime) resolveTaskDispatch(
+	ctx context.Context,
+	sessionID, teamID, taskKey string,
+	dispatcher *types.TeamSessionRef,
+) (taskDispatch, error) {
+	if dispatcher == nil || strings.TrimSpace(dispatcher.TeamSessionID) == "" {
+		return taskDispatch{}, fmt.Errorf(
+			"team %q uses lifecycle per_task; the caller instance is required to own the task", teamID)
+	}
+	events, err := r.replayFlowEvents(ctx, sessionID)
+	if err != nil {
+		return taskDispatch{}, err
+	}
+	latest := make(map[string]types.TeamSession)
+	for _, event := range events {
+		switch event.Type {
+		case types.EventTeamSessionCreated, types.EventTeamSessionUpdated:
+			session, ok := decodeTeamSession(event.Payload)
+			if !ok {
+				continue
+			}
+			latest[session.ID] = session
+		}
+	}
+
+	maxSeq := 0
+	dispatcherDepth := 0
+	dispatcherContext := ""
+	var match *types.TeamSession
+	for _, session := range latest {
+		if session.TeamID != teamID || !session.IsPerTask() {
+			continue
+		}
+		if session.SessionSeq > maxSeq {
+			maxSeq = session.SessionSeq
+		}
+		if session.ID == dispatcher.TeamSessionID {
+			dispatcherDepth = session.TaskDepth
+			dispatcherContext = session.TaskContextID
+		}
+		if session.TaskKey != taskKey {
+			continue
+		}
+		if session.DispatchedBy == nil || session.DispatchedBy.TeamSessionID != dispatcher.TeamSessionID {
+			owner := ""
+			if session.DispatchedBy != nil {
+				owner = session.DispatchedBy.TeamSessionID
+			}
+			return taskDispatch{}, fmt.Errorf(
+				"task %q is owned by %q; only its dispatcher may continue it", taskKey, owner)
+		}
+		copied := session
+		match = &copied
+	}
+
+	if match == nil {
+		return taskDispatch{
+			sessionSeq:    maxSeq + 1,
+			dispatchCount: 1,
+			created:       true,
+			depth:         dispatcherDepth + 1,
+			// A sub-task belongs to the dispatcher's task context; a Task
+			// dispatched by a resident instance roots a new one (set later
+			// from its own id).
+			taskContextID: dispatcherContext,
+		}, nil
+	}
+	plan := taskDispatch{
+		sessionSeq:    match.SessionSeq,
+		dispatchCount: match.DispatchCount + 1,
+		reopenCount:   match.ReopenCount,
+		depth:         match.TaskDepth,
+		taskContextID: match.TaskContextID,
+		authorization: match.Authorization,
+	}
+	if match.Status == types.SessionClosed {
+		plan.reopened = true
+		plan.reopenCount = match.ReopenCount + 1
+	}
+	return plan, nil
+}
+
 // no-tool-call failure rule must not treat the same way.
 func teamDeclaresTools(defs *types.Definitions, bindingID string) bool {
 	binding, ok := defs.Flow.Teams[bindingID]

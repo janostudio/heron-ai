@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/adrg/frontmatter"
@@ -36,6 +37,33 @@ type Store struct {
 	files  storage.FileStore
 	limits Limits
 	locks  *agentstore.AgentStateLocks
+	// writeLocks serializes whole load-merge-save cycles on shared state keys.
+	// Unlike locks (fail-fast TryLock for the CRUD endpoints), these block: two
+	// concurrent instances of the same Team must both land their writes, not
+	// race each other into a lost update.
+	writeLocks *keyLocks
+}
+
+// keyLocks is a blocking per-key mutex set.
+type keyLocks struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func newKeyLocks() *keyLocks {
+	return &keyLocks{locks: make(map[string]*sync.Mutex)}
+}
+
+func (l *keyLocks) lock(key string) func() {
+	l.mu.Lock()
+	mu, ok := l.locks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		l.locks[key] = mu
+	}
+	l.mu.Unlock()
+	mu.Lock()
+	return mu.Unlock
 }
 
 func NewStore(files storage.FileStore, limits Limits) *Store {
@@ -51,7 +79,7 @@ func NewStore(files storage.FileStore, limits Limits) *Store {
 	if limits.MaxItems <= 0 {
 		limits.MaxItems = 40
 	}
-	return &Store{files: files, limits: limits, locks: agentstore.NewAgentStateLocks()}
+	return &Store{files: files, limits: limits, locks: agentstore.NewAgentStateLocks(), writeLocks: newKeyLocks()}
 }
 
 // SetLocks shares an external agent-level write lock set. When nil, the Store
@@ -82,25 +110,128 @@ func (s *Store) ForConfig(config types.StateConfig) *Store {
 		limits.TeamMaxChars = config.MaxChars
 		limits.AgentMaxChars = config.MaxChars
 	}
-	return &Store{files: s.files, limits: limits, locks: s.locks}
+	return &Store{files: s.files, limits: limits, locks: s.locks, writeLocks: s.writeLocks}
 }
 
 func (s *Store) LoadTeam(ctx context.Context, sessionID, teamID string) (types.StateSnapshot, error) {
 	return s.load(ctx, s.path(sessionID, "teams", teamID, "state.md"), types.StateScopeTeam, sessionID, teamID, "")
 }
 
+// SaveTeam persists one Team's shared state.
+//
+// The write is a merge, not an overwrite: under a per-key lock the current file
+// is re-read and the incoming snapshot is unioned onto it (by item ID). Two
+// instances running the same Team concurrently both land their entries instead
+// of the later save silently erasing the earlier one. The known trade-off is
+// recorded in the design doc: an entry another instance removed while this
+// snapshot was held can come back; the CRUD endpoints remain the authoritative
+// way to remove entries.
 func (s *Store) SaveTeam(ctx context.Context, snapshot types.StateSnapshot) error {
 	snapshot.Scope = types.StateScopeTeam
-	return s.save(ctx, s.path(snapshot.SessionID, "teams", snapshot.TeamID, "state.md"), snapshot, s.limits.TeamMaxChars)
+	unlock := s.writeLocks.lock("team:" + snapshot.SessionID + ":" + snapshot.TeamID)
+	defer unlock()
+	current, err := s.LoadTeam(ctx, snapshot.SessionID, snapshot.TeamID)
+	if err != nil {
+		return err
+	}
+	merged := mergeStateSnapshots(current, snapshot)
+	merged.Scope = types.StateScopeTeam
+	return s.save(ctx, s.path(merged.SessionID, "teams", merged.TeamID, "state.md"), merged, s.limits.TeamMaxChars)
 }
 
 func (s *Store) LoadAgent(ctx context.Context, sessionID, teamID, callID string) (types.StateSnapshot, error) {
 	return s.load(ctx, s.path(sessionID, "agents", teamID, callID, "state.md"), types.StateScopeAgent, sessionID, teamID, callID)
 }
 
+// SaveAgent persists one Agent call's session-scoped state, with the same
+// merge semantics as SaveTeam: the per-call key is shared by every per_task
+// instance of the Team, so concurrent writers must not erase each other.
 func (s *Store) SaveAgent(ctx context.Context, snapshot types.StateSnapshot) error {
 	snapshot.Scope = types.StateScopeAgent
-	return s.save(ctx, s.path(snapshot.SessionID, "agents", snapshot.TeamID, snapshot.CallID, "state.md"), snapshot, s.limits.AgentMaxChars)
+	unlock := s.writeLocks.lock("agent:" + snapshot.SessionID + ":" + snapshot.TeamID + ":" + snapshot.CallID)
+	defer unlock()
+	current, err := s.LoadAgent(ctx, snapshot.SessionID, snapshot.TeamID, snapshot.CallID)
+	if err != nil {
+		return err
+	}
+	merged := mergeStateSnapshots(current, snapshot)
+	merged.Scope = types.StateScopeAgent
+	return s.save(ctx, s.path(merged.SessionID, "agents", merged.TeamID, merged.CallID, "state.md"), merged, s.limits.AgentMaxChars)
+}
+
+// mergeStateSnapshots unions two snapshots of one state key: the incoming
+// snapshot wins for fields it carries, and entries the current file has but the
+// incoming snapshot never saw are kept (matched by item ID / record id /
+// workspace path). That is what turns "later save wins" into "both land".
+func mergeStateSnapshots(current, incoming types.StateSnapshot) types.StateSnapshot {
+	merged := incoming
+	if merged.Goal == "" {
+		merged.Goal = current.Goal
+	}
+	merged.Confirmed = mergeStateItems(current.Confirmed, incoming.Confirmed)
+	merged.OpenQuestions = mergeStateItems(current.OpenQuestions, incoming.OpenQuestions)
+	merged.Decisions = mergeStateItems(current.Decisions, incoming.Decisions)
+	merged.NextSteps = mergeStateItems(current.NextSteps, incoming.NextSteps)
+	merged.RecordIDs = mergeStrings(current.RecordIDs, incoming.RecordIDs)
+	merged.Workspace = mergeWorkspace(current.Workspace, incoming.Workspace)
+	if current.Revision > merged.Revision {
+		merged.Revision = current.Revision
+	}
+	return merged
+}
+
+func mergeStateItems(current, incoming []types.StateItem) []types.StateItem {
+	if len(current) == 0 {
+		return incoming
+	}
+	known := make(map[string]bool, len(incoming))
+	for _, item := range incoming {
+		known[item.ID] = true
+	}
+	merged := incoming
+	for _, item := range current {
+		if item.ID == "" || known[item.ID] {
+			continue
+		}
+		merged = append(merged, item)
+	}
+	return merged
+}
+
+func mergeStrings(current, incoming []string) []string {
+	if len(current) == 0 {
+		return incoming
+	}
+	known := make(map[string]bool, len(incoming))
+	for _, value := range incoming {
+		known[value] = true
+	}
+	merged := incoming
+	for _, value := range current {
+		if value == "" || known[value] {
+			continue
+		}
+		merged = append(merged, value)
+	}
+	return merged
+}
+
+func mergeWorkspace(current, incoming []types.StateWorkspaceRef) []types.StateWorkspaceRef {
+	if len(current) == 0 {
+		return incoming
+	}
+	known := make(map[string]bool, len(incoming))
+	for _, ref := range incoming {
+		known[ref.Path+"\x00"+ref.Revision] = true
+	}
+	merged := incoming
+	for _, ref := range current {
+		if ref.Path == "" || known[ref.Path+"\x00"+ref.Revision] {
+			continue
+		}
+		merged = append(merged, ref)
+	}
+	return merged
 }
 
 // LoadAgentState reads the persistent cross-session state of one Agent

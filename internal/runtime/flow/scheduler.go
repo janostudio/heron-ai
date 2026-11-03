@@ -82,6 +82,11 @@ func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession,
 	}
 
 	act := activation{teamID: target, callerTeam: caller}
+	// Inherit the task context of the message: a dispatcher woken by a task
+	// result judges that task with that task's records in view.
+	if contextID, ok := msg.Payload["task_context_id"].(string); ok {
+		act.taskContextID = contextID
+	}
 	// The activator is whoever dispatched this Team: its work message carries
 	// caller_team, which is where the result goes and where the Team returns on
 	// proceed/coordinate/fail.
@@ -274,6 +279,13 @@ func (r *Runtime) postResult(ctx context.Context,
 		return nil
 	}
 	payload := map[string]any{"team_result": execution.result}
+	// A per_task Team's result carries its task context: the instance that
+	// dispatched it is woken to judge this task, and needs to read the records
+	// the task produced. Resident results carry no context — they are the
+	// coordination layer and stay readable session-wide.
+	if execution.session.IsPerTask() && execution.session.TaskContextID != "" {
+		payload["task_context_id"] = execution.session.TaskContextID
+	}
 	// The entry Team is woken to answer the user, so it needs the question —
 	// not just the result it is relaying. It travels as the statement this
 	// continuation belongs to, not as the woken turn's input: as input it

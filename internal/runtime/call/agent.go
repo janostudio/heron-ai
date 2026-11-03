@@ -51,6 +51,8 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		TeamTurnID:    req.TeamTurn.ID,
 		CallID:        req.Call.ID,
 		CallTurnID:    callTurnID(req),
+		TeamSessionID: req.TeamSession.ID,
+		TaskContextID: taskContextOf(req.TeamSession),
 	})
 	execCtx = agentstore.WithRecordCollector(execCtx, spawnCollector)
 
@@ -58,6 +60,7 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		FlowSessionID:      req.FlowSession.ID,
 		FlowTurnID:         req.FlowTurn.ID,
 		TeamID:             req.TeamTurn.TeamID,
+		TeamSessionID:      req.TeamSession.ID,
 		TeamTurnID:         req.TeamTurn.ID,
 		CallID:             req.Call.ID,
 		CallTurnID:         req.CallTurnID,
@@ -181,6 +184,17 @@ func basisFromWorkspaceOps(operations []types.WorkspaceOperation) []types.BasisR
 	return basis
 }
 
+// taskContextOf is the task context a record produced by this session belongs
+// to. Only per_task instances are isolated: a resident session is the
+// coordination layer, so its output stays readable session-wide even when the
+// turn was woken by a task.
+func taskContextOf(session types.TeamSession) string {
+	if session.IsPerTask() {
+		return session.TaskContextID
+	}
+	return ""
+}
+
 func newCallRecord(req types.CallRequest, name, kind, summary string, data map[string]any) types.SharedRecord {
 	return types.SharedRecord{
 		RecordID: fmt.Sprintf("%s-%d", req.Call.ID, time.Now().UnixNano()),
@@ -194,6 +208,8 @@ func newCallRecord(req types.CallRequest, name, kind, summary string, data map[s
 			TeamTurnID:    req.TeamTurn.ID,
 			CallID:        req.Call.ID,
 			CallTurnID:    req.CallTurnID,
+			TeamSessionID: req.TeamSession.ID,
+			TaskContextID: taskContextOf(req.TeamSession),
 		},
 		Summary:   summary,
 		Data:      data,
