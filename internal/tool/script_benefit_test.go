@@ -47,7 +47,7 @@ func TestBenefitContextFootprint(t *testing.T) {
 		if i > 0 {
 			code.WriteString(",")
 		}
-		code.WriteString(fmt.Sprintf("%q", name))
+		fmt.Fprintf(&code, "%q", name)
 	}
 	code.WriteString(`];
 		const hits = [];
