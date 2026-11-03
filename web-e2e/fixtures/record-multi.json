@@ -1,0 +1,249 @@
+{
+  "events": [
+    {
+      "seq": 1,
+      "type": "flow_turn.started",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "",
+      "call_turn_id": "",
+      "team_id": "",
+      "created_at": "2026-11-03T02:10:00.000Z",
+      "payload": { "input": "派发出去看看" }
+    },
+    {
+      "seq": 2,
+      "type": "team_turn.started",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_a",
+      "call_turn_id": "",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:10:00.500Z",
+      "payload": { "team_turn": { "id": "tt_a", "team_id": "default", "status": "running" } }
+    },
+    {
+      "seq": 3,
+      "type": "agent_turn.started",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_a",
+      "call_turn_id": "tt_a:coordinator",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:10:01.000Z",
+      "payload": { "call": "coordinator" }
+    },
+    {
+      "seq": 4,
+      "type": "agent.model_response",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_a",
+      "call_turn_id": "tt_a:coordinator",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:10:02.000Z",
+      "payload": {
+        "structured": true,
+        "reply": "我把这件事派给 probe 团队去探。",
+        "text": "{\"reply\":\"我把这件事派给 probe 团队去探。\",\"next\":{\"action\":\"dispatch\"}}"
+      }
+    },
+    {
+      "seq": 5,
+      "type": "agent_turn.completed",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_a",
+      "call_turn_id": "tt_a:coordinator",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:10:03.000Z",
+      "payload": {}
+    },
+    {
+      "seq": 6,
+      "type": "team_turn.completed",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_a",
+      "call_turn_id": "",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:10:04.000Z",
+      "payload": { "team_turn": { "id": "tt_a", "team_id": "default", "status": "completed", "started_at": "2026-11-03T02:10:00.500Z" } }
+    },
+    {
+      "seq": 7,
+      "type": "team_turn.started",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_b",
+      "call_turn_id": "",
+      "team_id": "probe",
+      "created_at": "2026-11-03T02:10:05.000Z",
+      "payload": { "team_turn": { "id": "tt_b", "team_id": "probe", "status": "running" } }
+    },
+    {
+      "seq": 8,
+      "type": "agent_turn.started",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_b",
+      "call_turn_id": "tt_b:terrain",
+      "team_id": "probe",
+      "created_at": "2026-11-03T02:10:06.000Z",
+      "payload": {}
+    },
+    {
+      "seq": 9,
+      "type": "agent.model_response",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_b",
+      "call_turn_id": "tt_b:terrain",
+      "team_id": "probe",
+      "created_at": "2026-11-03T02:10:30.000Z",
+      "payload": {
+        "structured": true,
+        "reply": "地形取证完成：仓库是纯 Go，没有前端构建。",
+        "text": "{\"reply\":\"地形取证完成：仓库是纯 Go，没有前端构建。\"}"
+      }
+    },
+    {
+      "seq": 10,
+      "type": "agent_turn.completed",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_b",
+      "call_turn_id": "tt_b:terrain",
+      "team_id": "probe",
+      "created_at": "2026-11-03T02:10:31.000Z",
+      "payload": {}
+    },
+    {
+      "seq": 11,
+      "type": "team_turn.completed",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_b",
+      "call_turn_id": "",
+      "team_id": "probe",
+      "created_at": "2026-11-03T02:10:32.000Z",
+      "payload": { "team_turn": { "id": "tt_b", "team_id": "probe", "status": "completed", "started_at": "2026-11-03T02:10:05.000Z" } }
+    },
+    {
+      "seq": 12,
+      "type": "team_turn.started",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_c",
+      "call_turn_id": "",
+      "team_id": "facts",
+      "created_at": "2026-11-03T02:10:33.000Z",
+      "payload": { "team_turn": { "id": "tt_c", "team_id": "facts", "status": "running" } }
+    },
+    {
+      "seq": 13,
+      "type": "agent.model_response",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_c",
+      "call_turn_id": "tt_c:inspect",
+      "team_id": "facts",
+      "created_at": "2026-11-03T02:10:40.000Z",
+      "payload": {
+        "structured": true,
+        "reply": "facts 团队的 inspect 看完了配置。",
+        "text": "{\"reply\":\"facts 团队的 inspect 看完了配置。\"}"
+      }
+    },
+    {
+      "seq": 14,
+      "type": "team_turn.completed",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_c",
+      "call_turn_id": "",
+      "team_id": "facts",
+      "created_at": "2026-11-03T02:10:41.000Z",
+      "payload": { "team_turn": { "id": "tt_c", "team_id": "facts", "status": "completed", "started_at": "2026-11-03T02:10:33.000Z" } }
+    },
+    {
+      "seq": 15,
+      "type": "team_turn.started",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_d",
+      "call_turn_id": "",
+      "team_id": "repo-info",
+      "created_at": "2026-11-03T02:10:42.000Z",
+      "payload": { "team_turn": { "id": "tt_d", "team_id": "repo-info", "status": "running" } }
+    },
+    {
+      "seq": 16,
+      "type": "agent.model_response",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_d",
+      "call_turn_id": "tt_d:inspect",
+      "team_id": "repo-info",
+      "created_at": "2026-11-03T02:10:50.000Z",
+      "payload": {
+        "structured": true,
+        "reply": "repo-info 团队的 inspect 也看完了，和 facts 的不是同一个。",
+        "text": "{\"reply\":\"repo-info 团队的 inspect 也看完了，和 facts 的不是同一个。\"}"
+      }
+    },
+    {
+      "seq": 17,
+      "type": "team_turn.completed",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_d",
+      "call_turn_id": "",
+      "team_id": "repo-info",
+      "created_at": "2026-11-03T02:10:51.000Z",
+      "payload": { "team_turn": { "id": "tt_d", "team_id": "repo-info", "status": "completed", "started_at": "2026-11-03T02:10:42.000Z" } }
+    },
+    {
+      "seq": 18,
+      "type": "team_turn.started",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_e",
+      "call_turn_id": "",
+      "team_id": "analyze",
+      "created_at": "2026-11-03T02:10:52.000Z",
+      "payload": { "team_turn": { "id": "tt_e", "team_id": "analyze", "status": "running" } }
+    },
+    {
+      "seq": 19,
+      "type": "agent.model_response",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_e",
+      "call_turn_id": "tt_e:analyze",
+      "team_id": "analyze",
+      "created_at": "2026-11-03T02:10:53.000Z",
+      "payload": {
+        "structured": true,
+        "reply": "analyze 团队的 analyze 说了最后一句。",
+        "text": "{\"reply\":\"analyze 团队的 analyze 说了最后一句。\"}"
+      }
+    },
+    {
+      "seq": 20,
+      "type": "team_turn.completed",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "tt_e",
+      "call_turn_id": "",
+      "team_id": "analyze",
+      "created_at": "2026-11-03T02:10:54.000Z",
+      "payload": { "team_turn": { "id": "tt_e", "team_id": "analyze", "status": "completed", "started_at": "2026-11-03T02:10:52.000Z" } }
+    },
+    {
+      "seq": 21,
+      "type": "flow_turn.waiting_input",
+      "flow_turn_id": "ft_multi",
+      "team_turn_id": "",
+      "call_turn_id": "",
+      "team_id": "",
+      "created_at": "2026-11-03T02:10:55.000Z",
+      "payload": {
+        "reply": "三个团队都回来了：地形、facts 配置、repo-info 各一份。",
+        "origin": "user",
+        "intermediate": false
+      }
+    }
+  ],
+  "nodes": [],
+  "facts": {
+    "turns": 1,
+    "team_turns": 4,
+    "calls": 4,
+    "tool_calls": 0,
+    "tool_failures": 0,
+    "input_tokens": 2100,
+    "output_tokens": 1300,
+    "models": ["demo-model"]
+  }
+}
