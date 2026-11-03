@@ -71,30 +71,55 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
   border: 1px dashed var(--border-strong); border-radius: 8px;
   font: inherit; font-size: 12px; color: var(--muted); background: var(--bg-subtle); }
 
-/* Run board: which team/agent is running right now, nothing else. */
-.runboard { position: relative; margin-bottom: 16px; }
+/* Run board: a status wall — each team a base, its agents the desks under it,
+ * dispatch links drawn on the canvas behind. Idle reads calm, running glows. */
+.runboard { position: relative; margin-bottom: 16px; padding: 20px;
+  border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+  background:
+    radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0) 0 0 / 24px 24px,
+    linear-gradient(180deg, var(--bg-subtle), var(--bg)); }
 .run-links { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
-.run-summary, .run-group-title, .run-grid { position: relative; z-index: 1; }
-.run-summary { margin-bottom: 8px; font-size: 12px; color: var(--muted); }
-.run-live { color: var(--accent); font-weight: 550; }
-.run-group-title { margin: 10px 0 6px; font-size: 11px; letter-spacing: .05em;
-  text-transform: uppercase; color: var(--faint); }
-.run-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
-.run-block { margin-bottom: 12px; }
-.run-children { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 8px; margin: 8px 0 0 26px; }
-.run-card { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
-  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-subtle); font-size: 12px; }
-.run-card.running { border-color: var(--accent); background: var(--accent-soft); }
+.run-summary, .run-grid, .run-block { position: relative; z-index: 1; }
+.run-summary { margin-bottom: 12px; font-size: 12px; color: var(--muted); }
+.run-live { color: var(--accent); font-weight: 600; }
+.run-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.run-block { margin-bottom: 16px; }
+.run-children { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px; margin: 10px 0 0 30px; }
+
+.run-card { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: linear-gradient(180deg, var(--bg), var(--bg-subtle));
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .08);
+  font-size: 13px; transition: transform .15s ease, box-shadow .15s ease;
+  animation: run-in .4s ease both; }
+.run-card:hover { transform: translateY(-2px); }
+/* Idle cards sit back; running ones glow. */
+.run-card.completed, .run-card.pending { opacity: .82; }
+.run-card.running { border-color: var(--accent); opacity: 1;
+  animation: run-in .4s ease both, run-glow 2.2s ease-in-out infinite; }
 .run-card.failed { border-color: var(--danger); }
-.run-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
-.run-card.completed .run-dot { background: var(--ok); }
-.run-card.failed .run-dot { background: var(--danger); }
-.run-card.running .run-dot { background: var(--accent); animation: run-pulse 1.2s ease-in-out infinite; }
-@keyframes run-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.65); } }
+@keyframes run-in { from { opacity: 0; transform: translateY(8px) scale(.97); }
+  to { opacity: 1; transform: none; } }
+@keyframes run-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(76, 141, 255, 0); }
+  50% { box-shadow: 0 0 20px 3px rgba(76, 141, 255, .35); } }
+
+.run-avatar { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 14px; font-weight: 600;
+  box-shadow: inset 0 -2px 4px rgba(0, 0, 0, .18); }
+.run-card.running .run-avatar { animation: run-pulse 1.4s ease-in-out infinite; }
+@keyframes run-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(.88); } }
+
 .run-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-team { color: var(--faint); }
-.run-time { color: var(--faint); font-variant-numeric: tabular-nums; }
+.run-parent { color: var(--faint); }
+.run-state { flex: 0 0 auto; padding: 2px 9px; border-radius: 999px; font-size: 11px;
+  background: var(--bg-sunken); color: var(--faint); }
+.run-card.running .run-state { background: rgba(76, 141, 255, .16); color: var(--accent); }
+.run-card.completed .run-state, .run-card.pending .run-state { background: rgba(63, 185, 80, .14); color: var(--ok); }
+.run-card.failed .run-state { background: rgba(248, 81, 73, .16); color: var(--danger); }
+.run-dot { display: none; }
 
 /* Waterfall: every team and call on one axis, so overlapping work is visible. */
 .waterfall { margin-bottom: 16px; }
