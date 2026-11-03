@@ -209,47 +209,55 @@ func TestRuntimeLimitsWithDefaults(t *testing.T) {
 	t.Run("all zero falls back to defaults", func(t *testing.T) {
 		got := (RuntimeLimits{}).WithDefaults()
 		require.Equal(t, RuntimeLimits{
-			MaxTeamTurns:         100,
-			MaxCallsPerTeamTurn:  100,
-			MaxAgentRounds:       200,
-			MaxParallelTeams:     20,
-			MaxParallelCalls:     20,
-			MaxCoordinateRetries: 20,
-			MaxParallelTools:     20,
+			MaxTeamTurns:          100,
+			MaxCallsPerTeamTurn:   100,
+			MaxAgentRounds:        200,
+			MaxParallelTeams:      20,
+			MaxParallelCalls:      20,
+			MaxCoordinateRetries:  20,
+			MaxParallelTools:      20,
+			MaxActiveTeamSessions: 8,
+			MaxTaskContextDepth:   3,
 		}, got)
 	})
 
 	t.Run("each negative field falls back independently", func(t *testing.T) {
 		in := RuntimeLimits{
-			MaxTeamTurns:         -1,
-			MaxCallsPerTeamTurn:  -1,
-			MaxAgentRounds:       -1,
-			MaxParallelTeams:     -1,
-			MaxParallelCalls:     -1,
-			MaxCoordinateRetries: -1,
-			MaxParallelTools:     -1,
+			MaxTeamTurns:          -1,
+			MaxCallsPerTeamTurn:   -1,
+			MaxAgentRounds:        -1,
+			MaxParallelTeams:      -1,
+			MaxParallelCalls:      -1,
+			MaxCoordinateRetries:  -1,
+			MaxParallelTools:      -1,
+			MaxActiveTeamSessions: -1,
+			MaxTaskContextDepth:   -1,
 		}
 		got := in.WithDefaults()
 		require.Equal(t, RuntimeLimits{
-			MaxTeamTurns:         100,
-			MaxCallsPerTeamTurn:  100,
-			MaxAgentRounds:       200,
-			MaxParallelTeams:     20,
-			MaxParallelCalls:     20,
-			MaxCoordinateRetries: 20,
-			MaxParallelTools:     20,
+			MaxTeamTurns:          100,
+			MaxCallsPerTeamTurn:   100,
+			MaxAgentRounds:        200,
+			MaxParallelTeams:      20,
+			MaxParallelCalls:      20,
+			MaxCoordinateRetries:  20,
+			MaxParallelTools:      20,
+			MaxActiveTeamSessions: 8,
+			MaxTaskContextDepth:   3,
 		}, got)
 	})
 
 	t.Run("positive values preserved", func(t *testing.T) {
 		in := RuntimeLimits{
-			MaxTeamTurns:         5,
-			MaxCallsPerTeamTurn:  6,
-			MaxAgentRounds:       7,
-			MaxParallelTeams:     8,
-			MaxParallelCalls:     9,
-			MaxCoordinateRetries: 10,
-			MaxParallelTools:     12,
+			MaxTeamTurns:          5,
+			MaxCallsPerTeamTurn:   6,
+			MaxAgentRounds:        7,
+			MaxParallelTeams:      8,
+			MaxParallelCalls:      9,
+			MaxCoordinateRetries:  10,
+			MaxParallelTools:      12,
+			MaxActiveTeamSessions: 4,
+			MaxTaskContextDepth:   2,
 		}
 		got := in.WithDefaults()
 		require.Equal(t, in, got)

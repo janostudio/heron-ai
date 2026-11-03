@@ -62,8 +62,51 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 				Error:  resolveErr.Error(),
 			}, nil
 		}
+		if resolved.created && spec.Authorization != nil {
+			// Freeze the grant with the task: from here on it is the task's
+			// permission, not the caller's latest opinion.
+			frozen := *spec.Authorization
+			if frozen.GrantedAt.IsZero() {
+				frozen.GrantedAt = time.Now().UTC()
+			}
+			resolved.authorization = &frozen
+		}
+		if !resolved.created && !resolved.authorization.ScopesEqual(spec.Authorization) {
+			return types.TeamCallOutcome{
+				Status: "failed",
+				Error: fmt.Sprintf(
+					"task %q is frozen with a different authorization; continuing it may not change the granted scope",
+					spec.TaskKey),
+			}, nil
+		}
 		plan = resolved
 		seq = plan.sessionSeq
+		if plan.created {
+			limits := defs.Limits.WithDefaults()
+			active, countErr := r.activeTaskCount(ctx, session.ID)
+			if countErr != nil {
+				return types.TeamCallOutcome{
+					Status: "failed",
+					Error:  fmt.Sprintf("count active task instances: %v", countErr),
+				}, nil
+			}
+			if active >= limits.MaxActiveTeamSessions {
+				return types.TeamCallOutcome{
+					Status: "failed",
+					Error: fmt.Sprintf(
+						"session already has %d active task instances (limit %d); close finished tasks with TeamSession(action=close) before dispatching more",
+						active, limits.MaxActiveTeamSessions),
+				}, nil
+			}
+			if plan.depth > limits.MaxTaskContextDepth {
+				return types.TeamCallOutcome{
+					Status: "failed",
+					Error: fmt.Sprintf(
+						"task nesting depth %d exceeds the limit %d; hand the work back to the parent task instead of nesting further",
+						plan.depth, limits.MaxTaskContextDepth),
+				}, nil
+			}
+		}
 	}
 	if !r.tryMarkTeamBusySeq(session.ID, spec.TeamID, seq) {
 		return types.TeamCallOutcome{
@@ -93,6 +136,9 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 			sessionSeq:    seq,
 			taskKey:       strings.TrimSpace(spec.TaskKey),
 			taskContextID: plan.taskContextID,
+			taskDepth:     plan.depth,
+			authorization: plan.authorization,
+			subscriptions: spec.Subscriptions,
 			dispatchedBy:  spec.DispatchedBy,
 			dispatchCount: plan.dispatchCount,
 			reopenCount:   plan.reopenCount,
@@ -221,8 +267,9 @@ func (r *Runtime) ListTeams(ctx context.Context, spec types.TeamCatalogSpec) ([]
 			continue
 		}
 		entry := types.TeamCatalogEntry{
-			TeamID:   target,
-			Receives: receivesOf(targetBinding.Inputs),
+			TeamID:    target,
+			Receives:  receivesOf(targetBinding.Inputs),
+			Lifecycle: string(targetBinding.EffectiveLifecycle()),
 		}
 		if team, found := defs.Teams[targetBinding.TeamID]; found {
 			entry.Responsibility = teamResponsibility(team)
@@ -387,7 +434,10 @@ type taskDispatch struct {
 	dispatchCount int
 	reopenCount   int
 	reopened      bool
+	created       bool
+	depth         int
 	taskContextID string
+	authorization *types.AuthorizationGrant
 }
 
 // resolveTaskDispatch finds the instance a task_key already owns, or allocates
@@ -423,6 +473,7 @@ func (r *Runtime) resolveTaskDispatch(
 	}
 
 	maxSeq := 0
+	dispatcherDepth := 0
 	var match *types.TeamSession
 	for _, session := range latest {
 		if session.TeamID != teamID || !session.IsPerTask() {
@@ -430,6 +481,9 @@ func (r *Runtime) resolveTaskDispatch(
 		}
 		if session.SessionSeq > maxSeq {
 			maxSeq = session.SessionSeq
+		}
+		if session.ID == dispatcher.TeamSessionID {
+			dispatcherDepth = session.TaskDepth
 		}
 		if session.TaskKey != taskKey {
 			continue
@@ -447,13 +501,20 @@ func (r *Runtime) resolveTaskDispatch(
 	}
 
 	if match == nil {
-		return taskDispatch{sessionSeq: maxSeq + 1, dispatchCount: 1}, nil
+		return taskDispatch{
+			sessionSeq:    maxSeq + 1,
+			dispatchCount: 1,
+			created:       true,
+			depth:         dispatcherDepth + 1,
+		}, nil
 	}
 	plan := taskDispatch{
 		sessionSeq:    match.SessionSeq,
 		dispatchCount: match.DispatchCount + 1,
 		reopenCount:   match.ReopenCount,
+		depth:         match.TaskDepth,
 		taskContextID: match.TaskContextID,
+		authorization: match.Authorization,
 	}
 	if match.Status == types.SessionClosed {
 		plan.reopened = true

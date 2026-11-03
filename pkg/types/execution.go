@@ -410,6 +410,15 @@ type RuntimeLimits struct {
 	// Activations beyond it are deferred to the next batch, not dropped.
 	MaxParallelTeams int `json:"max_parallel_teams"`
 
+	// MaxActiveTeamSessions bounds how many per_task Team instances one Flow
+	// session may keep open. Closed instances do not count, so a long session
+	// that finishes its tasks never hits the ceiling.
+	MaxActiveTeamSessions int `json:"max_active_team_sessions"`
+
+	// MaxTaskContextDepth bounds how deeply per_task instances may nest: a
+	// dispatched task may hand work to another task, but only this far.
+	MaxTaskContextDepth int `json:"max_task_context_depth"`
+
 	// MaxParallelCalls bounds how many Calls run at once within one TeamTurn.
 	// Calls beyond it are deferred to the next batch, not dropped.
 	MaxParallelCalls int `json:"max_parallel_calls"`
@@ -447,6 +456,12 @@ func (l RuntimeLimits) WithDefaults() RuntimeLimits {
 	}
 	if l.MaxParallelTools <= 0 {
 		l.MaxParallelTools = 20
+	}
+	if l.MaxActiveTeamSessions <= 0 {
+		l.MaxActiveTeamSessions = 8
+	}
+	if l.MaxTaskContextDepth <= 0 {
+		l.MaxTaskContextDepth = 3
 	}
 	return l
 }

@@ -1171,6 +1171,14 @@ type activation struct {
 	// They are empty for resident activations.
 	taskKey       string
 	taskContextID string
+	// taskDepth is the nesting depth inside the task context (resident
+	// dispatchers start at 1).
+	taskDepth int
+	// authorization is the frozen permission of the task (nil for resident
+	// sessions and for tasks dispatched without a grant).
+	authorization *types.AuthorizationGrant
+	// subscriptions are the sources whose events belong to this task.
+	subscriptions []string
 	// dispatchCount counts this round; reopenCount counts how often a closed
 	// instance was reused. Both are bookkeeping for the caller, not gates.
 	dispatchCount int
@@ -1328,6 +1336,9 @@ func (r *Runtime) executeTeamTurn(
 		DispatchedBy:     current.dispatchedBy,
 		TaskKey:          current.taskKey,
 		TaskContextID:    current.taskContextID,
+		TaskDepth:        current.taskDepth,
+		Authorization:    current.authorization,
+		Subscriptions:    current.subscriptions,
 		DispatchCount:    current.dispatchCount,
 		ReopenCount:      current.reopenCount,
 		Status:           types.SessionRunning,
@@ -1373,7 +1384,7 @@ func (r *Runtime) executeTeamTurn(
 		return execution, err
 	}
 
-	teamRecords := selectFlowRecordsForBinding(records, binding, scopeSince)
+	teamRecords := selectFlowRecordsForBinding(records, binding, scopeSince, teamSession.TaskContextID)
 	// Record the hand-off before the Team runs: the consumer is what a display
 	// layer needs to draw "B → A" without repeating B's content. Writing it here
 	// (not in the Team) keeps the edge a Flow fact — the Team only knows it
@@ -1658,6 +1669,8 @@ func teamFailureRecord(flowTurn types.FlowTurn, execution teamExecution) *types.
 			FlowTurnID:    flowTurn.ID,
 			TeamID:        execution.activation.teamID,
 			TeamTurnID:    teamResult.Turn.ID,
+			TeamSessionID: execution.session.ID,
+			TaskContextID: execution.session.TaskContextID,
 		},
 		Summary:   fmt.Sprintf("Team %q failed: %s", execution.activation.teamID, reason),
 		Data:      data,
@@ -2451,7 +2464,13 @@ func teamInput(input string, spec types.InputSpec) string {
 	return ""
 }
 
+// selectFlowRecords keeps the session-wide contract: only records outside any
+// task context are considered.
 func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec, since time.Time) []types.SharedRecord {
+	return selectFlowRecordsInContext(records, spec, since, "")
+}
+
+func selectFlowRecordsInContext(records []types.SharedRecord, spec types.InputSpec, since time.Time, taskContextID string) []types.SharedRecord {
 	if spec.FlowRecords == nil && spec.Records == nil {
 		return nil
 	}
@@ -2476,13 +2495,20 @@ func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec, since
 		if !since.IsZero() && !record.CreatedAt.IsZero() && record.CreatedAt.Before(since) {
 			continue
 		}
+		// Tasks are isolated by context: a record produced inside one task
+		// context is invisible outside it. Records with no context belong to the
+		// session-wide layer (coordination output) and stay visible to everyone,
+		// which is what keeps a resident coordinator readable to its tasks.
+		if record.Producer.TaskContextID != "" && record.Producer.TaskContextID != taskContextID {
+			continue
+		}
 		selected = append(selected, record)
 	}
 	return selected
 }
 
-func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding, since time.Time) []types.SharedRecord {
-	return selectFlowRecords(records, binding.Inputs, since)
+func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding, since time.Time, taskContextID string) []types.SharedRecord {
+	return selectFlowRecordsInContext(records, binding.Inputs, since, taskContextID)
 }
 
 func recordIDs(records []types.SharedRecord) []string {

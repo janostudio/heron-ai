@@ -51,6 +51,8 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		TeamTurnID:    req.TeamTurn.ID,
 		CallID:        req.Call.ID,
 		CallTurnID:    callTurnID(req),
+		TeamSessionID: req.TeamSession.ID,
+		TaskContextID: req.TeamSession.TaskContextID,
 	})
 	execCtx = agentstore.WithRecordCollector(execCtx, spawnCollector)
 
@@ -195,6 +197,8 @@ func newCallRecord(req types.CallRequest, name, kind, summary string, data map[s
 			TeamTurnID:    req.TeamTurn.ID,
 			CallID:        req.Call.ID,
 			CallTurnID:    req.CallTurnID,
+			TeamSessionID: req.TeamSession.ID,
+			TaskContextID: req.TeamSession.TaskContextID,
 		},
 		Summary:   summary,
 		Data:      data,

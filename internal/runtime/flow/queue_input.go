@@ -87,6 +87,22 @@ func (r *Runtime) drainQueuedInput(ctx context.Context, sessionID string) {
 	}
 }
 
+// hasPendingUserInput reports whether a person is waiting to be served. A new
+// work round must not start while one is pending: a follow-up question about
+// work already running outranks starting more work.
+func (r *Runtime) hasPendingUserInput(ctx context.Context, sessionID string) bool {
+	box, err := r.loadMailbox(ctx, sessionID)
+	if err != nil {
+		return false
+	}
+	for _, msg := range box {
+		if msg.Kind == mailboxKindUser && msg.Status == types.MailboxPending {
+			return true
+		}
+	}
+	return false
+}
+
 // pendingUserInput returns the oldest stored user message, if the session is
 // idle enough to run it.
 func (r *Runtime) pendingUserInput(ctx context.Context, sessionID string) (types.MailboxMessage, types.FlowSession, bool) {

@@ -467,6 +467,7 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	teamTool.SetRunner(flowRuntime)
 	listTeamsTool.SetCatalog(flowRuntime)
 	teamSessionTool.SetCatalog(flowRuntime)
+	teamSessionTool.SetCloser(flowRuntime)
 	// The flow runtime owns the wake-up records: it is what can append the
 	// events, read the session back after a restart, and start the turn. The
 	// tools only translate a model call into a request.

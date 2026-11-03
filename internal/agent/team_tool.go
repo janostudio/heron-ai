@@ -378,9 +378,10 @@ func (d *TeamTaskDispatcher) ExecutionSpec(name string) types.ToolExecutionSpec 
 // task without replaying its own history.
 const TeamSessionToolName = "TeamSession"
 
-// TeamSessionTool answers status/list queries about dispatched tasks.
+// TeamSessionTool answers status/list/close requests about dispatched tasks.
 type TeamSessionTool struct {
 	catalog types.TaskCatalog
+	closer  types.TaskCloser
 }
 
 func NewTeamSessionTool(catalog types.TaskCatalog) *TeamSessionTool {
@@ -395,23 +396,33 @@ func (t *TeamSessionTool) SetCatalog(catalog types.TaskCatalog) {
 	t.catalog = catalog
 }
 
+// SetCloser wires the soft-close path (same runtime, separate interface: the
+// read side stays usable without it).
+func (t *TeamSessionTool) SetCloser(closer types.TaskCloser) {
+	if t == nil {
+		return
+	}
+	t.closer = closer
+}
+
 func (t *TeamSessionTool) Name() string { return TeamSessionToolName }
 
 func (t *TeamSessionTool) Description() string {
-	return "Read the tasks you dispatched: status of one task by task_key, or the list of " +
-		"all tasks this Team instance dispatched. Use it before continuing or reporting progress."
+	return "Read or close the tasks you dispatched: status of one task by task_key, the list of " +
+		"all tasks this Team instance dispatched, or a soft close (records and transcript are kept; " +
+		"dispatching the same task_key again reopens it)."
 }
 
 func (t *TeamSessionTool) Parameters() map[string]any {
 	return map[string]any{
 		"action": map[string]any{
 			"type":        "string",
-			"enum":        []string{"status", "list"},
-			"description": "status: one task by task_key; list: every task this instance dispatched",
+			"enum":        []string{"status", "list", "close"},
+			"description": "status: one task by task_key; list: every task this instance dispatched; close: soft-close a task and its sub-tasks",
 		},
 		"task_key": map[string]any{
 			"type":        "string",
-			"description": "Business key of the task (required for action=status)",
+			"description": "Business key of the task (required for action=status|close)",
 		},
 	}
 }
@@ -457,10 +468,23 @@ func (t *TeamSessionTool) Execute(ctx context.Context, params map[string]any) (*
 			infos = []types.TaskInfo{}
 		}
 		return taskJSON(infos)
+	case "close":
+		if t.closer == nil {
+			return teamError("TeamSession(close) is not configured"), nil
+		}
+		taskKey := strings.TrimSpace(stringParam(params, "task_key"))
+		if taskKey == "" {
+			return teamError("TeamSession(action=close) requires task_key"), nil
+		}
+		info, err := t.closer.CloseTask(ctx, spec, taskKey)
+		if err != nil {
+			return teamError(err.Error()), nil
+		}
+		return taskJSON(info)
 	case "":
-		return teamError("TeamSession requires action=status|list"), nil
+		return teamError("TeamSession requires action=status|list|close"), nil
 	default:
-		return teamError(fmt.Sprintf("unknown TeamSession action %q (use status or list)", action)), nil
+		return teamError(fmt.Sprintf("unknown TeamSession action %q (use status, list or close)", action)), nil
 	}
 }
 

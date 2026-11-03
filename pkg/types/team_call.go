@@ -29,6 +29,14 @@ type TeamCallSpec struct {
 	// uses lifecycle per_task: it is what lets a later dispatch find and
 	// continue the same instance.
 	TaskKey string
+	// Subscriptions are the sources (issue / PR / CI / thread ids) whose later
+	// events belong to this task. Frozen on the first dispatch: a later dispatch
+	// may add none of them silently, because delivery depends on them.
+	Subscriptions []string
+	// Authorization is the permission the caller grants this task. It is frozen
+	// on the first dispatch; a later dispatch of the same task_key may only
+	// repeat it.
+	Authorization *AuthorizationGrant
 	// DispatchedBy names the calling Team instance. The callee's ownership is
 	// fixed to it: only this instance may continue, close or reopen the task.
 	DispatchedBy *TeamSessionRef
@@ -88,6 +96,13 @@ type TaskCatalog interface {
 	GetTask(ctx context.Context, spec TaskCatalogSpec, taskKey string) (TaskInfo, error)
 }
 
+// TaskCloser soft-closes a task: the instance keeps its transcript and records,
+// but stops accepting work. Reopening happens by dispatching the same task_key
+// again, which is why closing is a state change rather than a delete.
+type TaskCloser interface {
+	CloseTask(ctx context.Context, spec TaskCatalogSpec, taskKey string) (TaskInfo, error)
+}
+
 // TeamRunner executes one Team call. The flow runtime implements it: only the
 // flow knows the session, the Team bindings and how to persist a Team turn.
 type TeamRunner interface {
@@ -111,6 +126,9 @@ type TeamCatalogEntry struct {
 	// Produces is the record the target publishes when it finishes, so a caller
 	// knows what to read next.
 	Produces string `json:"produces,omitempty"`
+	// Lifecycle tells the caller whether handing work over creates a task
+	// instance ("per_task", needs task_key) or reuses the resident session.
+	Lifecycle string `json:"lifecycle,omitempty"`
 }
 
 // TeamCatalogSpec identifies whose view is being read.

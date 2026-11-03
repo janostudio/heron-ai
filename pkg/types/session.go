@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // SessionStatus is the lifecycle state of a persistent session.
 type SessionStatus string
@@ -70,6 +73,41 @@ type TeamSessionRef struct {
 	ToolCallID    string `yaml:"tool_call_id,omitempty" json:"tool_call_id,omitempty"`
 }
 
+// AuthorizationGrant is the permission a task was created with. It is frozen
+// when the task is created: continuing or reopening the task reuses it, so the
+// scope cannot quietly widen later in the task's life.
+type AuthorizationGrant struct {
+	Scopes    []string  `yaml:"scopes,omitempty" json:"scopes,omitempty"`
+	Source    string    `yaml:"source,omitempty" json:"source,omitempty"`
+	GrantedBy string    `yaml:"granted_by,omitempty" json:"granted_by,omitempty"`
+	GrantedAt time.Time `yaml:"granted_at,omitempty" json:"granted_at,omitempty"`
+}
+
+// ScopesEqual reports whether two grants carry the same scope set, ignoring
+// order. An empty scope set is not equal to a non-empty one: adding a scope is
+// a change, and a change is what the freeze rule refuses.
+func (g *AuthorizationGrant) ScopesEqual(other *AuthorizationGrant) bool {
+	if g == nil && other == nil {
+		return true
+	}
+	if g == nil || other == nil {
+		return false
+	}
+	if len(g.Scopes) != len(other.Scopes) {
+		return false
+	}
+	left := append([]string(nil), g.Scopes...)
+	right := append([]string(nil), other.Scopes...)
+	sort.Strings(left)
+	sort.Strings(right)
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // TeamSession is the continuing context of a Team inside one FlowSession.
 //
 // resident sessions keep the historical id "<flowSessionID>:<teamKey>" and
@@ -101,6 +139,10 @@ type TeamSession struct {
 	// TaskContextID groups a dispatch and all of its descendants. Records are
 	// isolated by this value; it is empty for session-wide records.
 	TaskContextID string `yaml:"task_context_id,omitempty" json:"task_context_id,omitempty"`
+	// TaskDepth is the nesting depth inside one task context: a task dispatched
+	// by a resident instance is 1, a task dispatched by a per_task instance is
+	// its dispatcher's depth + 1.
+	TaskDepth int `yaml:"task_depth,omitempty" json:"task_depth,omitempty"`
 	// DispatchCount counts dispatched rounds (continue calls) on this instance.
 	DispatchCount int `yaml:"dispatch_count,omitempty" json:"dispatch_count,omitempty"`
 	// ReopenCount counts how often a closed instance was reopened. It is
@@ -108,11 +150,14 @@ type TeamSession struct {
 	ReopenCount int `yaml:"reopen_count,omitempty" json:"reopen_count,omitempty"`
 	// Subscriptions are the sources (issue / PR / CI / thread ids) whose new
 	// events are delivered straight to this instance.
-	Subscriptions []string      `yaml:"subscriptions,omitempty" json:"subscriptions,omitempty"`
-	Status        SessionStatus `yaml:"status" json:"status"`
-	CreatedAt     time.Time     `yaml:"created_at" json:"created_at"`
-	UpdatedAt     time.Time     `yaml:"updated_at" json:"updated_at"`
-	ClosedAt      *time.Time    `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`
+	Subscriptions []string `yaml:"subscriptions,omitempty" json:"subscriptions,omitempty"`
+	// Authorization is the permission this task was created with, frozen for
+	// the life of the task.
+	Authorization *AuthorizationGrant `yaml:"authorization,omitempty" json:"authorization,omitempty"`
+	Status        SessionStatus       `yaml:"status" json:"status"`
+	CreatedAt     time.Time           `yaml:"created_at" json:"created_at"`
+	UpdatedAt     time.Time           `yaml:"updated_at" json:"updated_at"`
+	ClosedAt      *time.Time          `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`
 }
 
 // EffectiveLifecycle returns the lifecycle, defaulting to resident for data

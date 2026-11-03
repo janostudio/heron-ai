@@ -122,6 +122,15 @@ func (r *Runtime) drainTeamInbox(ctx context.Context, session types.FlowSession,
 		})
 		return
 	}
+	// A person's follow-up outranks starting more work: leave the work message
+	// pending and let the user turn run first. It comes back here afterwards.
+	if r.hasPendingUserInput(ctx, session.ID) {
+		logging.Debug("drain team inbox: user message pending, deferring work", map[string]any{
+			"flow_session_id": session.ID,
+			"team_id":         teamID,
+		})
+		return
+	}
 	logging.Debug("drain team inbox: launching next message", map[string]any{
 		"flow_session_id": session.ID,
 		"team_id":         teamID,
