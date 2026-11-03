@@ -35,6 +35,71 @@ func (r *Runtime) ListTasks(ctx context.Context, spec types.TaskCatalogSpec) ([]
 	return tasks, nil
 }
 
+// ListTaskTrees groups this instance's tasks by task context: one entry per
+// dispatched tree, tasks ordered by their instance id (which is also the
+// dispatch order).
+func (r *Runtime) ListTaskTrees(ctx context.Context, spec types.TaskCatalogSpec) ([]types.TaskTree, error) {
+	tasks, err := r.ListTasks(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	// Descendants belong to the tree but were dispatched by the task instance,
+	// not by this caller: include them by task context so the ops view shows
+	// the whole tree instead of only its roots.
+	known := make(map[string]bool, len(tasks))
+	contexts := make(map[string]bool, len(tasks))
+	for _, task := range tasks {
+		known[task.TeamSessionID] = true
+		contexts[task.TaskContextID] = true
+	}
+	if len(contexts) > 0 {
+		events, replayErr := r.replayFlowEvents(ctx, spec.FlowSessionID)
+		if replayErr != nil {
+			return nil, replayErr
+		}
+		latest := make(map[string]types.TeamSession)
+		for _, event := range events {
+			switch event.Type {
+			case types.EventTeamSessionCreated, types.EventTeamSessionUpdated:
+				session, ok := decodeTeamSession(event.Payload)
+				if ok {
+					latest[session.ID] = session
+				}
+			}
+		}
+		for _, session := range latest {
+			if !session.IsPerTask() || known[session.ID] {
+				continue
+			}
+			if !contexts[session.TaskContextID] {
+				continue
+			}
+			known[session.ID] = true
+			tasks = append(tasks, taskInfoOf(session, ""))
+		}
+	}
+	order := make([]string, 0, len(tasks))
+	grouped := make(map[string][]types.TaskInfo, len(tasks))
+	for _, task := range tasks {
+		contextID := task.TaskContextID
+		if contextID == "" {
+			contextID = task.TeamSessionID
+		}
+		if _, seen := grouped[contextID]; !seen {
+			order = append(order, contextID)
+		}
+		grouped[contextID] = append(grouped[contextID], task)
+	}
+	trees := make([]types.TaskTree, 0, len(order))
+	for _, contextID := range order {
+		trees = append(trees, types.TaskTree{TaskContextID: contextID, Tasks: grouped[contextID]})
+	}
+	sort.SliceStable(trees, func(i, j int) bool {
+		return trees[i].TaskContextID < trees[j].TaskContextID
+	})
+	return trees, nil
+}
+
 // GetTask returns one dispatched task by its business key.
 func (r *Runtime) GetTask(ctx context.Context, spec types.TaskCatalogSpec, taskKey string) (types.TaskInfo, error) {
 	if strings.TrimSpace(taskKey) == "" {

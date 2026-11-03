@@ -474,6 +474,7 @@ func (r *Runtime) resolveTaskDispatch(
 
 	maxSeq := 0
 	dispatcherDepth := 0
+	dispatcherContext := ""
 	var match *types.TeamSession
 	for _, session := range latest {
 		if session.TeamID != teamID || !session.IsPerTask() {
@@ -484,6 +485,7 @@ func (r *Runtime) resolveTaskDispatch(
 		}
 		if session.ID == dispatcher.TeamSessionID {
 			dispatcherDepth = session.TaskDepth
+			dispatcherContext = session.TaskContextID
 		}
 		if session.TaskKey != taskKey {
 			continue
@@ -506,6 +508,10 @@ func (r *Runtime) resolveTaskDispatch(
 			dispatchCount: 1,
 			created:       true,
 			depth:         dispatcherDepth + 1,
+			// A sub-task belongs to the dispatcher's task context; a Task
+			// dispatched by a resident instance roots a new one (set later
+			// from its own id).
+			taskContextID: dispatcherContext,
 		}, nil
 	}
 	plan := taskDispatch{

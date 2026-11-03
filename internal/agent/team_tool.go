@@ -417,8 +417,8 @@ func (t *TeamSessionTool) Parameters() map[string]any {
 	return map[string]any{
 		"action": map[string]any{
 			"type":        "string",
-			"enum":        []string{"status", "list", "close"},
-			"description": "status: one task by task_key; list: every task this instance dispatched; close: soft-close a task and its sub-tasks",
+			"enum":        []string{"status", "list", "tree", "close"},
+			"description": "status: one task by task_key; list: every task this instance dispatched; tree: the same tasks grouped by task context; close: soft-close a task and its sub-tasks",
 		},
 		"task_key": map[string]any{
 			"type":        "string",
@@ -468,6 +468,15 @@ func (t *TeamSessionTool) Execute(ctx context.Context, params map[string]any) (*
 			infos = []types.TaskInfo{}
 		}
 		return taskJSON(infos)
+	case "tree":
+		trees, err := t.catalog.ListTaskTrees(ctx, spec)
+		if err != nil {
+			return teamError(err.Error()), nil
+		}
+		if trees == nil {
+			trees = []types.TaskTree{}
+		}
+		return taskJSON(trees)
 	case "close":
 		if t.closer == nil {
 			return teamError("TeamSession(close) is not configured"), nil

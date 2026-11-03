@@ -2604,7 +2604,7 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 			Name: "TeamSession", Type: "object",
 			Description: "Read or close the tasks you dispatched: status of one task by task_key, the list of all tasks this Team instance dispatched, or a soft close (records and transcript are kept; dispatching the same task_key again reopens it).",
 			Properties: map[string]types.JSONProperty{
-				"action":   {Type: "string", Enum: []string{"status", "list", "close"}, Description: "status: one task by task_key; list: every task this instance dispatched; close: soft-close a task and its sub-tasks"},
+				"action":   {Type: "string", Enum: []string{"status", "list", "tree", "close"}, Description: "status: one task by task_key; list: every task this instance dispatched; tree: tasks grouped by task context; close: soft-close a task and its sub-tasks"},
 				"task_key": {Type: "string", Description: "Business key of the task (required for action=status|close)"},
 			},
 			Required: []string{"action"},

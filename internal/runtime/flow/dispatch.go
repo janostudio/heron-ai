@@ -186,6 +186,22 @@ func (r *Runtime) teamBusy(sessionID, teamID string) bool {
 // liveTeamsFor returns the Teams executing in one session. Recovery and the
 // running-team check read it: a Team running in another session must neither
 // be reported as interrupted in this one nor block its input.
+// liveTeamSessionsFor returns the Team instances executing in one session,
+// keyed by TeamSessionID. Interruption detection uses it: two per_task
+// instances of one Team are two executions, so "is this turn still running?"
+// has to be answered per instance, not per Team.
+func (r *Runtime) liveTeamSessionsFor(sessionID string) map[string]bool {
+	r.dispatchMu.Lock()
+	defer r.dispatchMu.Unlock()
+	live := make(map[string]bool, len(r.busyTeams))
+	for key := range r.busyTeams {
+		if key.sessionID == sessionID {
+			live[teamSessionID(key.sessionID, key.teamID, key.seq)] = true
+		}
+	}
+	return live
+}
+
 func (r *Runtime) liveTeamsFor(sessionID string) map[string]bool {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()

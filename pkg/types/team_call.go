@@ -88,11 +88,20 @@ type TaskCatalogSpec struct {
 	CallerTeamSessionID string
 }
 
+// TaskTree groups the tasks of one instance by task context. It is the ops
+// view: one entry per dispatched task tree, so "what is this session working on
+// and how deep did it go" is answerable without scanning every task.
+type TaskTree struct {
+	TaskContextID string     `json:"task_context_id"`
+	Tasks         []TaskInfo `json:"tasks"`
+}
+
 // TaskCatalog is the read side of the task routing table. The flow runtime
 // derives it from the event stream (the fact source), so a restarted process
 // answers the same questions without a separate index to keep in sync.
 type TaskCatalog interface {
 	ListTasks(ctx context.Context, spec TaskCatalogSpec) ([]TaskInfo, error)
+	ListTaskTrees(ctx context.Context, spec TaskCatalogSpec) ([]TaskTree, error)
 	GetTask(ctx context.Context, spec TaskCatalogSpec, taskKey string) (TaskInfo, error)
 }
 

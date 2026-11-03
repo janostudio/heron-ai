@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -209,4 +210,52 @@ func TestSubscriptionDeliveryIsDeduped(t *testing.T) {
 
 	_, err = rt.DeliverSubscriptionEvent(ctx, session.ID, "issue-999", "evt-3", "unrelated")
 	require.Error(t, err)
+}
+
+// TestInterruptedExecutionsArePerInstance: the same Team may have one instance
+// running and one interrupted. The live sibling must not hide the interrupted
+// one, and must not be reported as interrupted itself.
+func TestInterruptedExecutionsArePerInstance(t *testing.T) {
+	now := time.Now().UTC()
+	events := []storage.SessionEvent{
+		{EventHeader: types.EventHeader{
+			Type: types.EventTeamTurnStarted, TeamID: "dev",
+			TeamSessionID: "fs:dev:1", TeamTurnID: "tt1", CreatedAt: now,
+		}},
+		{EventHeader: types.EventHeader{
+			Type: types.EventTeamTurnStarted, TeamID: "dev",
+			TeamSessionID: "fs:dev:2", TeamTurnID: "tt2", CreatedAt: now,
+		}},
+	}
+	got := interruptedExecutions(events, liveIndex{sessions: map[string]bool{"fs:dev:2": true}})
+	require.Len(t, got, 1)
+	require.Equal(t, "fs:dev:1", got[0].TeamSessionID)
+	require.Equal(t, "dev", got[0].TeamID)
+}
+
+// TestListTaskTreesGroupsByContext is the ops view: a dispatched task and the
+// sub-task it handed out form one tree; an independent task forms another.
+func TestListTaskTreesGroupsByContext(t *testing.T) {
+	rt, _ := newPerTaskRuntime(t)
+	session, _ := mailboxTestSession(t)
+	writeFlowSession(t, rt, session)
+	ctx := context.Background()
+
+	first := dispatchTask(t, rt, session.ID, "repoA-143", "fs:default")
+	require.Equal(t, "done", first.Status)
+	nested := dispatchTask(t, rt, session.ID, "sub-1", first.TeamSessionID)
+	require.Equal(t, "done", nested.Status)
+	dispatchTask(t, rt, session.ID, "repoB-207", "fs:default")
+
+	spec := types.TaskCatalogSpec{FlowSessionID: session.ID, CallerTeamSessionID: "fs:default"}
+	trees, err := rt.ListTaskTrees(ctx, spec)
+	require.NoError(t, err)
+	require.Len(t, trees, 2, "two independent tasks -> two trees")
+
+	var sizes []int
+	for _, tree := range trees {
+		sizes = append(sizes, len(tree.Tasks))
+	}
+	require.ElementsMatch(t, []int{1, 2}, sizes,
+		"the sub-task must sit in its dispatcher's tree")
 }
