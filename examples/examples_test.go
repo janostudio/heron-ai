@@ -163,12 +163,3 @@ func TestNovelRPExampleUsesEntryActivationAndParallelLanes(t *testing.T) {
 		require.NotEmpty(t, agent.Body)
 	}
 }
-
-
-func keys[T any](values map[string]T) []string {
-	result := make([]string, 0, len(values))
-	for key := range values {
-		result = append(result, key)
-	}
-	return result
-}
