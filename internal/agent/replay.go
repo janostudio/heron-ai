@@ -33,7 +33,7 @@ func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentReques
 	// The task boundary is the most recent user turn, not the current flow
 	// turn. Filtering by the current turn alone drops everything the agent did
 	// earlier in the same task: a Team woken by a result cannot see that it
-	// already dispatched this task and answers the same way again (s17: three
+	// already dispatched this task and answers the same way again (three
 	// identical dispatch replies in one minute).
 	chain := currentTaskChain(replay.Events)
 	// pendingCallIDs tracks the ids of the most recent assistant tool_calls, in
@@ -47,7 +47,7 @@ func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentReques
 			continue
 		}
 		// 只重放当前任务链内的事件。上一轮问题的结论不能进来——模型看到自己
-		// 上次的答案，会把新问题当成旧任务继续答（s13：问某个仓库的线上日志，回了上一轮
+		// 上次的答案，会把新问题当成旧任务继续答（问某个仓库的线上日志，回了上一轮
 		// repo-a 的主分支）。但同一条任务链内的历史必须留下：被结果唤醒的
 		// Team 需要看到自己上一轮做过什么，否则会重复同一个动作。
 		if req.FlowTurnID != "" && event.FlowTurnID != "" {

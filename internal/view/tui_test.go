@@ -175,12 +175,12 @@ func TestTUIModel_View_Quitting(t *testing.T) {
 func TestTUIModel_View_QuittingWithSessionID(t *testing.T) {
 	runner := &mockFlowRunner{}
 	model := NewTUIModel("test", "gpt-4", 1, 1, runner)
-	model.sessionID = "fs_7a3e3c95f9b3fbf9"
+	model.sessionID = "fs_test_session"
 	model.quitting = true
 
 	view := model.View()
 	assert.Contains(t, view, "Goodbye!")
-	assert.Contains(t, view, "heron --session fs_7a3e3c95f9b3fbf9")
+	assert.Contains(t, view, "heron --session fs_test_session")
 }
 
 // TestTUIModel_SetSessionIDDrivesExitHint covers the heron --list → pick →

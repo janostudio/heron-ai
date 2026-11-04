@@ -69,7 +69,6 @@ CLI 侧的现象与命令见 [CLI.md](./CLI.md)；`heron-ai` Skill 的安装方�
 |---|---|
 | [AGENT-CAPABILITY-REVIEW.zh-CN.md](./AGENT-CAPABILITY-REVIEW.zh-CN.md)（中） | Agent 能力设计评估 |
 | [AGENT-CORE-IMPROVEMENT-PLAN.zh-CN.md](./AGENT-CORE-IMPROVEMENT-PLAN.zh-CN.md)（中） | Agent 核心能力改进计划 |
-| [issues/INDEX.md](./issues/INDEX.md)（中） | 已修/在修问题与设计单的索引，逐条带状态 |
 
 ## 维护约定
 

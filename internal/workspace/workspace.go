@@ -61,7 +61,7 @@ type localWorkspace struct {
 	// 由 runtime 从 settings.json 的 env 段解析后传入；nil 表示不注入。
 	injectEnv map[string]string
 	// readRoots 是主 workspace 根之外允许 READ 的目录，已解析为绝对路径。
-	// 典型场景：engine 的 cwd 是 heron-ai/，而它要读的 repos/ 在上一级。
+	// 典型场景：engine 的 cwd 是 heron-ai/，而它要读的代码目录在上一级。
 	// 写入一律拒绝——只读扩展不是第二个 workspace。
 	readRoots []string
 }

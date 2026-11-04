@@ -33,7 +33,7 @@ type WorkspaceConfig struct {
 	//
 	// It exists for one concrete layout: the engine runs with its cwd set to a
 	// subdirectory (heron-ai/) while the repositories it works on sit one level
-	// up (repos/), so every read of real code was rejected as "path escapes
+	// up (a sibling code directory), so every read of real code was rejected as "path escapes
 	// workspace" and the model fell back to Bash, which does not enforce the
 	// same boundary.
 	ReadRoots []string `yaml:"read_roots,omitempty" json:"read_roots,omitempty"`

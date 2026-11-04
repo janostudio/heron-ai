@@ -351,7 +351,7 @@ List of agent names this agent can delegate tasks to.
 
 `State` 是 agent 的"跨会话待办与备忘"（区别于 knowledge 的固化知识）。它在磁盘上是一个**目录**：一个 block 一个文件，外加一份 `index.md` 摘要。
 
-**state 不注入 prompt。** 引擎只注入一段固定指针（`state_pointer`，`Placement: system`、`Stability: stable`），说明目录位置和读取规则；条目靠 agent 调 `State` 按需读取。原因：把快照拼进 prompt 后，上一轮的结论会被当成这一轮的结果，实测导致 owner/coordinator 答非所问。
+**state 不注入 prompt。** 引擎只注入一段固定指针（`state_pointer`，`Placement: system`、`Stability: stable`），说明目录位置和读取规则；条目靠 agent 调 `State` 按需读取。原因：把快照拼进 prompt 后，上一轮的结论会被当成这一轮的结果，实测导致多 agent 协作时答非所问。
 
 在 `tools.builtin` 声明 `State` 后，agent 可调用：
 

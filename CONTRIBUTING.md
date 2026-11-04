@@ -39,7 +39,7 @@ go test ./examples/          # 四个示例配置的结构断言
 
 | 改动类型 | 期望 |
 |---|---|
-| 修 Bug | 一个能复现的测试用例，先红后绿。仓库里 `docs/issues/` 下的问题单是这类先例 |
+| 修 Bug | 一个能复现的测试用例，先红后绿；提交信息里写清触发条件与根因 |
 | 加功能 | 配置字段要同时更新 `docs/configuration/`；新增的对外行为要能被 `--check-config` 校验到 |
 | 新增内置工具 | 除在 `internal/app` 注册外，**必须**同步 `internal/agent/runtime.go` 的 `builtinSchemas`，否则工具对模型不可见且没有任何报错 |
 | 改文档 | 新增的 `docs/` 根目录文档要进 `docs/INDEX.md`；不生效的配置项要明确标注，而不是留着让人以为能调 |

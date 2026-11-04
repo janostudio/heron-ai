@@ -1092,7 +1092,7 @@ heron --json-rpc --flow .agents/flows/default.yml
 7. 保存和恢复 `FlowSession.ID`；
 8. 实现优雅关闭和超时终止；
 9. 增加 mock Heron CLI 测试；
-10. 增加一次真实宿主项目的集成测试。
+10. 增加一次真实项目的集成测试。
 
 ## 15. 验收标准
 

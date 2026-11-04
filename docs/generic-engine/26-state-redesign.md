@@ -8,9 +8,9 @@
 
 早期 State 把快照（goal / confirmed / open_questions / decisions）拼进每轮 prompt，意图是"让 Agent 记住上一轮"。实测结果是相反的：
 
-- 上一轮的结论被下一轮当成自己的结论。实际事故：问仓库 B 时答出仓库 A 的分支和 HEAD（s13 的实际会话日志）。
+- 上一轮的结论被下一轮当成自己的结论。实际事故：新问题被答成了上一轮另一个问题的事实。
 - `next_steps` 里存的不是待办，而是"上一轮答复"和"重派过程"，越积越多，读起来更像结论。
-- 两个承载跨轮工作的 Team 只能把 `state.enabled` 关掉来止损（`default_team.yml`、`owner_team.yml`），等于放弃了 State。
+- 两个承载跨轮工作的 Team 只能把 `state.enabled` 关掉来止损，等于放弃了 State。
 
 根因不是提示词不够严厉，而是快照缺少四样让模型能判断的东西：**任务标识、状态、时间戳、作废判据**。提示词里的"unless the current task continues it"要求模型做一个它没有信息可做的判断。
 
@@ -91,7 +91,7 @@ StateList{ UpdatedAt, Revision, Goal, Items }  // 单块读取的返回
 每个块文件都是 frontmatter（`block` / `revision` / `updated_at`）+ Markdown body，条目形如：
 
 ```
-- i-23: 给目录迁移补测试 [status=in_progress, added_by=coordinator(e-1)]
+- i-23: 补一个迁移测试 [status=in_progress, added_by=planner(e-1)]
 ```
 
 - 每次写块：`revision = index.revision + 1`，`updated_at = now(UTC)`，然后刷新 `index.md` 对应行。

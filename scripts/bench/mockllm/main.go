@@ -1,8 +1,8 @@
 // Command mockllm is a minimal OpenAI-compatible mock LLM server for load
 // testing Heron's HTTP path without a real model endpoint. It serves a single
-// /tencent/v1/chat/completions route (matching the default models.json
-// base_url http://127.0.0.1:15721/tencent/v1) and returns a fixed reply with a
-// realistic usage shape.
+// /v1/chat/completions route (matching a models.json base_url of
+// http://127.0.0.1:15721/v1) and returns a fixed reply with a realistic
+// usage shape.
 package main
 
 import (
@@ -41,7 +41,7 @@ type usage struct {
 
 func main() {
 	addr := ":15721"
-	http.HandleFunc("/tencent/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
 		resp := chatCompletion{
 			ID:      "chatcmpl-mock",
 			Object:  "chat.completion",

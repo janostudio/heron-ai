@@ -123,7 +123,7 @@ jq -r 'select(.type=="agent.model_response")
    **`raw_text` 为被丢弃的模型原始输出**（便于回溯）
 3. 下一轮重试
 
-真实样例（某次运行的 `fs_7a3e3c95f9b3fbf9`）：
+真实样例（某次运行的 `fs_xxx`）：
 
 ```
 seq=21  agent.model_response  round=0  finish=stop  text=''  completion_tokens=2
@@ -131,9 +131,8 @@ seq=22  agent.feedback        round=0  content='The previous response was not va
 seq=23  agent.model_response  round=1  finish=tool_calls  text=''   ← 重试后改为调工具
 ```
 
-> ⚠️ `raw_text` 是在 `2026-10-09` 修复
-> `ISSUE-structured-retry-no-raw-output` 之后才落盘的。**修复前**的历史会话
-> （含上面的 `fs_7a3e3c95f9b3fbf9`）该字段不存在，`jq` 会得到 `null`——这是
+> ⚠️ `raw_text` 是在 `2026-10-09` 之后才落盘的。**更早**的历史会话
+> （含上面的 `fs_xxx`）该字段不存在，`jq` 会得到 `null`——这是
 > 旧数据，不是"模型输出为空"。
 
 ### 排查手法：区分"模型输出异常"与"schema 定义过严"

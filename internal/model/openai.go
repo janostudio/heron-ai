@@ -17,7 +17,7 @@ import (
 )
 
 // OpenAIProvider speaks the OpenAI Chat Completions wire format. It is also
-// used for OpenAI-compatible gateways, including the local Tencent endpoint.
+// used for OpenAI-compatible gateways, including self-hosted ones.
 // ModelProfile is kept here so model defaults are applied centrally instead
 // of being repeated in every Agent file.
 type OpenAIProvider struct {

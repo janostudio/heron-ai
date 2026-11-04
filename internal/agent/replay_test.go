@@ -423,7 +423,7 @@ func TestReplayAgentContextPairsToolCallIDByOrder(t *testing.T) {
 }
 
 // 跨回合重放会让模型看到自己上一轮的结论，于是把新问题当旧任务继续答
-// （s13：问某个仓库的线上日志，回了上一轮 repo-a 的主分支）。同一 call 的历史
+// （问某个仓库的线上日志，回了上一轮 repo-a 的主分支）。同一 call 的历史
 // 必须按 flow turn 隔离，只重放本回合的增量。
 func TestReplayAgentContextStopsAtTurnBoundary(t *testing.T) {
 	w := &fakeSessionWriter{}
@@ -487,7 +487,7 @@ func TestStructuredSummaryRendersArrayItemsReadably(t *testing.T) {
 
 // 同一条任务链内的历史必须完整重放：被结果唤醒的 Team 要能看到自己上一轮
 // 做过什么、上游交回了什么，否则它会重新判断该做什么，重复同一个动作
-// （s17：一分钟内三次相同的派发话术）。
+// （一分钟内三次相同的派发话术）。
 func TestReplayKeepsWholeTaskChain(t *testing.T) {
 	w := &fakeSessionWriter{}
 	loop := newReplayTurnLoop(w)

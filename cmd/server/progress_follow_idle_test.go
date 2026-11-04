@@ -23,7 +23,7 @@ func shortenFollowLimits(t *testing.T, silence, pending time.Duration) func() {
 //
 // 旧实现用一个固定的总时长上限（15 分钟）兜底：只要有 Team 在跑，订阅在满
 // 15 分钟时被无条件关掉，之后写出的结论没人收听，调用方永远停在"执行中"
-// （实测 fs_cac1168638104818：15 分 37 秒的任务，结论落在窗口外）。
+// （实测：15 分 37 秒的任务，结论落在窗口外）。
 // 现在改为"多久没有进展才放弃"：只要还有 Team 在跑，跟多久都行。
 func TestFollowHasNoTotalRuntimeCap(t *testing.T) {
 	restore := shortenFollowCadence(t)

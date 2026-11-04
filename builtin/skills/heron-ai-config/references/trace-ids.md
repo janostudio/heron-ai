@@ -80,12 +80,12 @@ jq -c 'select(.type=="shared_record.published") | .payload.record.producer' $S/f
 
 ### 9.4 一条完整链路长什么样
 
-以 `fs_7a3e3c95f9b3fbf9` 第 2 轮为例，从提问串到答复：
+以 `fs_xxx` 第 2 轮为例，从提问串到答复：
 
 ```text
-flow_turn.started        ft_e6212632…  input='提问：知识应该写在那个目录下'
+flow_turn.started        ft_e6212632…  input='提问：这个功能应该怎么配置'
   team_turn.started      tt_4757a023…  team=default
-    agent_turn.started   call=coordinator  call_turn=tt_4757a023…:coordinator
+    agent_turn.started   call=planner      call_turn=tt_4757a023…:planner
       agent.model_response round=0  finish=stop  text=''      ← 结构化校验失败
       agent.feedback       round=0  重试提示
       agent.model_response round=1  finish=tool_calls  → Glob ×2
@@ -93,7 +93,7 @@ flow_turn.started        ft_e6212632…  input='提问：知识应该写在那�
       agent.model_response round=3  finish=stop  text='{"reply":…}'
     agent_turn.completed Requests=4  Usage.total_tokens=29218
   team_turn.completed    next.action=proceed
-  shared_record.published CoordinatorReply
+  shared_record.published PlannerReply
 flow_turn.waiting_input
 ```
 
