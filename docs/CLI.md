@@ -116,7 +116,9 @@ Some combinations are refused at startup rather than resolved silently:
 | Key | Action |
 |-----|--------|
 | Enter | Send message |
-| Up/Down | Navigate input history |
+| Up / Down | Recall older / newer input (in a multi-line input, Up first moves the cursor to the top line) |
+| Ctrl+P / Ctrl+N | Aliases for Up / Down |
+| Alt+Up / Alt+Down | Scroll the transcript (plain Up/Down is reserved for history) |
 | Ctrl+L | Clear screen |
 | Ctrl+C | Exit |
 
@@ -169,9 +171,12 @@ Endpoints (registered in `cmd/server/main.go`):
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET | `/` | Web UI (static assets, served from the same process) |
+| GET | `/api/health` | Readiness plus `pending_wakeups` and `sessions_loaded` |
 | POST | `/api/run` | Start a run, or continue one when the body carries `flow_session_id` |
 | POST | `/api/sessions` | Alias of `/api/run` |
 | POST | `/api/sessions/turn` | Send another input to an existing session (`?session_id=`) |
+| GET | `/api/sessions/{id}/record` | Paged session records (`?after_seq=`, `?limit=`) — the Web UI reads this |
 | GET | `/api/status` | Session status (`?session_id=`) |
 | GET | `/api/stream` | SSE stream of session events (`?session_id=`) |
 | GET | `/api/recovery/status` | Recovery status (`?session_id=`) |
@@ -184,9 +189,11 @@ Endpoints (registered in `cmd/server/main.go`):
 | POST | `/api/tasks/cancel` | Cancel an async Tool task (`?task_id=`) |
 | GET | `/api/tasks/stream` | SSE stream for one Tool task (`?task_id=`) |
 
-**There are no path-parameter routes.** `session_id` and `task_id` are always
-query parameters (`/api/status?session_id=fs_001`), never `/api/run/{id}`.
-A client written against path-style URLs gets 404 on every call.
+The API is query-parameter based: `session_id` and `task_id` are query values
+(`/api/status?session_id=fs_001`), never `/api/run/{id}`. The single exception is
+`/api/sessions/{id}/record`, which takes the session id in the path because it
+exists for the bundled Web UI's paging; a client written against path-style URLs
+gets 404 on every other route.
 
 `/api/run` and `/api/sessions/turn` take `input` (or `message`, or `content`/
 `attachments`) in the JSON body; `/api/run` additionally accepts `flow_id` and
