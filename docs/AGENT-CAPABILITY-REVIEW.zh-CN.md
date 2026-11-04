@@ -1,7 +1,15 @@
 # Agent 能力设计评估
 
-> 评估日期：2026-08-26  
-> 评估范围：Agent 内部执行、Tool、Loop、网页开发能力和异步任务能力。  
+> ⚠️ **历史评估稿（2026-08-26），不是现状说明。**
+>
+> 文中列出的"主要问题"是评估当时的状态，部分已在后续实现中解决。已知已落地的有：
+> MCP 工具接入 agent loop（`MCPToolProvider` / `ToolSchemaProvider`）、异步工具任务
+> （`/api/tasks` 系列接口）、Todo 的共享存储（`tool.NewTodoStore`）、上下文压缩与
+> 结构化输出的两阶段重试。读当前能力请看 [architecture.md](./architecture.md) 与
+> [configuration/agent.md](./configuration/agent.md)；本文保留的价值在于当时的判断依据。
+>
+> 评估日期：2026-08-26
+> 评估范围：Agent 内部执行、Tool、Loop、网页开发能力和异步任务能力。
 > 不评估 Flow、Team 的整体编排设计。
 
 ## 1. 结论

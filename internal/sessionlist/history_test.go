@@ -132,7 +132,7 @@ func TestHistoryKeepsOpsOnlyCall(t *testing.T) {
 	id := "fs_ops"
 	writeSession(t, root, id, []string{
 		`{"seq":1,"type":"flow_turn.started","payload":{"input":"go"}}`,
-		`{"seq":2,"type":"team_turn.completed","payload":{"team_result":{"Turn":{"team_id":"intake"},"CallResults":{"acquire":{"AgentID":"searcher","Reply":"","WorkspaceOps":[{"kind":"bash","command":"acquire.sh genie","exit_code":0}]}}}}}`,
+		`{"seq":2,"type":"team_turn.completed","payload":{"team_result":{"Turn":{"team_id":"research"},"CallResults":{"acquire":{"AgentID":"searcher","Reply":"","WorkspaceOps":[{"kind":"bash","command":"build.sh repo-a","exit_code":0}]}}}}}`,
 	}, nil)
 
 	turns, err := History(storage.NewFileStore(root), filepath.Join(SessionsDir, id))
@@ -143,5 +143,5 @@ func TestHistoryKeepsOpsOnlyCall(t *testing.T) {
 	assert.Empty(t, msg.Reply)
 	require.Len(t, msg.Ops, 1)
 	assert.Equal(t, "bash", msg.Ops[0].Kind)
-	assert.Equal(t, "acquire.sh genie", msg.Ops[0].Subject)
+	assert.Equal(t, "build.sh repo-a", msg.Ops[0].Subject)
 }

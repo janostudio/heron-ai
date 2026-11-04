@@ -291,7 +291,7 @@ func TestTeamTurnResultUnmarshalLegacyPayload(t *testing.T) {
 		"Turn": {
 			"id": "tt_7b562393f6deca50",
 			"flow_turn_id": "ft_b6a1a45aaea98e86",
-			"team_session_id": "fs_df2a5c8c965ec5ef:default",
+			"team_session_id": "fs_test_session:default",
 			"team_id": "default",
 			"attempt": 1,
 			"status": "completed",

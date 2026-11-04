@@ -1,14 +1,23 @@
 {
-  "providers": [
+  "model": "gpt-4o-mini",
+  "models": [
     {
-      "name": "openai",
-      "apiKey": "${OPENAI_API_KEY}",
-      "models": [
-        { "id": "gpt-4o", "maxTokens": 128000 },
-        { "id": "gpt-4o-mini", "maxTokens": 128000 }
-      ],
-      "default": "gpt-4o-mini"
+      "id": "gpt-4o-mini",
+      "name": "gpt-4o-mini",
+      "protocol": "openai_chat",
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "${OPENAI_API_KEY}",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 16000
+    },
+    {
+      "id": "claude-sonnet-4-5",
+      "name": "claude-sonnet-4-5",
+      "protocol": "anthropic_messages",
+      "base_url": "https://api.anthropic.com/v1",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 24000
     }
-  ],
-  "defaultProvider": "openai"
+  ]
 }

@@ -315,7 +315,7 @@ func deriveCallTurn(index *factIndex, node *Node) CallTurnFact {
 // requestUsage sums the per-request usage the provider reported.
 //
 // Requests[].usage is the fact source for consumption (see the consumption
-// model in CODEBUDDY.md and docs/ARCHITECTURE.md). CallResult.Usage is the
+// model in docs/architecture.md and session-files.md). CallResult.Usage is the
 // executor's own total and is only used when a call reported no requests at
 // all, which is the normal case for command and webhook calls.
 func requestUsage(result types.CallResult) types.TokenUsage {

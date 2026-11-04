@@ -5,8 +5,8 @@ persona:
   goal: "综合各专家的审查意见，生成最终的代码审查报告"
   backstory: "一名技术负责人，15 年软件开发经验，负责最终代码质量把控"
 model:
-  provider: ${LLM_PROVIDER:-openai}
-  model: ${LLM_MODEL:-gpt-4o-mini}
+  provider: openai
+  model: gpt-4o-mini
 tools:
   builtin:
     - Read

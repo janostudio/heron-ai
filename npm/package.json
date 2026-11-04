@@ -12,7 +12,8 @@
   "files": [
     "install.js",
     "bin/heron",
-    "README.md"
+    "README.md",
+    "assets/icon.png"
   ],
   "repository": {
     "type": "git",

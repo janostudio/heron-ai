@@ -59,8 +59,8 @@ func TestResolveTemplate(t *testing.T) {
 func TestResolveTemplateRecords(t *testing.T) {
 	req := templateRequest()
 	req.Records = []types.SharedRecord{
-		{Name: "WorktreeTarget", RecordID: "rec-1", Summary: "genie",
-			Data: map[string]any{"repo": "genie", "branch": "feat/134", "count": float64(3)}},
+		{Name: "BuildTarget", RecordID: "rec-1", Summary: "repo-a",
+			Data: map[string]any{"repo": "repo-a", "branch": "feat/134", "count": float64(3)}},
 	}
 
 	tests := []struct {
@@ -68,13 +68,13 @@ func TestResolveTemplateRecords(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"summary shorthand", "${records.WorktreeTarget}", "genie"},
-		{"explicit summary", "${records.WorktreeTarget.Summary}", "genie"},
-		{"data string", "${records.WorktreeTarget.Data.repo}", "genie"},
-		{"data branch", "${records.WorktreeTarget.Data.branch}", "feat/134"},
-		{"data number", "${records.WorktreeTarget.Data.count}", "3"},
-		{"record id", "${records.WorktreeTarget.RecordID}", "rec-1"},
-		{"mixed with identity", "${records.WorktreeTarget.Data.repo}/${call_id}", "genie/answer"},
+		{"summary shorthand", "${records.BuildTarget}", "repo-a"},
+		{"explicit summary", "${records.BuildTarget.Summary}", "repo-a"},
+		{"data string", "${records.BuildTarget.Data.repo}", "repo-a"},
+		{"data branch", "${records.BuildTarget.Data.branch}", "feat/134"},
+		{"data number", "${records.BuildTarget.Data.count}", "3"},
+		{"record id", "${records.BuildTarget.RecordID}", "rec-1"},
+		{"mixed with identity", "${records.BuildTarget.Data.repo}/${call_id}", "repo-a/answer"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -88,7 +88,7 @@ func TestResolveTemplateRecords(t *testing.T) {
 func TestResolveTemplateRecordsMissingIsError(t *testing.T) {
 	req := templateRequest()
 	req.Records = []types.SharedRecord{
-		{Name: "WorktreeTarget", Data: map[string]any{"repo": "genie"}},
+		{Name: "BuildTarget", Data: map[string]any{"repo": "repo-a"}},
 	}
 
 	cases := []struct {
@@ -96,10 +96,10 @@ func TestResolveTemplateRecordsMissingIsError(t *testing.T) {
 		input string
 	}{
 		{"unknown record", "${records.Nope.Data.x}"},
-		{"unknown data field", "${records.WorktreeTarget.Data.missing}"},
-		{"unknown fixed field", "${records.WorktreeTarget.Nope}"},
-		{"malformed deep", "${records.WorktreeTarget.Data.a.b}"},
-		{"unterminated", "${records.WorktreeTarget.Data.x"},
+		{"unknown data field", "${records.BuildTarget.Data.missing}"},
+		{"unknown fixed field", "${records.BuildTarget.Nope}"},
+		{"malformed deep", "${records.BuildTarget.Data.a.b}"},
+		{"unterminated", "${records.BuildTarget.Data.x"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,14 +123,14 @@ func TestResolveTemplateRecordsLastWins(t *testing.T) {
 func TestResolveCommandArgs(t *testing.T) {
 	req := templateRequest()
 	req.Records = []types.SharedRecord{
-		{Name: "Target", Data: map[string]any{"repo": "genie"}},
+		{Name: "Target", Data: map[string]any{"repo": "repo-a"}},
 	}
 	req.Call.Command = &types.CommandSpec{
 		Args: []string{"acquire", "${records.Target.Data.repo}", "${call_id}"},
 	}
 	args, err := resolveCommandArgs(req)
 	assert.NoError(t, err)
-	assert.Equal(t, []string{"acquire", "genie", "answer"}, args)
+	assert.Equal(t, []string{"acquire", "repo-a", "answer"}, args)
 }
 
 func TestResolveCommandArgsEmpty(t *testing.T) {
@@ -176,7 +176,7 @@ func TestCommandEnv(t *testing.T) {
 func TestCommandEnvRecordMissingFails(t *testing.T) {
 	req := templateRequest()
 	req.Call.Command = &types.CommandSpec{
-		Env: map[string]string{"AUTO_REPO": "${records.Target.Data.repo}"},
+		Env: map[string]string{"BUILD_TARGET": "${records.Target.Data.repo}"},
 	}
 	_, err := commandEnv(req)
 	assert.Error(t, err, "an unresolvable record in env must fail the call, not send an empty var")
@@ -222,7 +222,7 @@ func TestStringifyRecordValueScalars(t *testing.T) {
 		{"string", "hello", "hello"},
 		{"bool true", true, "true"},
 		{"bool false", false, "false"},
-		{"float integral", float64(134288), "134288"},
+		{"float integral", float64(123), "123"},
 		{"float fractional", 1.5, "1.5"},
 		{"int", 42, "42"},
 		{"int64", int64(7), "7"},
@@ -248,11 +248,11 @@ func TestStringifyRecordValueStructures(t *testing.T) {
 			"nested",
 			map[string]any{
 				"candidates": []any{
-					map[string]any{"number": float64(134288), "repo": "genie/genie"},
+					map[string]any{"number": float64(123), "repo": "repo-a/repo-a"},
 				},
 				"notes": "x",
 			},
-			`{"candidates":[{"number":134288,"repo":"genie/genie"}],"notes":"x"}`,
+			`{"candidates":[{"number":123,"repo":"repo-a/repo-a"}],"notes":"x"}`,
 		},
 	}
 	for _, tc := range cases {
@@ -300,7 +300,7 @@ func TestCommandEnvPassesNestedRecordAsJSON(t *testing.T) {
 				"reply": "done",
 				"parsed": map[string]any{
 					"candidates": []any{
-						map[string]any{"number": float64(134288), "repo": "genie/genie"},
+						map[string]any{"number": float64(123), "repo": "repo-a/repo-a"},
 					},
 					"notes": "x",
 				},
@@ -317,7 +317,7 @@ func TestCommandEnvPassesNestedRecordAsJSON(t *testing.T) {
 			got = strings.TrimPrefix(entry, "AUTO_QUERY=")
 		}
 	}
-	want := `{"candidates":[{"number":134288,"repo":"genie/genie"}],"notes":"x"}`
+	want := `{"candidates":[{"number":123,"repo":"repo-a/repo-a"}],"notes":"x"}`
 	assert.Equal(t, want, got)
 	assert.True(t, json.Valid([]byte(got)), "env value must be valid JSON, got %q", got)
 
@@ -330,6 +330,6 @@ func TestCommandEnvPassesNestedRecordAsJSON(t *testing.T) {
 	}
 	assert.NoError(t, json.Unmarshal([]byte(got), &decoded))
 	assert.Len(t, decoded.Candidates, 1)
-	assert.Equal(t, 134288, decoded.Candidates[0].Number)
-	assert.Equal(t, "genie/genie", decoded.Candidates[0].Repo)
+	assert.Equal(t, 123, decoded.Candidates[0].Number)
+	assert.Equal(t, "repo-a/repo-a", decoded.Candidates[0].Repo)
 }

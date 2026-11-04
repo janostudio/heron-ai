@@ -132,9 +132,9 @@ Skill package contract:
 2. it does not depend on the source project's private directory layout;
 3. it receives input through arguments, environment variables or stdin;
 4. it writes only to the declared workspace/output location;
-5. it does not require the source project's credentials, worktree pool,
-   scheduler or external service unless those dependencies are packaged too.
+5. it does not require the source project's credentials, internal scheduler or
+   external service unless those dependencies are packaged too.
 
 Otherwise copy the script into the Skill and adapt its path and dependency
-boundary first. A Skill is the reusable unit; an auto-bugfix repository's
-whole `.codebuddy/scripts` directory is not a reusable framework API.
+boundary first. A Skill is the reusable unit; a host project's whole script
+directory is not a reusable framework API.

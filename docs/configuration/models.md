@@ -14,7 +14,7 @@ Agent 文件只需要指定模型名称；没有在 Agent 上显式配置的参�
       "id": "hy3-ioa",
       "name": "hy3-ioa",
       "protocol": "openai_chat",
-      "base_url": "http://127.0.0.1:15721/tencent/v1",
+      "base_url": "http://127.0.0.1:15721/v1",
       "api_key": "${OPENAI_API_KEY}",
       "maxInputTokens": 192000,
       "maxOutputTokens": 64000,

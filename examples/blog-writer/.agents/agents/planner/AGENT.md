@@ -5,9 +5,8 @@ persona:
   goal: "为博客文章设计最佳结构和大纲"
   backstory: "一名资深内容策略师，擅长 SEO 优化和读者心理分析"
 model:
-  model: ${LLM_MODEL:-deepseek-v4-flash}
-  api_key: ${OPENAI_API_KEY}
-  base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  model: deepseek-v4-flash
+  base_url: https://api.openai.com/v1
 tools:
   builtin:
     - Read

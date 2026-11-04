@@ -3,7 +3,6 @@ package examples_test
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -163,91 +162,4 @@ func TestNovelRPExampleUsesEntryActivationAndParallelLanes(t *testing.T) {
 		require.True(t, ok, "agent %s should exist", name)
 		require.NotEmpty(t, agent.Body)
 	}
-}
-
-func TestAutoBugfixGitignoreExampleUsesNativeAgentsSkillsScriptsAndDeterministicCommands(t *testing.T) {
-	// The auto-bugfix-gitignore fixture is a local-only example ignored by
-	// .gitignore. On a clean checkout (CI) it is absent, so skip rather than
-	// fail; the fixture exists and is exercised in local development.
-	fixture := filepath.Join("..", "examples", "auto-bugfix-gitignore", ".agents", "flows", "auto_bugfix.yml")
-	if _, err := os.Stat(fixture); err != nil {
-		t.Skipf("auto-bugfix-gitignore fixture not present (clean checkout): %v", err)
-	}
-
-	definitions := loadDefinitions(t, "auto-bugfix-gitignore", ".agents/flows/auto_bugfix.yml")
-
-	require.Equal(t, "auto_bugfix_gitignore", definitions.Flow.ID)
-	require.Equal(t, "default", definitions.Flow.EntryTeamID)
-	// The fixture sets no runtime limits, so the (loose) engine defaults apply.
-	require.Equal(t, 100, definitions.Limits.MaxTeamTurns)
-	require.Equal(t, 100, definitions.Limits.MaxCallsPerTeamTurn)
-	require.Equal(t, 200, definitions.Limits.MaxAgentRounds)
-
-	require.ElementsMatch(t,
-		[]string{"default", "diagnose", "challenge", "fix", "test", "review", "learn", "audit"},
-		keys(definitions.Flow.Teams),
-	)
-	require.Len(t, definitions.Agents, 10)
-	require.ElementsMatch(t,
-		[]string{
-			"root-cause-analysis-skill",
-			"challenge-review",
-			"code-fix",
-			"verification",
-			"code-review",
-			"knowledge-learning",
-			"gitignore-diagnostics",
-			"workspace-exploration",
-			"session-observation",
-			"backend-test",
-			"self-evolving",
-			"code-review-skill",
-			"fixture-maintenance",
-		},
-		keys(definitions.Skills),
-	)
-	require.Equal(t,
-		[]string{
-			"scripts/git_snapshot.sh",
-			"scripts/verify_gitignore.sh",
-			"scripts/check_project_scope.sh",
-		},
-		definitions.Skills["gitignore-diagnostics"].Scripts,
-	)
-	require.Equal(t,
-		[]string{
-			"scripts/learn.py",
-			"scripts/skill_evolve.py",
-		},
-		definitions.Skills["self-evolving"].Scripts,
-	)
-	require.Contains(t, definitions.Rules, "safety")
-
-	testTeam := definitions.Teams["test_team"]
-	require.Equal(t, types.CallCommand, testTeam.Calls["check_ignore"].Type)
-	require.Equal(t, types.ReplayIdempotent, testTeam.Calls["check_ignore"].Command.ReplayPolicy)
-	require.Equal(t, "gitignore-check-${flow_turn_id}", testTeam.Calls["check_ignore"].Command.IdempotencyKey)
-	require.Equal(t, types.ReplayIdempotent, testTeam.Calls["check_status"].Command.ReplayPolicy)
-	require.Equal(t, "git-status-${flow_turn_id}", testTeam.Calls["check_status"].Command.IdempotencyKey)
-	require.ElementsMatch(t,
-		[]string{"VerificationReport", "GitStatusReport"},
-		[]string{
-			testTeam.Output.Records[0].Record,
-			testTeam.Output.Records[1].Record,
-		},
-	)
-
-	fixTeam := definitions.Teams["fix_team"]
-	require.Equal(t, types.CallAgent, fixTeam.Calls["fix"].Type)
-	require.Equal(t, "code-fixer", fixTeam.Calls["fix"].AgentID)
-	require.ElementsMatch(t, []string{"code-fix", "gitignore-diagnostics"}, definitions.Agents["code-fixer"].Skills)
-	require.ElementsMatch(t, []string{"safety", "fix-boundary"}, definitions.Agents["code-fixer"].Rules)
-}
-
-func keys[T any](values map[string]T) []string {
-	result := make([]string, 0, len(values))
-	for key := range values {
-		result = append(result, key)
-	}
-	return result
 }

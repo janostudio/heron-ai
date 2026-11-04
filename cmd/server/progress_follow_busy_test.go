@@ -10,7 +10,7 @@ import (
 
 // TestFollowKeepsSubscriptionWhileTeamTaskRuns is the s24 regression.
 //
-// 派活轮返回空答复后，被派出去的 Team 还在跑，flow.jsonl 里一段时间没有任何
+// 派发轮返回空答复后，被派出去的 Team 还在跑，flow.jsonl 里一段时间没有任何
 // 事件。旧的 idle 判定只读事件流，于是 3 秒后就把订阅关了；等 Team 写出结论时
 // 已经没人收听，调用方永远等不到答复（实测：订阅 17:44 关闭，结论 17:49 落盘）。
 // 现在 idle 判定还要问一次“还有没有 Team 任务在跑”。

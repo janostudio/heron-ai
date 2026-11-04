@@ -1,8 +1,9 @@
-# Heron Team 分享与加载设计（草案 v2）
+# Heron Team 分享与加载设计
 
-**状态：** 方案草案，待评审
+**状态：** 已实现（`heron teams` 的四种用法均已落地；本文保留设计取舍与边界）
 **范围：** `heron teams`（列表）、`heron teams add` / `remove` / `export`
-**关联：** `docs/generic-engine/04-modules/04F-skill.md`、`internal/definitions/`、`internal/config/definitions.go`
+**关联：** `internal/teamspkg/`、`internal/definitions/`、`internal/config/definitions.go`、
+`docs/CLI.md` 的 Teams Commands 一节（用法速查）
 
 **v2 变更（相对 v1）：**
 
@@ -604,7 +605,7 @@ heron 的知识目录有三处，**全部不打包**：
 3. 于是 `agent.Knowledge` 在运行时**没有任何读取方**。全仓只有
    `internal/definitions/validate.go:155` 和 `writer.go:193,311` 在做存在性校验。
    官方文档自己也写着 `id` "**is not a lookup key at run time**"
-   （`heron-ai/docs/configuration/knowledge.md:97`）。
+   （`docs/configuration/knowledge.md`）。
 
 它现在是一个**看起来像访问控制、实际只是拼写检查**的字段，比没有更糟：
 作者写 `knowledge: [seo-guide]` 会以为自己限定了这个 Agent 的知识范围，
@@ -621,7 +622,7 @@ heron 的知识目录有三处，**全部不打包**：
 | `internal/definitions/render.go:19-66` | 删 `knowledgeIDs`（唯一用途就是给上面那两处校验） |
 | `internal/definitions/merge.go` | 注释里"skills/knowledge/rules are resolved by name"改为不含 knowledge |
 | `examples/**/AGENT.md` | 14 个文件含 `knowledge:` 段，逐一删除 |
-| `heron-ai/docs/configuration/agent.md` | 示例与字段说明去掉 `knowledge` |
+| `docs/configuration/agent.md` | 示例与字段说明去掉 `knowledge` |
 
 **不动的部分**（这些是目录级机制，与新字段无关）：
 `internal/knowledge/` 整体、`KnowledgePointer`、`bash_gate.go` 的 `hasPrivateKnowledge`、
@@ -820,7 +821,7 @@ declare TeamSession in the caller if it needs to query or close tasks.
 
 ### 14.4 依赖声明：requires.teams
 
-一个 Team 的 Agent 通过 `Team` 工具派活给别的 Team，这是运行时的名字解析，静态闭包看不到。因此包可以声明：
+一个 Team 的 Agent 通过 `Team` 工具派发给别的 Team，这是运行时的名字解析，静态闭包看不到。因此包可以声明：
 
 ```yaml
 requires:

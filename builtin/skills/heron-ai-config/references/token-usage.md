@@ -48,22 +48,22 @@ jq -r -s '[.[] | select(.type=="agent_turn.completed")]
   $S/team.jsonl
 ```
 
-实测输出（`fs_63f041b056487198`，一个跨 team 的会话）：
+实测输出（`fs_xxx`，一个跨 team 的会话）：
 
 ```text
 总计            628464
 
 team=default    prompt=38528   completion=5767    total=44295
-team=intake     prompt=566563  completion=17606   total=584169
+team=research   prompt=566563  completion=17606   total=584169
 
-agent=coordinator      team=default  prompt=38528   completion=5767   total=44295
-agent=issue-searcher   team=intake   prompt=566563  completion=17606  total=584169
+agent=planner          team=default  prompt=38528   completion=5767   total=44295
+agent=researcher       team=research   prompt=566563  completion=17606  total=584169
 ```
 
 ### 读这些数字时要注意三点
 
-1. **同一 agent 被多次调用会分别累计**。上例 `default` team 的 coordinator 在
-   intake 前后各被调用一次，两次都计入（`group_by` 会把它们合并，但轮次数是累加的）。
+1. **同一 agent 被多次调用会分别累计**。上例 `default` team 的 planner 在
+   research 前后各被调用一次，两次都计入（`group_by` 会把它们合并，但轮次数是累加的）。
    这是"本 FlowTurn 总消耗"，不是"某个 agent 的固定开销"。
 2. **`prompt` 会因上下文重复发送而膨胀**。同一 agent 多轮时，每轮都把前序工具输出
    重新发给模型，`prompt_tokens` 逐轮累加。所以 `prompt ≫ completion` 是常态，
@@ -76,7 +76,7 @@ agent=issue-searcher   team=intake   prompt=566563  completion=17606  total=5841
 
 ```bash
 # 看某 agent 每一轮各自的 usage，找出哪一轮开始膨胀
-jq -r 'select(.type=="agent_turn.completed" and .payload.call_result.AgentID=="issue-searcher")
+jq -r 'select(.type=="agent_turn.completed" and .payload.call_result.AgentID=="researcher")
        | .payload.call_result.Requests[]
        | "prompt=\(.usage.prompt_tokens) completion=\(.usage.completion_tokens)"' \
   $S/team.jsonl

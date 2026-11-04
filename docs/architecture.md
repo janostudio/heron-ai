@@ -23,26 +23,64 @@ Flow (signal routing)
 
 ## Package Structure
 
+`cmd/server` is the only binary. `pkg/types` is the shared vocabulary;
+everything else is `internal/`, grouped by the job it does.
+
 ```
 heron-ai/
-├── cmd/server/          # CLI entry point
-├── pkg/types/           # Shared types and interfaces
-├── internal/
-│   ├── runtime/         # Flow, Team, and Call runtimes
-│   ├── agent/           # AgentTurn loop, guardrail, signal parser, HITL
-│   ├── tool/            # Tool registry, executor, builtin tools
-│   ├── skill/           # Skill registry, loader, injector
-│   ├── knowledge/       # Knowledge index, injector, summarizer
-│   ├── model/           # LLM provider abstraction
-│   ├── config/          # Config loader (flows/teams/agents)
-│   ├── storage/         # File store, run state persistence
-│   ├── state/           # Short-term session state snapshots
-│   ├── logging/         # Rotating execution log（事实源之一：轮转 JSONL）
-│   ├── view/            # TUI (bubbletea), HTTP handler, SSE
-│   ├── eval/            # Evaluation: 关联 ID 体系 + 事实派生（Phase 1 已落地；尚未接入 CLI/TUI 查看）
-│   ├── mcp/             # MCP client（stdio + http 两种 transport；sse 不支持，配置写 sse 会明确报错）
-│   └── extension/       # Extension registry
+├── cmd/server/          # CLI entry point: flags, subcommands, HTTP handlers
+├── pkg/types/           # Shared types and interfaces (the import boundary)
+├── builtin/skills/      # Skills shipped with the engine
+├── examples/            # Complete .agents/ trees, loaded by CI
+└── internal/
 ```
+
+| Package | Responsibility |
+|---|---|
+| `runtime` | Flow / Team / Call runtimes: turn lifecycle, activation, record routing |
+| `agent` | One AgentTurn: LLM/tool loop, prompt assembly hooks, guardrail, signal parser, HITL, structured output, spawn handling |
+| `agentstore` | Inserts dynamically spawned child calls into the invoking Team's DAG |
+| `prompt` | Builtin prompt fragments and prompt provenance |
+| `model` | Provider abstraction (`openai_chat`, `anthropic_messages`), profile defaults, fallback router |
+| `tool` | Tool registry, executor, builtin tools, Bash policy, path scope |
+| `skill` | Skill registry, loader, progressive-disclosure injector |
+| `knowledge` | Knowledge index, injector, summarizer |
+| `state` | Short-term session state snapshots (`state.md`) |
+| `storage` | File store and run-state persistence (append-only JSONL) |
+| `logging` | Rotating execution log (one of the fact sources) |
+| `config` | Config loader: flows / teams / agents / skills / rules / settings / models |
+| `definitions` | Definition merge, templates, validation and writing (backs the `Define` tool) |
+| `teamspkg` | Team package manifest, dependency closure and compatibility checks |
+| `view` | TUI (bubbletea), HTTP handler, SSE, session picker |
+| `app` | Runtime wiring: builds and connects everything above for a run |
+| `mcp` | MCP client (stdio + http; `sse` is unsupported and rejected at startup) |
+| `media` | Multimedia content blocks and attachment store |
+| `workspace` | Execution backend: local process or remote SSH, with path restriction |
+| `osenv` | Merges `settings.json` `env` into every subprocess environment |
+| `sessionlist` | Reads `.agents/data/sessions/` for `--list` |
+| `eval` | Correlation IDs and fact derivation (not yet surfaced in CLI/TUI) |
+| `extension` | Extension registry (registration only; no script runtime is bundled) |
+
+Two of these are easy to misread:
+
+- `agentstore` does not store agents. It writes the synthetic call that makes a
+  spawned child join the parent's Team DAG.
+- `extension` is a registry, not a plugin runtime. Nothing in the engine loads
+  Lua or WASM; a tool that is not builtin or MCP-backed has to be registered in
+  `internal/app`.
+
+## Where things live
+
+| What | Path | Notes |
+|---|---|---|
+| Configuration | `.agents/` | Resolved relative to the process cwd, never upward |
+| Session events | `.agents/data/sessions/<fs_id>/{flow,team,agent}.jsonl` | One append-only log split by producing layer |
+| Flow-scope records | `.agents/data/sessions/<fs_id>/evidence.jsonl` | Appears once a Flow-scope record is published |
+| State snapshots | `.agents/data/sessions/<fs_id>/teams/…/state.md` | Human-readable, injected next turn |
+| Execution log | `.agents/data/logs/YYYY-MM-DD.log` | JSON lines; `debug` adds request usage |
+| Installed Team packages | `.agents/_teams/<scope>/` | Scanned in addition to `.agents/` |
+
+The data directory is fixed; `settings.json` has no key that moves it.
 
 ## Signal Routing
 
@@ -69,14 +107,19 @@ Each agent can be configured with:
 - **Persona**: Role, goal, backstory
 - **Tools**: Builtin tool schemas are declared in `internal/agent/runtime.go`
   (`builtinSchemas`) — Read, Write, Bash, WebSearch, WebFetch, CodeNav,
-  AskUserQuestion, Grep, Glob, TodoWrite, TodoRead, Spawn, Collect, State,
-  Define. An agent only gets the subset listed in its `tools.builtin`.
+  AskUserQuestion, Grep, Glob, TodoWrite, TodoRead, Spawn, ListTeams, Team,
+  TeamSession, Collect, ScheduleWakeup, CancelWakeup, State, Define. An agent
+  only gets the subset listed in its `tools.builtin`; a name that is registered
+  but missing from `builtinSchemas` runs but stays invisible to the model.
+  Two tools are conditional: `Script` only appears when
+  `settings.json` sets `tools.script.enabled`, and `ScheduleWakeup` /
+  `CancelWakeup` only exist under `--serve`, the one mode whose process
+  outlives its turns.
   `WebSearch` and `WebFetch` additionally read their data source from the `web`
   section of `.agents/settings.json` — the provider defaults to `duckduckgo`
   (keyless, search only); `tinyfish`, `brave` and `tavily` need an `api_key`
-  and fail closed without one, while `direct` fetches locally. Fetch follows
-  the search provider but falls back to `direct` for providers that expose no
-  fetch API; see `docs/configuration/agent.md`.
+  and fail closed without one, while `direct` fetches locally. See
+  `docs/configuration/settings.md` and `docs/configuration/agent.md`.
 - **Skills**: Packaged tool + prompt combinations
 - **Knowledge**: Searchable knowledge base
 - **Rules**: Soft/hard constraints
@@ -85,3 +128,5 @@ Each agent can be configured with:
 - **Structured Output**: JSON schema enforcement
 - **Handoff**: Cross-agent task delegation
 - **HITL**: Human-in-the-loop approval gates
+- **MCP**: Tools discovered from configured MCP servers, listed per agent under
+  `tools.mcp`

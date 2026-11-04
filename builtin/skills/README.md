@@ -23,16 +23,25 @@ skills:
 
 ```
 builtin/skills/
-└── heron-ai-config/          # 配置编写 + 运维指导
-    ├── SKILL.md              # 精简入口
+└── heron-ai-config/          # 配置编写 + 运维 + 运行排查
+    ├── SKILL.md              # 入口：先自检 → 再排查 → 按需读参考
     ├── references/
-    │   ├── fields.md         # 每个字段含义
-    │   ├── organization.md   # 目录组织 + 三层编排 + 优势
-    │   └── operations.md     # 下载/使用/启动/关闭
+    │   ├── debug-triage.md   # 排查入口：判定标准、异常模式、从配置预测行为
+    │   ├── session-files.md  # 数据落点、三层 jsonl、执行日志
+    │   ├── token-usage.md    # 按 team / agent / 轮次统计 token
+    │   ├── trace-ids.md      # 事件 ID 串联地图
+    │   ├── fields.md         # 每个配置字段的含义 + ${records.*} 模板
+    │   ├── organization.md   # 目录组织、三层编排、设计优势
+    │   ├── operations.md     # 安装/启动/关闭/校验的完整命令
+    │   └── define.md         # Define 工具：让 Agent 自建 Agent/Team
     └── scripts/
         ├── build.sh          # 从源码构建二进制
         └── serve.sh          # 后台启停服务（PID 管理）
 ```
+
+`SKILL.md` 保持精简，只放高频路径；细节一律下沉到 `references/`，由模型按需读取
+（渐进式披露）。新增参考文件时，记得同时更新 `SKILL.md` 的参考表和本图，否则
+文件写了也没人知道该读它。
 
 ## 约定
 

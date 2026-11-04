@@ -42,10 +42,14 @@ jobs:
 
       - name: Build npm package
         run: |
-          mkdir -p dist/npm/bin
+          mkdir -p dist/npm/bin dist/npm/assets
           cp npm/package.json npm/install.js dist/npm/
           cp npm/bin/heron dist/npm/bin/
           chmod +x dist/npm/bin/heron
+          # npm 页面上的说明来自包内 README.md，图标则必须与 README 里的相对
+          # 路径（assets/icon.png）对得上，否则包页首屏是一张破图。
+          cp README.md dist/npm/
+          cp assets/icon.png dist/npm/assets/
           VERSION=${GITHUB_REF#refs/tags/v}
           # 版本必须由 tag 注入。模板里写死版本号时 sed 匹配不到，npm 会去发布
           # 那个写死的版本，报 "cannot publish over previously published versions"

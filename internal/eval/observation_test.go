@@ -10,8 +10,8 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// goldenSession is a real captured FlowSession committed under testdata/.
-const goldenSession = "fs_831c8e5428a040f7"
+// goldenSession is a captured FlowSession, anonymized and committed under testdata/.
+const goldenSession = "fs_golden"
 
 func fixtureFacts(t *testing.T) *SessionFacts {
 	t.Helper()
@@ -244,7 +244,7 @@ func TestObserveGoldenSession(t *testing.T) {
 		t.Fatalf("golden call count = %d", len(turn.TeamTurns[0].Calls))
 	}
 	call := turn.TeamTurns[0].Calls[0]
-	if call.CallID != "coordinator" || call.AgentID != "default-coordinator" {
+	if call.CallID != "planner" || call.AgentID != "default-planner" {
 		t.Fatalf("golden call = %+v", call)
 	}
 	if call.Usage.PromptTokens != 2136 || call.Usage.CompletionTokens != 72 || call.Usage.TotalTokens != 2208 {
@@ -253,10 +253,10 @@ func TestObserveGoldenSession(t *testing.T) {
 	if turn.Usage.TotalTokens != 2208 || facts.Usage().TotalTokens != 2208 {
 		t.Fatalf("golden aggregated usage = %+v / %+v", turn.Usage, facts.Usage())
 	}
-	if len(turn.Records) != 1 || turn.Records[0].Name != "CoordinatorReply" {
+	if len(turn.Records) != 1 || turn.Records[0].Name != "PlannerReply" {
 		t.Fatalf("golden records = %+v", turn.Records)
 	}
-	if len(facts.Evidence) != 1 || facts.Evidence[0].Name != "CoordinatorReply" {
+	if len(facts.Evidence) != 1 || facts.Evidence[0].Name != "PlannerReply" {
 		t.Fatalf("golden evidence = %+v", facts.Evidence)
 	}
 

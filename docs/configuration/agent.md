@@ -173,8 +173,30 @@ The content above belongs in:
 | `custom` | array | Custom tool names |
 | `mcp` | array | MCP server tool names |
 
-Built-in tools: `Read`, `Write`, `Grep`, `Glob`, `Bash`, `WebSearch`,
-`WebFetch`, `CodeNav`, `AskUserQuestion`, `TodoWrite`, `TodoRead`, `State`
+Built-in tools:
+
+| Tool | Purpose | Notes |
+|---|---|---|
+| `Read` | Read a file, optionally a line range | |
+| `Write` | Write a file | Classed as a write; passes policy and approval |
+| `Grep` | Content search | |
+| `Glob` | Path search | |
+| `Bash` | Run a shell command | Extra blocked phrases via `settings.json` `tools.restricted_bash_phrases` |
+| `WebSearch` / `WebFetch` | Web data source | Configured on the engine, not the agent — see the `web` section below |
+| `CodeNav` | Symbol navigation over the workspace | |
+| `AskUserQuestion` | Ask the user and wait for an answer | |
+| `TodoWrite` / `TodoRead` | Per-agent todo list | One shared store: writing something you cannot read back is not useful |
+| `Spawn` | Spawn a child agent | |
+| `Collect` | Collect spawned results | Auto-granted when `Spawn` or `Team` is declared |
+| `ListTeams` / `Team` / `TeamSession` | Discover and hand work to other Teams | |
+| `State` | Read/write session state snapshots | |
+| `Define` | Create Agent/Team definitions from inside a conversation | See `builtin/skills/heron-ai-config/references/define.md` |
+| `Script` | Run a REPL script that orchestrates several tool calls | **Only when** `settings.json` sets `tools.script.enabled` |
+| `ScheduleWakeup` / `CancelWakeup` | Wake a session later | **Only under `--serve`**, the one mode whose process outlives its turns |
+
+A tool must be both listed here and declared in the agent's `tools.builtin` to
+be visible to the model. Declaring a name that the registry does not know has
+no effect and produces no error at load time.
 
 ### web (data source for `WebSearch` / `WebFetch`)
 
@@ -329,7 +351,7 @@ List of agent names this agent can delegate tasks to.
 
 `State` 是 agent 的"跨会话待办与备忘"（区别于 knowledge 的固化知识）。它在磁盘上是一个**目录**：一个 block 一个文件，外加一份 `index.md` 摘要。
 
-**state 不注入 prompt。** 引擎只注入一段固定指针（`state_pointer`，`Placement: system`、`Stability: stable`），说明目录位置和读取规则；条目靠 agent 调 `State` 按需读取。原因：把快照拼进 prompt 后，上一轮的结论会被当成这一轮的结果，实测导致 owner/coordinator 答非所问。
+**state 不注入 prompt。** 引擎只注入一段固定指针（`state_pointer`，`Placement: system`、`Stability: stable`），说明目录位置和读取规则；条目靠 agent 调 `State` 按需读取。原因：把快照拼进 prompt 后，上一轮的结论会被当成这一轮的结果，实测导致多 agent 协作时答非所问。
 
 在 `tools.builtin` 声明 `State` 后，agent 可调用：
 
