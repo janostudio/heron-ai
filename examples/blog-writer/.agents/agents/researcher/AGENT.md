@@ -5,9 +5,8 @@ persona:
   goal: "深入调研给定主题，收集关键事实、数据和案例"
   backstory: "一名经验丰富的内容研究员，擅长快速找到高质量信息源并提炼核心观点"
 model:
-  model: ${LLM_MODEL:-deepseek-v4-flash}
-  api_key: ${OPENAI_API_KEY}
-  base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  model: deepseek-v4-flash
+  base_url: https://api.openai.com/v1
 tools:
   builtin:
     - Read

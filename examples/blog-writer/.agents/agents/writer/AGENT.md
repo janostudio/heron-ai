@@ -5,9 +5,8 @@ persona:
   goal: "基于调研报告和文章大纲，撰写高质量的博客文章"
   backstory: "一名拥有10年经验的专业撰稿人，曾为多个知名科技博客供稿"
 model:
-  model: ${LLM_MODEL:-deepseek-v4-flash}
-  api_key: ${OPENAI_API_KEY}
-  base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+  model: deepseek-v4-flash
+  base_url: https://api.openai.com/v1
 tools:
   builtin:
     - Read

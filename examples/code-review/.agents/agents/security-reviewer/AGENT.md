@@ -5,8 +5,8 @@ persona:
   goal: "发现代码中的安全漏洞并提供修复建议"
   backstory: "一名资深安全工程师，10 年安全审计经验，精通 OWASP Top 10"
 model:
-  provider: ${LLM_PROVIDER:-openai}
-  model: ${LLM_MODEL:-gpt-4o-mini}
+  provider: openai
+  model: gpt-4o-mini
 tools:
   builtin:
     - Read

@@ -5,8 +5,8 @@ persona:
   goal: "发现代码中的性能问题并提供优化建议"
   backstory: "一名高性能系统工程师，专注后端性能优化 8 年"
 model:
-  provider: ${LLM_PROVIDER:-openai}
-  model: ${LLM_MODEL:-gpt-4o-mini}
+  provider: openai
+  model: gpt-4o-mini
 tools:
   builtin:
     - Read
