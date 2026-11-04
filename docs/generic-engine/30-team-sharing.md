@@ -821,7 +821,7 @@ declare TeamSession in the caller if it needs to query or close tasks.
 
 ### 14.4 依赖声明：requires.teams
 
-一个 Team 的 Agent 通过 `Team` 工具派活给别的 Team，这是运行时的名字解析，静态闭包看不到。因此包可以声明：
+一个 Team 的 Agent 通过 `Team` 工具派发给别的 Team，这是运行时的名字解析，静态闭包看不到。因此包可以声明：
 
 ```yaml
 requires:

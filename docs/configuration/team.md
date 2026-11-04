@@ -99,18 +99,18 @@ command:
 | `${records.<Name>.RecordID}` / `.Name` | 记录 ID / 名称 |
 
 `<Name>` 必须是该 call 在 `inputs` 里声明为输入的记录（`flow_records` /
-`team_records` / `records`）。示例——把"目标仓库"记录的值传给占槽脚本：
+`team_records` / `records`）。示例——把上游记录里的目标值传给 shell 脚本：
 
 ```yaml
-acquire_slot:
+build_target:
   type: command
   command:
-    command: "bash .agents/skills/worktree-guard/scripts/acquire.sh"
+    command: "bash .agents/skills/build/scripts/build.sh"
     env:
-      AUTO_REPO: "${records.WorktreeTarget.Data.repo}"
+      BUILD_TARGET: "${records.BuildTarget.Data.repo}"
       HERON_FLOW_SESSION_ID: "${flow_session_id}"
   inputs:
-    flow_records: [WorktreeTarget]
+    flow_records: [BuildTarget]
 ```
 
 > **缺字段 = 报错**。若 `${records.X.Y}` 引用的记录或字段不存在，该 command call

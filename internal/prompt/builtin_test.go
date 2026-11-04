@@ -254,7 +254,7 @@ func TestRenderKeepsDeliveredResultWhenRecordIsIntermediate(t *testing.T) {
 // 报告之前），最后一条不能又是那句问题。否则模型看到末尾是提问，会把刚
 // 回来的结果当成背景，重新判断这一轮该做什么，于是重复派发同一个任务。
 func TestRenderPutsContinuedTaskBeforeCollaborators(t *testing.T) {
-	const task = "查看线上日志，example.com 的流量一天请求数有多少"
+	const task = "查看服务日志，example.com 的日请求数有多少"
 
 	messages, err := NewPromptRenderer(nil).Render(
 		types.AgentConfig{Persona: types.PersonaConfig{Role: "Coordinator"}},

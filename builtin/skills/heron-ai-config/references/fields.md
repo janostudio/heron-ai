@@ -123,12 +123,12 @@ command call **不能读对话内容**，但可以通过 `command.env` / `comman
 因此**同 team 内"前一个 call 刚产出、后一个 call 要引用"时必须用 `records` + `from`**：
 
 ```yaml
-# ❌ 错：IssueCandidates 此刻还是 team scope，不在 Flow 级集合里
+# ❌ 错：TaskCandidates 此刻还是 team scope，不在 Flow 级集合里
 acquire_slot:
   depends_on: [search]
   inputs:
-    flow_records: [IssueCandidates]
-# → 报 `record "IssueCandidates" not found among call inputs`
+    flow_records: [TaskCandidates]
+# → 报 `record "TaskCandidates" not found among call inputs`
 
 # ✅ 对：用 from 指定同 team 内的产出方
 acquire_slot:
@@ -136,7 +136,7 @@ acquire_slot:
   inputs:
     records:
       - from: search              # 同 team 内的 call 名
-        record: IssueCandidates
+        record: TaskCandidates
 ```
 
 `records` 形式会沿 `previous`（同 team 内前序 call 的结果）查找，
@@ -149,16 +149,16 @@ acquire_slot:
   type: command
   depends_on: [search]
   command:
-    command: "bash .agents/skills/xxx/scripts/acquire.sh"
+    command: "bash .agents/skills/xxx/scripts/build.sh"
     env:
       HERON_FLOW_SESSION_ID: "${flow_session_id}"
-      AUTO_REPO: "${records.IssueCandidates.Data.repo}"   # ← 从上游记录取
+      BUILD_TARGET: "${records.TaskCandidates.Data.repo}"   # ← 从上游记录取
   inputs:
     records:                                 # ← 必须声明，否则找不到该 record
       - from: search
-        record: IssueCandidates
+        record: TaskCandidates
   output:
-    record: WorktreeSlot
+    record: BuildResult
 ```
 
 **三个必须注意的点**：
@@ -178,8 +178,8 @@ acquire_slot:
    值是非标量（map / array）时，引擎以 **JSON** 形式传递
    （`stringifyRecordValue` 用 `json.Marshal`），消费方需自行 `jq` 解析。
 
-> **command 输出的 `Data` 是什么？** 视 executor 而定。以 `acquire.sh` 为例，
-> `WorktreeSlot.Data` 是 `{exit_code, passed, stderr, stdout}`——脚本的 JSON 结果在
+> **command 输出的 `Data` 是什么？** 视 executor 而定。以 shell 脚本 call 为例，
+> `BuildResult.Data` 是 `{exit_code, passed, stderr, stdout}`——脚本的 JSON 结果在
 > `stdout` **字符串**里，**没有**展开成 `Data.abs_path` 这样的字段。引用前先确认
 > 该 record 的 `Data` 实际键，可用
 > `jq -r 'select(...).payload.record.data | keys' flow.jsonl` 查。
@@ -222,7 +222,7 @@ frontmatter 分组：
 > `Collect` 是例外：**声明了 `Team` 或 `Spawn` 时，引擎自动授予 `Collect`**（放入
 > 允许清单并暴露 schema）。派发了子任务就必须能收结果，不需要手写。
 >
-> 这个例外来自一次真实事故：只声明 `Team` 时，引擎回流结果会以模型名义写下一对
+> 这个例外来自一个真实的失败模式：只声明 `Team` 时，引擎回流结果会以模型名义写下一对
 > `Collect` 调用 + 结果；模型在转录里看到"自己调用过"，就跟着再调一次，而允许
 > 清单拒绝了它，于是模型反复重试直到轮次耗尽，那一轮没有任何答复。手动写
 > `Collect` 现在无害但不是必需。

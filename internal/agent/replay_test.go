@@ -423,7 +423,7 @@ func TestReplayAgentContextPairsToolCallIDByOrder(t *testing.T) {
 }
 
 // 跨回合重放会让模型看到自己上一轮的结论，于是把新问题当旧任务继续答
-// （问某个仓库的线上日志，回了上一轮 repo-a 的主分支）。同一 call 的历史
+// （问某个服务的问题，回了上一轮 repo-a 的主分支）。同一 call 的历史
 // 必须按 flow turn 隔离，只重放本回合的增量。
 func TestReplayAgentContextStopsAtTurnBoundary(t *testing.T) {
 	w := &fakeSessionWriter{}
@@ -440,7 +440,7 @@ func TestReplayAgentContextStopsAtTurnBoundary(t *testing.T) {
 
 	req := reqFor("call-1")
 	req.FlowTurnID = "ft-new"
-	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看线上日志"}}
+	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看服务日志"}}
 
 	got := loop.replayAgentContext(context.Background(), req, initial)
 
@@ -495,7 +495,7 @@ func TestReplayKeepsWholeTaskChain(t *testing.T) {
 	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
 		EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1", FlowTurnID: "ft-user"},
 		Payload: map[string]any{
-			"text": "已转给执行侧，让它去查 cls 线上日志",
+			"text": "已转给执行侧，让它去查服务日志",
 			"turn": map[string]any{"origin": "user"},
 		},
 	})
@@ -509,12 +509,12 @@ func TestReplayKeepsWholeTaskChain(t *testing.T) {
 
 	req := reqFor("call-1")
 	req.FlowTurnID = "ft-mailbox"
-	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看线上日志"}}
+	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看服务日志"}}
 
 	got := loop.replayAgentContext(context.Background(), req, initial)
 
 	require.Len(t, got, 4, "同一任务链的两个回合都要重放")
-	assert.Equal(t, "已转给执行侧，让它去查 cls 线上日志", got[2].Content)
+	assert.Equal(t, "已转给执行侧，让它去查服务日志", got[2].Content)
 	assert.Equal(t, "owner 交回：缺日志索引与时间范围", got[3].Content)
 }
 
@@ -540,7 +540,7 @@ func TestReplayDropsPreviousTaskChain(t *testing.T) {
 
 	req := reqFor("call-1")
 	req.FlowTurnID = "ft-b2"
-	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看线上日志"}}
+	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看服务日志"}}
 
 	got := loop.replayAgentContext(context.Background(), req, initial)
 

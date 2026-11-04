@@ -287,10 +287,10 @@ func TestCommandExecutorSuccess(t *testing.T) {
 func TestCommandExecutorResolvesRecordTemplates(t *testing.T) {
 	exec := newWorkspaceExecutor(t)
 
-	req := commandRequest("printf '%s' \"$AUTO_REPO\"")
-	req.Call.Command.Env = map[string]string{"AUTO_REPO": "${records.WorktreeTarget.Data.repo}"}
+	req := commandRequest("printf '%s' \"$BUILD_TARGET\"")
+	req.Call.Command.Env = map[string]string{"BUILD_TARGET": "${records.BuildTarget.Data.repo}"}
 	req.Records = []types.SharedRecord{
-		{Name: "WorktreeTarget", Data: map[string]any{"repo": "repo-a"}},
+		{Name: "BuildTarget", Data: map[string]any{"repo": "repo-a"}},
 	}
 
 	result, err := exec.Execute(context.Background(), req)
@@ -304,9 +304,9 @@ func TestCommandExecutorArgTemplateResolves(t *testing.T) {
 
 	// With Args present the command runs directly (not via a shell), so the
 	// command is the binary and the template is one argv element.
-	req := commandRequest("printf", "%s", "${records.WorktreeTarget.Data.repo}")
+	req := commandRequest("printf", "%s", "${records.BuildTarget.Data.repo}")
 	req.Records = []types.SharedRecord{
-		{Name: "WorktreeTarget", Data: map[string]any{"repo": "repo-a"}},
+		{Name: "BuildTarget", Data: map[string]any{"repo": "repo-a"}},
 	}
 
 	result, err := exec.Execute(context.Background(), req)
@@ -319,7 +319,7 @@ func TestCommandExecutorMissingRecordFails(t *testing.T) {
 	exec := newWorkspaceExecutor(t)
 
 	req := commandRequest("echo should-not-run")
-	req.Call.Command.Env = map[string]string{"AUTO_REPO": "${records.Target.Data.repo}"}
+	req.Call.Command.Env = map[string]string{"BUILD_TARGET": "${records.Target.Data.repo}"}
 
 	result, err := exec.Execute(context.Background(), req)
 	require.Error(t, err, "an unresolvable record reference must fail the call")

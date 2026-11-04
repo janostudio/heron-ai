@@ -59,7 +59,7 @@ func TestResolveTemplate(t *testing.T) {
 func TestResolveTemplateRecords(t *testing.T) {
 	req := templateRequest()
 	req.Records = []types.SharedRecord{
-		{Name: "WorktreeTarget", RecordID: "rec-1", Summary: "repo-a",
+		{Name: "BuildTarget", RecordID: "rec-1", Summary: "repo-a",
 			Data: map[string]any{"repo": "repo-a", "branch": "feat/134", "count": float64(3)}},
 	}
 
@@ -68,13 +68,13 @@ func TestResolveTemplateRecords(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"summary shorthand", "${records.WorktreeTarget}", "repo-a"},
-		{"explicit summary", "${records.WorktreeTarget.Summary}", "repo-a"},
-		{"data string", "${records.WorktreeTarget.Data.repo}", "repo-a"},
-		{"data branch", "${records.WorktreeTarget.Data.branch}", "feat/134"},
-		{"data number", "${records.WorktreeTarget.Data.count}", "3"},
-		{"record id", "${records.WorktreeTarget.RecordID}", "rec-1"},
-		{"mixed with identity", "${records.WorktreeTarget.Data.repo}/${call_id}", "repo-a/answer"},
+		{"summary shorthand", "${records.BuildTarget}", "repo-a"},
+		{"explicit summary", "${records.BuildTarget.Summary}", "repo-a"},
+		{"data string", "${records.BuildTarget.Data.repo}", "repo-a"},
+		{"data branch", "${records.BuildTarget.Data.branch}", "feat/134"},
+		{"data number", "${records.BuildTarget.Data.count}", "3"},
+		{"record id", "${records.BuildTarget.RecordID}", "rec-1"},
+		{"mixed with identity", "${records.BuildTarget.Data.repo}/${call_id}", "repo-a/answer"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -88,7 +88,7 @@ func TestResolveTemplateRecords(t *testing.T) {
 func TestResolveTemplateRecordsMissingIsError(t *testing.T) {
 	req := templateRequest()
 	req.Records = []types.SharedRecord{
-		{Name: "WorktreeTarget", Data: map[string]any{"repo": "repo-a"}},
+		{Name: "BuildTarget", Data: map[string]any{"repo": "repo-a"}},
 	}
 
 	cases := []struct {
@@ -96,10 +96,10 @@ func TestResolveTemplateRecordsMissingIsError(t *testing.T) {
 		input string
 	}{
 		{"unknown record", "${records.Nope.Data.x}"},
-		{"unknown data field", "${records.WorktreeTarget.Data.missing}"},
-		{"unknown fixed field", "${records.WorktreeTarget.Nope}"},
-		{"malformed deep", "${records.WorktreeTarget.Data.a.b}"},
-		{"unterminated", "${records.WorktreeTarget.Data.x"},
+		{"unknown data field", "${records.BuildTarget.Data.missing}"},
+		{"unknown fixed field", "${records.BuildTarget.Nope}"},
+		{"malformed deep", "${records.BuildTarget.Data.a.b}"},
+		{"unterminated", "${records.BuildTarget.Data.x"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -176,7 +176,7 @@ func TestCommandEnv(t *testing.T) {
 func TestCommandEnvRecordMissingFails(t *testing.T) {
 	req := templateRequest()
 	req.Call.Command = &types.CommandSpec{
-		Env: map[string]string{"AUTO_REPO": "${records.Target.Data.repo}"},
+		Env: map[string]string{"BUILD_TARGET": "${records.Target.Data.repo}"},
 	}
 	_, err := commandEnv(req)
 	assert.Error(t, err, "an unresolvable record in env must fail the call, not send an empty var")
