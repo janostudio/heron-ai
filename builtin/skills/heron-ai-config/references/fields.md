@@ -210,8 +210,11 @@ frontmatter 分组：
 ### tools
 | 字段 | 含义 |
 |---|---|
-| `builtin` | 内置工具：Read/Write/Edit/Grep/Glob/Bash/WebSearch/WebFetch/CodeNav/AskUserQuestion/TodoWrite/TodoRead/Spawn/Collect/State/Define |
+| `builtin` | 内置工具：Read/Write/Grep/Glob/Bash/WebSearch/WebFetch/CodeNav/AskUserQuestion/TodoWrite/TodoRead/Spawn/Collect/ListTeams/Team/TeamSession/State/Define（另有 `Script`、`ScheduleWakeup`/`CancelWakeup` 见下） |
 | `custom` / `mcp` | 自定义 / MCP 工具 |
+
+> 没有 `Edit` 工具：改文件用 `Read` → `Write`。写错工具名**不会在加载期报错**，
+> 只是那个工具对模型不可见 —— 排查"模型说没有某能力"时先核对这个名字。
 
 > `Spawn`、`State`、`Define` 是**按需开启**的工具：不写进 `builtin` 就既不会
 > 提供给模型，调用也会被允许清单拦下。`Define` 的语义见 `define.md`。
@@ -307,6 +310,73 @@ frontmatter 分组：
 - 被派发（通过 `Team` 工具调用起来）的子 Team，产出的记录会以 **flow 作用域的副本**写入 `evidence.jsonl`。这样调用方的 `flow_records` 才能按名读到它——否则子 Team 的结论只能留在它自己那一层。
 - 时间窗：被工具结果唤醒的回合只读**派发那一刻之后**产生的记录，上一轮问题的结论不会被当成本轮事实。窗口起点是派发，不是"收到结果"。
 - 想确认某条记录到底被谁消费，读 `shared_record.consumed` 事件（见下文运行时事件字段）。
+
+## models.json（`.agents/models.json`）
+
+**唯一必需文件**：缺它或 `models` 为空，启动直接失败（`load .agents/models.json` /
+`models.json has no models`）。
+
+```json
+{
+  "model": "hy3-ioa",
+  "models": [
+    {
+      "id": "hy3-ioa",
+      "name": "hy3-ioa",
+      "protocol": "openai_chat",
+      "base_url": "http://127.0.0.1:15721/tencent/v1",
+      "api_key": "${OPENAI_API_KEY}",
+      "maxInputTokens": 192000,
+      "maxOutputTokens": 64000
+    }
+  ]
+}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `model` | 默认模型，按条目的 **`name`** 匹配（`name` 空时回填 `id`）；空则用第一条 |
+| `id` / `name` | `name` 是匹配键与显示名，`id` 是发给 API 的 wire model（空则用 `name`） |
+| `protocol` | `openai_chat`（默认）/ `anthropic_messages`；不认识的值按 openai 处理 |
+| `base_url` | Provider 地址 |
+| `api_key` | 直接写值，或写 `${ENV_VAR}` 由引擎展开 |
+| `maxInputTokens` / `maxAllowedSize` | 上下文预算，压缩策略据此计算 |
+| `maxOutputTokens` | 单次输出上限，缺省走协议默认 |
+| `temperature` / `top_p` / `top_k` / `repetition_penalty` | 采样默认值，缺省则不发送 |
+| `reasoning` | Provider-neutral 推理配置 |
+
+`api_key` 的两级来源与陷阱：
+
+- 写 `${VAR}` 时由引擎展开；**展开为空会直接报 `API key ... is not set`**，不会退回
+  其他变量（防止把 A 厂商的 key 发给 B 厂商）。
+- 整段省略时按协议读 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`。
+- Agent 的 `model.model` 只写模型名，**不要写 `${ENV}`** —— 那里不做展开。
+
+## settings.json（`.agents/settings.json`）
+
+可选，缺文件即全默认。**只有下面这些段有代码读取**：
+
+| 段 | 作用 | 关键项 |
+|---|---|---|
+| `logging` | 执行日志 | `level`（`debug` 才有 `model request usage`）、`dir`、`max_file_size`、`max_backups`（0=不限）、`retention_days`；日志只写文件，没有 stdout 分支 |
+| `runtime` | 编排循环安全上限 | `max_team_turns`(100，**每个 FlowTurn**)、`max_calls_per_team_turn`(100)、`max_agent_rounds`(200)、`max_parallel_*`(20)、`max_coordinate_retries`(20)、`max_active_team_sessions`(8)、`max_task_context_depth`(3) |
+| `knowledge` | 知识总结模型 | `summary_model`（空 = 默认模型） |
+| `web` | WebSearch / WebFetch 数据源 | 见上文 tools 节的 provider 对照 |
+| `mcp` | MCP server 列表 | `name` / `transport`(`stdio`\|`http`) / `command`+`args` / `url`+`headers` / `env` |
+| `tools` | 工具策略 | `restricted_bash_phrases`（只增不减）、`script.*`（默认关闭） |
+| `env` | 注入所有子进程的环境变量 | **每个值都按路径解析**，相对**工作区根**（进程 cwd）：`"."` = 根，`".."` = 上一级。非路径值会被拼成路径（`"MODE": "prod"` → `<cwd>/prod`），这个段只适合放路径锚点 |
+
+**不生效的段**（老配置里常见，调了也没用）：
+
+| 段 | 为什么 |
+|---|---|
+| `logging.output` | `buildLogger` 只传 level/dir/轮转参数，`output` 被丢弃；日志永远写 `dir` |
+| `paths.data` | 数据目录硬编码 `.agents/data/` |
+| `agent.max_parallel` / `agent.tracing` / `agent.default_loop` | 没有全局 agent 段；单 agent 限制在 `AGENT.md` 的 `loop`，全局在 `runtime.max_agent_rounds` |
+| `observability` | 包已删除；`logging.retention_days` 才是生效的那个 |
+
+`runtime` 的上限是**防跑飞的兜底**，不是编排旋钮：合法的 Flow 会来回移交很多次，
+默认值刻意远高于任何正常计数。要更早失败才调低。
 
 ## rules（`.agents/rules/<name>.md`）
 

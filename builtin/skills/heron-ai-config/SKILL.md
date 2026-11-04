@@ -18,6 +18,17 @@ scripts:
 你在为一个基于 heron-ai 多 Agent 引擎的项目编写或修改配置，执行
 下载/启动/关闭等运维操作，或排查一次运行的问题。
 
+## 改完配置先自检（比跑一轮快）
+
+```bash
+heron --check-config --flow .agents/flows/default.yml
+```
+
+只做加载与校验，不建模型客户端、不产生会话，秒级返回；退出码 0 = 合法。
+它拦得住：agent 名对不上、record 引用未声明、`per_task` 绑定缺
+`inputs.user_message`。拦不住模型名、API key、MCP 连接 —— 那些要跑一轮才知道，
+所以顺序是「先 `--check-config`，再 `--prompt` 试一轮」。
+
 ## 排查一次运行（高频，先看这里）
 
 **定位会话**：数据在工作区根（heron 启动的 cwd）的 `.agents/data/sessions/<flow_session_id>/`。
@@ -123,7 +134,7 @@ jq -r -s '[.[]|select(.type=="agent_turn.completed")]|group_by(.payload.call_res
 
 | 参考文件 | 内容 |
 |---|---|
-| `references/fields.md` | **每个配置字段的含义**（Flow/Team/Call/Agent/record/rules/**workspace**）+ 运行时事件字段 + **`${records.*}` 模板**（把共享记录传进 command） |
+| `references/fields.md` | **每个配置字段的含义**（Flow/Team/Call/Agent/record/rules/**workspace**，以及 **models.json / settings.json 的生效段与不生效段**）+ 运行时事件字段 + **`${records.*}` 模板**（把共享记录传进 command） |
 | `references/organization.md` | 目录组织、三层编排、设计优势 |
 | `references/operations.md` | 下载/使用/启动/关闭的详细命令 |
 | `references/define.md` | **Define 工具**：让 Agent 在对话中自建 Agent/Team 定义 |
@@ -151,6 +162,13 @@ jq -r -s '[.[]|select(.type=="agent_turn.completed")]|group_by(.payload.call_res
 9. Agent 声明了 `Team` 或 `Spawn` 时不必再手写 `Collect`——引擎会自动授予并暴露
    schema。反过来只声明 `Team` 而不给 `Collect`，历史上会造成"模型反复调一个被
    拒绝的工具直到轮次耗尽"。
+10. `settings.json` 里**真正被读的段**只有 `logging` / `runtime` / `knowledge` /
+    `web` / `mcp` / `tools` / `env`。`paths`、`agent`、`observability` 没有任何代码
+    读取 —— 在里面调参数不会有任何效果。详细字段与不生效清单见引擎仓库
+    `docs/configuration/settings.md`。
+11. Team 分享包装在 `.agents/_teams/<scope>/`，由 `heron teams` 管理；手写的
+    `heron-team.yml` 需要 `apiVersion: heron/v1` 与 `kind: team`。装包前先
+    `--dry-run` 看解析结果，`--yes` 会跳过 skill 脚本复核（等于让它跑别人的 shell）。
 
 ## 脚本
 

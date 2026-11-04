@@ -173,8 +173,30 @@ The content above belongs in:
 | `custom` | array | Custom tool names |
 | `mcp` | array | MCP server tool names |
 
-Built-in tools: `Read`, `Write`, `Grep`, `Glob`, `Bash`, `WebSearch`,
-`WebFetch`, `CodeNav`, `AskUserQuestion`, `TodoWrite`, `TodoRead`, `State`
+Built-in tools:
+
+| Tool | Purpose | Notes |
+|---|---|---|
+| `Read` | Read a file, optionally a line range | |
+| `Write` | Write a file | Classed as a write; passes policy and approval |
+| `Grep` | Content search | |
+| `Glob` | Path search | |
+| `Bash` | Run a shell command | Extra blocked phrases via `settings.json` `tools.restricted_bash_phrases` |
+| `WebSearch` / `WebFetch` | Web data source | Configured on the engine, not the agent — see the `web` section below |
+| `CodeNav` | Symbol navigation over the workspace | |
+| `AskUserQuestion` | Ask the user and wait for an answer | |
+| `TodoWrite` / `TodoRead` | Per-agent todo list | One shared store: writing something you cannot read back is not useful |
+| `Spawn` | Spawn a child agent | |
+| `Collect` | Collect spawned results | Auto-granted when `Spawn` or `Team` is declared |
+| `ListTeams` / `Team` / `TeamSession` | Discover and hand work to other Teams | |
+| `State` | Read/write session state snapshots | |
+| `Define` | Create Agent/Team definitions from inside a conversation | See `builtin/skills/heron-ai-config/references/define.md` |
+| `Script` | Run a REPL script that orchestrates several tool calls | **Only when** `settings.json` sets `tools.script.enabled` |
+| `ScheduleWakeup` / `CancelWakeup` | Wake a session later | **Only under `--serve`**, the one mode whose process outlives its turns |
+
+A tool must be both listed here and declared in the agent's `tools.builtin` to
+be visible to the model. Declaring a name that the registry does not know has
+no effect and produces no error at load time.
 
 ### web (data source for `WebSearch` / `WebFetch`)
 

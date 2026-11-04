@@ -28,9 +28,53 @@ heron knowledge --flow .agents/flows/default.yml
 # Knowledge: archive expired knowledge (ExpiresAt in the past)
 heron knowledge gc --flow .agents/flows/default.yml
 
+# Teams: list local + installed teams / install / remove / export
+heron teams
+heron teams add <source>
+heron teams remove <name>
+heron teams export <team>
+
+# Sessions: list and pick one to resume
+heron --list
+
+# Validate configuration without starting a turn
+heron --check-config --flow .agents/flows/default.yml
+
 # Version
 heron --version
 ```
+
+## Flag reference
+
+| Flag | Type | Default | Meaning |
+|------|------|---------|---------|
+| `--flow` | string | `.agents/flows/default.yml` | Flow config path. `default.yaml` is also accepted. |
+| `--prompt` | string | empty | Run one FlowTurn and exit (non-interactive). |
+| `--session` | string | empty | Resume an existing FlowSession by id. |
+| `--model` | string | empty | Override the default model from `models.json`. |
+| `--log-level` | string | from `settings.json` | `debug`, `info`, `warn`, `error`. |
+| `--max-rounds` | int | `0` (use config) | Override the per-Agent max rounds. |
+| `--list` | bool | false | List sessions and pick one to resume. |
+| `--check-config` | bool | false | Load flow/team/agent definitions, print each Team binding's lifecycle, exit 0 on valid. |
+| `--json-rpc` | bool | false | Long-lived JSON-RPC 2.0 over stdin/stdout. |
+| `--serve` | bool | false | Start HTTP server mode. |
+| `--host` | string | `127.0.0.1` | Bind address for `--serve`. |
+| `--port` | string | `8080` | Port for `--serve`. |
+| `--auth-token` | string | `$HERON_SERVE_TOKEN` | Bearer token required by `--serve`. |
+| `--input-format` | string | empty | Machine input format; only `stream-json`. |
+| `--output-format` | string | empty | Machine output format; only `stream-json`. |
+| `--server` | string | empty | HTTP Heron server URL for `stream-json` client mode. |
+| `--version` | bool | false | Print version and exit. |
+
+Some combinations are refused at startup rather than resolved silently:
+
+- `--list` cannot be combined with `--session` or `--prompt`.
+- `--json-rpc` cannot be combined with `--prompt` or `--serve`.
+- `--input-format` / `--output-format` cannot be combined with `--prompt`,
+  `--serve` or `--json-rpc`; `stream-json` requires both flags, plus `--flow`
+  and `--server`.
+
+`--host`, `--port` and `--auth-token` are only meaningful with `--serve`.
 
 ## TUI Mode
 
@@ -59,12 +103,13 @@ heron --version
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/exit` | Exit TUI |
+| `/exit` (`/quit`) | Exit TUI |
 | `/clear` | Clear message list |
 | `/model` | Show current model |
 | `/usage` | Show token usage |
 | `/flow` | Show flow config |
 | `/agents` | List agents |
+| `/welcome` | Redraw the welcome banner |
 
 ### Keyboard Shortcuts
 
@@ -180,9 +225,150 @@ Rules:
 - `flow.jsonl`, `team.jsonl` and `agent.jsonl` remain internal storage
   formats and are not sent directly over stdout.
 
+## stream-json Client Mode
+
+`--input-format stream-json --output-format stream-json` turns the CLI into a
+thin client of a running `--serve` instance. Both flags are required together,
+and so are `--flow` and `--server`; the Flow itself runs on the server, the
+client only translates stdin/stdout JSONL into HTTP calls.
+
+```bash
+heron --input-format stream-json --output-format stream-json \
+      --flow .agents/flows/default.yml \
+      --server http://127.0.0.1:8080
+```
+
+Input lines are objects discriminated by `type`:
+
+| `type` | Payload | Effect |
+|--------|---------|--------|
+| `user` | `message`, `content` or `input` | Starts or continues a turn via `POST /api/run`. Text and content blocks (text/image/file) are both accepted. |
+| `approval` / `permission_response` | `approval_id` + `approved` (`true`/`false`), optional `reason`, `approver`, `channel` | Answers a pending approval via `POST /api/approvals`. |
+| `resume` / `poll` | `session_id` (carried from earlier turns by default) | Re-reads durable state via `GET /api/result`. |
+
+Output lines are one of:
+
+```json
+{"type":"result","subtype":"input_required","session_id":"fs_001","status":"waiting_input","reply":"...","error":"","pending_approvals":[],"pending_tool_tasks":[],"records":[]}
+{"type":"error","subtype":"parse_error","error":"..."}
+```
+
+`subtype` on a `result` tells the caller how the turn ended:
+`success`, `input_required`, `permission_required`, `tool_waiting`, `failure`.
+Error subtypes are `parse_error`, `invalid_content`, `invalid_input`,
+`request_failed`, `invalid_approval`, `approval_failed`, `invalid_resume` and
+`unsupported_input`.
+
+`session_id` is sticky: once a result carries one, later `user` lines continue
+that session without repeating it.
+
+## Configuration Check
+
+```bash
+heron --check-config --flow .agents/flows/default.yml
+```
+
+Loads the same definitions the runtime loads, without building a model
+provider and without touching a session, then prints every Team binding's
+resolved lifecycle:
+
+```
+default      team=qa_team      lifecycle=resident
+flow default: 1 bindings ok (0 per_task)
+```
+
+Exit code 0 means the configuration is valid; 1 prints the loader error to
+stderr. Use it as a pre-deployment gate: a binding that declares
+`lifecycle: per_task` without `inputs.user_message` fails here instead of on
+the first real turn.
+
+## Teams Commands
+
+`heron teams` is a definition-management command: it lives next to the Teams you
+wrote yourself and the ones installed from packages, and it runs before any Flow
+config is resolved, so it works in a directory with no `.agents/` at all.
+Packages install under `.agents/_teams/<scope>/`, which `LoadDefinitions` scans
+in addition to `.agents/teams/`. Design and trade-offs:
+`docs/generic-engine/30-team-sharing.md`.
+
+```bash
+# List installed packages (also the default when no subcommand is given)
+heron teams
+
+# Install from a local path or a remote source
+heron teams add ./my-team-package
+heron teams add https://github.com/<owner>/<repo>
+heron teams add https://github.com/<owner>/<repo>#<ref>
+heron teams add https://example.com/team.tar.gz
+
+# Preview the parse without writing anything
+heron teams add ./my-team-package --dry-run
+
+# Remove an installed package
+heron teams remove <name>
+heron teams remove <name> --keep-agents
+
+# Export a team as a package (tar.gz by default)
+heron teams export <team>
+heron teams export <team> -o dist/ --format dir --version 1.2.0
+```
+
+| Usage | Flags | Notes |
+|-------|-------|-------|
+| `heron teams` | — | Lists every Team from both roots — `.agents/teams/*.yml` (`source=local`) and `.agents/_teams/<scope>/` (installed packages) — as `TEAM / SOURCE / VERSION / STATUS`. `heron teams list` is rejected on purpose: list is the bare command. An empty result prints `no teams`. |
+| `heron teams add <source>` | `--dry-run`, `--yes`, `--as <name>`, `--refresh` | `<source>` is a local directory, `https://github.com/<owner>/<repo>` (optional `#ref`), or an `https` `.tar.gz` / `.tgz` URL. |
+| `heron teams remove <name>` | `--keep-agents` | Deletes the package directory; `--keep-agents` keeps `agents/`, `skills/` and `rules/` and removes only `teams/`. |
+| `heron teams export <team>` | `-o`, `--format tar.gz\|dir`, `--version` | `-o` is a directory or a full path ending in `.tar.gz`. |
+
+Source rules are enforced, not guessed:
+
+- `http://` is refused; remote sources must be `https`.
+- A non-GitHub URL must end in `.tar.gz` or `.tgz`.
+- A GitHub source must be exactly `https://github.com/<owner>/<repo>`. The
+  optional `#fragment` is the git ref (branch, tag or commit); it defaults to
+  `HEAD` and is part of the download cache key, so two branches of one
+  repository do not overwrite each other.
+
+A package declares itself in `heron-team.yml`:
+
+```yaml
+apiVersion: heron/v1
+kind: team
+name: review-team
+version: 0.1.0
+description: Multi-reviewer code review team
+runtime:
+  lifecycle: resident      # resident (default) | per_task
+provides:
+  teams: [review_team]
+  agents: [lead-reviewer, security-reviewer]
+  skills: []
+  rules: [review-standards]
+requires: {}
+```
+
+`models.json` is never packaged: models, keys and endpoints belong to the
+receiving side. Skill scripts can execute arbitrary commands, so `add` shows
+them for review — `--yes` is what skips that prompt, and `sandbox.scripts`
+(`allow` / `deny` / `review`) is what the package itself declares.
+
+## Session List
+
+```bash
+heron --list
+```
+
+Lists FlowSessions from `.agents/data/sessions/` and, on a terminal, opens a
+picker; the selected session resumes in TUI with the current `--flow`. When
+stdin or stdout is not a terminal — pipes, CI, `--prompt` wrappers — the same
+command prints a text table instead of opening a picker.
+
+`--list` runs before any Flow config is resolved, so it works in a directory
+that has no `.agents/` yet. An empty store prints `暂无会话` and exits 0.
+
 ## Knowledge Commands
 
-Knowledge 是"跨会话固化知识"（区别于 state 的"待办"）。生产 = 从 session 事件提炼，消费 = agent 检索注入。详见 `docs/generic-engine/24-knowledge-trigger-design.md`。
+Knowledge 是"跨会话固化知识"（区别于 state 的"待办"）。生产 = 从 session 事件提炼，消费 = agent 检索注入。配置与语义见 `docs/configuration/knowledge.md`。
 
 ```bash
 # 学一个会话（增量：只学上次之后的新事件）
