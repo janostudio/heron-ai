@@ -8,7 +8,7 @@
 
 早期 State 把快照（goal / confirmed / open_questions / decisions）拼进每轮 prompt，意图是"让 Agent 记住上一轮"。实测结果是相反的：
 
-- 上一轮的结论被下一轮当成自己的结论。实际事故：问仓库 B 时答出仓库 A 的分支和 HEAD（s13 的 genie-agent→cls 日志）。
+- 上一轮的结论被下一轮当成自己的结论。实际事故：问仓库 B 时答出仓库 A 的分支和 HEAD（s13 的实际会话日志）。
 - `next_steps` 里存的不是待办，而是"上一轮答复"和"重派过程"，越积越多，读起来更像结论。
 - 两个承载跨轮工作的 Team 只能把 `state.enabled` 关掉来止损（`default_team.yml`、`owner_team.yml`），等于放弃了 State。
 

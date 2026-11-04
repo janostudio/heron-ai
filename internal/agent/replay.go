@@ -47,8 +47,8 @@ func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentReques
 			continue
 		}
 		// 只重放当前任务链内的事件。上一轮问题的结论不能进来——模型看到自己
-		// 上次的答案，会把新问题当成旧任务继续答（s13：问 cls 日志，回了上一轮
-		// genie-agent 的主分支）。但同一条任务链内的历史必须留下：被结果唤醒的
+		// 上次的答案，会把新问题当成旧任务继续答（s13：问某个仓库的线上日志，回了上一轮
+		// repo-a 的主分支）。但同一条任务链内的历史必须留下：被结果唤醒的
 		// Team 需要看到自己上一轮做过什么，否则会重复同一个动作。
 		if req.FlowTurnID != "" && event.FlowTurnID != "" {
 			inChain := chain != nil && chain[event.FlowTurnID]

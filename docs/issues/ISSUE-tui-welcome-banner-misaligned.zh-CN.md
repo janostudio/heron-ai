@@ -113,7 +113,7 @@ for i, l in enumerate(lines[start + 1:end], 1):
 EOF
 
 # 观察实际渲染
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai && heron
+cd <your-workspace>/heron-ai && heron
 ```
 
 实测：第 4-9 行宽度 51，其余 48 —— 差 3 列。

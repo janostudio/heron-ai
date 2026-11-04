@@ -39,8 +39,8 @@
 **一整行无分段的长文本**。用户在截图中看到：
 
 ```
-明白，你要的是方案 a：genie 仓库的 genie-1 槽位，切到 feat/134288-miniprogram-p0。
-但这一棒我不能自己派出去——两个卡点：1) 重复激活门禁：... 2) 授权：genie-1 当前在 ...
+明白，你要的是方案 a：目标仓库的 repo-b-1 槽位，切到 feat/123-miniprogram-p0。
+但这一棒我不能自己派出去——两个卡点：1) 重复激活门禁：... 2) 授权：repo-b-1 当前在 ...
 ```
 
 `1)` 和 `2)` 挤在同一行，没有换行、没有缩进。
@@ -57,9 +57,9 @@
 长回复（>300 字符）16 条，其中无换行 13 条（81%）
 
  #     长度    换行数  首行预览
- 1    373      0      '{"reply":"我是 auto-bugfix 的主协调员...
+ 1    373      0      '{"reply":"我是主协调员，只负责调度...
  5   1333      0      '{"reply":"知识库不是随便找个 md 写...
-27    898      0      '{"reply":"你问的是「为什么切到了 genie-agent-1...
+27    898      0      '{"reply":"你问的是「为什么切到了 repo-a-1...
 62    864      0      '{"reply":"明白，你要的是方案 a：...
 68   1009      0      '{"reply":"收到，你选了方案 2...
 ```
@@ -69,7 +69,7 @@
 **带换行的回复，都不带 JSON 外壳**：
 
 ```
-26   3215     63      '用户：repos/.pool/genie-1 我期望切换...'
+26   3215     63      '用户：repos/.pool/repo-b-1 我期望切换...'
 38   7911     99      '@decision\nstatus: done\n...'
 39    736     16      '收到上游数据。检查输入：...'
 ```
@@ -168,7 +168,7 @@ JSON。在这样的约束下，模型倾向于**避免在字符串字面量里�
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 
 # 1. 找一个带 structured_output 的 agent 的回复
 S=.agents/data/sessions/<fs_id>

@@ -423,7 +423,7 @@ func TestReplayAgentContextPairsToolCallIDByOrder(t *testing.T) {
 }
 
 // 跨回合重放会让模型看到自己上一轮的结论，于是把新问题当旧任务继续答
-// （s13：问 cls 日志，回了上一轮 genie-agent 的主分支）。同一 call 的历史
+// （s13：问某个仓库的线上日志，回了上一轮 repo-a 的主分支）。同一 call 的历史
 // 必须按 flow turn 隔离，只重放本回合的增量。
 func TestReplayAgentContextStopsAtTurnBoundary(t *testing.T) {
 	w := &fakeSessionWriter{}
@@ -431,7 +431,7 @@ func TestReplayAgentContextStopsAtTurnBoundary(t *testing.T) {
 
 	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
 		EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1", FlowTurnID: "ft-old"},
-		Payload:     map[string]any{"text": "上一轮的结论：genie-agent 主分支是 main"},
+		Payload:     map[string]any{"text": "上一轮的结论：repo-a 主分支是 main"},
 	})
 	_, _ = w.Append(context.Background(), "fs-1", storage.LayerAgent, storage.SessionEvent{
 		EventHeader: types.EventHeader{Type: types.EventAgentModelResponse, CallID: "call-1", FlowTurnID: "ft-new"},
@@ -440,14 +440,14 @@ func TestReplayAgentContextStopsAtTurnBoundary(t *testing.T) {
 
 	req := reqFor("call-1")
 	req.FlowTurnID = "ft-new"
-	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看cls线上日志"}}
+	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看线上日志"}}
 
 	got := loop.replayAgentContext(context.Background(), req, initial)
 
 	require.Len(t, got, 3, "只应重放本回合的事件")
 	assert.Equal(t, "本回合的中间输出", got[2].Content)
 	for _, msg := range got {
-		assert.NotContains(t, msg.Content, "genie-agent")
+		assert.NotContains(t, msg.Content, "repo-a")
 	}
 }
 
@@ -455,19 +455,19 @@ func TestReplayAgentContextStopsAtTurnBoundary(t *testing.T) {
 func TestStructuredSummaryFlattensToReadableLine(t *testing.T) {
 	parsed := map[string]any{
 		"status":         "done",
-		"repo":           "genie-agent",
+		"repo":           "repo-a",
 		"primary_branch": "main",
 		"exists":         true,
 	}
 	got := structuredSummary(parsed)
-	require.Contains(t, got, "repo=genie-agent")
+	require.Contains(t, got, "repo=repo-a")
 	require.Contains(t, got, "primary_branch=main")
 	require.NotContains(t, got, "{")
 }
 
 func TestStructuredSummaryPrefersNamedFields(t *testing.T) {
 	require.Equal(t, "主分支是 main", structuredSummary(map[string]any{
-		"summary": "主分支是 main", "repo": "genie-agent",
+		"summary": "主分支是 main", "repo": "repo-a",
 	}))
 	require.Equal(t, "", structuredSummary("not a map"))
 }
@@ -475,7 +475,7 @@ func TestStructuredSummaryPrefersNamedFields(t *testing.T) {
 // 数组元素常常是 {question, answer} 对，%v 会把 Go 的 map[...] 语法漏进回复。
 func TestStructuredSummaryRendersArrayItemsReadably(t *testing.T) {
 	got := structuredSummary(map[string]any{
-		"repo": "genie-agent",
+		"repo": "repo-a",
 		"checks": []any{
 			map[string]any{"question": "主分支", "answer": "main"},
 			map[string]any{"question": "当前分支", "answer": "main"},
@@ -509,7 +509,7 @@ func TestReplayKeepsWholeTaskChain(t *testing.T) {
 
 	req := reqFor("call-1")
 	req.FlowTurnID = "ft-mailbox"
-	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看cls线上日志"}}
+	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看线上日志"}}
 
 	got := loop.replayAgentContext(context.Background(), req, initial)
 
@@ -533,14 +533,14 @@ func TestReplayDropsPreviousTaskChain(t *testing.T) {
 			},
 		})
 	}
-	appendEvent("ft-a1", "user", "旧问题：genie-agent 主分支是 main")
+	appendEvent("ft-a1", "user", "旧问题：repo-a 主分支是 main")
 	appendEvent("ft-a2", "mailbox", "旧问题：已确认 main")
 	appendEvent("ft-b1", "user", "新问题：查 cls 请求数")
 	appendEvent("ft-b2", "mailbox", "owner 交回：缺日志信息")
 
 	req := reqFor("call-1")
 	req.FlowTurnID = "ft-b2"
-	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看cls线上日志"}}
+	initial := []types.Message{{Role: "system", Content: "sys"}, {Role: "user", Content: "查看线上日志"}}
 
 	got := loop.replayAgentContext(context.Background(), req, initial)
 
@@ -548,6 +548,6 @@ func TestReplayDropsPreviousTaskChain(t *testing.T) {
 	assert.Equal(t, "新问题：查 cls 请求数", got[2].Content)
 	assert.Equal(t, "owner 交回：缺日志信息", got[3].Content)
 	for _, msg := range got {
-		assert.NotContains(t, msg.Content, "genie-agent", "旧任务的结论不能进入本轮")
+		assert.NotContains(t, msg.Content, "repo-a", "旧任务的结论不能进入本轮")
 	}
 }

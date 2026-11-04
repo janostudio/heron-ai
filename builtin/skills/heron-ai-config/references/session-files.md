@@ -9,8 +9,8 @@ ID 串联见 `trace-ids.md`。
 ## 1. 数据落点全景
 
 所有运行时数据在**工作区根**（即 heron 启动时的 cwd）的 `.agents/data/` 下。
-以本工作区为例，cwd 是 `auto_bugfix/heron-ai`，所以是
-`auto_bugfix/heron-ai/.agents/data/`：
+以引擎仓库自带的示例为例，cwd 是 `examples/simple-qa`，所以数据落在
+`examples/simple-qa/.agents/data/`：
 
 ```
 .agents/data/
@@ -123,7 +123,7 @@ jq -r 'select(.type=="agent.model_response")
    **`raw_text` 为被丢弃的模型原始输出**（便于回溯）
 3. 下一轮重试
 
-真实样例（`auto_bugfix` 的 `fs_7a3e3c95f9b3fbf9`）：
+真实样例（某次运行的 `fs_7a3e3c95f9b3fbf9`）：
 
 ```
 seq=21  agent.model_response  round=0  finish=stop  text=''  completion_tokens=2

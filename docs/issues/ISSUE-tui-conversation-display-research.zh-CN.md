@@ -85,7 +85,7 @@ URL 这类无空格长串会渲染成超宽行，被 viewport（v1.0.0 不软换
 
 ```
 >  你是谁                                                  ← 用户：`>` 青色
-我是 auto-bugfix 的主协调员（编排人格 wx-78）。我只负责调度：识别你的目标属于 Bug 还是 Feature，决定激活
+我是主协调员。我只负责调度：识别你的目标属于 Bug 还是 Feature，决定激活
 intake/diagnose/design/challenge/fix/verify/review/deliver/learn/audit
 中的哪一个团队，处理回退与重试预算，或在缺授权/有歧义时向你求证。…
 >  提问：知识应该写在那个目录下                            ← 用户
@@ -120,7 +120,7 @@ renderer, err := glamour.NewTermRenderer(
 
 ```
 --- wordWrap=60 ---
-  我是 auto-bugfix
+  我是主协调员
   的主协调员。我只负责调度：识别你的目标属于 Bug 还是
   Feature，决定激活
   intake/diagnose/design/challenge/fix/verify/review/deliver/learn/audit    ← 76 列，未断
@@ -134,7 +134,7 @@ renderer, err := glamour.NewTermRenderer(
 
 - 枚举团队/agent：`intake/diagnose/design/challenge/fix/verify/review/deliver/learn/audit`
 - 文件路径：`knowledge/_shared/patterns-<主题>.md`
-- 命令：`python3 .codebuddy/scripts/check_pattern_dup.py --text "…" --validate-meta`
+- 命令：`python3 scripts/check_pattern_dup.py --text "…" --validate-meta`
 - URL、hash、长标识符
 
 截图里正是这一类内容撑满整行。
@@ -200,8 +200,8 @@ for _, teamResult := range result.TeamResults {
 截图里大段内容是这样的：
 
 ```
-{"slot_id": "genie-agent-1", "repo": "genie-agent", "path": "repos/...
-"slot_snapshot": {"schema_version": 1, "slot_id": "genie-agent-1", ...
+{"slot_id": "repo-a-1", "repo": "repo-a", "path": "repos/...
+"slot_snapshot": {"schema_version": 1, "slot_id": "repo-a-1", ...
 ```
 
 command call 的 **stdout 原样进入消息体**，几十行 JSON 挤占屏幕，
@@ -264,7 +264,7 @@ bodyWidth := paddedWidth - 2       // 再减 gutter "⏺ "（2 列）
 
 | # | 改动 |
 |---|---|
-| 5 | command / tool 输出**折叠为一行摘要**（如 `⏺ acquire_slot → genie-agent-1 ✓`），完整输出存文件、正文只留关键行 |
+| 5 | command / tool 输出**折叠为一行摘要**（如 `⏺ acquire_slot → repo-a-1 ✓`），完整输出存文件、正文只留关键行 |
 | 6 | 状态栏补 `tokens` / 当前 `team` / 轮次耗时（`m.totalUsage`、`m.roundNum` 已有） |
 
 ### P2 —— 长会话可读性
@@ -285,10 +285,10 @@ bodyWidth := paddedWidth - 2       // 再减 gutter "⏺ "（2 列）
 ## 验证方式
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 heron                                    # 进 TUI
 # 输入会触发多 agent 的问题，例如：
-#   "占用 genie-1，然后分支切换到 feat/134288-miniprogram-p0，了解这个分支做了什么"
+#   "占用 repo-b-1，然后分支切换到 feat/123-miniprogram-p0，了解这个分支做了什么"
 # 观察：
 #   1. 能否区分哪个 team/agent 在回复
 #   2. 用户问句与模型回复是否一眼可分

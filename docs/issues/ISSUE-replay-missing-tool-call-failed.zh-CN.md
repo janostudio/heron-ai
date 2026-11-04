@@ -246,7 +246,7 @@ func toolResultMessage(payload map[string]any) types.Message {
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 S=.agents/data/sessions/fs_7a3e3c95f9b3fbf9
 
 # 1. 看第二次 intake 的 tool 配对失败
@@ -264,10 +264,10 @@ EOF
 
 # 2. 看引擎确实发出 failed 事件
 grep -n "EventToolCallFailed" ../heron-ai/internal/agent/runtime.go 2>/dev/null || \
-  grep -n "EventToolCallFailed" /Users/jahweijiang/Documents/github/multirole-agent/heron-ai/internal/agent/runtime.go
+  grep -n "EventToolCallFailed" <your-workspace>/heron-ai/internal/agent/runtime.go
 
 # 3. 看 replay 是否处理
-grep -n "case types.Event" /Users/jahweijiang/Documents/github/multirole-agent/heron-ai/internal/agent/replay.go
+grep -n "case types.Event" <your-workspace>/heron-ai/internal/agent/replay.go
 # → 只有 ModelResponse / ToolCallCompleted / AgentFeedback / ContextCompacted
 
 # 4. 手工验证"数量不匹配"会 400（缺 tool_call_id 单条不会）

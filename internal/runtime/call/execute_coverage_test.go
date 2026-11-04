@@ -290,13 +290,13 @@ func TestCommandExecutorResolvesRecordTemplates(t *testing.T) {
 	req := commandRequest("printf '%s' \"$AUTO_REPO\"")
 	req.Call.Command.Env = map[string]string{"AUTO_REPO": "${records.WorktreeTarget.Data.repo}"}
 	req.Records = []types.SharedRecord{
-		{Name: "WorktreeTarget", Data: map[string]any{"repo": "genie"}},
+		{Name: "WorktreeTarget", Data: map[string]any{"repo": "repo-a"}},
 	}
 
 	result, err := exec.Execute(context.Background(), req)
 	require.NoError(t, err)
 	assert.Equal(t, types.TurnCompleted, result.Status)
-	assert.Equal(t, "genie", result.Reply)
+	assert.Equal(t, "repo-a", result.Reply)
 }
 
 func TestCommandExecutorArgTemplateResolves(t *testing.T) {
@@ -306,13 +306,13 @@ func TestCommandExecutorArgTemplateResolves(t *testing.T) {
 	// command is the binary and the template is one argv element.
 	req := commandRequest("printf", "%s", "${records.WorktreeTarget.Data.repo}")
 	req.Records = []types.SharedRecord{
-		{Name: "WorktreeTarget", Data: map[string]any{"repo": "genie"}},
+		{Name: "WorktreeTarget", Data: map[string]any{"repo": "repo-a"}},
 	}
 
 	result, err := exec.Execute(context.Background(), req)
 	require.NoError(t, err)
 	assert.Equal(t, types.TurnCompleted, result.Status)
-	assert.Equal(t, "genie", result.Reply)
+	assert.Equal(t, "repo-a", result.Reply)
 }
 
 func TestCommandExecutorMissingRecordFails(t *testing.T) {

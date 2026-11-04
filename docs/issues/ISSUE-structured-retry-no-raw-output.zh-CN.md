@@ -79,7 +79,7 @@ if agent.Structured != nil {
 
 ## 全库出现次数
 
-`auto_bugfix/heron-ai/.agents/data/sessions/*/agent.jsonl` 中，被丢弃的轮共 **4** 条
+`.agents/data/sessions/*/agent.jsonl` 中，被丢弃的轮共 **4** 条
 （148 条 `agent.model_response` 中的 `text空 + finish=stop + 无tool_calls`）：
 
 ```
@@ -105,7 +105,7 @@ fs_f741e51abd8bea19  round=0  completion=2
 ## 复现
 
 ```bash
-cd auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 
 # 1. 找出被丢弃的轮
 for f in .agents/data/sessions/*/agent.jsonl; do

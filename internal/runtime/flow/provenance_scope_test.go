@@ -11,16 +11,16 @@ import (
 )
 
 // 记录跨轮留存。上一轮问题产生的结论如果进入本轮上下文，Team 会判定"事实
-// 已确认"而跳过工作，直接复述旧答案（s13：问 cls 日志，回了 genie-agent 的
+// 已确认"而跳过工作，直接复述旧答案（s13：问 cls 日志，回了 repo-a-agent 的
 // 主分支）。
 func TestSelectFlowRecordsDropsEarlierTurns(t *testing.T) {
 	scopeSince := time.Now().UTC()
 	stale := types.SharedRecord{
-		Name: "RepoFacts", Summary: "genie-agent 主分支 main",
+		Name: "RepoFacts", Summary: "repo-a-agent 主分支 main",
 		CreatedAt: scopeSince.Add(-6 * time.Minute),
 	}
 	current := types.SharedRecord{
-		Name: "OwnerReply", Summary: "workbuddy.host 流量已归零",
+		Name: "OwnerReply", Summary: "example.com 流量已归零",
 		CreatedAt: scopeSince.Add(time.Second),
 	}
 	spec := types.InputSpec{FlowRecords: []string{"RepoFacts", "OwnerReply"}}

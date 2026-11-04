@@ -18,13 +18,13 @@ func TestRenderOpLinesCompactSummary(t *testing.T) {
 		Role: RoleAgent, CallID: "acquire", AgentName: "searcher", TeamName: "intake",
 		Content: "done",
 		Ops: []OpOutput{
-			{Kind: "bash", Subject: "acquire.sh genie issue-2429", ExitCode: 0},
+			{Kind: "bash", Subject: "acquire.sh repo-a issue-2429", ExitCode: 0},
 			{Kind: "bash", Subject: "go test ./...", ExitCode: 1, Failed: true},
 		},
 	})
 
 	out := stripANSI(model.viewport.View())
-	assert.Contains(t, out, "acquire.sh genie issue-2429")
+	assert.Contains(t, out, "acquire.sh repo-a issue-2429")
 	assert.Contains(t, out, "✓")
 	assert.Contains(t, out, "✗ exit 1")
 }

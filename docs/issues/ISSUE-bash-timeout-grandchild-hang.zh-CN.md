@@ -41,18 +41,18 @@ agent.jsonl
 agent 在第 10 轮调用了：
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix && \
+cd <your-workspace> && \
 grep -rn "get_default_repo\|is_default" \
   --include=*.py --include=*.sh --include=*.md --include=*.json . \
   | grep -v "^./repos/" | head -40
 ```
 
-从 auto_bugfix **根目录递归全仓搜索**，只排除了 `./repos/`。实际扫描范围：
+从**工作区根目录递归全仓搜索**，只排除了依赖目录。实际扫描范围：
 
 | 目录 | 文件数 |
 |---|---|
 | `.git` | 4883 |
-| `.codebuddy` | 7021 |
+| 工具脚本目录 | 7021 |
 | `knowledge` | 9364 |
 | `logs` | 1755 |
 | 其余 | ~700 |
@@ -154,8 +154,8 @@ timedOut := ctx != nil && ctx.Err() == context.DeadlineExceeded
 grep -rn "pattern" --include=*.py . | grep -v "^./repos/"
 
 # 要（限定目录 + 明确文件集）
-grep -n "pattern" .codebuddy/scripts/worktree_pool.py
-rg "pattern" .codebuddy/scripts/ --glob '!repos/'
+grep -n "pattern" scripts/some_script.py
+rg "pattern" scripts/ --glob '!deps/'
 ```
 
 `root_cause`（root-cause-analyst）、`explorer`、`issue-searcher` 这几个会大量用
@@ -164,7 +164,7 @@ Bash 的 agent 都该加这条约束。可放进全局知识 `.agents/knowledge/
 ## 复现步骤
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix
+cd <your-workspace>
 
 # 1. 观察扫描规模（会卡住，用 Ctrl+C 中断）
 grep -rn "get_default_repo\|is_default" \

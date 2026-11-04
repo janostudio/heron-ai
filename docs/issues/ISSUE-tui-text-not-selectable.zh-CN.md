@@ -120,7 +120,7 @@ case tea.MouseMsg:
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 heron                                   # 进 TUI，随便聊一轮产生输出
 # 用鼠标拖拽 TUI 中的文字 → 无选区、无法复制
 # 对照：--prompt 模式的输出可正常拖选

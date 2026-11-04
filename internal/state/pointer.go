@@ -10,7 +10,7 @@ import (
 // The state is a memory, and a memory replayed into every prompt is read as the
 // current task's finding. That is not hypothetical: with the snapshot
 // injected, a previous turn's verdict came back verbatim as the answer to a
-// different question (s13, genie-agent→cls), and both teams that carry
+// different question (s13：问某个仓库的分支，回的是另一个仓库的日志), and both teams that carry
 // cross-turn work had to switch State off to stop it.
 //
 // The memory-tool pattern fixes the cause instead of the symptom: keep only a

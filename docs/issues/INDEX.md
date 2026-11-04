@@ -11,7 +11,6 @@
 | [tui-exit-no-resume-hint](./ISSUE-tui-exit-no-resume-hint.zh-CN.md) | TUI 退出只显示 `Goodbye!`，不告知如何用 `--session` 续聊 | **已修复** |
 | [skill-symlink](./ISSUE-skill-symlink.zh-CN.md) | Skill 目录不支持符号链接（软链 skill 加载时静默跳过 + 工具访问越界） | **问题 1 已修复**；问题 2 有意设计 |
 | [structured-retry-no-raw-output](./ISSUE-structured-retry-no-raw-output.zh-CN.md) | 结构化重试丢弃的模型原始输出不可回溯 | **已修复** |
-| [acquire-silent-slot-occupation](./ISSUE-acquire-silent-slot-occupation.zh-CN.md) | `acquire.sh` 无参调用会静默占用真实 worktree 槽位 | **已修复** |
 | [cli-session-list-command](./ISSUE-cli-session-list-command.zh-CN.md) | `heron --list` 列出会话并回车进入；附带 CLI 参数风格统一 | **已实现** |
 | [tui-long-text-truncation](./ISSUE-tui-long-text-truncation.zh-CN.md) | TUI 中较长文本显示不全（viewport v1.0.0 不换行而是硬切）；含"无法上下滚动"修复 | **已修复** |
 | [tui-message-distinction](./ISSUE-tui-message-distinction.zh-CN.md) | TUI 用户消息与机器人消息难以区分 | **已修复** |

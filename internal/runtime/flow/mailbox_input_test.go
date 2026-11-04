@@ -206,7 +206,7 @@ func TestResumeForMailboxFeedsDispatchedTask(t *testing.T) {
 
 	session := seedMailboxSession(t, rt, "fs-task", types.SessionWaitingInput)
 	turn := types.FlowTurn{ID: "ft-1", FlowSessionID: session.ID}
-	const task = "查看仓库genie，目前主分支是什么"
+	const task = "查看仓库repo-a，目前主分支是什么"
 	_, err := rt.enqueueResultMessage(context.Background(), session, turn,
 		addr("default", ""),
 		map[string]any{

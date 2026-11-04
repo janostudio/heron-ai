@@ -64,8 +64,8 @@ if recordName := req.Call.Output.Record; recordName != "" {
 
 ```json
 {
-  "reply":  "{\"candidates\":[{\"number\":134288,...}],\"notes\":\"...\"}",
-  "parsed": {"candidates":[{"number":134288,...}],"notes":"..."}
+  "reply":  "{\"candidates\":[{\"number\":123,...}],\"notes\":\"...\"}",
+  "parsed": {"candidates":[{"number":123,...}],"notes":"..."}
 }
 ```
 
@@ -183,7 +183,7 @@ internal/runtime/call/agent.go:125:			data["parsed"] = result.Parsed
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 S=.agents/data/sessions/fs_7a3e3c95f9b3fbf9
 
 # 1. 看 agent 产出的 Data 结构（只有 reply/parsed）

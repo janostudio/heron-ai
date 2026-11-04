@@ -40,7 +40,7 @@
 ### 1.2 实测基线
 
 在决定改造成本前，实测了仓库现有 skill 的真实注入量。
-测量对象：`examples/auto-bugfix-gitignore`（13 个 skill，全树最多），
+测量对象：一个含 13 个 skill 的工作区（该用例未随仓库分发，数据保留用于对照），
 一次性注入**全部** 13 个 skill 的 body（比任何单 agent 的实际情况更悲观）：
 
 | 指标 | 实测值 |
@@ -539,8 +539,8 @@ func (t *SkillTool) Execution() types.ToolExecutionSpec {
 用带 skill 的真实样例跑完整 turn，确认 listing 进 prompt、`UseSkill` 能激活、
 激活后工具可用：
 
-- `examples/auto-bugfix-gitignore` —— 13 个 skill，`audit-agent` 声明 2 个，
-  是验证 listing 与激活的最小真实场景。
+- 含 13 个 skill 的工作区（13 个 skill，其中一个 agent 声明 2 个）——
+  是验证 listing 与激活的最小真实场景；该用例未随仓库分发，可按需自建。
 - `examples/blog-writer` —— 4 个 skill，含 `deep_research`，带 `references/`，
   可顺带验证第 3 层（模型用 `Read` 读 references）。
 

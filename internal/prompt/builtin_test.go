@@ -227,16 +227,16 @@ func TestStructuredOutputContractNilIsEmpty(t *testing.T) {
 func TestRenderKeepsDeliveredResultWhenRecordIsIntermediate(t *testing.T) {
 	data, err := json.Marshal([]types.SharedRecord{{
 		Name:    "OwnerReply",
-		Summary: "我来查 genie-agent 仓库的主分支，已派事实查询。",
+		Summary: "我来查 repo-a 仓库的主分支，已派事实查询。",
 	}})
 	require.NoError(t, err)
 
-	const finalAnswer = "genie-agent 仓库的主分支是 main。"
+	const finalAnswer = "repo-a 仓库的主分支是 main。"
 	messages, err := NewPromptRenderer(nil).Render(types.AgentConfig{}, types.AgentRequest{TeamID: "default"},
 		RenderContext{ContextBlocks: []types.ContextBlock{
 			{Kind: "records", Text: string(data), Source: "owner"},
 			{Kind: "mailbox_result", Text: finalAnswer, Source: "owner"},
-			{Kind: "input", Text: "查看仓库genie-agent，目前主分支是什么", Source: "user"},
+			{Kind: "input", Text: "查看仓库repo-a，目前主分支是什么", Source: "user"},
 		}})
 	require.NoError(t, err)
 
@@ -254,7 +254,7 @@ func TestRenderKeepsDeliveredResultWhenRecordIsIntermediate(t *testing.T) {
 // 报告之前），最后一条不能又是那句问题。否则模型看到末尾是提问，会把刚
 // 回来的结果当成背景，重新判断这一轮该做什么，于是重复派发同一个任务。
 func TestRenderPutsContinuedTaskBeforeCollaborators(t *testing.T) {
-	const task = "查看cls线上日志，workbuddy.host的流量一天请求数有多少"
+	const task = "查看线上日志，example.com 的流量一天请求数有多少"
 
 	messages, err := NewPromptRenderer(nil).Render(
 		types.AgentConfig{Persona: types.PersonaConfig{Role: "Coordinator"}},

@@ -119,7 +119,7 @@ heron 的 TUI 本质是 **REPL**（有输入框、在对话），不是 pager—
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 heron
 # 输入两条消息："第一条" / "第二条"
 # 按 ↑ → 观察是滚动正文（当前行为）还是回填"第二条"（期望行为）

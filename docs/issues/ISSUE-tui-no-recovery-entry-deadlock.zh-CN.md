@@ -179,7 +179,7 @@ func (r *Runtime) Recover(ctx, sessionID, req types.RecoveryRequest) (types.Flow
 
 ```bash
 # 终端 A：启动 HTTP 服务
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 heron --serve --port 8080
 
 # 终端 B：查恢复状态
@@ -200,7 +200,7 @@ curl -s -X POST http://localhost:8080/api/recovery \
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 
 # 1. 找停在不一致状态的会话（有 team_turn.started 无 completed）
 for d in .agents/data/sessions/fs_*; do

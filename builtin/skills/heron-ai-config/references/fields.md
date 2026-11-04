@@ -53,7 +53,7 @@ workspace:
   type: local
   read_roots:
     - ../repos
-    - ../.codebuddy
+    - ../shared-config
 ```
 
 ---

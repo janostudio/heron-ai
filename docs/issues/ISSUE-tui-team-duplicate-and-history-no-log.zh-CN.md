@@ -139,9 +139,9 @@ func renderRoundSeparator(round, width int) string {
 ### 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 heron
-# 提一个会跨 team 的问题（如"占用 genie-1 ..."）
+# 提一个会跨 team 的问题（如"占用 repo-b-1 ..."）
 # 观察：team 切换处出现 "▸ default" 紧接 "default › coordinator"
 ```
 

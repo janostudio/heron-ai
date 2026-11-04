@@ -25,12 +25,12 @@
 
 ## 现象
 
-在 `auto_bugfix` 的 heron 工作区里，`.agents/skills/heron-ai-config` 是指向引擎
+在宿主项目的 heron 工作区里，`.agents/skills/heron-ai-config` 是指向引擎
 仓库的一个软链：
 
 ```bash
-readlink auto_bugfix/heron-ai/.agents/skills/heron-ai-config
-# /Users/jahweijiang/Documents/github/multirole-agent/heron-ai/builtin/skills/heron-ai-config
+readlink <your-workspace>/heron-ai/.agents/skills/heron-ai-config
+# <your-workspace>/heron-ai/builtin/skills/heron-ai-config
 ```
 
 期望是"skill 只维护一份、两个仓库共用"。实际这个 skill **在运行时完全不可用**，
@@ -77,7 +77,7 @@ os.Stat（跟随软链）对照:
 ### 问题 2：工具读取时被判"越界"
 
 即使 skill 被加载，agent 用 `Read`/`Grep`/`Glob` 访问软链目录仍会失败。
-这有**真实运行记录**（`auto_bugfix/heron-ai/.agents/data/sessions/` 下的历史会话）：
+这有**真实运行记录**（`.agents/data/sessions/` 下的历史会话）：
 
 ```
 tool_call.failed  Read  .agents/skills/heron-ai-config
@@ -120,7 +120,7 @@ if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+sep) {
 
 ## 当前处置
 
-保持现状（用户决定 A：软链不动），`heron-ai-config` 在 `auto_bugfix` 工作区
+保持现状（用户决定 A：软链不动），`heron-ai-config` 在宿主工作区
 中**实际不可用**——这不妨碍其他真实目录的 skill 正常工作。
 
 ## 可选方向（均未实施，供后续决策）
@@ -128,21 +128,21 @@ if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+sep) {
 | 方向 | 做法 | 代价 |
 |---|---|---|
 | 修问题 1 | `LoadAll` 改用 `os.Stat(entry)` 以跟随软链 | 只解决加载；问题 2 仍在，skill 内容加载后虽注入 prompt，但 agent 主动读 `references/` 仍会越界 |
-| 复制 + 同步脚本 | 在 auto_bugfix 侧放真实目录，用脚本从引擎仓库单向同步 | 变成两份物理副本；可移植性最好 |
-| 反转源 | 实体放 auto_bugfix（在工作区内），引擎仓库那份改为软链 | 工作区内为真实目录，避开两层问题；引擎仓库侧开发时软链可能不可用 |
+| 复制 + 同步脚本 | 在宿主项目侧放真实目录，用脚本从引擎仓库单向同步 | 变成两份物理副本；可移植性最好 |
+| 反转源 | 实体放宿主项目（在工作区内），引擎仓库那份改为软链 | 工作区内为真实目录，避开两层问题；引擎仓库侧开发时软链可能不可用 |
 | 引擎内建 | `builtin/skills` 随二进制嵌入（类似 `go:embed`），工作区无需放置 | 需引擎改动；skill 不再可热改 |
 
 ## 复现方式
 
 ```bash
 # 1. 确认软链存在
-ls -la auto_bugfix/heron-ai/.agents/skills/ | grep '^l'
+ls -la <your-workspace>/heron-ai/.agents/skills/ | grep '^l'
 
 # 2. 观察加载阶段跳过（Go 复现，见上文实测输出）
 #    cnb-ops(真实目录) IsDir()=true，heron-ai-config(软链) IsDir()=false
 
 # 3. 观察工具访问越界
-grep -h 'heron-ai-config' auto_bugfix/heron-ai/.agents/data/sessions/*/agent.jsonl \
+grep -h 'heron-ai-config' .agents/data/sessions/*/agent.jsonl \
   | grep 'tool_call.failed'
 
 # 4. 隔离设计有测试兜底（不要试图放宽）

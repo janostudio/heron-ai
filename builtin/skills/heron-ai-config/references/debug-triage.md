@@ -17,7 +17,7 @@
 > 不想装 jq 时，用本节末尾的 node 等价写法（node 在本项目里总是可用）。
 
 ```bash
-cd <工作区>                                   # 本例：auto_bugfix/heron-ai
+cd <工作区>                                   # 含 .agents/ 的目录
 ls -1dt .agents/data/sessions/fs_* | head -5  # 按 mtime 倒序，最新在最前
 ```
 

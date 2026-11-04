@@ -1,5 +1,17 @@
 # heron-connect CLI JSON-RPC 兼容设计
 
+> **状态：协议已实现。** `heron --json-rpc` 即本文描述的第一期协议；命令与参数速查见
+> [CLI.md](./CLI.md) 的 JSON-RPC 一节，实现细节以 `cmd/server/jsonrpc.go` 为准。
+>
+> 与本文写作时相比的两处演进：
+> - 响应新增 `intermediate` 字段，用来标记"这一轮只是过程、结论还在下游"；
+>   调用方应只把非 intermediate 的 `reply` 当作最终答复。
+> - `stream-json` 客户端模式另有独立协议（`--input-format/--output-format`，
+>   见 CLI.md），与本文的 JSON-RPC 是两条通道，不要混用。
+>
+> 第 11 章的"不做实时流"仍是现状：JSON-RPC 通道是一问一答，需要进度推送请用
+> `--serve` 的 SSE。
+
 ## 1. 目标
 
 让 `heron-connect` 可以像启动 Claude Code、Codex 等 CLI 一样启动 Heron：
@@ -73,10 +85,10 @@ JSON-RPC 2.0 over JSONL/NDJSON stdin/stdout
 
 ## 1.2 与 Agent CLI `stream-json` 的关系
 
-Claude Code、CodeBuddy、Codex 等 CLI 都使用一行一个 JSON 事件的方式输出机器可读数据，但它们的事件 Schema 并不完全相同：
+Claude Code、Codex 等 CLI 都使用一行一个 JSON 事件的方式输出机器可读数据，但它们的事件 Schema 并不完全相同：
 
 ```text
-Claude Code / CodeBuddy
+Claude Code / Codex
   system / assistant / user / result
 
 Codex
@@ -98,7 +110,7 @@ SessionEvent over {flow,team,agent}.jsonl
 
 这样做的原因是通信需要稳定的请求 ID、响应匹配和标准错误结构；内部存储需要完整的执行事件、顺序号和恢复信息。两者职责不同，因此使用两套 Schema。
 
-未来如果需要直接兼容 Claude Code/CodeBuddy 的 `stream-json`，可以新增独立的 Transport Adapter，不修改当前 Session 存储格式，也不修改 JSON-RPC 的 `turn` 方法。
+未来如果需要直接兼容 Claude Code 的 `stream-json`，可以新增独立的 Transport Adapter，不修改当前 Session 存储格式，也不修改 JSON-RPC 的 `turn` 方法。
 
 ## 2. 为什么不直接使用当前 `--prompt`
 
@@ -113,7 +125,7 @@ heron --prompt "请检查项目中的 .gitignore"
 当前输出是人类可读文本，类似：
 
 ```text
-Flow: auto_bugfix_gitignore
+Flow: my_agent
 Model: hy3-ioa
 FlowSession: fs_xxx
 Status: waiting_input
@@ -183,25 +195,25 @@ heron --json-rpc
 ```bash
 heron \
   --json-rpc \
-  --flow .agents/flows/auto_bugfix.yml
+  --flow .agents/flows/default.yml
 ```
 
 也可以由 `heron-connect` 配置启动：
 
 ```toml
 [[projects]]
-name = "auto-bugfix"
+name = "heron-agent"
 
 [projects.agent]
 type = "heron"
 
 [projects.agent.options]
-work_dir = "/path/to/auto-bugfix"
+work_dir = "/path/to/workspace"
 command = "/path/to/heron"
 args = [
   "--json-rpc",
   "--flow",
-  ".agents/flows/auto_bugfix.yml"
+  ".agents/flows/default.yml"
 ]
 ```
 
@@ -1019,7 +1031,7 @@ evidence.jsonl
 
 ```bash
 cd /path/to/project
-heron --json-rpc --flow .agents/flows/auto_bugfix.yml
+heron --json-rpc --flow .agents/flows/default.yml
 ```
 
 输入：
@@ -1080,7 +1092,7 @@ heron --json-rpc --flow .agents/flows/auto_bugfix.yml
 7. 保存和恢复 `FlowSession.ID`；
 8. 实现优雅关闭和超时终止；
 9. 增加 mock Heron CLI 测试；
-10. 增加一次真实 auto-bugfix 集成测试。
+10. 增加一次真实宿主项目的集成测试。
 
 ## 15. 验收标准
 

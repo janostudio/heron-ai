@@ -26,7 +26,7 @@
 用 `--session <fs_id>` 恢复一个已有会话，TUI 顶部显示：
 
 ```
-Heron AI - auto_bugfix_flow | Tokens: 0        ← 应为历史累计值
+Heron AI - my_flow | Tokens: 0        ← 应为历史累计值
 ```
 
 但**历史对话内容是正常显示的**（之前的问答都在），只是 token 从 0 重新计。
@@ -149,7 +149,7 @@ jq -r 'select(.type=="team_turn.completed")
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 
 # 1. 跑一轮产生消耗
 heron --prompt "你好"

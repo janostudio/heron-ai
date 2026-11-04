@@ -117,7 +117,7 @@ case tea.KeyCtrlO:
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 heron
 # 提一个会产生长回复的问题（如"介绍一下知识库结构"）
 # 观察：回复是否只显示前 12 行 + "… N more lines (Ctrl+O to expand)"

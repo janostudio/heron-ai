@@ -404,7 +404,7 @@ turn 不独占）→ C5 是记账跟上（并发事件）→ C6 是记账完善�
 
 | # | 影响面 | 程度 | 说明 |
 |---|---|---|---|
-| **I1** | **事件契约** | **高** | `flow.jsonl`/`team.jsonl` 事件模型要能表达"并发 turn + 消息投递"，是**已发布契约**（见 CODEBUDDY.md「事件流字段命名」），改动需谨慎、需版本化 |
+| **I1** | **事件契约** | **高** | `flow.jsonl`/`team.jsonl` 事件模型要能表达"并发 turn + 消息投递"，是**已发布契约**（见事件流字段命名约定），改动需谨慎、需版本化 |
 | **I2** | **消费端（TUI/HTTP/SSE）** | **高** | 现在假设"单链 turn 顺序渲染"，并发的 turn/消息需要新的展示与排序逻辑（参照 `ISSUE-tui-conversation-display-research`） |
 | **I3** | **状态机语义** | **高** | `SessionStatus` 现值描述"会话在推进"，并发后需区分"会话里哪些 agent 在跑"；会话级 status 要**退回派生视角**（§七 C4） |
 | **I4** | **记账/消耗模型** | **中** | 消耗事实源仍是 `agent.jsonl` 的 `agent_turn.completed.payload.call_result.Requests[]`；并发后 team/flow 级加总需能**按 round 归位**，否则"这次问了花了多少"算不清 |
@@ -575,5 +575,5 @@ P0 把"派活/汇总/失败上报/邮箱接收"都绑在 `binding.Coordinator` �
 **不变的部分**：FlowTurn 仍是**一次消息处理事务**，同一时刻每个 Team 至多一个 running round；
 "不做并发 turn"（§9.2）保留——并发发生在 **Team 轮** 之间，FlowTurn 仍是单条判据。
 
-**实跑验证**（`auto_bugfix` 配置，`--json-rpc`）：`default → owner → worktree → owner → …` 整条链
+**实跑验证**（真实项目配置，`--json-rpc`）：`default → owner → worktree → owner → …` 整条链
 通过 mailbox 推进，结果回到激活者；重复转交被会话级激活预算拦下，不再无界循环。

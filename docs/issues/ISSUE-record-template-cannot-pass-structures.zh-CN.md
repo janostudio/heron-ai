@@ -36,13 +36,13 @@
 `Data.parsed` 的**原始形态是 JSON**（落盘即为 JSON 对象）：
 
 ```json
-{"candidates":[{"number":134288,"repo":"genie/genie"}],"notes":"x"}
+{"candidates":[{"number":123,"repo":"owner/repo"}],"notes":"x"}
 ```
 
 而引擎输出的是：
 
 ```
-map[candidates:[map[number:134288 repo:genie/genie]] notes:x]
+map[candidates:[map[number:123 repo:owner/repo]] notes:x]
 ```
 
 **这是 Go 的 `fmt.Sprint` 调试格式，不是原始值** —— 说明引擎**加工了它**。
@@ -71,7 +71,7 @@ command:
 得到的**不是 JSON**，而是 Go 的内部 map 格式：
 
 ```
-map[candidates:[map[number:134288 repo:genie/genie]]]
+map[candidates:[map[number:123 repo:owner/repo]]]
 ```
 
 **这个字符串无法被 shell 命令或 `jq` 解析**——传了等于没传。
@@ -116,7 +116,7 @@ func stringifyRecordValue(v any) string {
 ```go
 parsed := map[string]any{
 	"candidates": []any{
-		map[string]any{"number": float64(134288), "repo": "genie/genie"},
+		map[string]any{"number": float64(123), "repo": "owner/repo"},
 	},
 }
 fmt.Println(stringify(parsed))
@@ -125,8 +125,8 @@ fmt.Println(stringify(parsed))
 输出：
 
 ```
-map[candidates:[map[number:134288 repo:genie/genie]]]     ← 实际
-{"candidates":[{"number":134288,"repo":"genie/genie"}]}   ← 注释承诺的
+map[candidates:[map[number:123 repo:owner/repo]]]     ← 实际
+{"candidates":[{"number":123,"repo":"owner/repo"}]}   ← 注释承诺的
 ```
 
 **两者完全不同**。前者不是合法 JSON，无法被任何工具消费。
@@ -158,7 +158,7 @@ ${records.X.Data.parsed} 拿到的值不可用
 Data = {
   "exit_code": 0,
   "passed":    true,
-  "stdout":    "{\"slot_id\":\"genie-1\",\"abs_path\":\"/...\"}",   ← 业务数据在字符串里
+  "stdout":    "{\"slot_id\":\"repo-b-1\",\"abs_path\":\"/...\"}",   ← 业务数据在字符串里
   "stderr":    ""
 }
 ```
@@ -193,7 +193,7 @@ TeamFailureReport.Data = {
 
 ## 当前配置的实际后果
 
-以 `auto_bugfix` 的 heron 配置为例，8 个 command call 里：
+以某个实际项目的配置为例，8 个 command call 里：
 
 | call | 需要的参数 | 现状 |
 |---|---|---|
@@ -269,7 +269,7 @@ default:
 | # | 输入 | 期望输出 |
 |---|---|---|
 | 1 | `string` | 原样 |
-| 2 | `bool` / 整数 / 浮点 | 现有行为不变（`true` / `134288` / `1.5`） |
+| 2 | `bool` / 整数 / 浮点 | 现有行为不变（`true` / `123` / `1.5`） |
 | 3 | `map[string]any` | **合法 JSON**（`{"a":1}`），不是 `map[a:1]` |
 | 4 | `[]any` | **合法 JSON**（`[1,2]`），不是 `[1 2]` |
 | 5 | 嵌套（`map` 内含 `[]map`） | **合法 JSON**，且顺序/转义正确 |
@@ -308,7 +308,7 @@ default:
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/github/multirole-agent/heron-ai
+cd <your-workspace>/heron-ai
 
 # 1. 看实现（注释 vs default 分支）
 sed -n '168,192p' internal/runtime/call/policy.go
@@ -329,14 +329,14 @@ func stringify(v any) string {
 	}
 }
 func main() {
-	parsed := map[string]any{"candidates": []any{map[string]any{"number": float64(134288), "repo": "genie/genie"}}}
+	parsed := map[string]any{"candidates": []any{map[string]any{"number": float64(123), "repo": "owner/repo"}}}
 	fmt.Printf("实际: %s\n", stringify(parsed))
-	fmt.Printf("期望: %s\n", `{"candidates":[{"number":134288,"repo":"genie/genie"}]}`)
+	fmt.Printf("期望: %s\n", `{"candidates":[{"number":123,"repo":"owner/repo"}]}`)
 }
 EOF
 go run /tmp/s.go
-# 实际: map[candidates:[map[number:134288 repo:genie/genie]]]
-# 期望: {"candidates":[{"number":134288,"repo":"genie/genie"}]}
+# 实际: map[candidates:[map[number:123 repo:owner/repo]]]
+# 期望: {"candidates":[{"number":123,"repo":"owner/repo"}]}
 
 # 3. 在一处真实配置里试（会得到不可用的值）
 grep -rn 'records\.' .agents/teams/*.yml

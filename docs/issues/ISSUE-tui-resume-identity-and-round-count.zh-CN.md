@@ -16,7 +16,7 @@
   **`RoleAgent`** 并填 `TeamName`/`AgentName`/`Ops`（复用 `historyMessages()`），
   与新消息渲染一致。
 - `cmd/server/main.go` 的 `historyTurns()` 做 `sessionlist → view` 投影。
-- 实测 auto_bugfix 会话：历史消息恢复为 `default › coordinator` 等，带 ops 摘要。
+- 实测某个真实会话：历史消息恢复为 `default › coordinator` 等，带 ops 摘要。
 
 ### 问题 2：round = 用户输入 —— 已修
 
@@ -109,7 +109,7 @@ payload.team_result.CallResults[]   ← 每个 call 的 AgentID / Reply / Ops
 一次用户输入触发的多轮 agent 协作，被 SPLIT 成多个 round：
 
 ```
-> 占用 genie-1，然后分支切换到 feat/134288-miniprogram-p0，了解这个分支做了什么
+> 占用 repo-b-1，然后分支切换到 feat/123-miniprogram-p0，了解这个分支做了什么
 ...
     Round 4        ← 协调员第一次回复
     Round 5        ← intake team 回复
@@ -170,11 +170,11 @@ m.roundNum = len(turns)     // turns 是按"用户输入"配对的
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/tencent/auto_bugfix/heron-ai
+cd <your-workspace>/heron-ai
 
 # 问题 2：一次输入触发多 team
 heron
-> 占用 genie-1，然后分支切换到 feat/134288-miniprogram-p0，了解这个分支做了什么
+> 占用 repo-b-1，然后分支切换到 feat/123-miniprogram-p0，了解这个分支做了什么
 # 观察：同一次输入出现了 Round 4 / 5 / 6
 
 # 问题 1：resume 后身份丢失

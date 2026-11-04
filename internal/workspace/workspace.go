@@ -76,8 +76,8 @@ func NewLocal(root string, injectEnv ...map[string]string) (Workspace, error) {
 //
 // readRoots 里的目录对 Read/Grep/Glob/CodeNav 可见，对 Write/Edit 不可见。
 // 加这个能力的原因是一个具体冲突：engine 的工作区根是进程 cwd（例如
-// auto_bugfix/heron-ai），而它要操作的业务仓库在上一级
-// （auto_bugfix/repos）。路径校验按根拒绝，模型只能改走 Bash——而 Bash 不受
+// 引擎仓库自身），而它要操作的业务仓库在上一级
+// （工作区根之外的另一个目录）。路径校验按根拒绝，模型只能改走 Bash——而 Bash 不受
 // 这套校验约束，反而把边界绕过去了。给出一个显式的只读扩展比留这个后门安全。
 func NewLocalWithReadRoots(root string, readRoots []string, injectEnv ...map[string]string) (Workspace, error) {
 	if strings.TrimSpace(root) == "" {

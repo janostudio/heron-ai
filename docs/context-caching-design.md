@@ -46,19 +46,22 @@ TurnLoop（一个 agent，绑定 AgentConfig.Model.Provider）
 - **收益**：对齐 Claude Code Layer 1（observation masking），JetBrains 数据显示 +2.6% solve rate。
 - **状态**：✅ 已实现（`internal/agent/context.go`）。
 
-## 2. 待做的优化（缓存意识，未落地）
+## 2. 优化清单（部分已落地）
 
-以下是对标 Claude Code 但 heron **尚未实现**的部分，集中在缓存。
+以下是对标 Claude Code 的缓存优化。每项标注当前状态；标"未落地"的才是还缺的。
 
-### 2.1 缓存命中统计（已有，但未利用）
+### 2.1 缓存命中统计（已落地）
 
-- **现状**：`TokenUsage` 已统计 `CacheReadInputTokens` / `CacheCreationInputTokens`，但**没人消费**。
-- **优化**：把缓存命中率暴露到 `logging`（之前做的执行日志），用于监控。
+`TokenUsage` 统计 `CacheReadInputTokens` / `CacheCreationInputTokens` /
+`PromptCacheHitTokens`，并在 `internal/agent/runtime.go` 写入执行日志字段，可直接用来算
+命中率。要看得更细，把 `logging.level` 调到 `debug`。
 
-### 2.2 ContextManager 感知 provider（关键缺口）
+### 2.2 ContextManager 感知 provider（部分落地）
 
-- **现状**：`ContextManager` 不感知 provider，压缩方向固定"丢头保尾"。
-- **优化**：抽象 `CacheProfile`，让 ContextManager 知道 provider 缓存特性。
+**已落地的部分**：agent 通过 `ModelContextSizer` 接口向 provider 询问所选模型的输入容量
+（`internal/agent/context.go`），不再对所有模型假设同一个窗口。
+
+**仍缺的部分**：没有显式 `CacheProfile`，压缩方向不随 provider 的缓存特性变化。
 
 ```go
 type CacheProfile struct {

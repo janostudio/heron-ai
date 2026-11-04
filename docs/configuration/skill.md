@@ -136,5 +136,5 @@ Skill package contract:
    scheduler or external service unless those dependencies are packaged too.
 
 Otherwise copy the script into the Skill and adapt its path and dependency
-boundary first. A Skill is the reusable unit; an auto-bugfix repository's
-whole `.codebuddy/scripts` directory is not a reusable framework API.
+boundary first. A Skill is the reusable unit; a host project's whole script
+directory is not a reusable framework API.

@@ -160,7 +160,7 @@ model.SeedHistory([]HistoryTurn{{Input: "earlier question", Messages: []HistoryM
 ## 复现
 
 ```bash
-cd /Users/jahweijiang/Documents/github/multirole-agent/heron-ai
+cd <your-workspace>/heron-ai
 go test ./...                     # → sessionlist + view 两个包 build failed
 go build ./...                    # exit 0：主代码可编译，仅测试文件失配
 go vet ./internal/view/ ./internal/sessionlist/

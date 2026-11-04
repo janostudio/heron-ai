@@ -1,23 +1,31 @@
 {
-  "flow": {
-    "loopMaxRounds": 0
+  "logging": {
+    "level": "info",
+    "dir": ".agents/data/logs",
+    "max_file_size": "50MB",
+    "max_backups": 5,
+    "retention_days": 7
   },
-  "team": {
-    "maxParallelAgents": 10,
-    "maxParallelTeams": 1
+  "runtime": {
+    "max_team_turns": 100,
+    "max_calls_per_team_turn": 100,
+    "max_agent_rounds": 200,
+    "max_parallel_teams": 20,
+    "max_parallel_calls": 20,
+    "max_parallel_tools": 20,
+    "max_coordinate_retries": 20,
+    "max_active_team_sessions": 8,
+    "max_task_context_depth": 3
   },
-  "agent": {
-    "loopMaxRounds": 10,
-    "timeout": "120s",
-    "toolMode": "parallel",
-    "stream": true,
-    "permissions": {
-      "allow": [],
-      "deny": [],
-      "ask": []
+  "web": {
+    "provider": "duckduckgo",
+    "fetch": {
+      "provider": "direct"
     }
   },
+  "mcp": [],
   "tools": {
+    "restricted_bash_phrases": [],
     "script": {
       "enabled": false,
       "timeout_ms": 60000,
@@ -26,11 +34,5 @@
       "catalog_budget": 8000
     }
   },
-  "logging": {
-    "level": "info",
-    "output": "stdout"
-  },
-  "paths": {
-    "data": ".agents/data/"
-  }
+  "env": {}
 }
