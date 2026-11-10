@@ -1,0 +1,16 @@
+id: probe_team
+goal: 链尾的检查单元：按派发来的子任务执行并给出结论。
+
+calls:
+  run:
+    type: agent
+    agent: probe
+    responsibility: 按派发来的子任务检查并给出结论
+    inputs:
+      user_message: true
+    output:
+      record: ProbeReport
+
+output:
+  from: run
+  record: ProbeReport

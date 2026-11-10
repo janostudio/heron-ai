@@ -644,6 +644,16 @@ func requestContextBlocks(req flowInputRequest) ([]types.ContextBlock, error) {
 	if strings.TrimSpace(text) == "" && len(parts) == 0 {
 		return nil, nil
 	}
+	// The agent reads its input text from this block, not from the `input` field
+	// beside it. A request that carries only attachments has no text of its own,
+	// so without this the words that came with the picture are dropped and the
+	// turn runs on an empty message.
+	if strings.TrimSpace(text) == "" {
+		text = strings.TrimSpace(req.Input)
+		if text == "" {
+			text = strings.TrimSpace(req.Message)
+		}
+	}
 	return []types.ContextBlock{{
 		Kind: "input", Text: text, Parts: parts, Source: "http",
 		Stability: "dynamic", Priority: 80, Compressible: true,

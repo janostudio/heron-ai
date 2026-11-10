@@ -54,6 +54,19 @@ func TestRequestContextBlocks(t *testing.T) {
 			wantParts:  1,
 		},
 		{
+			// The agent takes its input text from the block, so a request that only
+			// has attachments must carry the words too — otherwise "看图" reaches
+			// the model as an empty message with a picture attached.
+			name: "attachments keep the text that came with them",
+			req: flowInputRequest{
+				Input:       "看图",
+				Attachments: []types.MediaAttachment{{SourceType: "base64", DataBase64: "aGk=", Kind: "image"}},
+			},
+			wantBlocks: 1,
+			wantText:   "看图",
+			wantParts:  1,
+		},
+		{
 			name:    "invalid content returns error",
 			req:     flowInputRequest{Content: json.RawMessage(`{"type":"bogus"}`)},
 			wantErr: true,

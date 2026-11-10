@@ -2,12 +2,33 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
+
+// contextBlocksOf reads the blocks stored with a queued message back into the
+// shape a turn expects. The mailbox payload is plain JSON, so the blocks come
+// back as generic maps and need one round trip through the encoder; a payload
+// written before blocks were stored simply has none.
+func contextBlocksOf(payload map[string]any) []types.ContextBlock {
+	raw, ok := payload["context_blocks"]
+	if !ok || raw == nil {
+		return nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var blocks []types.ContextBlock
+	if err := json.Unmarshal(data, &blocks); err != nil {
+		return nil
+	}
+	return blocks
+}
 
 // mailboxKindUser is a message the user sent while the session was busy.
 //
@@ -27,16 +48,25 @@ const userInputQueuedReply = "已收到，当前任务完成后继续处理。"
 // Returning it as queued rather than as an error keeps the promise the user
 // made by sending it: the message is not rejected, only deferred. The turn that
 // is running will start it as soon as it finishes (see drainQueuedInput).
-func (r *Runtime) queueUserInput(ctx context.Context, session types.FlowSession, input string) (types.FlowTurnResult, error) {
+//
+// The context blocks travel with the message. They carry the attachments — an
+// image the user pasted while the previous answer was still being produced — and
+// storing only the text would drop them silently: the queued turn would run
+// against a message the user never sent.
+func (r *Runtime) queueUserInput(ctx context.Context, session types.FlowSession, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
 	defs := r.definitions.Snapshot()
 	entry := defs.Flow.EntryTeamID
 	if entry == "" {
 		return types.FlowTurnResult{}, fmt.Errorf("flow has no entry team; cannot queue input")
 	}
+	payload := map[string]any{"input": input}
+	if len(blocks) > 0 {
+		payload["context_blocks"] = blocks
+	}
 	if _, err := r.enqueueMessage(ctx, session, types.FlowTurn{},
 		types.MailboxAddress{TeamID: entry},
 		mailboxKindUser,
-		map[string]any{"input": input},
+		payload,
 	); err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -75,7 +105,8 @@ func (r *Runtime) drainQueuedInput(ctx context.Context, sessionID string) {
 			return
 		}
 		input, _ := claimed.Payload["input"].(string)
-		if _, err := r.runTurnWithOrigin(ctx, r.definitions.Snapshot(), session, input, nil,
+		blocks := contextBlocksOf(claimed.Payload)
+		if _, err := r.runTurnWithOrigin(ctx, r.definitions.Snapshot(), session, input, blocks,
 			[]activation{{teamID: r.definitions.Snapshot().Flow.EntryTeamID}},
 			turnOriginUser, time.Now().UTC(), nil, nil); err != nil {
 			logging.Error("run queued user input", map[string]any{
@@ -120,10 +151,9 @@ func (r *Runtime) pendingUserInput(ctx context.Context, sessionID string) (types
 	if err != nil {
 		return types.MailboxMessage{}, types.FlowSession{}, false
 	}
-	for _, msg := range box {
-		if msg.Kind == mailboxKindUser && msg.Status == types.MailboxPending {
-			return msg, session, true
-		}
+	msg, ok := oldestPendingUserInput(box)
+	if !ok {
+		return types.MailboxMessage{}, types.FlowSession{}, false
 	}
-	return types.MailboxMessage{}, types.FlowSession{}, false
+	return msg, session, true
 }

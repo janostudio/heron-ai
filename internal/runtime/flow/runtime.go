@@ -273,7 +273,7 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
 		// The turn in flight cannot be interrupted, but the message must not be
 		// lost either: store it and let the running turn start it when it ends.
-		return r.queueUserInput(ctx, session, input)
+		return r.queueUserInput(ctx, session, input, blocks)
 	}
 	if running, err := r.runningTeams(ctx, sessionID); err != nil {
 		return types.FlowTurnResult{}, err
@@ -308,7 +308,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is waiting for approval; approval resume is not configured", session.ID)
 	}
 	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
-		return r.queueUserInput(ctx, session, input)
+		return r.queueUserInput(ctx, session, input, blocks)
 	}
 	if session.Status != types.SessionWaitingInput &&
 		session.Status != types.SessionWaitingTool {
