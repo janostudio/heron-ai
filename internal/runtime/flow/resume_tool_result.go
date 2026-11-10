@@ -31,6 +31,11 @@ type TeamResultSignal struct {
 	Reply      string
 	Records    []string
 	Error      string
+	// Failed says the call did not do its work. The answer text alone cannot
+	// carry this: a failure that reads like a sentence ("worker could not
+	// complete the task: ...") is indistinguishable from a result, and a turn
+	// that summarises it sounds like success.
+	Failed bool
 }
 
 // ResumeForToolResult appends a finished Team call's answer to the caller's
@@ -144,8 +149,24 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 			scopeSince = task.CreatedAt
 		}
 	}
+	// A failed dispatch is not a result to summarise: it is a request that did
+	// not happen. Carry it into the turn so the turn ends failed with the reason
+	// instead of producing a confident-sounding narration of work nobody did.
+	var failure error
+	switch {
+	case strings.TrimSpace(signal.Error) != "":
+		failure = fmt.Errorf("dispatched team %q failed: %s", signal.TeamID, strings.TrimSpace(signal.Error))
+	case signal.Status == string(types.ToolTaskFailed):
+		failure = fmt.Errorf("dispatched team %q failed without a reason", signal.TeamID)
+	case signal.Failed:
+		reason := strings.TrimSpace(signal.Reply)
+		if reason == "" {
+			reason = "no reason reported"
+		}
+		failure = fmt.Errorf("dispatched team %q could not complete the task: %s", signal.TeamID, reason)
+	}
 	_, runErr := r.runTurnWithOrigin(ctx, r.definitions.Snapshot(), session, "", nil,
-		[]activation{{teamID: activator}}, turnOriginTool, scopeSince, nil)
+		[]activation{{teamID: activator}}, turnOriginTool, scopeSince, nil, failure)
 	if runErr != nil {
 		return fmt.Errorf("run turn for tool result: %w", runErr)
 	}

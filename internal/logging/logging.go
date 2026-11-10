@@ -4,7 +4,9 @@
 package logging
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -494,3 +496,42 @@ func Warn(msg string, fields map[string]any) { current().Warn(msg, fields) }
 
 // Error logs an error message via the default logger.
 func Error(msg string, fields map[string]any) { current().Error(msg, fields) }
+
+// ErrorUnlessCancelled logs a failure at error level, and at info level when
+// the failure is the caller withdrawing the request. A cancel is work that
+// stopped on purpose; reporting it as an incident fills the log an operator
+// reads with errors nobody has to act on, and buries the real ones.
+func ErrorUnlessCancelled(err error, msg string, fields map[string]any) {
+	if err == nil {
+		return
+	}
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	fields["error"] = err.Error()
+	if IsCancellation(err) {
+		Info(msg+" (cancelled)", fields)
+		return
+	}
+	Error(msg, fields)
+}
+
+// IsCancellation reports whether err means "the caller withdrew the request".
+//
+// The error chain is tried first. The text fallback is not redundant: failures
+// cross a JSON boundary on their way up (a Team turn reports its reason as a
+// string), and a string cannot be unwrapped — `errors.Is(err, context.Canceled)`
+// on it is false. Without the fallback a cancelled turn is recorded as failed,
+// which both logs an error nobody can act on and writes the wrong terminal event.
+func IsCancellation(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "context canceled") ||
+		strings.Contains(text, "context cancelled") ||
+		strings.Contains(text, "context deadline exceeded")
+}

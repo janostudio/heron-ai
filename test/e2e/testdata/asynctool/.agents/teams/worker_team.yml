@@ -1,0 +1,16 @@
+id: worker_team
+goal: 完成被派发的任务并给出结论。
+
+calls:
+  run:
+    type: agent
+    agent: worker
+    responsibility: 按派发来的任务说明执行并给出结论
+    inputs:
+      user_message: true
+    output:
+      record: WorkerReport
+
+output:
+  from: run
+  record: WorkerReport

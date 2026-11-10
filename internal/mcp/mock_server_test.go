@@ -38,7 +38,14 @@ const (
 	mockModeSlow  = "slow"
 	mockModePaged = "paged"
 	mockModeNoise = "noise"
+	// mockModeCrashOnce dies on the first tools/call and works afterwards, which
+	// is what a crashed-and-restarted child looks like from the client's side.
+	// The marker file records that the crash already happened.
+	mockModeCrashOnce = "crash-once"
 )
+
+// envMockCrashMarker names the file whose absence means "crash now".
+const envMockCrashMarker = "HERON_MCP_MOCK_CRASH_MARKER"
 
 // mockSlowDelay is long relative to the timeouts the tests set and short
 // relative to the suite's patience.
@@ -104,6 +111,14 @@ func runMockServer() {
 		case "tools/list":
 			writeMockResult(out, req.ID, mockToolsListResult(req.Params, mode))
 		case "tools/call":
+			if marker := os.Getenv(envMockCrashMarker); mode == mockModeCrashOnce && marker != "" {
+				if _, err := os.Stat(marker); err != nil {
+					_ = os.WriteFile(marker, []byte("crashed"), 0o600)
+					// Die mid-call: the client sees the pipe close, exactly like a
+					// segfault or an OOM kill.
+					os.Exit(7)
+				}
+			}
 			if mode == mockModeSlow {
 				time.Sleep(mockSlowDelay)
 			}

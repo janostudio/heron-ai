@@ -61,6 +61,19 @@ type Runtime struct {
 	// getting it wrong means either refusing a live turn or resuming a dead one.
 	turnMu       sync.Mutex
 	runningTurns map[string]bool
+	// seqMu serializes per_task instance ordinal allocation. The ordinal is read
+	// from the event stream and then incremented, so without it two dispatches
+	// from one model response can pick the same number and collide.
+	seqMu sync.Mutex
+	// allocatedSeq remembers the highest per_task ordinal handed out per session
+	// in this process, so an instance whose created-event has not been written
+	// yet still reserves its number.
+	allocatedSeq map[string]int
+	// turnCancels holds the cancel function of the turn running in each session,
+	// so Cancel can stop the work instead of only labelling the session. A
+	// status written while the turn keeps going is a lie the user sees as an
+	// answer arriving after they cancelled.
+	turnCancels map[string]context.CancelFunc
 	// closedInterrupts records the sessions whose dangling executions have
 	// already been given a terminal event by this process. One pass is enough:
 	// the terminal it writes is what subsequent replays read.
@@ -260,7 +273,7 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
 		// The turn in flight cannot be interrupted, but the message must not be
 		// lost either: store it and let the running turn start it when it ends.
-		return r.queueUserInput(ctx, session, input)
+		return r.queueUserInput(ctx, session, input, blocks)
 	}
 	if running, err := r.runningTeams(ctx, sessionID); err != nil {
 		return types.FlowTurnResult{}, err
@@ -295,7 +308,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is waiting for approval; approval resume is not configured", session.ID)
 	}
 	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
-		return r.queueUserInput(ctx, session, input)
+		return r.queueUserInput(ctx, session, input, blocks)
 	}
 	if session.Status != types.SessionWaitingInput &&
 		session.Status != types.SessionWaitingTool {
@@ -360,7 +373,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 			attempt:       pendingTeam.Attempt + 1,
 			resumeResults: resumeResults,
 			resumeCalls:   resumeCalls,
-		}}, turnOriginResume, time.Time{}, nil)
+		}}, turnOriginResume, time.Time{}, nil, nil)
 	}
 	if !ok {
 		return r.runTurnWithContext(ctx, session, input, persistedBlocks)
@@ -375,7 +388,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 		resumeInput:        input,
 		resumeCallTurnID:   pending.CallTurnID,
 		resumeTaskID:       pending.TaskID,
-	}}, turnOriginResume, time.Time{}, nil)
+	}}, turnOriginResume, time.Time{}, nil, nil)
 }
 
 func (r *Runtime) ResumeApproval(ctx context.Context, sessionID, approvalID string, approved bool, reason string) (types.FlowTurnResult, error) {
@@ -611,13 +624,19 @@ func (r *Runtime) Cancel(ctx context.Context, sessionID string) error {
 	}
 	session.Status = types.SessionCancelled
 	session.UpdatedAt = time.Now().UTC()
-	return r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
+	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          types.EventFlowSessionUpdated,
 			FlowSessionID: session.ID,
 		},
 		Payload: map[string]any{"session": session},
-	})
+	}); err != nil {
+		return err
+	}
+	// Stop the work, not just the label. The turn's own finishTurn writes the
+	// terminal event with the cancelled status.
+	r.cancelRunningTurn(sessionID)
+	return nil
 }
 
 func (r *Runtime) Status(ctx context.Context, sessionID string) (types.FlowSession, error) {
@@ -662,7 +681,7 @@ func (r *Runtime) runTurnWithActivationsAndContext(
 	blocks []types.ContextBlock,
 	initial []activation,
 ) (types.FlowTurnResult, error) {
-	return r.runTurnWithOrigin(ctx, defs, session, input, blocks, initial, turnOriginUser, time.Time{}, nil)
+	return r.runTurnWithOrigin(ctx, defs, session, input, blocks, initial, turnOriginUser, time.Time{}, nil, nil)
 }
 
 // Turn origin values recorded on FlowTurn.Origin.
@@ -696,10 +715,16 @@ func (r *Runtime) runTurnWithOrigin(
 	origin string,
 	scopeSince time.Time,
 	deliveries []types.UserDelivery,
+	// pendingFailure is a condition the caller already knows is fatal for this
+	// turn — a dispatched Team that came back failed, for instance. The turn
+	// still runs (the model may say something useful about it), but it ends
+	// failed and its text is not published as a conclusion: a turn whose work
+	// did not happen must not read as an answer.
+	pendingFailure error,
 ) (types.FlowTurnResult, error) {
 	// Publish that this process owns a live turn for the session, so a message
 	// arriving mid-turn is queued rather than mistaken for a crash leftover.
-	clearRunning := r.markTurnRunning(session.ID)
+	ctx, clearRunning := r.markTurnRunning(ctx, session.ID)
 	defer clearRunning()
 	r.closeInterruptedTurns(ctx, session.ID)
 	if err := r.validateDependencies(session.FlowID); err != nil {
@@ -768,6 +793,17 @@ func (r *Runtime) runTurnWithOrigin(
 	}); err != nil {
 		return types.FlowTurnResult{}, err
 	}
+	// Info, not debug: these two lines are the join key between the process log
+	// and the session's event log. Without them a deployment running at the
+	// default level writes nothing that names the session, so "why did this turn
+	// hang" can only be answered by reading jsonl and matching timestamps by eye.
+	// No input text is logged — the id plus the outcome is what a reader needs.
+	logging.Info("flow turn started", map[string]any{
+		"flow_session_id": session.ID,
+		"flow_turn_id":    turn.ID,
+		"origin":          turn.Origin,
+		"attempt":         turn.Attempt,
+	})
 
 	result := types.FlowTurnResult{
 		Session: session,
@@ -955,10 +991,9 @@ func (r *Runtime) runTurnWithOrigin(
 		}
 		wg.Wait()
 		if firstErr != nil {
-			logging.Error("team turn execution failed", map[string]any{
+			logging.ErrorUnlessCancelled(firstErr, "team turn execution failed", map[string]any{
 				"flow_session_id": session.ID,
 				"flow_turn_id":    turn.ID,
-				"error":           firstErr.Error(),
 			})
 			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, firstErr)
 		}
@@ -1023,13 +1058,16 @@ func (r *Runtime) runTurnWithOrigin(
 				recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
 				continue
 			}
-			switch next.Action {
-			case types.NextProceed:
+			switch kind, known := classifyRoute(next.Action); {
+			case !known:
+				if routeFailure == nil {
+					routeFailure = fmt.Errorf("unsupported next action %q", next.Action)
+				}
+			case kind == routeForward:
 				targets := fixedTargets(execution.binding)
 				if len(targets) == 0 {
-					// With no fixed route the result goes back to whoever
-					// activated this Team. The entry has no activator, so the
-					// FlowTurn ends and waits for the user.
+					// With no fixed route the result goes back to whoever activated this Team.
+					// The entry has no activator, so the FlowTurn ends and waits for the user.
 					if execution.activation.activator == "" {
 						hasWaitInput = true
 						recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
@@ -1040,17 +1078,15 @@ func (r *Runtime) runTurnWithOrigin(
 				for _, target := range targets {
 					enqueueBatchRoute(routeTo(target, execution.activation.teamID))
 				}
-			case types.NextActivate:
-				// Collaboration is an asynchronous tool now: a Team hands work to
-				// another Team by calling the Team tool, which returns a task handle
-				// and delivers the answer as a tool result. Keeping the routing
-				// protocol as a second dispatch path would reintroduce the turn
-				// rebuild this whole change removes.
+			case kind == routeRetiredActivate:
+				// Collaboration is an asynchronous tool now: a Team hands work to another
+				// Team by calling the Team tool, which returns a task handle and delivers the
+				// answer as a tool result.
 				routeFailure = fmt.Errorf(
 					"team %q asked to activate %v: routing dispatch is retired, call the Team tool instead",
 					execution.activation.teamID, next.Teams)
 				continue
-			case types.NextReturn:
+			case kind == routeReturn:
 				target := next.CallerTeam
 				if target == "" {
 					target = execution.activation.activator
@@ -1061,7 +1097,7 @@ func (r *Runtime) runTurnWithOrigin(
 					continue
 				}
 				enqueueBatchRoute(routeTo(target, execution.activation.teamID))
-			case types.NextCoordinate:
+			case kind == routeCoordinate:
 				sourceTeam := execution.activation.teamID
 				if coordinateRetries[sourceTeam] >= r.limits.MaxCoordinateRetries {
 					routeFailure = fmt.Errorf(
@@ -1073,42 +1109,45 @@ func (r *Runtime) runTurnWithOrigin(
 					continue
 				}
 				coordinateRetries[sourceTeam]++
-				// Hand the decision back to whoever activated this Team; with
-				// no activator the user is the one to decide.
+				// Hand the decision back to whoever activated this Team; with no activator
+				// the user is the one to decide.
 				if execution.activation.activator == "" {
 					hasWaitInput = true
 					recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
 					continue
 				}
 				enqueueBatchRoute(routeTo(execution.activation.activator, execution.activation.teamID))
-			case types.NextWaitTool:
-				hasWaitTool = true
-			case types.NextWaitApproval:
-				hasWaitApproval = true
-			case types.NextAction("complete"), types.NextAction("wait_input"):
-				// Backward compatibility for older Agent responses. These
-				// values describe lifecycle completion, not Flow/Team
-				// orchestration. The current lifecycle leaves a normal Flow
-				// turn resumable, so do not enqueue another Team here.
-				// The turn ends on this hop, so its reply is the answer.
-				recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
-			case types.NextFail:
+			case kind == routeStop:
+				switch next.Action {
+				case types.NextWaitTool:
+					hasWaitTool = true
+				case types.NextWaitApproval:
+					hasWaitApproval = true
+				default:
+					// Legacy lifecycle values (complete / wait_input) describe the Agent
+					// finishing, not an orchestration step. The turn ends on this hop, so its
+					// reply is the answer.
+					recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
+				}
+			case kind == routeFail:
 				if routeFailure == nil {
 					routeFailure = errors.New(next.Reason)
-				}
-			default:
-				if routeFailure == nil {
-					routeFailure = fmt.Errorf("unsupported next action %q", next.Action)
 				}
 			}
 		}
 		if routeFailure != nil {
-			logging.Error("flow route failure", map[string]any{
+			// A cancelled call surfaces here as a route failure whose reason is
+			// text ("call \"x\": llm chat: context canceled"), so the cancel has to
+			// be recognised by text or it is recorded as an incident.
+			logging.ErrorUnlessCancelled(routeFailure, "flow route failure", map[string]any{
 				"flow_session_id": session.ID,
 				"flow_turn_id":    turn.ID,
-				"error":           routeFailure.Error(),
 			})
-			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, routeFailure)
+			status := types.SessionFailed
+			if logging.IsCancellation(routeFailure) {
+				status = types.SessionCancelled
+			}
+			return r.finishTurn(ctx, withDeliveries(result, deliveries), status, routeFailure)
 		}
 		result.Turn.Next = resolvedRoute
 		if len(queue) == 0 {
@@ -1120,6 +1159,42 @@ func (r *Runtime) runTurnWithOrigin(
 			// the loop is safe: the guard makes it idempotent, so a wait-case
 			// exit records it once and a plain fall-through records it once.
 			recordDispatched()
+			if pendingFailure != nil && !hasWaitApproval && !hasWaitTool {
+				// The work this turn was woken to collect did not happen. Ending
+				// "waiting_input" with the model's narration would tell the user
+				// the request succeeded; the turn ends failed and the answer slot
+				// stays empty, with the reason in Error.
+				// Replace the model's narration with a sentence that states the
+				// failure. Leaving it empty would make the failure live only in
+				// the error field, which a client that renders replies never
+				// shows.
+				result.Reply = failureReply(pendingFailure)
+				result.FinalReply = result.Reply
+				logging.Error("flow turn failed on dispatched work", map[string]any{
+					"flow_session_id": session.ID,
+					"flow_turn_id":    turn.ID,
+					"error":           pendingFailure.Error(),
+				})
+				return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, pendingFailure)
+			}
+			// A dispatch the engine refused or that failed is a failed request,
+			// even when the model narrates it as done. Marking the turn failed is
+			// what lets a client show the reason instead of a confident summary of
+			// work that never ran. Only when nothing at all succeeded: a retry that
+			// worked is a success with a failed attempt behind it.
+			if !hasWaitApproval && !hasWaitTool {
+				if reasons, noneSucceeded := failedTeamCalls(result.TeamResults); noneSucceeded && len(reasons) > 0 {
+					failure := fmt.Errorf("dispatched work did not run: %s", strings.Join(reasons, "; "))
+					result.Reply = failureReply(failure)
+					result.FinalReply = result.Reply
+					logging.Error("flow turn failed on dispatched work", map[string]any{
+						"flow_session_id": session.ID,
+						"flow_turn_id":    turn.ID,
+						"error":           failure.Error(),
+					})
+					return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, failure)
+				}
+			}
 			switch {
 			case hasWaitApproval:
 				return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionWaitingApproval, nil)
@@ -1426,12 +1501,11 @@ func (r *Runtime) executeTeamTurn(
 		ResumeCalls:        current.resumeCalls,
 	})
 	if runErr != nil {
-		logging.Error("team run failed", map[string]any{
+		logging.ErrorUnlessCancelled(runErr, "team run failed", map[string]any{
 			"flow_session_id": session.ID,
 			"flow_turn_id":    flowTurn.ID,
 			"team_id":         current.teamID,
 			"team_turn_id":    teamTurn.ID,
-			"error":           runErr.Error(),
 		})
 		teamResult.Error = runErr.Error()
 		teamResult.Turn.Status = types.TurnFailed
@@ -1539,6 +1613,12 @@ func (r *Runtime) executeTeamTurn(
 		}
 	}
 
+	// Same reason as finishTurn: a cancelled execution still has to record that
+	// the TeamTurn ended. The recovery check pairs started/completed events, so a
+	// TeamTurn with only a start makes the session "have unfinished execution",
+	// and a session in that state refuses new input until it is recovered.
+	ctx = writeEvenIfCancelled(ctx)
+
 	eventType := types.EventTeamTurnCompleted
 	if waitingApproval && teamResult.Error == "" {
 		eventType = types.EventTeamTurnWaitingApproval
@@ -1585,6 +1665,46 @@ func (r *Runtime) executeTeamTurn(
 	// Flow can report it to the Team that activated it. It is not an automatic
 	// replay request; only an explicit activate route may run work again.
 	return execution, nil
+}
+
+// failureReply is what a failed turn says when the model narrated success
+// instead. It names the failure so a client that only relays replies still
+// tells the user something actionable.
+func failureReply(err error) string {
+	if err == nil {
+		return ""
+	}
+	return "The request could not be completed: " + err.Error()
+}
+
+// failedTeamCalls reports why each Team call in this turn failed, and whether
+// none of them succeeded. It returns noneSucceeded=false as soon as one call
+// produced a result, so a turn that recovered from a refusal is not marked
+// failed for the attempt that did not land.
+func failedTeamCalls(results []types.TeamTurnResult) (reasons []string, noneSucceeded bool) {
+	noneSucceeded = true
+	for _, result := range results {
+		failed := result.Turn.Status == types.TurnFailed || strings.TrimSpace(result.Error) != ""
+		if !failed {
+			noneSucceeded = false
+			continue
+		}
+		reason := strings.TrimSpace(result.Error)
+		if reason == "" && result.Next != nil {
+			reason = strings.TrimSpace(result.Next.Reason)
+		}
+		if reason == "" {
+			reason = "team execution failed"
+		}
+		if result.Turn.TeamID != "" {
+			reason = result.Turn.TeamID + ": " + reason
+		}
+		reasons = append(reasons, reason)
+	}
+	if len(results) == 0 {
+		noneSucceeded = false
+	}
+	return reasons, noneSucceeded
 }
 
 func (r *Runtime) publishFlowRecord(
@@ -1715,6 +1835,19 @@ func (r *Runtime) finishTurn(
 	status types.SessionStatus,
 	runErr error,
 ) (types.FlowTurnResult, error) {
+	// A cancelled turn reaches here through the very context Cancel cancelled.
+	// The terminal event is the only record that the turn stopped, so it has to
+	// be written on a context that is still alive.
+	ctx = writeEvenIfCancelled(ctx)
+	if logging.IsCancellation(runErr) {
+		// Cancellation is not a failure of the work: it is the outcome the user
+		// asked for, and reporting it as "failed" sends them looking for a bug.
+		// The check is text-aware on purpose: a Team reports its reason as a
+		// string, and a string cannot be unwrapped, so errors.Is alone let a
+		// cancelled turn finish as failed.
+		status = types.SessionCancelled
+		runErr = errors.New("turn cancelled")
+	}
 	now := time.Now().UTC()
 	result.Session.Status = sessionStatusAfterTurn(status)
 	result.Session.UpdatedAt = now
@@ -1724,10 +1857,9 @@ func (r *Runtime) finishTurn(
 		result.Error = runErr.Error()
 	}
 	if status == types.SessionFailed {
-		logging.Error("flow turn failed", map[string]any{
+		logging.ErrorUnlessCancelled(errors.New(result.Error), "flow turn failed", map[string]any{
 			"flow_session_id": result.Session.ID,
 			"flow_turn_id":    result.Turn.ID,
-			"error":           result.Error,
 		})
 	}
 	eventType := types.EventFlowTurnCompleted
@@ -1827,6 +1959,17 @@ func (r *Runtime) finishTurn(
 	}); err != nil {
 		return result, err
 	}
+	// Pairs with "flow turn started": the two lines let a reader follow any turn
+	// from the process log alone, at the level a deployment actually runs.
+	logging.Info("flow turn finished", map[string]any{
+		"flow_session_id": result.Session.ID,
+		"flow_turn_id":    result.Turn.ID,
+		"status":          string(result.Turn.Status),
+		"team":            result.FinalReplyTeam,
+		"intermediate":    result.Turn.Intermediate,
+		"error":           result.Error,
+		"duration_ms":     now.Sub(result.Turn.StartedAt).Milliseconds(),
+	})
 	// A message that arrived while this turn was running is waiting in the
 	// mailbox. Start it now, in its own goroutine: this turn still holds the
 	// caller's lock, and running it inline would either recurse or deadlock.
@@ -2715,21 +2858,44 @@ func (r *Runtime) closeInterruptedTurns(ctx context.Context, sessionID string) {
 	}
 }
 
-func (r *Runtime) markTurnRunning(sessionID string) func() {
+// markTurnRunning publishes the turn as live and returns a context Cancel can
+// cancel, plus the cleanup that unpublishes it.
+func (r *Runtime) markTurnRunning(ctx context.Context, sessionID string) (context.Context, func()) {
 	if sessionID == "" {
-		return func() {}
+		return ctx, func() {}
 	}
+	turnCtx, cancel := context.WithCancel(ctx)
 	r.turnMu.Lock()
 	if r.runningTurns == nil {
 		r.runningTurns = make(map[string]bool)
 	}
+	if r.turnCancels == nil {
+		r.turnCancels = make(map[string]context.CancelFunc)
+	}
 	r.runningTurns[sessionID] = true
+	r.turnCancels[sessionID] = cancel
 	r.turnMu.Unlock()
-	return func() {
+	return turnCtx, func() {
+		cancel()
 		r.turnMu.Lock()
 		delete(r.runningTurns, sessionID)
+		delete(r.turnCancels, sessionID)
 		r.turnMu.Unlock()
 	}
+}
+
+// cancelRunningTurn stops the turn this process is running for the session, if
+// any. Reporting "cancelled" without this leaves the in-flight model call and
+// its answer to arrive afterwards.
+func (r *Runtime) cancelRunningTurn(sessionID string) bool {
+	r.turnMu.Lock()
+	cancel := r.turnCancels[sessionID]
+	r.turnMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
 }
 
 // isTurnRunning reports whether this process has a live turn for the session.
@@ -2823,4 +2989,18 @@ func topActivationPairs(counts map[string]int) []string {
 		out = append(out, fmt.Sprintf("%s ×%d", p.name, p.n))
 	}
 	return out
+}
+
+// writeEvenIfCancelled returns a context still usable for writing when the
+// caller's context has already been cancelled.
+//
+// Terminal events are the ledger: they are how the recovery check learns that a
+// turn, team turn or call ended. Skipping them on cancellation makes an ordinary
+// cancel indistinguishable from a crash, and the session then refuses new input
+// until someone runs recovery.
+func writeEvenIfCancelled(ctx context.Context) context.Context {
+	if ctx == nil || ctx.Err() == nil {
+		return ctx
+	}
+	return context.Background()
 }

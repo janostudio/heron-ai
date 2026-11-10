@@ -106,23 +106,22 @@ func requireBearerToken(token string, next http.Handler) http.Handler {
 
 // openWithoutToken reports whether path is served before authentication.
 //
-// Two things stay open, and only these two:
+// One thing stays open: the viewer shell — index.html, /static/*, and the
+// /s/<id> route that serves index.html so a deep link loads. The shell carries
+// no data and has to load before the browser can be asked for a token;
+// guarding it makes the token field unreachable over HTTP, which is the state
+// this function exists to fix.
 //
-//   - The viewer shell: index.html, /static/*, and the /s/<id> route that
-//     serves index.html so a deep link loads. The shell carries no data and has
-//     to load before the browser can be asked for a token — guarding it makes
-//     the token field unreachable over HTTP, which is the state this function
-//     exists to fix.
-//   - /api/health, which answers liveness only (ready flag, pending wakeup
-//     count, session count). Launchers and monitors poll it before they hold a
-//     credential, and it leaks no conversation content.
+// /api/health used to be open so launchers could poll it before holding a
+// credential. It is guarded now: on a non-loopback bind it told anyone who
+// asked how many sessions the engine had loaded and whether wake-ups were
+// pending, which is a deployment's activity, not a liveness byte. A probe that
+// needs it holds the token already — the same token it needs for the first real
+// call.
 //
-// The default is guarded: anything under /api/ needs the token unless it is
-// named here, so a new route cannot become public by accident.
+// The default is guarded: anything under /api/ needs the token, so a new route
+// cannot become public by accident.
 func openWithoutToken(path string) bool {
-	if path == "/api/health" {
-		return true
-	}
 	if path == "/api" || strings.HasPrefix(path, "/api/") {
 		return false
 	}

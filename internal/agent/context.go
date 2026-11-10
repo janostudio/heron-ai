@@ -905,8 +905,13 @@ func truncateContextText(text string, maxChars int) string {
 func cloneMessage(message types.Message) types.Message {
 	message.ToolCalls = append([]types.ToolCall(nil), message.ToolCalls...)
 	if len(message.Parts) > 0 {
-		message.Parts = make([]types.ContentPart, len(message.Parts))
-		for i, part := range message.Parts {
+		// Take the source slice before replacing the field: ranging over
+		// message.Parts after `make` walks the fresh, all-zero slice, which
+		// silently replaced every part with an empty one — every attachment
+		// dropped its media and reached the provider as an empty text part.
+		parts := message.Parts
+		message.Parts = make([]types.ContentPart, len(parts))
+		for i, part := range parts {
 			message.Parts[i] = part
 			if part.Media != nil {
 				media := *part.Media

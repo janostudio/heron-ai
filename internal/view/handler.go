@@ -3,13 +3,17 @@ package view
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/agent"
 	"github.com/heron-ai/heron-engine/internal/media"
 	"github.com/heron-ai/heron-engine/internal/storage"
+	"github.com/heron-ai/heron-engine/internal/workspace"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -21,6 +25,24 @@ type Handler struct {
 	// files is the read-only history source the web record view replays. It is
 	// nil for handlers built without one; those answer 503 rather than panic.
 	files storage.FileStore
+	// build names the binary that is serving. Without it a deployment cannot be
+	// identified from the outside: two restarts look identical, and a rollback
+	// that silently kept the new binary looks like a rollback that worked.
+	build BuildInfo
+}
+
+// BuildInfo identifies a running binary.
+type BuildInfo struct {
+	Version string
+	Commit  string
+}
+
+// SetBuildInfo lets the entrypoint publish what it was built from.
+func (h *Handler) SetBuildInfo(info BuildInfo) {
+	if h == nil {
+		return
+	}
+	h.build = info
 }
 
 func NewHandler() *Handler {
@@ -99,11 +121,21 @@ func (h *Handler) HandleRun(w http.ResponseWriter, r *http.Request) {
 
 	var req flowInputRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeDecodeError(w, err)
 		return
 	}
 	if req.Input == "" {
 		req.Input = req.Message
+	}
+	// The session to continue may be named in the body or in the query. Every
+	// other turn endpoint takes it from the query, so a client that follows that
+	// habit must not silently get a new session: "continue this" and "start a new
+	// one" are different intentions, and only one of them is recoverable.
+	if strings.TrimSpace(req.FlowSessionID) == "" {
+		req.FlowSessionID = strings.TrimSpace(r.URL.Query().Get("flow_session_id"))
+	}
+	if strings.TrimSpace(req.FlowSessionID) == "" {
+		req.FlowSessionID = strings.TrimSpace(r.URL.Query().Get("session_id"))
 	}
 	blocks, err := requestContextBlocks(req)
 	if err != nil {
@@ -130,6 +162,14 @@ func (h *Handler) HandleRun(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if err != nil {
+		// Continuing a named session is the same class of request as
+		// /api/sessions/turn: a session that is gone has to answer 404, or the
+		// client keeps retrying a request it can never satisfy. Only the branch
+		// that creates a session has no id to name, and there 400 stays right.
+		if strings.TrimSpace(req.FlowSessionID) != "" {
+			writeRuntimeError(w, about("session", req.FlowSessionID, err))
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -150,7 +190,7 @@ func (h *Handler) HandleTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	var req flowInputRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeDecodeError(w, err)
 		return
 	}
 	if req.Input == "" {
@@ -175,7 +215,7 @@ func (h *Handler) HandleTurn(w http.ResponseWriter, r *http.Request) {
 		result, err = h.runtime.HandleInput(r.Context(), sessionID, req.Input)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeRuntimeError(w, about("session", sessionID, err))
 		return
 	}
 	writeJSON(w, result)
@@ -190,7 +230,7 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		session, err := h.runtime.Status(r.Context(), sessionID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			writeReadError(w, about("session", sessionID, err), "session "+strconv.Quote(sessionID))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -216,7 +256,7 @@ func (h *Handler) HandleResult(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := h.runtime.Status(r.Context(), sessionID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeReadError(w, about("session", sessionID, err), "session "+strconv.Quote(sessionID))
 		return
 	}
 	writeJSON(w, types.FlowTurnResult{Session: session})
@@ -248,7 +288,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 
 	events, err := h.sessions.Subscribe(streamCtx, sessionID, lastID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeReadError(w, about("session", sessionID, err), "event stream for session "+strconv.Quote(sessionID))
 		return
 	}
 	writer, err := NewSSEWriter(w)
@@ -256,14 +296,66 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Replaying a session that already ended has to deliver its *latest* turn,
+	// not stop at the first terminal event in the file: a subscriber that sees
+	// turn one only will re-render an old answer and never notice the turn it
+	// actually asked about. The boundary below says where the recorded history
+	// ends and whether that end is already settled.
+	replayEnd, replaySettled := h.streamReplayBoundary(streamCtx, sessionID)
 	for event := range events {
 		if err := writer.WriteSessionEvent(event); err != nil {
 			return
 		}
-		if !follow && event.Type == types.EventFlowTurnCompleted {
+		if follow {
+			continue
+		}
+		if event.Seq <= replayEnd {
+			// Still replaying what was already recorded. Only the end of the
+			// history can finish the response, and only when it is settled.
+			if event.Seq == replayEnd && replaySettled {
+				return
+			}
+			continue
+		}
+		if turnStreamEnded(event) {
 			return
 		}
 	}
+}
+
+// streamReplayBoundary reports the last recorded sequence number and whether
+// the session's newest event already closes the turn.
+func (h *Handler) streamReplayBoundary(ctx context.Context, sessionID string) (int64, bool) {
+	replay, err := h.sessions.Replay(ctx, sessionID)
+	if err != nil || replay == nil || len(replay.Events) == 0 {
+		return 0, false
+	}
+	return replay.LastSeq, turnStreamEnded(replay.Events[len(replay.Events)-1])
+}
+
+// turnStreamEnded reports whether this event is the last one a non-following
+// subscriber needs.
+//
+// "Terminal" here means terminal for the turn, not for the session. An
+// interactive turn ends waiting_input, so a subscriber that only stops on
+// completed holds the connection open for ever: the client has to decide when
+// to stop reading on its own, and every ordinary question leaks a connection
+// until something upstream times it out.
+//
+// An intermediate turn is the exception. It also ends waiting_input, but it is a
+// progress report and the conclusion it reports on has not been produced yet;
+// closing there hands the client the handoff and drops the answer.
+func turnStreamEnded(event storage.SessionEvent) bool {
+	intermediate, _ := event.Payload["intermediate"].(bool)
+	switch event.Type {
+	case types.EventFlowTurnCompleted:
+		return true
+	case types.EventFlowTurnWaitingInput:
+		return !intermediate
+	case types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
+		return true
+	}
+	return false
 }
 
 // wakeupStatsProvider is implemented by a runtime that owns scheduled
@@ -276,16 +368,22 @@ type wakeupStatsProvider interface {
 // healthResponse is what an embedding client probes before it starts sending
 // work: a process that is up but has no runtime is not ready.
 type healthResponse struct {
-	Ready          bool `json:"ready"`
-	PendingWakeups int  `json:"pending_wakeups"`
-	SessionsLoaded int  `json:"sessions_loaded"`
+	Ready          bool   `json:"ready"`
+	Version        string `json:"version"`
+	Commit         string `json:"commit"`
+	PendingWakeups int    `json:"pending_wakeups"`
+	SessionsLoaded int    `json:"sessions_loaded"`
 }
 
 // HandleHealth reports readiness and how many wake-ups are waiting. The counts
 // are what an operator needs to answer "did the engine remember my timers
 // across the restart" without reading the event logs.
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
-	response := healthResponse{Ready: h.runtime != nil}
+	response := healthResponse{
+		Ready:   h.runtime != nil,
+		Version: h.build.Version,
+		Commit:  h.build.Commit,
+	}
 	if provider, ok := h.runtime.(wakeupStatsProvider); ok {
 		response.PendingWakeups, response.SessionsLoaded = provider.WakeupStats(r.Context())
 	}
@@ -306,7 +404,7 @@ func (h *Handler) HandleRecoveryStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status, err := recovery.RecoveryStatus(r.Context(), sessionID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeReadError(w, about("session", sessionID, err), "recovery status for session "+strconv.Quote(sessionID))
 		return
 	}
 	writeJSON(w, status)
@@ -325,12 +423,12 @@ func (h *Handler) HandleRecover(w http.ResponseWriter, r *http.Request) {
 	}
 	var req types.RecoveryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeDecodeError(w, err)
 		return
 	}
 	result, err := recovery.Recover(r.Context(), sessionID, req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeRuntimeError(w, about("session", sessionID, err))
 		return
 	}
 	writeJSON(w, result)
@@ -345,7 +443,7 @@ func (h *Handler) HandleResume(w http.ResponseWriter, r *http.Request) {
 		}
 		var req flowInputRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeDecodeError(w, err)
 			return
 		}
 		if req.Input == "" {
@@ -366,7 +464,7 @@ func (h *Handler) HandleResume(w http.ResponseWriter, r *http.Request) {
 			result, err = h.runtime.Resume(r.Context(), sessionID, req.Input)
 		}
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeRuntimeError(w, about("session", sessionID, err))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -392,7 +490,7 @@ func (h *Handler) HandleApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	var req approvalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeDecodeError(w, err)
 		return
 	}
 	requestID := req.RequestID
@@ -420,7 +518,7 @@ func (h *Handler) HandleApproval(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeRuntimeError(w, about("session", sessionID, err))
 		return
 	}
 	writeJSON(w, result)
@@ -429,6 +527,89 @@ func (h *Handler) HandleApproval(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+// writeRuntimeError maps a runtime failure to the status code a client acts on.
+// The distinction that matters is "the thing you named does not exist" versus
+// "the request you sent is wrong": a 400 on an expired session teaches the
+// client to fix its request, so it retries a session that is gone instead of
+// starting a new one.
+func writeRuntimeError(w http.ResponseWriter, err error) {
+	if isNotFound(err) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusBadRequest)
+}
+
+// writeReadError answers a failed read.
+//
+// A read names its subject and asks for it; there is no request shape the caller
+// can repair. So "not found" is the one answer it can act on and everything else
+// is ours: reporting an unreadable state file as 404 tells the client the session
+// is gone, and it drops work that a retry would have found. The 5xx body carries
+// the reason so an operator can act on it, but never a stack.
+func writeReadError(w http.ResponseWriter, err error, subject string) {
+	if isNotFound(err) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	http.Error(w, "internal error reading "+subject+": "+err.Error(), http.StatusInternalServerError)
+}
+
+// writeDecodeError answers a body that could not be read as JSON.
+//
+// Almost every decode failure is the request's fault. The exception is the
+// server's own cap: a body over the limit arrives here as *http.MaxBytesError,
+// and answering 400 would tell the client its JSON was malformed when the real
+// answer is "send less".
+func writeDecodeError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		http.Error(w, fmt.Sprintf("request body exceeds the %d byte limit", tooLarge.Limit), http.StatusRequestEntityTooLarge)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusBadRequest)
+}
+
+// resourceError names what a failure was about.
+//
+// "file not found" alone leaves a client with several ids in flight unable to
+// tell which one to drop, and leaves a human reading the body unable to tell
+// what the engine looked for. The id is quoted because it comes from the
+// request: quoting escapes anything that would otherwise corrupt the body.
+type resourceError struct {
+	resource string
+	id       string
+	err      error
+}
+
+func (e *resourceError) Error() string {
+	return e.resource + " " + strconv.Quote(e.id) + ": " + e.err.Error()
+}
+
+func (e *resourceError) Unwrap() error { return e.err }
+
+// about names the resource a failure belongs to. A failure that already names
+// one is left alone: wrapping it twice would print the id twice.
+func about(resource, id string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var named *resourceError
+	if errors.As(err, &named) {
+		return err
+	}
+	return &resourceError{resource: resource, id: id, err: err}
+}
+
+// isNotFound reports whether the failure means "no such session/task/approval".
+// Storage reports it as storage.ErrNotFound; a few call sites wrap the
+// workspace's own sentinel instead.
+func isNotFound(err error) bool {
+	return errors.Is(err, storage.ErrNotFound) ||
+		errors.Is(err, workspace.ErrFileNotFound) ||
+		errors.Is(err, agent.ErrToolTaskNotFound)
 }
 
 func requestContextBlocks(req flowInputRequest) ([]types.ContextBlock, error) {
@@ -463,6 +644,16 @@ func requestContextBlocks(req flowInputRequest) ([]types.ContextBlock, error) {
 	if strings.TrimSpace(text) == "" && len(parts) == 0 {
 		return nil, nil
 	}
+	// The agent reads its input text from this block, not from the `input` field
+	// beside it. A request that carries only attachments has no text of its own,
+	// so without this the words that came with the picture are dropped and the
+	// turn runs on an empty message.
+	if strings.TrimSpace(text) == "" {
+		text = strings.TrimSpace(req.Input)
+		if text == "" {
+			text = strings.TrimSpace(req.Message)
+		}
+	}
 	return []types.ContextBlock{{
 		Kind: "input", Text: text, Parts: parts, Source: "http",
 		Stability: "dynamic", Priority: 80, Compressible: true,
@@ -487,7 +678,7 @@ func (h *Handler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := h.runtime.Cancel(r.Context(), sessionID); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeRuntimeError(w, about("session", sessionID, err))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -531,7 +722,7 @@ func (h *Handler) HandleTaskStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	task, err := h.tasks.Load(r.Context(), taskID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeReadError(w, about("task", taskID, err), "task "+strconv.Quote(taskID))
 		return
 	}
 	writeJSON(w, task)
@@ -550,7 +741,11 @@ func (h *Handler) HandleTaskCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.cancel.Cancel(r.Context(), taskID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		// Cancelling a task nobody dispatched is the same class of answer as
+		// asking for a session that does not exist: the id is unknown, not the
+		// request malformed. A client that sees 400 here fixes its request; a 404
+		// tells it the work is already gone.
+		writeRuntimeError(w, about("task", taskID, err))
 		return
 	}
 	status := types.ToolTaskStatus(types.ToolTaskCancelled)
@@ -584,7 +779,7 @@ func (h *Handler) HandleTaskStream(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := subscriber.Subscribe(r.Context(), taskID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeReadError(w, about("task", taskID, err), "event stream for task "+strconv.Quote(taskID))
 		return
 	}
 	writer, err := NewSSEWriter(w)

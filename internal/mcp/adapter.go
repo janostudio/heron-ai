@@ -18,6 +18,10 @@ const (
 	DefaultStartTimeout = 30 * time.Second
 	// DefaultCallTimeout bounds one tools/call.
 	DefaultCallTimeout = 120 * time.Second
+	// DefaultReconnectAttempts bounds restarts of a dead stdio server. Three
+	// covers a crash plus a reload; more than that is a loop the operator should
+	// see as a failure rather than as a slow recovery.
+	DefaultReconnectAttempts = 3
 )
 
 // Transports this implementation supports.
@@ -65,6 +69,9 @@ type Options struct {
 	HTTPClient *http.Client
 	// GlobalEnv 是引擎级全局环境变量，以最低优先级注入每个 stdio server 子进程。
 	GlobalEnv map[string]string
+	// ReconnectAttempts bounds restarts of a dead stdio server. Zero uses the
+	// default; negative disables reconnection.
+	ReconnectAttempts int
 }
 
 func (o Options) startTimeout() time.Duration {
@@ -79,6 +86,16 @@ func (o Options) callTimeout() time.Duration {
 		return o.CallTimeout
 	}
 	return DefaultCallTimeout
+}
+
+// reconnectAttempts bounds how many times a dead stdio server is restarted
+// before the connection is left failing. Zero falls back to the default; a
+// negative value disables reconnection.
+func (o Options) reconnectAttempts() int {
+	if o.ReconnectAttempts != 0 {
+		return o.ReconnectAttempts
+	}
+	return DefaultReconnectAttempts
 }
 
 // toolRef remembers which server serves a tool.
@@ -137,6 +154,16 @@ func (a *MCPAdapter) Connect(ctx context.Context, server MCPServer) error {
 		return err
 	}
 	client := NewClient(server.Name, transport)
+	// A stdio server is a child process and can die on its own. Only stdio gets
+	// a factory: an HTTP endpoint is not restarted by us, and re-running the
+	// handshake against a healthy server would be pointless work.
+	if strings.EqualFold(strings.TrimSpace(server.Transport), TransportStdio) ||
+		strings.TrimSpace(server.Transport) == "" {
+		cfg := server
+		client.EnableReconnect(func(ctx context.Context) (Transport, error) {
+			return a.newTransport(cfg)
+		}, a.opts.reconnectAttempts())
+	}
 	startCtx, cancel := withTimeout(ctx, a.opts.startTimeout())
 	defer cancel()
 	if err := client.Connect(startCtx); err != nil {

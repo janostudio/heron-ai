@@ -1,0 +1,16 @@
+id: reporter_team
+goal: 产出结构化报告
+
+calls:
+  report:
+    type: agent
+    agent: reporter
+    responsibility: 按用户要求产出结构化报告
+    inputs:
+      user_message: true
+    output:
+      record: Report
+
+output:
+  from: report
+  record: Report

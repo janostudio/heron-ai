@@ -120,7 +120,7 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 	result, runErr := r.runTurnWithOrigin(ctx, defs, session, taskInputFromMessages(messages), blocks,
 		[]activation{wake}, turnOriginMailbox,
 		r.taskChainSince(ctx, sessionID, mailboxScopeSince(messages)),
-		userDeliveries(messages, defs.Flow.EntryTeamID))
+		userDeliveries(messages, defs.Flow.EntryTeamID), nil)
 
 	// Bookkeeping failures stay logged, never escalated: they must not turn a
 	// completed turn into a failed one.

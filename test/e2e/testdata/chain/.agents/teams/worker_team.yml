@@ -1,0 +1,16 @@
+id: worker_team
+goal: 完成被派发的任务；需要更细的检查时把子任务派给 probe。
+
+calls:
+  run:
+    type: agent
+    agent: worker
+    responsibility: 按派发来的任务说明执行；可以直接给出结论，也可以把子任务派给 probe
+    inputs:
+      user_message: true
+    output:
+      record: WorkerReport
+
+output:
+  from: run
+  record: WorkerReport

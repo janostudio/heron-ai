@@ -104,7 +104,7 @@ func TestTurnLoopToolApprovalCreatesDurableWaitingCheckpointAndResumes(t *testin
 	require.Equal(t, "completed", resumed.Reply)
 }
 
-func TestTurnLoopToolApprovalDeniedFailsWithoutExecuting(t *testing.T) {
+func TestTurnLoopToolApprovalDeniedDoesNotExecute(t *testing.T) {
 	model := &mockModelProvider{
 		responses: []types.ChatResponse{{
 			ToolCalls: []types.ToolCall{{
@@ -150,9 +150,18 @@ func TestTurnLoopToolApprovalDeniedFailsWithoutExecuting(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.TurnFailed, resumed.Status)
-	require.Contains(t, resumed.Error, "approval denied")
+	// A refusal is a decision that succeeded, not a broken turn: the loop
+	// continues so the model can react to it (ask, re-plan, explain), and the
+	// reason lands in the conversation rather than ending it. What must not
+	// change is the effect: nothing ran.
+	require.NotEqual(t, types.TurnFailed, resumed.Status)
 	require.Equal(t, 0, executor.executed)
+	require.NotEmpty(t, model.lastMessages)
+	joined := ""
+	for _, message := range model.lastMessages {
+		joined += message.Content + "\n"
+	}
+	require.Contains(t, joined, "approval denied")
 }
 
 func TestTurnLoopCheckpointCompatibilityRejectsFutureVersion(t *testing.T) {

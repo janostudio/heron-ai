@@ -79,12 +79,11 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		AllowedTeams:       req.AllowedTeams,
 	})
 	if err != nil {
-		logging.Error("agent executor failed", map[string]any{
+		logging.ErrorUnlessCancelled(err, "agent executor failed", map[string]any{
 			"flow_session_id": req.FlowSession.ID,
 			"team_id":         req.TeamTurn.TeamID,
 			"call_id":         req.Call.ID,
 			"agent_id":        req.Call.AgentID,
-			"error":           err.Error(),
 		})
 		return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
 	}

@@ -1,7 +1,9 @@
 package logging
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -444,5 +446,30 @@ func TestSyncDateRollsBackOnOpenFailure(t *testing.T) {
 	}
 	if gotDate != "1999-01-01" {
 		t.Fatalf("curDate = %q, want the pre-attempt value: a failed open must not advance the date", gotDate)
+	}
+}
+
+func TestIsCancellation(t *testing.T) {
+	wrapped := fmt.Errorf("call %q: %w", "worker", context.Canceled)
+	textOnly := fmt.Errorf("call %q: llm chat: context canceled", "worker")
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "context.Canceled", err: context.Canceled, want: true},
+		{name: "deadline", err: context.DeadlineExceeded, want: true},
+		{name: "wrapped chain", err: wrapped, want: true},
+		{name: "text only", err: textOnly, want: true},
+		{name: "ordinary failure", err: fmt.Errorf("model returned 500"), want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsCancellation(tc.err); got != tc.want {
+				t.Fatalf("IsCancellation(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }

@@ -1,0 +1,16 @@
+id: worker_b_team
+goal: 完成被派发的任务并给出结论（第二条执行通道，用于并行验证）。
+
+calls:
+  run:
+    type: agent
+    agent: worker-b
+    responsibility: 按派发来的任务说明执行并给出结论
+    inputs:
+      user_message: true
+    output:
+      record: WorkerBReport
+
+output:
+  from: run
+  record: WorkerBReport

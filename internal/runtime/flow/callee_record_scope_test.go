@@ -50,7 +50,7 @@ func TestDispatchedCalleeRecordIsVisibleToTheFlow(t *testing.T) {
 
 	_, err := rt.runTurnWithOrigin(context.Background(), defs, session, "", nil,
 		[]activation{{teamID: "verify", callerTeam: "default"}},
-		turnOriginTool, session.CreatedAt, nil)
+		turnOriginTool, session.CreatedAt, nil, nil)
 	require.NoError(t, err)
 
 	records, err := rt.loadHistoricalFlowRecords(context.Background(), session.ID)
@@ -75,7 +75,7 @@ func TestEntryTeamRecordStaysInTeamScope(t *testing.T) {
 	session := seedMailboxSession(t, rt, "fs-entry", types.SessionWaitingInput)
 
 	_, err := rt.runTurnWithOrigin(context.Background(), defs, session, "查版本号", nil,
-		[]activation{{teamID: "default"}}, turnOriginUser, session.CreatedAt, nil)
+		[]activation{{teamID: "default"}}, turnOriginUser, session.CreatedAt, nil, nil)
 	require.NoError(t, err)
 
 	records, err := rt.loadHistoricalFlowRecords(context.Background(), session.ID)

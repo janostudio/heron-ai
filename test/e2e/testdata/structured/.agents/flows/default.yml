@@ -1,0 +1,8 @@
+id: e2e_structured
+entry: reporter
+
+teams:
+  reporter:
+    team: reporter_team
+    inputs:
+      user_message: true

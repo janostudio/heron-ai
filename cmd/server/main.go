@@ -31,7 +31,13 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-var version = "dev"
+// version and commit are stamped at build time (-ldflags "-X ..."). They are
+// what /api/health and --version report, so a running deployment can be named
+// without inspecting the binary or guessing from the install directory.
+var (
+	version = "dev"
+	commit  = "unknown"
+)
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "knowledge" {
@@ -69,7 +75,7 @@ func main() {
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Printf("Heron AI v%s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("Heron AI v%s (%s/%s) commit=%s\n", version, runtime.GOOS, runtime.GOARCH, commit)
 		return
 	}
 
@@ -190,6 +196,7 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 		bundle.TaskControl,
 	)
 	handler.SetFileStore(bundle.Files)
+	handler.SetBuildInfo(view.BuildInfo{Version: version, Commit: commit})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/run", handler.HandleRun)
 	mux.HandleFunc("/api/sessions", handler.HandleRun)
@@ -233,7 +240,10 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 	// stay open so a browser can load the page and be asked for the token.
 	// openWithoutToken is the list, and it fails closed for anything else under
 	// /api/.
-	api := requireBearerToken(token, mux)
+	// Authentication first, then the method guard, then the body cap: an
+	// unauthenticated caller should not learn which methods a path accepts, and
+	// a request that is refused for its method should not be buffered first.
+	api := requireBearerToken(token, withMethodGuard(withBodyLimit(maxRequestBodyBytes, mux)))
 
 	fmt.Printf("Heron AI FlowRuntime server listening on %s:%s\n", host, port)
 	if !isLoopbackHost(host) {

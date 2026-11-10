@@ -1,0 +1,33 @@
+id: e2e_chain
+entry: frontdesk
+
+# Two edges, three teams: frontdesk may hand work to worker, and worker may
+# hand part of it to probe. The chain is what makes a turn span three teams
+# instead of two, and each edge is declared here so the reach belongs to the
+# flow rather than to the agent's habits.
+teams:
+  frontdesk:
+    team: frontdesk_team
+    can_activate:
+      - worker
+    inputs:
+      user_message: true
+
+  worker:
+    team: worker_team
+    can_activate:
+      - probe
+    on_proceed:
+      - frontdesk
+    inputs:
+      user_message: true
+
+  # The end of the chain. Its conclusion goes back to the team that dispatched
+  # it, so worker can finish the task it was given; worker's own result then goes
+  # back to frontdesk. Two hops, and the person who asked sees one conclusion.
+  probe:
+    team: probe_team
+    on_proceed:
+      - worker
+    inputs:
+      user_message: true

@@ -239,11 +239,10 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 			result.Error = err.Error()
 			result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
 			result.Turn.Status = types.TurnFailed
-			logging.Error("team batch failed", map[string]any{
+			logging.ErrorUnlessCancelled(err, "team batch failed", map[string]any{
 				"flow_session_id": req.FlowSession.ID,
 				"team_id":         req.Team.ID,
 				"team_turn_id":    req.TeamTurn.ID,
-				"error":           err.Error(),
 			})
 			return result, err
 		}
@@ -559,13 +558,12 @@ func (r *Runtime) runBatch(
 			}
 			callResult, err := r.executors.Execute(execCtx, callReq)
 			if err != nil {
-				logging.Error("call executor failed", map[string]any{
+				logging.ErrorUnlessCancelled(err, "call executor failed", map[string]any{
 					"flow_session_id": req.FlowSession.ID,
 					"team_id":         req.Team.ID,
 					"team_turn_id":    req.TeamTurn.ID,
 					"call_id":         name,
 					"call_type":       string(configured.Type),
-					"error":           err.Error(),
 				})
 			}
 			if callReq.ResumeApproval != nil {
@@ -749,6 +747,8 @@ func (r *Runtime) appendCallCompleted(ctx context.Context, req types.CallRequest
 	if r.sessions == nil {
 		return nil
 	}
+	ctx, cancel := terminalWriteContext(ctx)
+	defer cancel()
 	eventType := types.EventCommandTurnCompleted
 	switch req.Call.Type {
 	case types.CallAgent:
@@ -806,6 +806,8 @@ func (r *Runtime) appendCallWaiting(ctx context.Context, req types.CallRequest, 
 	if r.sessions == nil {
 		return nil
 	}
+	ctx, cancel := terminalWriteContext(ctx)
+	defer cancel()
 	if req.Call.Type != types.CallAgent {
 		return r.appendCallCompleted(ctx, req, result, spawn)
 	}
@@ -1426,4 +1428,17 @@ func summarizeCallNames(names []string, limit int) string {
 		out += fmt.Sprintf(" (+%d more)", rest)
 	}
 	return out
+}
+
+// terminalWriteContext detaches a terminal-event write from the caller's
+// cancellation.
+//
+// A cancelled turn still has to record that it ended. The recovery check pairs
+// started/completed events, so a call that only left a start reads as an
+// unfinished execution — and a session with unfinished execution refuses new
+// input until it is explicitly recovered. That made every cancel look like a
+// crash to the user. The write is bounded so a stuck disk cannot hang the cancel
+// path.
+func terminalWriteContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 }
