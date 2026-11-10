@@ -1459,10 +1459,23 @@
     });
   }
 
+  /* mediaKindOf names the attachment's kind. Recorded parts carry media_type
+   * (image/png) but no kind, so reading only `kind` labelled every image a
+   * "file" and never rendered it. */
+  function mediaKindOf(item) {
+    var kind = item.kind || "";
+    if (kind) { return kind; }
+    var mime = item.media_type || item.mime_type || "";
+    if (mime.indexOf("image/") === 0) { return "image"; }
+    if (mime.indexOf("video/") === 0) { return "video"; }
+    if (mime.indexOf("audio/") === 0) { return "audio"; }
+    return "file";
+  }
+
   /* mediaNode renders an attachment inline. It returns null for anything the
    * transcript cannot display, so the caller keeps the chip. */
   function mediaNode(item) {
-    var kind = item.kind || "";
+    var kind = mediaKindOf(item);
     var ref = item.storage_ref || "";
     var node = null;
     if (kind === "image") {
@@ -1491,7 +1504,7 @@
       var preview = mediaNode(item);
       if (preview) { row.appendChild(preview); }
       row.appendChild(el("span", { class: "chip" },
-        el("span", { class: "chip-kind" }, item.kind || "file"),
+        el("span", { class: "chip-kind" }, mediaKindOf(item)),
         el("span", { class: "chip-name" }, item.name || "(\u672a\u547d\u540d)"),
         el("span", { class: "chip-size" }, humanSize(item.size_bytes || 0))));
     });
