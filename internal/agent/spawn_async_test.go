@@ -396,12 +396,12 @@ func TestSpawnTool_AsyncChildEmitsSessionEvents(t *testing.T) {
 
 // TestSpawnTool_ChildUsageIsOwnAgentTurn locks the consumption model for
 // spawned children: a child's tokens are published as the child's own
-// session.agent_turn.completed event (payload.call_result.Usage / .Requests) under a
+// session.agent_turn.completed event (payload.call_result.usage / .Requests) under a
 // child-owned CallID, and are never folded into the parent's CallResult.
 //
 // This is deliberate, not a leak. The declared fact source for consumption is
 // the event stream (team.jsonl: session.agent_turn.completed →
-// payload.call_result.Requests[]); the parent CallResult.Usage covers only the
+// payload.call_result.requests[]); the parent CallResult.Usage covers only the
 // parent's own model rounds (runtime.go accumulates resp.Usage). Folding child
 // usage into the parent would double count it there, and is impossible for
 // wait=false anyway: an async child may finish after the parent's CallResult

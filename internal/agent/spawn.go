@@ -207,7 +207,7 @@ func (t *SpawnTool) SetTaskRunner(runner *AsyncToolExecutor) {
 
 // SetSessionWriter wires the optional per-layer session writer used to emit
 // agent-level events for spawned child turns (they land in team.jsonl), so
-// child consumption (session.agent_turn.completed → payload.call_result.Requests[])
+// child consumption (session.agent_turn.completed → payload.call_result.requests[])
 // is recorded in the same fact source as ordinary Agent turns.
 func (t *SpawnTool) SetSessionWriter(writer storage.SessionWriter) {
 	t.sessions = writer

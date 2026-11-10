@@ -460,7 +460,7 @@ func mailboxBodyText(msg types.MailboxMessage) string {
 // mailboxSender resolves the flow key of the Team that sent a message. From is
 // normally empty (enqueueMessage never populated it), so the payload is the
 // only reliable source: work messages carry caller_team, results carry
-// team_result.Turn.TeamID.
+// team_result.turn.team_id.
 func mailboxSender(msg types.MailboxMessage) string {
 	if from := strings.TrimSpace(msg.From.TeamID); from != "" {
 		return from
@@ -525,7 +525,7 @@ func renderMailboxInbox(messages []types.MailboxMessage) string {
 			b.WriteString("\n")
 			continue
 		}
-		// Degrade gracefully: no usable team_result.Reply. Fall back to any
+		// Degrade gracefully: no usable team_result.reply. Fall back to any
 		// coarse error/summary the payload carries, else say so explicitly.
 		if summary := mailboxResultSummary(msg.Payload); summary != "" {
 			b.WriteString(summary)
@@ -549,7 +549,7 @@ func renderMailboxInbox(messages []types.MailboxMessage) string {
 	return b.String()
 }
 
-// mailboxResultReply extracts team_result.Reply from a message payload. The
+// mailboxResultReply extracts team_result.reply from a message payload. The
 // team_result value is a TeamTurnResult that arrives either as the typed struct
 // (in-memory) or as a generic map (after a JSONL round-trip), so the value is
 // re-marshalled into the struct to read the published Reply field.
@@ -589,7 +589,7 @@ func mailboxResultReply(payload map[string]any) (string, bool) {
 }
 
 // mailboxResultSummary extracts a coarse human-readable summary from a message
-// payload when team_result.Reply is unavailable: the dispatch-recorded error
+// payload when team_result.reply is unavailable: the dispatch-recorded error
 // first, then the message's own recorded result. It returns "" when nothing
 // usable is present.
 func mailboxResultSummary(payload map[string]any) string {

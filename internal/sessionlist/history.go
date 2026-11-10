@@ -150,7 +150,7 @@ type teamTurnFields struct {
 	CallResults map[string]teamCallResult `json:"call_results"`
 }
 
-// teamTurnRef carries the team identifier embedded in a team_result.Turn.
+// teamTurnRef carries the team identifier embedded in a team_result.turn.
 type teamTurnRef struct {
 	TeamID string `json:"team_id"`
 }
