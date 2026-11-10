@@ -136,10 +136,18 @@ func (l *ConfigLoader) LoadScriptSettings() types.ScriptConfig {
 	var raw struct {
 		Tools struct {
 			Script types.ScriptConfig `json:"script"`
+			Repl   types.ScriptConfig `json:"repl"`
 		} `json:"tools"`
 	}
 	if err := json.Unmarshal(data, &raw); err == nil {
+		// tools.repl is the current key; tools.script keeps working for configs
+		// written before the rename. An explicit repl section wins.
 		cfg = raw.Tools.Script
+		if raw.Tools.Repl.Enabled || raw.Tools.Repl.TimeoutMS > 0 ||
+			raw.Tools.Repl.MaxSteps > 0 || raw.Tools.Repl.MaxOutputBytes > 0 ||
+			raw.Tools.Repl.CatalogBudget > 0 {
+			cfg = raw.Tools.Repl
+		}
 	}
 	return cfg
 }

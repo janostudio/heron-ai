@@ -15,6 +15,15 @@ import (
 // recursion guard below.
 const ScriptToolName = script.ToolName
 
+// isScriptTool reports whether name is the code-execution tool, under either
+// its current name or the one it had before the rename. The gate has to answer
+// for both: an agent definition written earlier declares "Script", gets the
+// alias, and would otherwise execute inner calls with no script_call_id — the
+// exact invisibility the gate exists to prevent.
+func isScriptTool(name string) bool {
+	return name == script.ToolName || name == script.LegacyToolName
+}
+
 // SetScriptDescription wires the description renderer for the Script tool.
 // Without it the tool is neither advertised nor gateable, which is how the
 // feature stays off by default.
@@ -75,7 +84,7 @@ func tagScriptEvent(ctx context.Context, payload map[string]any) map[string]any 
 func (t *TurnLoop) withScriptGate(ctx context.Context, agent types.AgentConfig, req types.AgentRequest, round int, calls []types.ToolCall) context.Context {
 	wantsScript := false
 	for _, call := range calls {
-		if call.Name == ScriptToolName {
+		if isScriptTool(call.Name) {
 			wantsScript = true
 			break
 		}
@@ -87,7 +96,7 @@ func (t *TurnLoop) withScriptGate(ctx context.Context, agent types.AgentConfig, 
 	// the catalog and the callable set are the same list by construction.
 	ctx = script.WithToolNames(ctx, scriptVisibleTools(agent))
 	return script.WithGate(ctx, func(gatedCtx context.Context, name string, args map[string]any) (*types.ToolResult, error) {
-		if name == ScriptToolName {
+		if isScriptTool(name) {
 			// Nesting would mean a script inside a script: the inner one would
 			// get its own gate, its own step budget and its own replay log, and
 			// the outer step count would no longer describe the work done.
