@@ -118,7 +118,7 @@ func TestRecordReturnsTimelineTreeAndFacts(t *testing.T) {
 	require.Equal(t, []string{"gpt-4o"}, payload.Facts.Models)
 	// Tool counts come from CallTurnFacts, which need team/call events. This
 	// fixture only carries flow-layer events, so they stay zero here; the
-	// tool_call.* events below are what the page renders.
+	// session.tool_call.* events below are what the page renders.
 
 	kinds := make(map[string]bool)
 	for _, node := range payload.Nodes {
