@@ -2,11 +2,13 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -85,6 +87,27 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	// the current one finishing, or the user's next message — reads it from the
 	// conversation instead of waiting for an event that already happened.
 	toolCallID := newID("call")
+	// The original task travels back with the result. A Team woken by its own
+	// call returning has to know what it was doing: without this it rebuilt the
+	// goal from its own State notes (fs_2864455499636f2b, 3m30s of rummaging
+	// before it dispatched again), and a Team that keeps no notes would have had
+	// to guess. The task record is also where the record window starts, so both
+	// facts come from one load.
+	originalTask := ""
+	taskCallID := ""
+	scopeSince := time.Now().UTC()
+	if r.tasks != nil {
+		if task, taskErr := r.tasks.Load(ctx, signal.TaskID); taskErr == nil && task != nil {
+			if !task.CreatedAt.IsZero() {
+				scopeSince = task.CreatedAt
+			}
+			originalTask = strings.TrimSpace(fmt.Sprint(task.Arguments["item"]))
+			taskCallID, _ = task.Arguments["call_id"].(string)
+		}
+	}
+	if taskCallID == "" {
+		taskCallID = signal.CallID
+	}
 	// The tool result is the Team's answer as text, matching what the Team tool
 	// itself returns. A status envelope here reads as "task updated" and invites
 	// the model to keep dispatching for the real answer.
@@ -97,6 +120,9 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	}
 	if len(signal.Records) > 0 {
 		content += fmt.Sprintf("\n\n(records: %s)", strings.Join(signal.Records, ", "))
+	}
+	if originalTask != "" {
+		content += "\n\n(original task: " + truncateRunes(originalTask, 800) + ")"
 	}
 	transcript.Messages = append(transcript.Messages,
 		types.Message{
@@ -142,13 +168,7 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	// finished. Anchoring at "now" excluded the very record that triggered the
 	// resume (published a moment earlier), which left the caller's declared
 	// flow_records empty and produced no shared_record.consumed edge for the
-	// display layer to draw (A→B fixture, 2026-10-28).
-	scopeSince := time.Now().UTC()
-	if r.tasks != nil {
-		if task, taskErr := r.tasks.Load(ctx, signal.TaskID); taskErr == nil && task != nil && !task.CreatedAt.IsZero() {
-			scopeSince = task.CreatedAt
-		}
-	}
+	// display layer to draw (A→B fixture, 2026-10-28). scopeSince was read above.
 	// A failed dispatch is not a result to summarise: it is a request that did
 	// not happen. Carry it into the turn so the turn ends failed with the reason
 	// instead of producing a confident-sounding narration of work nobody did.
@@ -156,6 +176,11 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	switch {
 	case strings.TrimSpace(signal.Error) != "":
 		failure = fmt.Errorf("dispatched team %q failed: %s", signal.TeamID, strings.TrimSpace(signal.Error))
+	case signal.Status == string(types.ToolTaskCancelled):
+		// A cancelled call did not produce an answer either. Treating it as a
+		// success makes the turn summarise work nobody did and retires the
+		// caller's progress as if it had been replaced by a conclusion.
+		failure = fmt.Errorf("dispatched team %q was cancelled before it answered", signal.TeamID)
 	case signal.Status == string(types.ToolTaskFailed):
 		failure = fmt.Errorf("dispatched team %q failed without a reason", signal.TeamID)
 	case signal.Failed:
@@ -164,6 +189,19 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 			reason = "no reason reported"
 		}
 		failure = fmt.Errorf("dispatched team %q could not complete the task: %s", signal.TeamID, reason)
+	}
+	// The call is back, so the caller's "still working on it" is no longer the
+	// state of the world. Retire it before the next turn reads records: leaving
+	// it active is how a progress line outlived the work it described. The
+	// retirement is scoped to the call that returned — a sibling call still in
+	// flight keeps its own progress line.
+	if settleErr := r.settleCallerProgress(ctx, session.ID, activator, taskCallID, failure != nil); settleErr != nil {
+		logging.Info("settle caller progress failed", map[string]any{
+			"flow_session_id": session.ID,
+			"team_id":         activator,
+			"call_id":         taskCallID,
+			"error":           settleErr.Error(),
+		})
 	}
 	_, runErr := r.runTurnWithOrigin(ctx, r.definitions.Snapshot(), session, "", nil,
 		[]activation{{teamID: activator}}, turnOriginTool, scopeSince, nil, failure)
@@ -207,6 +245,56 @@ func callerTranscriptID(flowSessionID, teamID, callID string) string {
 		call = "agent"
 	}
 	return fmt.Sprintf("%s:%s:%s", flowSessionID, team, call)
+}
+
+// settleCallerProgress retires the caller's progress records now that the call
+// behind them has come back.
+//
+// A pending record says "handed it on, waiting for the answer". Once the answer
+// exists that sentence is no longer the state of the world: it is either
+// replaced by the caller's next conclusion (superseded) or contradicted by a
+// failure (invalidated). Leaving it active is what let a two-minute-old "正在
+// 取证" be relayed as the current progress after the callee had already died
+// (fs_2864455499636f2b).
+//
+// Scoped by call id: a Team may hold several calls at once, and one coming back
+// says nothing about the others' progress lines. An empty call id falls back to
+// the team, which is the old behaviour for records written without one.
+func (r *Runtime) settleCallerProgress(ctx context.Context, sessionID, callerTeam, callID string, failed bool) error {
+	if r == nil || r.evidence == nil || callerTeam == "" {
+		return nil
+	}
+	records, err := r.evidence.List(ctx, sessionID, types.RecordScopeFlow)
+	if errors.Is(err, storage.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	// Append-only evidence: one id appears once per revision, and the last copy
+	// is the current one.
+	latest := make(map[string]types.SharedRecord, len(records))
+	for _, record := range records {
+		latest[record.RecordID] = record
+	}
+	status := types.RecordSuperseded
+	if failed {
+		status = types.RecordInvalidated
+	}
+	for _, record := range latest {
+		if record.Status != types.RecordPending || record.Producer.TeamID != callerTeam {
+			continue
+		}
+		if callID != "" && record.Producer.CallID != callID {
+			continue
+		}
+		record.Status = status
+		record.Revision++
+		if err := r.evidence.Publish(ctx, sessionID, record); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // toolResultWaitLimit bounds how long a finished Team call waits for the
