@@ -417,8 +417,8 @@ priority: 10
 | 位置 | 字段 | 含义 |
 |---|---|---|
 | `session.turn.started` | `payload.turn.input` | **本轮用户输入原文** |
-| `flow_turn.*` | `payload.turn.status` | `running` / `waiting_input` / `failed` / `cancelled` |
-| `flow_turn.*` | `payload.session.status` | 会话级状态，正常结束为 `idle` |
+| `session.turn.*` | `payload.turn.status` | `running` / `waiting_input` / `failed` / `cancelled` |
+| `session.turn.*` | `payload.session.status` | 会话级状态，正常结束为 `idle` |
 | `flow_turn` 终态 | `payload.reply` | 这一轮给用户的答复（`intermediate=true` 时为空） |
 | `flow_turn` 终态 | `payload.team` | **写这条答复的 Team**（`origin` 只说明这轮怎么被唤醒，不是归属） |
 | `flow_turn` 终态 | `payload.contributors[]` | 这轮里每个 Team 说了什么、谁请求的——答复是复述时用它还原来源 |

@@ -104,14 +104,14 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 
 | 现象 | 去看什么 |
 |---|---|
-| `flow_turn.failed` | 它的 `error`；常见 `flow turn exceeded max team turns`（路由成环、或 agent 没识别"这一步已完成"。先修路由，只有在确属合法的多次转交时才调 `settings.json` 的 `runtime.max_team_turns`） |
+| `session.turn.completed`（`payload.turn.status=failed`） | 它的 `error`；常见 `flow turn exceeded max team turns`（路由成环、或 agent 没识别"这一步已完成"。先修路由，只有在确属合法的多次转交时才调 `settings.json` 的 `runtime.max_team_turns`） |
 | `call_result.status` 非 completed | `call_result.error` |
 | 某 agent 的 `Requests` 数暴涨 | 上下文膨胀。每轮把前序工具输出重新带给模型；查 `session.context.compacted`，并考虑收窄工具输出或减少读取量 |
 | `flow_turn` 迟迟不结束 | `runtime.max_team_turns` 兜底上限（默认很宽松，正常编排不会碰到）与路由是否成环 |
 | 会话尾巴上有一个 `running` 的回合，之后再没动过 | 进程在回合中途退出。**下一次在这个会话里发消息时**，引擎会先给那个回合补写 `session.turn.completed` + `status=cancelled` + `payload.error=interrupted…`，然后才开始新回合。看到这条 `cancelled` 说明"上次是被中断的"，不是这次新出的错 |
 | 某条 record 明明产出了，下游 `flow_records` 却读不到 | 先看 `session.record.consumed` 有没有对应事件：没有，说明下游根本没被移交这条记录（检查 `inputs` 名字与时间窗）；有事件却没内容，才去看下游的注入 |
 | 模型输出为空 / 解析失败 | 先确认读的是 `payload.text` 而非 `payload.content`；若有 `session.agent.feedback`，说明模型没按 schema 输出，引擎已追加重试提示 |
-| command call 无输出 | `command_turn.*` 在 `team.jsonl`；看 `payload` 的退出码与 stderr |
+| command call 无输出 | `session.command_turn.*` 在 `team.jsonl`；看 `payload` 的退出码与 stderr |
 ## 3. 从配置预测"该发生什么"
 
 排查的前提是知道**正常长什么样**。运行时的形态直接由配置决定，所以先读配置、
@@ -120,11 +120,11 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 | 配置位置 | 决定运行时什么 | 对照方式 |
 |---|---|---|
 | `flows/default.yml` | 有哪些 team、`entry` 是谁、`can_activate` 允许谁被激活 | `flow.jsonl` 里出现的 `team_id` 必须是 `can_activate` 的子集 |
-| `teams/*.yml` 的 `calls` | 每个 team 内跑哪些 call（agent/command）、依赖顺序 | `team.jsonl` 的 `agent_turn.*` / `command_turn.*` 应与 calls 一一对应 |
+| `teams/*.yml` 的 `calls` | 每个 team 内跑哪些 call（agent/command）、依赖顺序 | `team.jsonl` 的 `session.agent_turn.*` / `session.command_turn.*` 应与 calls 一一对应 |
 | `teams/*.yml` 的 `output.record` | 该 team 该发布什么 record | `flow.jsonl` 的 `session.record.published` 的 `name` |
 | `agents/*/AGENT.md` 的 `loop` / `budget` | 轮数上限 | `Requests` 元素个数不应超过 `max_rounds` |
 | `agents/*/AGENT.md` 的 `structured_output` | 是否会有 `session.agent.feedback` 重试 | 有则说明模型没按 schema 输出 |
-| `settings.json` 的 `runtime` | `max_team_turns` / `max_calls_per_team_turn` / `max_agent_rounds` 等 | 触发上限时 `flow_turn.failed` |
+| `settings.json` 的 `runtime` | `max_team_turns` / `max_calls_per_team_turn` / `max_agent_rounds` 等 | 触发上限时 `session.turn.completed`（`turn.status=failed`） |
 
 ```bash
 # 该 flow 允许激活哪些 team
@@ -138,7 +138,7 @@ jq -r 'select(.type=="session.team_turn.started") | .team_id' $S/flow.jsonl | so
 **典型对照结论**：
 
 - 实际激活的 team 不在 `can_activate` 里 → 配置与运行不一致，查是否加载了旧定义
-- 配了 agent call 却只有 `command_turn.*` → 检查 call 的 `type` 字段
+- 配了 agent call 却只有 `session.command_turn.*` → 检查 call 的 `type` 字段
 - 没有任何 `session.agent.feedback` 但 agent 有 `structured_output` → 模型每次都合规，正常
 - `Requests` 数接近 `max_rounds` → 该 agent 快撞上限，考虑放宽或收敛 prompt
 ## 4. 排查思路

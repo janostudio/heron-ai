@@ -34,16 +34,16 @@ checkpoint / 异步工具任务按需生成，不保证存在，不要假定其�
 
 | 文件 | 只包含 | 事件 |
 |---|---|---|
-| `flow.jsonl` | flow 会话级 + **team turn 级** | `flow_session.*`、`flow_turn.*`、`team_session.*`、`team_turn.*`、`session.record.published`、`recovery.*` |
-| `team.jsonl` | **call 层**：agent / command / webhook | `agent_session.*`、`agent_turn.*`、`command_turn.*`、`webhook_turn.*`、`approval.*` |
-| `agent.jsonl` | agent **内部**行为 | `session.agent.model_response`、`tool_call.*`、`session.agent.feedback`、`session.context.compacted` |
+| `flow.jsonl` | flow 会话级 + **team turn 级** | `session.*`、`session.turn.*`、`session.team_session.*`、`session.team_turn.*`、`session.record.published`、`session.recovery.*` |
+| `team.jsonl` | **call 层**：agent / command / webhook | `session.agent_session.*`、`session.agent_turn.*`、`session.command_turn.*`、`session.webhook_turn.*`、`session.approval.*` |
+| `agent.jsonl` | agent **内部**行为 | `session.agent.model_response`、`session.tool_call.*`、`session.agent.feedback`、`session.context.compacted` |
 
 由此得出两个高频误判：
 
 - **`session.team_turn.completed` 在 `flow.jsonl`，不在 `team.jsonl`。** 在 `team.jsonl`
   里搜它必然一条都找不到——这是正常的分层，不是数据缺失。
-- **`command_turn.*` 在 `team.jsonl`，不在 `flow.jsonl`。** command 是 team 的
-  一个 call，所以和 `agent_turn.*` 同级。
+- **`session.command_turn.*` 在 `team.jsonl`，不在 `flow.jsonl`。** command 是 team 的
+  一个 call，所以和 `session.agent_turn.*` 同级。
 
 每行是一个 JSON 对象。共有字段：`seq`、`event_id`、`type`、`flow_session_id`、
 `team_turn_id`、`team_id`、`call_id`、`call_turn_id`、`call_type`、`attempt`、
@@ -54,7 +54,7 @@ checkpoint / 异步工具任务按需生成，不保证存在，不要假定其�
 | type | 含义 |
 |---|---|
 | `session.created` / `session.updated` | 会话创建/更新 |
-| `session.turn.started` / `session.turn.completed` / `session.turn.idle` / `flow_turn.failed` | 一轮 flow turn 生命周期 |
+| `session.turn.started` / `session.turn.completed` / `session.turn.idle` / `session.turn.failed` | 一轮 flow turn 生命周期 |
 | `session.team_session.created` / `session.team_session.updated` | team 会话 |
 | `session.team_turn.started` / `session.team_turn.completed` | team turn（**路由结果在这里**） |
 | `session.record.published` | 发布 SharedRecord |
@@ -192,7 +192,7 @@ jq -r 'select(.type=="session.agent.model_response"
 | **模型每轮的原始回复** | `agent.jsonl` 的 `session.agent.model_response` | `payload.text`（含思考/JSON）、`payload.round` 标第几轮 |
 | **这一轮对用户答了什么、谁写的** | `flow.jsonl` 的 `flow_turn` 终态 | `payload.reply` + `payload.team`（`intermediate=true` 表示这是进度不是答复，`reply` 为空） |
 | **成品文本与依据** | `evidence.jsonl` 的 SharedRecord | `summary`、`basis[]` |
-| 工具调用过程 | `agent.jsonl` 的 `tool_call.*` | `payload.tool_name` / `arguments` / `content` |
+| 工具调用过程 | `agent.jsonl` 的 `session.tool_call.*` | `payload.tool_name` / `arguments` / `content` |
 | 内部提示（结构化重试等） | `agent.jsonl` 的 `session.agent.feedback` | `payload.content` |
 
 ```bash

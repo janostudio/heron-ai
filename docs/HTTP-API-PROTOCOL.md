@@ -17,7 +17,8 @@
 | 会话列表 | `GET /api/sessions` | 一次性 JSON，全量返回，无分页 |
 | 历史记录 | `GET /api/sessions/{id}/record?after_seq=&limit=` | 一次性 JSON，游标分页（默认 500） |
 | 过程事件 | `GET /api/stream?session_id=&follow=1` | SSE，带 `Last-Event-ID` 续传 |
-| 提交一轮 | `POST /api/sessions/turn` 或 `POST /api/run` | **同步阻塞**，等整轮结束返回 `FlowTurnResult` |
+| 提交一轮（异步） | `POST /api/sessions/{id}/events` | **202 受理**，回合在后台执行，事件走会话流 |
+| 提交一轮（同步） | `POST /api/sessions/turn` 或 `POST /api/run` | 等整轮结束返回 `FlowTurnResult`，给没有常驻流的调用方 |
 
 代码位置：路由在 `cmd/server/main.go`，处理在 `internal/view/{handler.go,web.go}`，
 事件订阅在 `internal/storage/session.go`。
@@ -173,15 +174,15 @@ SubmitInput(ctx, sessionID, input, blocks):
         事件全部来自上面那条流；不再需要 setTimeout(800) 猜收尾
 ```
 
-`setTimeout(800)` 那段 fallback 可以删除：它存在的唯一理由是「提交是同步的，所以
+`setTimeout(800)` 那段 fallback 已删除：它存在的唯一理由是「提交是同步的，所以
 流里应该没有新东西了，但万一有呢」。提交改成 202 之后，流就是唯一通道，收尾由
 `session.turn.idle` / `session.turn.completed` 事件决定。
 
-### 3.6 顺带把 record 补上 status
+### 3.6 record 补上 status（已完成）
 
-`GET /record` 的 `session` 字段目前是字符串 id。改成对象（`{id, status, ...}`）之后，
-页面能判断「这个会话已经终态，不必常驻订阅」，避免给已完结的会话挂空流。
-数据源已存在（事件流里的 `session.created` / `session.updated`），只是没投影出来。
+`GET /record` 的 `session` 字段原先只是字符串 id，现在是 `{id, status}`。页面据此判断
+「这个会话已经终态，不必常驻订阅」，避免给已完结的会话挂空流。数据源是事件流里的
+会话节点，没有额外遍历。
 
 ## 4. 命名规范
 
@@ -229,7 +230,7 @@ Go 字段名（PascalCase）统一成 snake_case。字段集合由
 
 | 之前 | 现在 |
 |---|---|
-| `session.created` / `.updated` | `session.created` / `session.updated` |
+| `flow_session.created` / `.updated` | `session.created` / `session.updated` |
 | `flow_turn.*` | `session.turn.*` |
 | `team_turn.*` | `session.team_turn.*` |
 | `team_session.*` | `session.team_session.*` |
@@ -241,9 +242,9 @@ Go 字段名（PascalCase）统一成 snake_case。字段集合由
 | `wakeup.*` | `session.wakeup.*` |
 | `approval.*` | `session.approval.*` |
 | `recovery.*` | `session.recovery.*` |
-| `session.agent.model_response` / `session.agent.feedback` | `session.agent.model_response` / `session.agent.feedback` |
+| `agent.model_response` / `agent.feedback` | `session.agent.model_response` / `session.agent.feedback` |
 | `tool_call.*` | `session.tool_call.*` |
-| `session.context.compacted` | `session.context.compacted` |
+| `context.compacted` | `session.context.compacted` |
 
 动作词保持 `started` / `completed` / `failed` / `cancelled`：事件记录的是已经发生的事，
 过去时是对的。`in_progress` 是状态名，不是事件名，所以没有采用。
@@ -377,11 +378,11 @@ POST 返回后 setTimeout(800)
 POST /sessions/turn                     POST /sessions/{id}/events
   │                                       → 202，连接立刻释放
   ├─ 0s   连接建立                        │
-  │       （此后几分钟无任何数据）          ├─ 0s   流：turn.started
-  │                                       ├─ 3s   流：team_turn.started
-  │   ⚠ 代理 60s 空闲超时会掐断这条连接    ├─ 90s  流：agent.model_response
+  │       （此后几分钟无任何数据）          ├─ 0s   流：session.turn.started
+  │                                       ├─ 3s   流：session.team_turn.started
+  │   ⚠ 代理 60s 空闲超时会掐断这条连接    ├─ 90s  流：session.agent.model_response
   │   ⚠ 掐断后客户端看到的是"发送失败"     ├─ ...
-  │      但服务端仍在跑                    ├─ 240s 流：turn.idle
+  │      但服务端仍在跑                    ├─ 240s 流：session.turn.idle
   │                                       │
   ├─ 240s 才返回 200                      └─ 全程只有一条流，且一直有事件或心跳
   │

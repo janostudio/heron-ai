@@ -13,7 +13,7 @@ agent，只读 `team.jsonl` 一个文件即可（`team_id` 与 `AgentID` 都在�
 ```text
 Request（一轮模型调用，usage.prompt_tokens / completion_tokens）
   → call_result.usage                      ← 单个 call 内所有轮次的加总
-    → team_turn.Usage                      ← 该 team 内所有 call 的加总
+    → session.team_turn.Usage                      ← 该 team 内所有 call 的加总
       → flow 级 Tokens（终端显示值）        ← 所有 team 的加总
 ```
 

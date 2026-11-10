@@ -25,8 +25,8 @@ flow_session_id           → sessions/<fs_id>/ 目录（一次对话）
 | flow | `session.team_turn.completed` | ✓ | ✓ | ✓ | ✓ | | |
 | flow | `session.record.published` | ✓ | ✓ | **✗** | ✓ | | |
 | flow | `session.record.consumed` | ✓ | ✓ | ✓ | ✓ | | |
-| team | `agent_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| team | `command_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| team | `session.agent_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| team | `session.command_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | agent | `session.agent.model_response` | ✓ | **✗** | ✓ | ✓ | ✓ | ✓ |
 
 三个反直觉点：
@@ -37,7 +37,7 @@ flow_session_id           → sessions/<fs_id>/ 目录（一次对话）
 2. **`session.agent.model_response` 没有 `flow_turn_id`**。想从某一轮模型输出回溯到
    "是用户的哪次提问"，必须先拿 `team_turn_id` 去 `flow.jsonl` 查 `flow_turn_id`，
    不能一步到位。
-3. **只有 agent call 会写 `agent.jsonl`**。command call（`command_turn.*`）只出现在
+3. **只有 agent call 会写 `agent.jsonl`**。command call（`session.command_turn.*`）只出现在
    `team.jsonl`，没有对应的 `session.agent.model_response`；它的输出在
    `session.command_turn.completed.payload` 里。
 

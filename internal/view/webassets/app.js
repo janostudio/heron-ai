@@ -779,13 +779,13 @@
 
   /* ---------- composer ---------- */
   /* The page was read-only; this sends a turn into the session already on
-   * screen, using the same body the CLI bridge posts:
-   * POST /api/sessions/turn?session_id=… with {input, attachments}.
+   * screen: POST /api/sessions/{id}/events with {input, attachments}.
    *
-   * That call is synchronous — it answers when the whole flow turn finishes,
-   * which for a dispatching turn is minutes. So the send button locks and says
-   * so; a second message typed meanwhile would land in a turn that is still
-   * running.
+   * That call answers 202 as soon as the message is accepted, so the composer
+   * frees immediately — a dispatching turn runs for minutes, and the events
+   * describing it arrive on the session stream, not on this response. Whether
+   * a turn is still running is shown by the stop button, which the stream
+   * drives (markTurnActive), not by the composer's sending state.
    */
   var MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
   var scrollToBottom = false;
