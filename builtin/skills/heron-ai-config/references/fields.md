@@ -210,7 +210,7 @@ frontmatter 分组：
 ### tools
 | 字段 | 含义 |
 |---|---|
-| `builtin` | 内置工具：Read/Write/Grep/Glob/Bash/WebSearch/WebFetch/CodeNav/AskUserQuestion/TodoWrite/TodoRead/Spawn/Collect/ListTeams/Team/TeamSession/State/Define（另有 `Script`、`ScheduleWakeup`/`CancelWakeup` 见下） |
+| `builtin` | 内置工具：Read/Write/Grep/Glob/Bash/WebSearch/WebFetch/CodeNav/AskUserQuestion/TodoWrite/TodoRead/Spawn/Collect/ListTeams/Team/TeamSession/State/Define（另有 `REPL`（旧名 `Script`）、`ScheduleWakeup`/`CancelWakeup` 见下） |
 | `custom` / `mcp` | 自定义 / MCP 工具 |
 
 > 没有 `Edit` 工具：改文件用 `Read` → `Write`。写错工具名**不会在加载期报错**，

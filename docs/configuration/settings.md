@@ -17,7 +17,7 @@ model registry (endpoints and keys), `settings.json` is engine behavior.
 | `knowledge` | `ConfigLoader.LoadKnowledgeSettings` | Which model summarizes learned knowledge |
 | `web` | `ConfigLoader.LoadWebSettings` | Data source for the `WebSearch` / `WebFetch` tools |
 | `mcp` | `ConfigLoader.LoadMCPServers` | MCP servers connected at startup |
-| `tools` | `LoadToolPolicyPhrases`, `LoadScriptSettings` | Extra Bash policy phrases, `Script` tool |
+| `tools` | `LoadToolPolicyPhrases`, `LoadScriptSettings` | Extra Bash policy phrases, `REPL` tool (was `Script`; the old key `tools.script` still works) |
 | `env` | `ConfigLoader.LoadGlobalEnv` | Env vars injected into every subprocess |
 
 Sections that are **not** read by any code path are listed in
@@ -209,7 +209,7 @@ config cannot unblock a phrase the engine already refuses.
 
 ### tools.script
 
-The `Script` tool lets a model orchestrate several synchronous tool calls in
+The `REPL` tool (named `Script` before 2026-11) lets a model orchestrate several synchronous tool calls in
 one REPL call, keeping intermediate results out of the context. It is **off by
 default**; the switch has to be explicit.
 
