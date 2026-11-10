@@ -1266,9 +1266,26 @@
    * button follows this rather than the composer's sending state: a message
    * that was accepted but whose turn is still running must keep 停止 available. */
   var activeTurns = 0;
+  var RUNNING_HINT = "\u6b63\u5728\u6267\u884c\u2026\u8fc7\u7a0b\u4f1a\u5b9e\u65f6\u51fa\u73b0\u5728\u5bf9\u8bdd\u91cc\u3002";
+
+  /* The stop button and the running hint follow the turn, not the composer's
+   * sending state: an accepted message frees the composer at once, while the
+   * turn it started may run for minutes. */
   function markTurnActive(delta) {
     activeTurns = Math.max(0, activeTurns + delta);
-    document.body.classList.toggle("turn-active", activeTurns > 0);
+    var active = activeTurns > 0;
+    document.body.classList.toggle("turn-active", active);
+    // The hint shares the status line with attachment and send errors, so only
+    // clear the text this function wrote.
+    var status = document.querySelector(".composer-status");
+    if (!status) { return; }
+    if (active) {
+      status.textContent = RUNNING_HINT;
+      status.dataset.turnHint = "1";
+    } else if (status.dataset.turnHint) {
+      status.textContent = "";
+      delete status.dataset.turnHint;
+    }
   }
 
   function stopSessionStream() {
@@ -1278,21 +1295,40 @@
   function attachSessionStream(body) {
     stopSessionStream();
     if (!body || !currentRecord) { return; }
-    // record.session is the session id as a string; keep accepting an object in
-    // case the record shape grows back into one.
+    // record.session carries {id, status}; keep accepting a bare string in case
+    // an older record is replayed.
     var sessionID = currentRecord.session;
-    if (sessionID && sessionID.id) { sessionID = sessionID.id; }
+    var sessionStatus = "";
+    if (sessionID && sessionID.id) {
+      sessionStatus = sessionID.status || "";
+      sessionID = sessionID.id;
+    }
     var container = body.querySelector(".chat");
     if (!sessionID || !container) { return; }
 
     var known = {};   // flow turns already rendered from the record
     groupByTurn(currentRecord.events || []).forEach(function (turn) { known[turn.id] = true; });
+    // A turn that was already running when the page loaded will not emit
+    // another started event — its started is in the record — so the counter has
+    // to be primed from the session status, not from the stream.
+    if (sessionStatus === "running") { markTurnActive(1); }
     var turns = {};
     var lastSeq = lastSeqOf(currentRecord);
     var seen = 0;
     var stopped = false;
     var stopFn = null;
     var retry = 1000;
+
+    var settled = {};
+    function isTerminalTurn(type) {
+      return type === "session.turn.idle" || type === "session.turn.completed" ||
+        type === "session.turn.waiting_tool" || type === "session.turn.waiting_approval";
+    }
+    function settleTurn(id) {
+      if (settled[id]) { return; }
+      settled[id] = true;
+      markTurnActive(-1);
+    }
 
     function turnFor(id) {
       if (!turns[id]) {
@@ -1314,15 +1350,16 @@
       var id = event.flow_turn_id || "flow";
       if (known[id]) {
         // This turn is already on screen as history. Drawing its later events
-        // would duplicate it; the record is what the page renders from.
+        // would duplicate it; the record is what the page renders from. Its
+        // terminal event still has to settle the counter primed from the record.
+        if (isTerminalTurn(event.type)) { settleTurn(id); }
         return;
       }
       var view = turnFor(id);
       view.push(event);
       if (event.type === "session.turn.started") { markTurnActive(1); }
-      if (event.type === "session.turn.idle" || event.type === "session.turn.completed" ||
-          event.type === "session.turn.waiting_tool" || event.type === "session.turn.waiting_approval") {
-        markTurnActive(-1);
+      if (isTerminalTurn(event.type)) {
+        settleTurn(id);
         view.finish(event);
         return;
       }
