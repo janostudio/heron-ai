@@ -1058,13 +1058,16 @@ func (r *Runtime) runTurnWithOrigin(
 				recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
 				continue
 			}
-			switch next.Action {
-			case types.NextProceed:
+			switch kind, known := classifyRoute(next.Action); {
+			case !known:
+				if routeFailure == nil {
+					routeFailure = fmt.Errorf("unsupported next action %q", next.Action)
+				}
+			case kind == routeForward:
 				targets := fixedTargets(execution.binding)
 				if len(targets) == 0 {
-					// With no fixed route the result goes back to whoever
-					// activated this Team. The entry has no activator, so the
-					// FlowTurn ends and waits for the user.
+					// With no fixed route the result goes back to whoever activated this Team.
+					// The entry has no activator, so the FlowTurn ends and waits for the user.
 					if execution.activation.activator == "" {
 						hasWaitInput = true
 						recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
@@ -1075,17 +1078,15 @@ func (r *Runtime) runTurnWithOrigin(
 				for _, target := range targets {
 					enqueueBatchRoute(routeTo(target, execution.activation.teamID))
 				}
-			case types.NextActivate:
-				// Collaboration is an asynchronous tool now: a Team hands work to
-				// another Team by calling the Team tool, which returns a task handle
-				// and delivers the answer as a tool result. Keeping the routing
-				// protocol as a second dispatch path would reintroduce the turn
-				// rebuild this whole change removes.
+			case kind == routeRetiredActivate:
+				// Collaboration is an asynchronous tool now: a Team hands work to another
+				// Team by calling the Team tool, which returns a task handle and delivers the
+				// answer as a tool result.
 				routeFailure = fmt.Errorf(
 					"team %q asked to activate %v: routing dispatch is retired, call the Team tool instead",
 					execution.activation.teamID, next.Teams)
 				continue
-			case types.NextReturn:
+			case kind == routeReturn:
 				target := next.CallerTeam
 				if target == "" {
 					target = execution.activation.activator
@@ -1096,7 +1097,7 @@ func (r *Runtime) runTurnWithOrigin(
 					continue
 				}
 				enqueueBatchRoute(routeTo(target, execution.activation.teamID))
-			case types.NextCoordinate:
+			case kind == routeCoordinate:
 				sourceTeam := execution.activation.teamID
 				if coordinateRetries[sourceTeam] >= r.limits.MaxCoordinateRetries {
 					routeFailure = fmt.Errorf(
@@ -1108,32 +1109,29 @@ func (r *Runtime) runTurnWithOrigin(
 					continue
 				}
 				coordinateRetries[sourceTeam]++
-				// Hand the decision back to whoever activated this Team; with
-				// no activator the user is the one to decide.
+				// Hand the decision back to whoever activated this Team; with no activator
+				// the user is the one to decide.
 				if execution.activation.activator == "" {
 					hasWaitInput = true
 					recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
 					continue
 				}
 				enqueueBatchRoute(routeTo(execution.activation.activator, execution.activation.teamID))
-			case types.NextWaitTool:
-				hasWaitTool = true
-			case types.NextWaitApproval:
-				hasWaitApproval = true
-			case types.NextAction("complete"), types.NextAction("wait_input"):
-				// Backward compatibility for older Agent responses. These
-				// values describe lifecycle completion, not Flow/Team
-				// orchestration. The current lifecycle leaves a normal Flow
-				// turn resumable, so do not enqueue another Team here.
-				// The turn ends on this hop, so its reply is the answer.
-				recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
-			case types.NextFail:
+			case kind == routeStop:
+				switch next.Action {
+				case types.NextWaitTool:
+					hasWaitTool = true
+				case types.NextWaitApproval:
+					hasWaitApproval = true
+				default:
+					// Legacy lifecycle values (complete / wait_input) describe the Agent
+					// finishing, not an orchestration step. The turn ends on this hop, so its
+					// reply is the answer.
+					recordFinalReply(execution.result.Reply, execution.activation.activator == "", execution.activation.teamID)
+				}
+			case kind == routeFail:
 				if routeFailure == nil {
 					routeFailure = errors.New(next.Reason)
-				}
-			default:
-				if routeFailure == nil {
-					routeFailure = fmt.Errorf("unsupported next action %q", next.Action)
 				}
 			}
 		}

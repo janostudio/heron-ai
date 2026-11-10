@@ -184,13 +184,16 @@ func (r *Runtime) postRoutes(
 		return r.postResult(ctx, session, flowTurn, execution.activation.activator, execution)
 	}
 
-	switch next.Action {
-	case types.NextWaitTool, types.NextWaitApproval:
-		// Nothing to route: the round stopped to wait for a user, a Tool task
-		// or an approval. The parked status is written by parkDispatchedSession
-		// so the matching resume path can find the session again.
+	switch kind, known := classifyRoute(next.Action); {
+	case !known:
+		return fmt.Errorf("unsupported next action %q from dispatched team %q", next.Action, execution.activation.teamID)
+	case kind == routeStop:
+		// Nothing to route: the round stopped to wait for a user, a Tool task or
+		// an approval, or the Agent answered with a legacy lifecycle value. The
+		// parked status is written by parkDispatchedSession so the matching
+		// resume path can find the session again.
 		return nil
-	case types.NextActivate:
+	case kind == routeRetiredActivate:
 		// A Team hands work to another Team by calling the Team tool, not by
 		// asking the scheduler to start one. The mailbox dispatcher is gone with
 		// it: an answer returns as a tool result in the caller's conversation,
@@ -198,7 +201,7 @@ func (r *Runtime) postRoutes(
 		return fmt.Errorf(
 			"team %q asked to activate %v: routing dispatch is retired, call the Team tool instead",
 			execution.activation.teamID, next.Teams)
-	case types.NextProceed:
+	case kind == routeForward:
 		targets := fixedTargets(execution.binding)
 		if len(targets) == 0 {
 			return r.postResult(ctx, session, flowTurn, execution.activation.activator, execution)
@@ -209,19 +212,16 @@ func (r *Runtime) postRoutes(
 			}
 		}
 		return nil
-	case types.NextReturn:
+	case kind == routeReturn:
 		target := next.CallerTeam
 		if target == "" {
 			target = execution.activation.activator
 		}
 		return r.postResult(ctx, session, flowTurn, target, execution)
-	case types.NextCoordinate:
+	case kind == routeCoordinate, kind == routeFail:
 		return r.postResult(ctx, session, flowTurn, execution.activation.activator, execution)
-	case types.NextFail:
-		return r.postResult(ctx, session, flowTurn, execution.activation.activator, execution)
-	default:
-		return fmt.Errorf("unsupported next action %q from dispatched team %q", next.Action, execution.activation.teamID)
 	}
+	return nil
 }
 
 // parkDispatchedSession records the waiting status a dispatched round stopped
