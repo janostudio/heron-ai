@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -125,8 +126,13 @@ func (h *Handler) HandleRun(w http.ResponseWriter, r *http.Request) {
 
 	var req flowInputRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeDecodeError(w, err)
-		return
+		// An empty body asks for a blank session rather than reporting a bad
+		// request: the "new session" button sends `{}`, and a client that opens
+		// the conversation first sends nothing at all.
+		if !errors.Is(err, io.EOF) {
+			writeDecodeError(w, err)
+			return
+		}
 	}
 	if req.Input == "" {
 		req.Input = req.Message
@@ -145,6 +151,24 @@ func (h *Handler) HandleRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	// No session to continue and nothing to say yet: open an empty conversation.
+	// The page navigates into it and the user types there, instead of waiting on
+	// a form for a first turn that may take minutes to come back.
+	// Input is compared without trimming on purpose: `{}` means "just open a
+	// session", while `{"input":"   "}` is a caller that sent whitespace by
+	// mistake and deserves the 400 below.
+	if strings.TrimSpace(req.FlowSessionID) == "" &&
+		req.Input == "" && len(blocks) == 0 {
+		if creator, ok := h.runtime.(types.SessionCreator); ok {
+			session, createErr := creator.CreateSession(r.Context(), req.FlowID)
+			if createErr != nil {
+				writeRuntimeError(w, about("flow", req.FlowID, createErr))
+				return
+			}
+			writeJSON(w, types.FlowTurnResult{Session: session})
+			return
+		}
 	}
 	if strings.TrimSpace(req.Input) == "" {
 		if len(blocks) == 0 {

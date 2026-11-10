@@ -228,7 +228,7 @@ Go 字段名（PascalCase）统一成 snake_case。字段集合由
 
 | 之前 | 现在 |
 |---|---|
-| `flow_session.created` / `.updated` | `session.created` / `session.updated` |
+| `session.created` / `.updated` | `session.created` / `session.updated` |
 | `flow_turn.*` | `session.turn.*` |
 | `team_turn.*` | `session.team_turn.*` |
 | `team_session.*` | `session.team_session.*` |
@@ -240,15 +240,15 @@ Go 字段名（PascalCase）统一成 snake_case。字段集合由
 | `wakeup.*` | `session.wakeup.*` |
 | `approval.*` | `session.approval.*` |
 | `recovery.*` | `session.recovery.*` |
-| `agent.model_response` / `agent.feedback` | `session.agent.model_response` / `session.agent.feedback` |
+| `session.agent.model_response` / `session.agent.feedback` | `session.agent.model_response` / `session.agent.feedback` |
 | `tool_call.*` | `session.tool_call.*` |
-| `context.compacted` | `session.context.compacted` |
+| `session.context.compacted` | `session.context.compacted` |
 
 动作词保持 `started` / `completed` / `failed` / `cancelled`：事件记录的是已经发生的事，
 过去时是对的。`in_progress` 是状态名，不是事件名，所以没有采用。
 
-一个事件名跟着状态走：`flow_turn.waiting_input` → `session.turn.idle`，与 `SessionIdle` 对齐。
-`team_turn.waiting_input` / `agent_turn.waiting_input` 同理，但它们对应的 `TurnStatus` 值没变，
+一个事件名跟着状态走：`session.turn.idle` → `session.turn.idle`，与 `SessionIdle` 对齐。
+`session.team_turn.idle` / `session.agent_turn.idle` 同理，但它们对应的 `TurnStatus` 值没变，
 所以事件名与状态名在这两处并不一一对应——这是 TurnStatus 保留 `waiting_input` 的直接后果。
 
 `EventHeader` 的 id 字段（`flow_session_id` / `flow_turn_id`）**没有改**：它们标识的是

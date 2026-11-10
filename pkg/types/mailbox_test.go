@@ -9,12 +9,12 @@ import (
 
 func sampleMailboxMessage() MailboxMessage {
 	return MailboxMessage{
-		MessageID:     "msg_1",
-		FlowSessionID: "fs_1",
-		From:          MailboxAddress{TeamID: "t_a", AgentID: "a1"},
-		To:            MailboxAddress{TeamID: "t_b", AgentID: "a2"},
-		Kind:          "work",
-		Payload:       map[string]any{"task": "deploy"},
+		MessageID:       "msg_1",
+		FlowSessionID:   "fs_1",
+		From:            MailboxAddress{TeamID: "t_a", AgentID: "a1"},
+		To:              MailboxAddress{TeamID: "t_b", AgentID: "a2"},
+		Kind:            "work",
+		Payload:         map[string]any{"task": "deploy"},
 		CauseFlowTurnID: "ft_9",
 		Refs: ProducerRef{
 			FlowSessionID: "fs_1",

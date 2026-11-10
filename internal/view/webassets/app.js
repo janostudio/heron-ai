@@ -447,6 +447,9 @@
      * that into the login form, and a clean 200 renders straight through. */
     var match = location.pathname.match(/^\/s\/(.+)$/);
     var sessionID = match ? decodeURIComponent(match[1]) : "";
+    // Leaving a conversation must close its stream: one open subscription per
+    // visited session would pile up silently.
+    stopSessionStream();
     renderSidebar(sessionID);
     if (sessionID) {
       renderRecord(sessionID);
@@ -462,52 +465,30 @@
   }
 
   /* ---------- new session ---------- */
-  /* POST /api/sessions without a session id starts a new flow session: the body
-   * carries the first turn, and the answer only comes back once that turn is
-   * done. There is no "create empty session" call — the first message is what
-   * creates it — so the button has to warn that it may take a while instead of
-   * pretending to be instant. */
+  /* POST /api/sessions with no body opens an empty conversation; the first turn
+   * is typed into that page's composer. Creating a session and starting a turn
+   * are two steps for a person: waiting on this form for the first answer — a
+   * dispatch can take minutes — leaves them with nothing to look at. */
   function renderNewSession() {
     var busy = false;
-    var input = el("textarea", {
-      class: "new-input",
-      rows: "2",
-      placeholder: "\u7b2c\u4e00\u53e5\u8981\u505a\u4ec0\u4e48\uff1f\u8fd9\u4f1a\u521b\u5efa\u4f1a\u8bdd\u5e76\u7acb\u5373\u5f00\u59cb\u7b2c\u4e00\u8f6e\u3002"
-    });
-    var submit = el("button", { type: "button", class: "new-submit" }, "\u521b\u5efa\u5e76\u5f00\u59cb");
-    var cancel = el("button", { type: "button", class: "new-cancel" }, "\u53d6\u6d88");
-    var status = el("span", { class: "new-status" }, "");
     var toggle = el("button", { type: "button", class: "new-toggle" }, "\uff0b \u65b0\u5efa\u4f1a\u8bdd");
-    var form = el("div", { class: "new-form hidden" },
-      input,
-      el("div", { class: "new-bar" }, submit, cancel, status));
-    var box = el("div", { class: "new-session" }, toggle, form);
+    var box = el("div", { class: "new-session" }, toggle);
 
-    function setOpen(value) {
-      form.classList.toggle("hidden", !value);
-      toggle.classList.toggle("hidden", value);
-      if (value) {
-        input.focus();
-        return;
-      }
-      status.textContent = "";
+    function reset() {
+      busy = false;
+      toggle.disabled = false;
+      toggle.textContent = "\uff0b \u65b0\u5efa\u4f1a\u8bdd";
     }
-
-    toggle.addEventListener("click", function () { setOpen(true); });
-    cancel.addEventListener("click", function () { if (!busy) { setOpen(false); } });
 
     function create() {
       if (busy) { return; }
-      var value = input.value.trim();
-      if (!value) { input.focus(); return; }
       busy = true;
-      submit.disabled = true;
-      submit.textContent = "\u521b\u5efa\u4e2d\u2026";
-      status.textContent = "\u9996\u8f6e\u6b63\u5728\u6267\u884c\uff0c\u8dd1\u5b8c\u4f1a\u81ea\u52a8\u6253\u5f00\uff1b\u6d3e\u53d1\u7c7b\u4efb\u52a1\u53ef\u80fd\u8981\u51e0\u5206\u949f\u3002";
+      toggle.disabled = true;
+      toggle.textContent = "\u521b\u5efa\u4e2d\u2026";
       apiFetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input: value })
+        body: "{}"
       })
         .then(function (response) {
           if (response.ok) { return response.json(); }
@@ -518,28 +499,19 @@
         .then(function (result) {
           var id = result && result.Session && result.Session.id;
           if (!id) { throw new Error("\u54cd\u5e94\u91cc\u6ca1\u6709\u4f1a\u8bdd ID"); }
-          // The new session is not in the list we already fetched; rebuild it
-          // so the sidebar shows what was just created.
+          // The new session is not in the list already fetched; rebuild it so
+          // the sidebar shows what was just created.
           sidebarReady = false;
           navigate("/s/" + encodeURIComponent(id));
         })
         .catch(function (error) {
           if (error && error.unauthorized) { return; }
-          busy = false;
-          submit.disabled = false;
-          submit.textContent = "\u521b\u5efa\u5e76\u5f00\u59cb";
-          status.textContent = "\u521b\u5efa\u5931\u8d25\uff1a" + error.message;
+          reset();
+          toggle.title = "\u521b\u5efa\u5931\u8d25\uff1a" + error.message;
         });
     }
 
-    submit.addEventListener("click", create);
-    input.addEventListener("keydown", function (event) {
-      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-        event.preventDefault();
-        create();
-      }
-    });
-
+    toggle.addEventListener("click", create);
     return box;
   }
 
@@ -721,6 +693,7 @@
     if (!body || !currentRecord) { return; }
     currentMode = mode;
     stopRunLinks();
+    stopSessionStream();
     clear(body);
     var hint = document.getElementById("mode-hint");
     if (mode === "run") {
@@ -745,6 +718,7 @@
     }
     body.appendChild(renderChat(currentRecord));
     if (hint) { hint.textContent = "\u5bf9\u8bdd\uff1a\u4eba\u80fd\u8bfb\u7684\u6d88\u606f\u6d41\u3002"; }
+    attachSessionStream(body);
   }
 
   /* ---------- kpi ---------- */
@@ -924,7 +898,6 @@
       input.style.height = Math.min(input.scrollHeight || 0, 180) + "px";
     }
 
-    var liveRun = null;
     /* Bumped on every send and on every stop. A POST that answers after the
      * reader already stopped (or started another turn) must not touch the UI. */
     var runToken = 0;
@@ -941,9 +914,10 @@
       /* Subscribe before posting. The turn starts the moment the request
        * lands; a stream opened afterwards would miss its opening events. The
        * stream resumes from the last seq already on screen, so nothing replays. */
-      var chat = document.querySelector("#record-body .chat");
-      if (liveRun) { liveRun.stop(); liveRun = null; }
-      if (chat && currentRecord) { liveRun = startLiveRun(sessionID, chat, currentRecord); }
+      /* The page is already streaming this session; the turn's events arrive
+       * through it. Only remember how much has been seen, so the fallback below
+       * can tell "the stream delivered" from "it stayed silent". */
+      var seenBefore = sessionStream ? sessionStream.count() : 0;
 
       input.value = "";
       autosize();
@@ -970,8 +944,7 @@
           // left to add. Give the last frame a beat, then close it.
           setTimeout(function () {
             if (token !== runToken) { return; }
-            var missed = liveRun ? liveRun.count() === 0 : true;
-            if (liveRun) { liveRun.settleAll(); liveRun.stop(); liveRun = null; }
+            var missed = !sessionStream || sessionStream.count() === seenBefore;
             if (missed) {
               // The stream never delivered a frame; the record is the fallback
               // so the reader still sees what happened.
@@ -983,7 +956,6 @@
         .catch(function (error) {
           if (error && error.unauthorized) { return; }
           if (token !== runToken) { return; }
-          if (liveRun) { liveRun.stop(); liveRun = null; }
           setBusy(false, "\u53d1\u9001\u5931\u8d25\uff1a" + error.message);
         });
     }
@@ -997,7 +969,6 @@
     function stop() {
       if (!busy) { return; }
       runToken += 1;
-      if (liveRun) { liveRun.settleAll(); liveRun.stop(); liveRun = null; }
       setBusy(false, "\u6b63\u5728\u8bf7\u6c42\u505c\u6b62\u2026");
       apiFetch("/api/cancel?session_id=" + encodeURIComponent(sessionID), { method: "POST" })
         .then(function (response) {
@@ -1297,6 +1268,89 @@
     return view;
   }
 
+  /* The transcript follows the session while the page is open.
+   *
+   * Subscribing only for the duration of one POST covers the turn the reader
+   * sent and nothing else: a dispatched team comes back minutes later, and a
+   * scheduled wake-up has no request behind it at all, so those turns landed in
+   * the log with the page showing nothing new until a reload. */
+  var sessionStream = null;
+
+  function stopSessionStream() {
+    if (sessionStream) { sessionStream.stop(); sessionStream = null; }
+  }
+
+  function attachSessionStream(body) {
+    stopSessionStream();
+    if (!body || !currentRecord) { return; }
+    // record.session is the session id as a string; keep accepting an object in
+    // case the record shape grows back into one.
+    var sessionID = currentRecord.session;
+    if (sessionID && sessionID.id) { sessionID = sessionID.id; }
+    var container = body.querySelector(".chat");
+    if (!sessionID || !container) { return; }
+
+    var known = {};   // flow turns already rendered from the record
+    groupByTurn(currentRecord.events || []).forEach(function (turn) { known[turn.id] = true; });
+    var turns = {};
+    var lastSeq = lastSeqOf(currentRecord);
+    var seen = 0;
+    var stopped = false;
+    var stopFn = null;
+    var retry = 1000;
+
+    function turnFor(id) {
+      if (!turns[id]) {
+        turns[id] = createLiveTurn(id);
+        container.appendChild(turns[id].box);
+      }
+      return turns[id];
+    }
+
+    function onEvent(event) {
+      if (!event || !event.type) { return; }
+      seen++;
+      retry = 1000;
+      if (typeof event.seq === "number" && event.seq > lastSeq) { lastSeq = event.seq; }
+      /* Keep the loaded record in step: switching mode re-renders from it, and
+       * resuming the stream uses its last seq. */
+      if (currentRecord) { (currentRecord.events = currentRecord.events || []).push(event); }
+
+      var id = event.flow_turn_id || "flow";
+      if (known[id]) {
+        // This turn is already on screen as history. Drawing its later events
+        // would duplicate it; the record is what the page renders from.
+        return;
+      }
+      var view = turnFor(id);
+      view.push(event);
+      if (event.type === "session.turn.idle" || event.type === "session.turn.completed") {
+        view.finish(event);
+        return;
+      }
+      applyRunEvent(event);
+      refreshRunView();
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    function connect() {
+      stopFn = subscribeLive(sessionID, lastSeq, onEvent, function () {
+        if (stopped) { return; }
+        setTimeout(function () {
+          if (stopped) { return; }
+          retry = Math.min(retry * 2, 15000);
+          connect();
+        }, retry);
+      });
+    }
+    connect();
+
+    sessionStream = {
+      stop: function () { stopped = true; if (stopFn) { stopFn(); } },
+      count: function () { return seen; }
+    };
+  }
+
   function startLiveRun(sessionID, container, record) {
     var turns = {};
     var activeTurnID = "";
@@ -1357,7 +1411,7 @@
     var wrap = el("div", { class: "chat" });
     var turns = groupByTurn(record.events || []);
     if (turns.length === 0) {
-      wrap.appendChild(el("div", { class: "empty" }, "\u6ca1\u6709\u53ef\u5c55\u793a\u7684\u5bf9\u8bdd\u5185\u5bb9\u3002"));
+      wrap.appendChild(el("div", { class: "empty" }, "\u8fd9\u662f\u4e00\u4e2a\u65b0\u4f1a\u8bdd\uff0c\u5728\u4e0b\u9762\u7684\u8f93\u5165\u6846\u8f93\u5165\u7b2c\u4e00\u6761\u6d88\u606f\u3002"));
       return wrap;
     }
 

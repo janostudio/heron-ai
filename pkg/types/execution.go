@@ -497,6 +497,17 @@ type FlowRuntime interface {
 	Status(ctx context.Context, sessionID string) (FlowSession, error)
 }
 
+// SessionCreator is implemented by a runtime that can open an empty session.
+//
+// "New session" and "start the first turn" are two steps for a person: they open
+// a blank conversation, then type into it. Without this the only way to create a
+// session is to send its first turn, so the page cannot show the conversation
+// until that turn has finished — a dispatch can take minutes, and the user is
+// left staring at a form.
+type SessionCreator interface {
+	CreateSession(ctx context.Context, flowID string) (FlowSession, error)
+}
+
 // RichFlowRuntime is an optional transport extension for structured content.
 // The compatibility-oriented FlowRuntime interface remains string-based.
 type RichFlowRuntime interface {

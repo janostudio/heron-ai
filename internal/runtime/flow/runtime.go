@@ -246,12 +246,40 @@ func (r *Runtime) Start(ctx context.Context, req types.StartFlowRequest) (types.
 	if err != nil {
 		return types.FlowTurnResult{}, err
 	}
+	session, createErr := r.createSession(ctx, req.FlowID)
+	if createErr != nil {
+		return types.FlowTurnResult{}, createErr
+	}
+	return r.runTurnWithContext(ctx, session, req.Input, blocks)
+}
+
+// CreateSession opens a session with no turn in it.
+//
+// The page needs a conversation to navigate into before the user has typed
+// anything; creating it through the first turn would mean waiting for that turn
+// (a dispatch can take minutes) with nothing on screen.
+func (r *Runtime) CreateSession(ctx context.Context, flowID string) (types.FlowSession, error) {
+	if err := r.validateDependencies(flowID); err != nil {
+		return types.FlowSession{}, err
+	}
+	defs := r.definitions.Snapshot()
+	if strings.TrimSpace(flowID) == "" {
+		flowID = defs.Flow.ID
+	}
+	return r.createSession(ctx, flowID)
+}
+
+// createSession writes the creation event and returns the session. It starts
+// nothing: the first turn is a separate step, whether it comes immediately
+// (Start) or after the user types into the page.
+func (r *Runtime) createSession(ctx context.Context, flowID string) (types.FlowSession, error) {
+	now := time.Now().UTC()
 	session := types.FlowSession{
 		ID:        newID("fs"),
-		FlowID:    req.FlowID,
+		FlowID:    flowID,
 		Status:    types.SessionCreated,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
@@ -260,9 +288,9 @@ func (r *Runtime) Start(ctx context.Context, req types.StartFlowRequest) (types.
 		},
 		Payload: map[string]any{"session": session},
 	}); err != nil {
-		return types.FlowTurnResult{}, err
+		return types.FlowSession{}, err
 	}
-	return r.runTurnWithContext(ctx, session, req.Input, blocks)
+	return session, nil
 }
 
 func (r *Runtime) HandleInput(ctx context.Context, sessionID string, input string) (types.FlowTurnResult, error) {
@@ -288,16 +316,13 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	if session.Status == types.SessionWaitingApproval {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is already %s", session.ID, session.Status)
 	}
-	// A turn already in flight takes the message rather than being judged by the
-	// recovery check below. That check reads the event stream, where a turn that
-	// has started and not yet finished is indistinguishable from one a crash
-	// left behind; the running turn has simply not written its terminal event
-	// yet. Queueing is the path that keeps the message and lets the running turn
-	// start it when it ends. ResumeWithContext already orders these two checks
-	// this way; this entry point had them reversed.
+	// A turn of this process is running: this is the queueing case, and it has to
+	// be decided before the recovery check. That check reads the event log, where
+	// "running right now" and "died mid-flight" look identical except for the
+	// live index — and the index covers the flow turn, not the team and call
+	// turns inside it, so a healthy turn read as an unfinished execution and the
+	// second message was refused instead of queued.
 	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
-		// The turn in flight cannot be interrupted, but the message must not be
-		// lost either: store it and let the running turn start it when it ends.
 		return r.queueUserInput(ctx, session, input, blocks)
 	}
 	// The recovery check comes before the waiting_tool one on purpose. A session

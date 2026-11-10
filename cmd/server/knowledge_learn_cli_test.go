@@ -14,9 +14,9 @@ func TestEventLayer(t *testing.T) {
 		types.EventTeamTurnCompleted:     "team",
 		types.EventAgentTurnCompleted:    "agent",
 		types.EventToolCallCompleted:     "agent",
-		"session.command_turn.completed":         "team",
-		"session.webhook_turn.started":           "team",
-		"session.approval.requested":             "team",
+		"session.command_turn.completed": "team",
+		"session.webhook_turn.started":   "team",
+		"session.approval.requested":     "team",
 	}
 	for eventType, want := range cases {
 		if got := eventLayer(eventType); got != want {
@@ -53,14 +53,14 @@ func TestEventsToLayeredSources(t *testing.T) {
 
 func TestNormalizeScope(t *testing.T) {
 	cases := map[string]string{
-		"flow":    "flow",
-		"team":    "team",
-		"agent":   "agent",
-		"FLOW":    "flow",
-		"all":     "flow",
-		"agents":  "agent",
-		"":        "flow",
-		"bogus":   "flow",
+		"flow":   "flow",
+		"team":   "team",
+		"agent":  "agent",
+		"FLOW":   "flow",
+		"all":    "flow",
+		"agents": "agent",
+		"":       "flow",
+		"bogus":  "flow",
 	}
 	for in, want := range cases {
 		if got := normalizeScope(in); got != want {
