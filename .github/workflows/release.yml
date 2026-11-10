@@ -40,31 +40,34 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
-      - name: Build npm package
+      - name: Build npm packages
         run: |
-          mkdir -p dist/npm/bin dist/npm/assets
-          cp npm/package.json npm/install.js dist/npm/
-          cp npm/bin/heron dist/npm/bin/
-          chmod +x dist/npm/bin/heron
-          # npm 页面上的说明来自包内 README.md，图标则必须与 README 里的相对
-          # 路径（assets/icon.png）对得上，否则包页首屏是一张破图。
-          cp README.md dist/npm/
-          cp assets/icon.png dist/npm/assets/
           VERSION=${GITHUB_REF#refs/tags/v}
-          # 版本必须由 tag 注入。模板里写死版本号时 sed 匹配不到，npm 会去发布
-          # 那个写死的版本，报 "cannot publish over previously published versions"
-          # 或悄悄发出一个错误版本。匹配任意版本号，避免模板再被写死时静默失效。
-          sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" dist/npm/package.json
-          node -e "const v=require('./dist/npm/package.json').version; if(v!=='$VERSION'){console.error('npm package version mismatch: '+v+' != $VERSION');process.exit(1)}"
+          # 二进制随平台包发布，主包只带包装脚本；版本由 tag 注入，
+          # 模板里的 0.0.0-dev 只作占位（脚本会拒绝按占位版本发布）。
+          node npm/make-platform-packages.js --dist dist --out npm-dist --version "$VERSION"
 
-      - name: Publish to npm
+      - name: Publish platform packages to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          cd dist/npm
           echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
           # npm 对无效/过期的 token 返回 404（"'<pkg>@<version>' is not in this registry"）
           # 而不是 401，看起来像"包不存在/没权限发布"，极易误诊。发布前先确认 token 有效，
           # 失败就明确报认证问题并终止，不让 publish 带着坏 token 继续。
           npm whoami || { echo "::error::NPM_TOKEN 无效或已过期（npm whoami 失败）；请到 npm 账户重新生成 token 并更新仓库 secret NPM_TOKEN"; exit 1; }
+          VERSION=${GITHUB_REF#refs/tags/v}
+          # 平台包是同一包名的预发布版本（<version>-<platform>），必须显式 --tag：
+          # npm publish 默认把版本挂到 latest，那样 `npm install <pkg>` 会装到某个平台包。
+          for dir in npm-dist/platform-*; do
+            key="${dir#npm-dist/platform-}"
+            echo "::group::publish ${key}"
+            ( cd "$dir" && npm publish --access public --tag "platform-${VERSION}-${key}" )
+            echo "::endgroup::"
+          done
+
+      - name: Publish main package to npm
+        run: |
+          # 平台包全部发布成功后才发主包：主包的 optionalDependencies 指向它们。
+          cd npm-dist/main
           npm publish --access public

@@ -12,6 +12,7 @@
   "files": [
     "install.js",
     "bin/heron",
+    "lib/resolve-binary.js",
     "README.md",
     "assets/icon.png"
   ],

@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // install.js - postinstall script for heron-ai
-// Auto-detects platform and downloads the correct Go binary from GitHub Releases
+// 平台二进制正常情况下由 npm 平台包提供（安装时按 os/cpu 自动拉取）。
+// 这里只在平台包缺失时回退到 GitHub Releases 下载，例如 --no-optional、
+// npm 镜像还没同步到当前版本，或手动解包安装。
 
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { resolveBinary } = require('./lib/resolve-binary');
 
 const VERSION = 'v' + require('./package.json').version;
 const REPO = 'janostudio/heron-ai';
@@ -71,9 +74,18 @@ function install() {
     return;
   }
 
+  // 平台包已经带二进制时不再下载：安装阶段 npm 按 os/cpu 只拉当前平台的一份，
+  // 走 registry（国内可用镜像），比从 GitHub Releases 下载稳定得多。
+  const resolved = resolveBinary();
+  if (resolved.binaryPath) {
+    console.log(`Binary provided by npm platform package: ${resolved.binaryPath}`);
+    return;
+  }
+
   if (!downloadWithRetry(url, dest, MAX_RETRIES)) {
     console.error('\nManual installation:');
-    console.error(`  Download from: https://github.com/${REPO}/releases`);
+    console.error(`  Install the platform package: npm install -g @qinghuangniao/heron-ai@${VERSION.slice(1)}`);
+    console.error(`  Or download from: https://github.com/${REPO}/releases`);
     console.error(`  Place binary at: ${dest}`);
     process.exit(1);
   }

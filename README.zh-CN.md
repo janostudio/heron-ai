@@ -43,6 +43,9 @@ npm install -g @qinghuangniao/heron-ai
 heron --version
 ```
 
+二进制由对应平台的 npm 包（`@qinghuangniao/heron-ai-<platform>`）提供，安装只访问
+npm registry，不会从 GitHub 下载。
+
 源码构建（Go 1.26+）：
 
 ```bash

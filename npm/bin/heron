@@ -1,30 +1,30 @@
 #!/usr/bin/env node
 // bin/heron - cross-platform entry script for heron-ai
-// Calls the platform-specific Go binary, passing through all arguments
+// 调用当前平台的 Go 二进制，透传全部参数。
+//
+// 二进制来自 npm 平台包（@qinghuangniao/heron-ai-<platform>）或主包内的本地
+// 构建产物，解析逻辑见 lib/resolve-binary.js。
 
 const { spawnSync } = require('child_process');
-const path = require('path');
-const os = require('os');
+const { resolveBinary, platformPackageName } = require('../lib/resolve-binary');
 
-const PLATFORM_MAP = {
-  'linux-x64':   'heron-linux-amd64',
-  'linux-arm64': 'heron-linux-arm64',
-  'darwin-x64':   'heron-darwin-amd64',
-  'darwin-arm64': 'heron-darwin-arm64',
-  'win32-x64':    'heron-windows-amd64.exe',
-};
+const resolved = resolveBinary();
 
-const key = `${os.platform()}-${os.arch() === 'x64' ? 'x64' : os.arch()}`;
-const binaryName = PLATFORM_MAP[key];
-
-if (!binaryName) {
-  console.error(`Unsupported platform: ${key}`);
+if (!resolved.supported) {
+  console.error(`Unsupported platform: ${resolved.platformKey}`);
+  console.error('Supported platforms: linux/darwin x64+arm64, win32 x64');
   process.exit(1);
 }
 
-const binaryPath = path.join(__dirname, binaryName);
+if (!resolved.binaryPath) {
+  console.error(`Missing heron binary for ${resolved.platformKey}.`);
+  console.error(`Expected npm platform package: ${platformPackageName(resolved.platformKey)}`);
+  console.error('Reinstall with: npm install -g @qinghuangniao/heron-ai@latest');
+  console.error('If you installed with --no-optional, drop that flag so the platform package is installed.');
+  process.exit(1);
+}
 
-const result = spawnSync(binaryPath, process.argv.slice(2), {
+const result = spawnSync(resolved.binaryPath, process.argv.slice(2), {
   stdio: 'inherit',
 });
 
