@@ -178,7 +178,7 @@ Endpoints (registered in `cmd/server/main.go`):
 | POST | `/api/sessions/turn` | Send another input to an existing session (`?session_id=`) |
 | GET | `/api/sessions/{id}/record` | Paged session records (`?after_seq=`, `?limit=`) — the Web UI reads this |
 | GET | `/api/status` | Session status (`?session_id=`) |
-| GET | `/api/stream` | SSE stream of session events (`?session_id=`) |
+| GET | `/api/stream` | SSE stream of session events (`?session_id=`, `?follow=1` keeps it open across turns, `Last-Event-ID` resumes after a sequence) |
 | GET | `/api/recovery/status` | Recovery status (`?session_id=`) |
 | POST | `/api/recovery` | Trigger recovery (`?session_id=`, body = `RecoveryRequest`) |
 | POST | `/api/resume` | Resume a waiting session (`?session_id=`) |

@@ -29,6 +29,10 @@ type Handler struct {
 	// identified from the outside: two restarts look identical, and a rollback
 	// that silently kept the new binary looks like a rollback that worked.
 	build BuildInfo
+	// streamHeartbeat overrides the followed-stream heartbeat interval. Zero
+	// means the package default; tests set a small value rather than waiting
+	// fifteen seconds to observe one frame.
+	streamHeartbeat time.Duration
 }
 
 // BuildInfo identifies a running binary.
@@ -296,6 +300,17 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// A followed stream never ends on a turn boundary, so it also has to keep
+	// the connection warm: an idle connection is what an intermediary closes,
+	// and the wake-up this mode exists to deliver arrives during that idle gap.
+	if follow {
+		interval := h.streamHeartbeat
+		if interval <= 0 {
+			interval = streamHeartbeatInterval
+		}
+		followStream(streamCtx, writer, events, interval)
+		return
+	}
 	// Replaying a session that already ended has to deliver its *latest* turn,
 	// not stop at the first terminal event in the file: a subscriber that sees
 	// turn one only will re-render an old answer and never notice the turn it
@@ -305,9 +320,6 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 	for event := range events {
 		if err := writer.WriteSessionEvent(event); err != nil {
 			return
-		}
-		if follow {
-			continue
 		}
 		if event.Seq <= replayEnd {
 			// Still replaying what was already recorded. Only the end of the
@@ -356,6 +368,37 @@ func turnStreamEnded(event storage.SessionEvent) bool {
 		return true
 	}
 	return false
+}
+
+// streamHeartbeatInterval bounds how long a followed stream stays silent.
+//
+// A followed stream can legitimately idle for minutes between turns, and an
+// intermediary that treats an idle connection as dead will close it. A comment
+// frame is the only SSE frame clients are required to ignore, so it keeps the
+// connection warm without adding an event type every consumer must filter.
+const streamHeartbeatInterval = 15 * time.Second
+
+// followStream serves a stream that outlives the current turn.
+func followStream(ctx context.Context, writer *SSEWriter, events <-chan storage.SessionEvent, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := writer.WriteComment("ping"); err != nil {
+				return
+			}
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
+			if err := writer.WriteSessionEvent(event); err != nil {
+				return
+			}
+		}
+	}
 }
 
 // wakeupStatsProvider is implemented by a runtime that owns scheduled

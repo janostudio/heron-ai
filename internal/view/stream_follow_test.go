@@ -1,9 +1,12 @@
 package view
 
 import (
+	"bytes"
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,4 +88,79 @@ func TestHealthReportsNotReadyWithoutRuntime(t *testing.T) {
 	require.Equal(t, 200, recorder.Code)
 	require.Contains(t, recorder.Body.String(), `"ready":false`)
 	require.Contains(t, recorder.Body.String(), `"pending_wakeups":0`)
+}
+
+// syncRecorder is a ResponseWriter safe to read while a handler is still
+// writing. httptest.Recorder is not, and a heartbeat can only be observed
+// mid-stream, so the assertion needs a writer the test may inspect live.
+type syncRecorder struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+	hdr http.Header
+}
+
+func newSyncRecorder() *syncRecorder { return &syncRecorder{hdr: http.Header{}} }
+
+func (r *syncRecorder) Header() http.Header { return r.hdr }
+
+func (r *syncRecorder) Write(data []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.Write(data)
+}
+
+func (r *syncRecorder) WriteHeader(int) {}
+
+func (r *syncRecorder) Flush() {}
+
+func (r *syncRecorder) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.String()
+}
+
+// A followed stream can idle for minutes between turns. Without a heartbeat an
+// intermediary that treats an idle connection as dead closes it, and the
+// wake-up this feature exists to deliver is lost.
+func TestStreamFollowEmitsHeartbeat(t *testing.T) {
+	handler, sessionID := newStreamFixture(t)
+	handler.streamHeartbeat = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequest("GET", "/api/sessions/stream?session_id="+sessionID+"&follow=1", nil).WithContext(ctx)
+	recorder := newSyncRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		handler.HandleStream(recorder, request)
+		close(done)
+	}()
+
+	deadline := time.After(3 * time.Second)
+	for !strings.Contains(recorder.String(), ": ping") {
+		select {
+		case <-deadline:
+			t.Fatal("no heartbeat frame on a followed stream")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stream did not stop after the client went away")
+	}
+}
+
+// The heartbeat belongs to the followed stream only: a per-turn stream must
+// stay byte-identical for existing clients.
+func TestStreamWithoutFollowHasNoHeartbeat(t *testing.T) {
+	handler, sessionID := newStreamFixture(t)
+	handler.streamHeartbeat = time.Millisecond
+	request := httptest.NewRequest("GET", "/api/sessions/stream?session_id="+sessionID, nil)
+	recorder := httptest.NewRecorder()
+
+	handler.HandleStream(recorder, request)
+
+	require.NotContains(t, recorder.Body.String(), ": ping")
 }

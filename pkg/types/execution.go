@@ -57,6 +57,11 @@ type AgentRequest struct {
 //
 // If you ever do persist it, it becomes part of the published contract and
 // needs the same treatment as CallResult below.
+//
+// PendingInput is carried from the ToolResult that asked, not re-derived from
+// Reply: a tool that already knows its fields should not have them serialised
+// to JSON and parsed back just to reach the checkpoint, and a parser only ever
+// recovers the fields it was taught.
 type AgentResult struct {
 	Status          TurnStatus
 	Reply           string
@@ -69,6 +74,7 @@ type AgentResult struct {
 	Error           string
 	Checkpoint      *AgentCheckpoint
 	TaskID          string
+	PendingInput    *AgentPendingInput
 	PendingApproval *AgentPendingApproval
 	Approval        *HITLResponse
 }

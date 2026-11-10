@@ -1272,6 +1272,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 					Usage:        totalUsage,
 					WorkspaceOps: workspaceOps,
 					ToolCalls:    toolCalls,
+					PendingInput: toolResult.PendingInput,
 				}
 				return t.saveWaitingCheckpoint(ctx, agent, req, contextManager, budget, totalUsage, round+1, lastText, workspaceOps, toolCalls, waiting,
 					loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools))
@@ -1613,9 +1614,20 @@ func (t *TurnLoop) saveToolCheckpoint(
 	return checkpoint, nil
 }
 
+// pendingInputFromResult returns the request that suspended the turn.
+//
+// The structured value wins when present: the tool already built it, and
+// re-deriving it from the reply text loses any field the parser does not know
+// about (Fields was one such field before it was added below). The reply
+// fallback still matters for two callers that have no structured value: an
+// older checkpoint whose tool predates the field, and the loop guard's
+// ask_user path, which asks in prose rather than through a tool.
 func pendingInputFromResult(result *types.AgentResult) *types.AgentPendingInput {
 	if result == nil || result.Status != types.TurnWaitingInput {
 		return nil
+	}
+	if result.PendingInput != nil {
+		return result.PendingInput
 	}
 	pending := &types.AgentPendingInput{Question: result.Reply}
 	if strings.HasPrefix(result.Reply, "{") {
@@ -1637,9 +1649,49 @@ func pendingInputFromResult(result *types.AgentResult) *types.AgentPendingInput 
 					}
 				}
 			}
+			if fields, ok := raw["fields"].([]any); ok {
+				for _, item := range fields {
+					field, ok := item.(map[string]any)
+					if !ok {
+						continue
+					}
+					pending.Fields = append(pending.Fields, pendingFieldFromMap(field))
+				}
+			}
 		}
 	}
 	return pending
+}
+
+// pendingFieldFromMap decodes one field of a reply-embedded request. Unknown
+// keys are dropped rather than rejected: this path exists to rescue input that
+// was already accepted elsewhere, and refusing it would leave the turn waiting
+// with no request at all.
+func pendingFieldFromMap(field map[string]any) types.PendingInputField {
+	decoded := types.PendingInputField{}
+	if name, ok := field["name"].(string); ok {
+		decoded.Name = name
+	}
+	if kind, ok := field["type"].(string); ok {
+		decoded.Type = kind
+	}
+	if description, ok := field["description"].(string); ok {
+		decoded.Description = description
+	}
+	if required, ok := field["required"].(bool); ok {
+		decoded.Required = required
+	}
+	if fallback, ok := field["default"].(string); ok {
+		decoded.Default = fallback
+	}
+	if options, ok := field["options"].([]any); ok {
+		for _, item := range options {
+			if value, ok := item.(string); ok {
+				decoded.Options = append(decoded.Options, value)
+			}
+		}
+	}
+	return decoded
 }
 
 func statusForRoute(route *types.Route) types.TurnStatus {
@@ -2650,9 +2702,10 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 			Name: "AskUserQuestion", Type: "object",
 			Properties: map[string]types.JSONProperty{
 				"question":     {Type: "string", Description: "Question to show the user"},
-				"options":      {Type: "array", Description: "Optional answer choices"},
+				"options":      {Type: "array", Description: "Optional answer choices. Use for a single choice; do not combine with fields"},
 				"header":       {Type: "string", Description: "Optional short label"},
 				"multi_select": {Type: "boolean", Description: "Whether multiple choices may be selected"},
+				"fields":       {Type: "array", Description: `Structured form: collect several values in one pause. Each item is {"name": string (required, unique), "type": "string"|"number"|"boolean"|"enum" (default string), "description": string, "options": string[] (required when type is enum), "required": bool, "default": string}. Example: [{"name":"repo","description":"target repository"},{"name":"mode","type":"enum","options":["read","write"],"required":true}]`},
 			},
 			Required: []string{"question"},
 		},

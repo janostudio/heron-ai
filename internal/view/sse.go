@@ -85,6 +85,22 @@ func (s *SSEWriter) WriteChunk(content string) error {
 	})
 }
 
+// WriteComment emits an SSE comment frame.
+//
+// It exists for heartbeat, not for data: a comment is the only frame a client
+// is required to ignore, so it keeps a long-lived stream from being closed by
+// an intermediary that treats an idle connection as dead without inventing an
+// event type that every consumer would then have to filter out.
+func (s *SSEWriter) WriteComment(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := fmt.Fprintf(s.w, ": %s\n\n", text); err != nil {
+		return err
+	}
+	s.flusher.Flush()
+	return nil
+}
+
 func (s *SSEWriter) WriteCallChunk(callID, content string) error {
 	return s.WriteEvent(types.SSEEvent{
 		Type:    "call_output",
