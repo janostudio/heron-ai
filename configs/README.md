@@ -25,6 +25,6 @@ cp configs/models.json configs/settings.json my-agent/.agents/
 
 - `logging.max_backups: 5`、`retention_days: 7` 是合理的清理窗口；`0` 表示不限制。
 - `runtime.*` 是防跑飞的兜底，默认值刻意远高于正常工作负载。
-- `tools.script.enabled: false`：`Script` 工具默认关闭，需要才开。
+- `tools.repl.enabled: false`：`REPL` 工具默认关闭，需要才开。
 - `web.provider: duckduckgo` 免 key 但只答实体类查询；要真实搜索结果需换 provider 并配 key。
 - `mcp: []` 与不写这一段等价，显式写出来是为了让人知道有这个位置。

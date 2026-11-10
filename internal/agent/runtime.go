@@ -14,7 +14,6 @@ import (
 	"github.com/heron-ai/heron-engine/internal/definitions"
 	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/storage"
-	"github.com/heron-ai/heron-engine/internal/tool/script"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -1773,16 +1772,6 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 	if _, spawns := allowed["Spawn"]; spawns {
 		allowed["Collect"] = struct{}{}
 	}
-	// The code-execution tool answers to both names. An agent that declares the
-	// current one can still be called by the old one — prompts, client filters
-	// and agent definitions predate the rename — and declaring the old one
-	// reaches the same tool instead of "not allowed".
-	if _, ok := allowed[script.ToolName]; ok {
-		allowed[script.LegacyToolName] = struct{}{}
-	}
-	if _, ok := allowed[script.LegacyToolName]; ok {
-		allowed[script.ToolName] = struct{}{}
-	}
 	filtered := make([]types.ToolCall, len(calls))
 	copy(filtered, calls)
 	// Why a call never reaches the executor, keyed by position in the batch.
@@ -2891,15 +2880,7 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 		if _, hidden := withheld[toolName]; hidden {
 			continue
 		}
-		// The code-execution tool was renamed Script -> REPL. An agent definition
-		// written before the rename still says Script; resolving it here keeps
-		// that agent working instead of silently losing the tool (a name the
-		// registry does not know has no symptom at load time).
-		lookup := toolName
-		if lookup == script.LegacyToolName {
-			lookup = script.ToolName
-		}
-		if schema, ok := builtinSchemas[lookup]; ok {
+		if schema, ok := builtinSchemas[toolName]; ok {
 			schemas = append(schemas, schema)
 		}
 	}

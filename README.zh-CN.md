@@ -80,7 +80,7 @@ heron --prompt "你好"    # 跑一轮就退出
 |---|---|
 | **编排** | `Flow → Team → Call → AgentTurn`，信号路由（`continue` / `wait_input` / `goal_achieved` / `goal_failed` / `goal_impossible`），层间用带类型的 record 传递数据 |
 | **Agent** | Persona、按 agent 授权的工具、Skill、Knowledge、Rules、Guardrail、Hooks、结构化输出、Handoff、HITL 审批 |
-| **工具** | 20 个内置（`Read`、`Write`、`Bash`、`Grep`、`Glob`、`WebSearch`、`WebFetch`、`CodeNav`、`TodoWrite`、`Spawn`、`Team`、`State`、`Define` 等），另支持自定义工具与 MCP server；`Script` 是第 21 个，需在 `settings.json` 显式开启 |
+| **工具** | 20 个内置（`Read`、`Write`、`Bash`、`Grep`、`Glob`、`WebSearch`、`WebFetch`、`CodeNav`、`TodoWrite`、`Spawn`、`Team`、`State`、`Define` 等），另支持自定义工具与 MCP server；`REPL` 是第 21 个，需在 `settings.json` 显式开启 |
 | **运行方式** | TUI · `--prompt` 单轮 · stdin/stdout 常驻 JSON-RPC · 带 SSE 与内置 Web UI 的 HTTP server · `stream-json` 客户端 |
 | **Team 包** | `heron teams` 安装 / 卸载 / 导出，带 manifest、依赖闭包与脚本复核 |
 | **知识** | `heron knowledge` 把已结束的会话提炼成 Markdown 条目，`gc` 按 `ExpiresAt` 归档 |

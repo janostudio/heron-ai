@@ -125,7 +125,7 @@ func (l *ConfigLoader) LoadDefinitions(ctx context.Context, req DefinitionsLoadR
 	}, nil
 }
 
-// LoadScriptSettings 读取 settings.json 的 tools.script 段。文件或字段缺失
+// LoadScriptSettings 读取 settings.json 的 tools.repl 段。文件或字段缺失
 // 都返回零值，即关闭——这个能力默认不开，开关必须是显式的。
 func (l *ConfigLoader) LoadScriptSettings() types.ScriptConfig {
 	var cfg types.ScriptConfig
@@ -135,19 +135,11 @@ func (l *ConfigLoader) LoadScriptSettings() types.ScriptConfig {
 	}
 	var raw struct {
 		Tools struct {
-			Script types.ScriptConfig `json:"script"`
-			Repl   types.ScriptConfig `json:"repl"`
+			Repl types.ScriptConfig `json:"repl"`
 		} `json:"tools"`
 	}
 	if err := json.Unmarshal(data, &raw); err == nil {
-		// tools.repl is the current key; tools.script keeps working for configs
-		// written before the rename. An explicit repl section wins.
-		cfg = raw.Tools.Script
-		if raw.Tools.Repl.Enabled || raw.Tools.Repl.TimeoutMS > 0 ||
-			raw.Tools.Repl.MaxSteps > 0 || raw.Tools.Repl.MaxOutputBytes > 0 ||
-			raw.Tools.Repl.CatalogBudget > 0 {
-			cfg = raw.Tools.Repl
-		}
+		cfg = raw.Tools.Repl
 	}
 	return cfg
 }

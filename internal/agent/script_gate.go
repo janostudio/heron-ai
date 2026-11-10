@@ -15,13 +15,11 @@ import (
 // recursion guard below.
 const ScriptToolName = script.ToolName
 
-// isScriptTool reports whether name is the code-execution tool, under either
-// its current name or the one it had before the rename. The gate has to answer
-// for both: an agent definition written earlier declares "Script", gets the
-// alias, and would otherwise execute inner calls with no script_call_id — the
-// exact invisibility the gate exists to prevent.
+// isScriptTool reports whether name is the code-execution tool. The gate, the
+// recursion guard and the allowlist all key on the same name; a call spelled
+// any other way is an ordinary tool call.
 func isScriptTool(name string) bool {
-	return name == script.ToolName || name == script.LegacyToolName
+	return name == script.ToolName
 }
 
 // SetScriptDescription wires the description renderer for the Script tool.
@@ -102,7 +100,7 @@ func (t *TurnLoop) withScriptGate(ctx context.Context, agent types.AgentConfig, 
 			// the outer step count would no longer describe the work done.
 			return &types.ToolResult{
 				Success: false,
-				Error:   "Script cannot call itself; call the inner tools directly",
+				Error:   script.ToolName + " cannot call itself; call the inner tools directly",
 			}, nil
 		}
 		call := types.ToolCall{

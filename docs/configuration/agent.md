@@ -191,7 +191,7 @@ Built-in tools:
 | `ListTeams` / `Team` / `TeamSession` | Discover and hand work to other Teams | |
 | `State` | Read/write session state snapshots | |
 | `Define` | Create Agent/Team definitions from inside a conversation | See `builtin/skills/heron-ai-config/references/define.md` |
-| `REPL` | Run a script that orchestrates several tool calls (named `Script` before 2026-11) | **Only when** `settings.json` sets `tools.script.enabled`, **and** the agent sets `hitl.enabled` — the whole program is the unit a human approves, so without HITL the call is denied, not run |
+| `REPL` | Run a script that orchestrates several tool calls | **Only when** `settings.json` sets `tools.repl.enabled`, **and** the agent sets `hitl.enabled` — the whole program is the unit a human approves, so without HITL the call is denied, not run |
 | `ScheduleWakeup` / `CancelWakeup` | Wake a session later | **Only under `--serve`**, the one mode whose process outlives its turns |
 
 A tool must be both listed here and declared in the agent's `tools.builtin` to

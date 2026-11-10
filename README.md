@@ -84,7 +84,7 @@ building a model client or opening a session, and prints each Team binding's lif
 |---|---|
 | **Orchestration** | `Flow → Team → Call → AgentTurn`, with signal routing (`continue` / `wait_input` / `goal_achieved` / `goal_failed` / `goal_impossible`) and typed records passed between layers |
 | **Agents** | Persona, per-agent tools, skills, knowledge, rules, guardrails, hooks, structured output, handoff, HITL approvals |
-| **Tools** | 20 builtin (`Read`, `Write`, `Bash`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `CodeNav`, `TodoWrite`, `Spawn`, `Team`, `State`, `Define`, …), plus custom tools and MCP servers. `Script` is a 21st, enabled only via `settings.json` |
+| **Tools** | 20 builtin (`Read`, `Write`, `Bash`, `Grep`, `Glob`, `WebSearch`, `WebFetch`, `CodeNav`, `TodoWrite`, `Spawn`, `Team`, `State`, `Define`, …), plus custom tools and MCP servers. `REPL` is a 21st, enabled only via `settings.json` |
 | **Run modes** | TUI · one-shot `--prompt` · long-lived JSON-RPC over stdin/stdout · HTTP server with SSE and a bundled Web UI · `stream-json` client |
 | **Team packages** | `heron teams` — install / remove / export, with manifest, dependency closure and script review |
 | **Knowledge** | `heron knowledge` distills finished sessions into Markdown entries; `gc` archives by `ExpiresAt` |
