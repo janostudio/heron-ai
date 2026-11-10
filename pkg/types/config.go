@@ -34,10 +34,10 @@ type KnowledgeConfig struct {
 	SummaryModel string `json:"summary_model,omitempty"`
 }
 
-// ScriptConfig 配置 Script（REPL 代码模式）工具，对应 settings.json 的
-// tools.script 段。
+// ScriptConfig 配置 REPL 代码模式工具，对应 settings.json 的 tools.repl 段。
 //
-// 零值即关闭。开启后模型可以用一个 Script 调用编排多个同步工具，
+// 类型名沿用 ScriptConfig（包内历史命名），模型看到的工具名是 REPL。
+// 零值即关闭。开启后模型可以用一次 REPL 调用编排多个同步工具，
 // 中间结果不进上下文；写操作仍然逐次过 policy / bash gate / 审批。
 type ScriptConfig struct {
 	Enabled bool `json:"enabled"`

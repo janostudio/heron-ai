@@ -14,7 +14,14 @@ import (
 // ToolName is the name the model sees. It is also the recursion guard's key and
 // the name the runtime uses to decide whether to publish a gate, so it is
 // declared once here and referenced from the agent package.
-const ToolName = "Script"
+//
+// The tool takes one program and runs it — closer to a code-execution surface
+// than to a shell script, and every comparable agent stack names that surface
+// after code execution (code mode, CodeAgent, Programmatic Tool Calling).
+// "REPL" is the name a reader arrives at fastest, even though this is not an
+// interactive read-eval-print loop: there is no session, each call starts a
+// fresh interpreter and replays for recovery.
+const ToolName = "REPL"
 
 // CatalogSource renders the catalog for a set of tool names. A nil slice means
 // "every tool this instance can see", which is what the fallback path uses when
@@ -80,7 +87,7 @@ func NewScriptTool(caller ToolCaller, store StepStore, catalog CatalogSource, op
 	return &ScriptTool{caller: caller, store: store, catalog: catalog, opts: opts}
 }
 
-func (t *ScriptTool) Name() string { return "Script" }
+func (t *ScriptTool) Name() string { return ToolName }
 
 // Description states the contract, not the catalog. The catalog is per-session
 // (it depends on the agent's tool whitelist) and is rendered into the code
@@ -339,4 +346,4 @@ func numberParam(params map[string]any, key string) (int64, bool) {
 // a single type assertion.
 type jsonNumber interface{ Int64() (int64, error) }
 
-func (t *ScriptTool) String() string { return fmt.Sprintf("Script(budget=%d)", t.opts.CatalogBudget) }
+func (t *ScriptTool) String() string { return fmt.Sprintf("REPL(budget=%d)", t.opts.CatalogBudget) }

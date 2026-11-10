@@ -252,11 +252,11 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// missing.
 	toolRegistry.Register(agent.NewDefineTool(definitionwriter.NewWriter(store), store))
 
-	// Script (REPL code mode) is opt-in through settings.json tools.script.
+	// REPL (code mode) is opt-in through settings.json tools.repl.
 	// Everything it needs is constructed here rather than inside the tool so the
 	// feature has exactly one switch and no hidden defaults.
 	//
-	// The catalog lists every registered builtin except Script itself, not the
+	// The catalog lists every registered builtin except REPL itself, not the
 	// per-agent whitelist: the catalog is rendered per session but the agent
 	// config is not available at this point. That is safe because visibility is
 	// not authorization — an inner call goes back through executeToolCalls,
@@ -363,7 +363,24 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// The pointer names the knowledge directories an agent may grep. It reads
 	// the same two roots the validation above does, so what it advertises and
 	// what was validated cannot diverge.
-	teamRuntime.SetKnowledgePointer(knowledge.NewKnowledgePointer(files, ".agents/knowledge", ".agents"))
+	// The pointer names the same mounts the tool backend enforces, resolved the
+	// same way (a relative entry is relative to the workspace root). Absolute,
+	// because a relative example is what made an agent invent "/project/repos"
+	// and burn its calls on paths that never existed.
+	var readRootPaths []string
+	if definitions.Workspace != nil {
+		for _, root := range definitions.Workspace.ReadRoots {
+			root = strings.TrimSpace(root)
+			if root == "" {
+				continue
+			}
+			if !filepath.IsAbs(root) {
+				root = filepath.Join(workspaceRoot, root)
+			}
+			readRootPaths = append(readRootPaths, filepath.Clean(root))
+		}
+	}
+	teamRuntime.SetKnowledgePointer(knowledge.NewKnowledgePointer(files, ".agents/knowledge", ".agents", readRootPaths...))
 	sessionWriter := storage.NewJSONLSessionWriter(files)
 	checkpointStore := agent.NewFileCheckpointStore(files)
 	// Transcripts are the running conversation of one Agent inside one Flow
