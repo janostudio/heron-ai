@@ -111,7 +111,7 @@ Each agent can be configured with:
   TeamSession, Collect, ScheduleWakeup, CancelWakeup, State, Define. An agent
   only gets the subset listed in its `tools.builtin`; a name that is registered
   but missing from `builtinSchemas` runs but stays invisible to the model.
-  Two tools are conditional: `Script` only appears when
+  Two tools are conditional: `REPL` (formerly `Script`) only appears when
   `settings.json` sets `tools.script.enabled`, and `ScheduleWakeup` /
   `CancelWakeup` only exist under `--serve`, the one mode whose process
   outlives its turns.
