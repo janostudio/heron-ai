@@ -115,6 +115,17 @@ func (t *WriteTool) Parameters() map[string]any {
 		"new_text":      map[string]any{"type": "string", "description": "Replacement text for edit mode"},
 	}
 }
+
+// writeModeOrDefault names the mode the workspace will use, so the error can
+// tell the model which mode it was actually in when the parameter was missing.
+// The empty string is not a mode the caller chose; it is the default.
+func writeModeOrDefault(mode string) string {
+	if mode == "" {
+		return "replace"
+	}
+	return mode
+}
+
 func (t *WriteTool) Execute(ctx context.Context, params map[string]any) (*types.ToolResult, error) {
 	file, _ := params["file"].(string)
 	content, _ := params["content"].(string)
@@ -124,6 +135,24 @@ func (t *WriteTool) Execute(ctx context.Context, params map[string]any) (*types.
 	newText, _ := params["new_text"].(string)
 	if file == "" {
 		return &types.ToolResult{Success: false, Error: "file parameter is required"}, nil
+	}
+	// A missing content is not an empty content. The default mode is replace,
+	// so a model that truncates its output or misspells the key would otherwise
+	// blank the file and be told it succeeded. Only the key's presence is
+	// checked: an explicit empty string is a legitimate way to truncate a file,
+	// and refusing it would break that.
+	if mode != "edit" {
+		if _, present := params["content"]; !present {
+			return &types.ToolResult{
+				Success: false,
+				Error: fmt.Sprintf(
+					"content is required for mode %q; pass an empty string to write an empty file",
+					writeModeOrDefault(mode)),
+			}, nil
+		}
+		if _, isString := params["content"].(string); !isString {
+			return &types.ToolResult{Success: false, Error: "content must be a string"}, nil
+		}
 	}
 	if t.workspace == nil {
 		return &types.ToolResult{Success: false, Error: "workspace is not configured"}, nil

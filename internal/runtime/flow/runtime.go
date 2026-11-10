@@ -98,6 +98,22 @@ type Runtime struct {
 	// the loop cannot start the same one twice before its state event lands.
 	// Guarded by wakeupMu.
 	wakeupInflight map[string]bool
+	// wakeupHold pins a record until a retry is allowed, when the reschedule
+	// itself could not be persisted. The loop takes the earliest scheduled
+	// FireAt, so a record left at a FireAt it already passed is picked up
+	// again immediately — without this the loop spins at full CPU whenever a
+	// state event cannot be written. Guarded by wakeupMu.
+	wakeupHold map[string]time.Time
+
+	// cancelMu guards sessionWork: the cancel functions of background
+	// executions this process is running for a session. A dispatched Team
+	// outlives the turn that started it, so it cannot inherit that turn's
+	// context — it was given context.Background() instead, which also meant
+	// nothing could ever stop it. turnCancels covers the turn itself;
+	// this covers the work the turn handed off before it ended.
+	cancelMu    sync.Mutex
+	sessionWork map[string]map[int]context.CancelFunc
+	nextWorkID  int
 	// wakeupSessionLister enumerates sessions for startup recovery. It is
 	// injected because the sessions directory is app-layer layout.
 	wakeupSessionLister func(context.Context) ([]string, error)
@@ -636,6 +652,15 @@ func (r *Runtime) Cancel(ctx context.Context, sessionID string) error {
 	// Stop the work, not just the label. The turn's own finishTurn writes the
 	// terminal event with the cancelled status.
 	r.cancelRunningTurn(sessionID)
+	// A dispatched Team outlives the turn that started it and runs on a context
+	// of its own, so cancelling the turn does not reach it. This is what stops
+	// those; without it the child keeps working after the user asked it to stop.
+	if stopped := r.cancelSessionWork(sessionID); stopped > 0 {
+		logging.Info("cancelled background work for session", map[string]any{
+			"flow_session_id": sessionID,
+			"executions":      stopped,
+		})
+	}
 	return nil
 }
 
@@ -2903,6 +2928,55 @@ func (r *Runtime) isTurnRunning(sessionID string) bool {
 	r.turnMu.Lock()
 	defer r.turnMu.Unlock()
 	return r.runningTurns[sessionID]
+}
+
+// registerSessionWork returns a cancellable context for work that must outlive
+// the turn that started it, plus a release func to call when that work ends.
+//
+// The context is deliberately not derived from the caller's: a dispatched Team
+// keeps running after the FlowTurn returns, so inheriting that context would
+// kill it at once. Detaching it from the caller does not mean detaching it from
+// the session, which is what this map restores.
+func (r *Runtime) registerSessionWork(sessionID string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancelMu.Lock()
+	if r.sessionWork == nil {
+		r.sessionWork = make(map[string]map[int]context.CancelFunc)
+	}
+	if r.sessionWork[sessionID] == nil {
+		r.sessionWork[sessionID] = make(map[int]context.CancelFunc)
+	}
+	id := r.nextWorkID
+	r.nextWorkID++
+	r.sessionWork[sessionID][id] = cancel
+	r.cancelMu.Unlock()
+
+	return ctx, func() {
+		cancel()
+		r.cancelMu.Lock()
+		if work := r.sessionWork[sessionID]; work != nil {
+			delete(work, id)
+			if len(work) == 0 {
+				delete(r.sessionWork, sessionID)
+			}
+		}
+		r.cancelMu.Unlock()
+	}
+}
+
+// cancelSessionWork stops every background execution registered for a session
+// and reports how many were running. The cancel funcs are removed before being
+// called so a concurrent release cannot double-delete.
+func (r *Runtime) cancelSessionWork(sessionID string) int {
+	r.cancelMu.Lock()
+	work := r.sessionWork[sessionID]
+	delete(r.sessionWork, sessionID)
+	r.cancelMu.Unlock()
+
+	for _, cancel := range work {
+		cancel()
+	}
+	return len(work)
 }
 
 func sessionStatusAfterTurn(status types.SessionStatus) types.SessionStatus {
