@@ -60,7 +60,7 @@ type envOptions struct {
 	// streamModel makes the generated model profile ask for streaming, which is
 	// what the streaming cases need to exercise at all.
 	streamModel bool
-	// scriptEnabled turns on settings.json tools.script and adds Script to the
+	// scriptEnabled turns on settings.json tools.repl and adds REPL to the
 	// fixture agent's builtin list: the tool has to be both enabled and
 	// declared, and a missing half fails silently (the model simply never sees
 	// the tool).
@@ -117,8 +117,8 @@ func newEnv(t *testing.T, opts envOptions) *env {
 		}
 	}
 	if opts.scriptEnabled {
-		if err := ensureBuiltinTool(filepath.Join(e.Root, ".agents", "agents", "assistant", "AGENT.md"), "Script"); err != nil {
-			t.Fatalf("declare Script in fixture agent: %v", err)
+		if err := ensureBuiltinTool(filepath.Join(e.Root, ".agents", "agents", "assistant", "AGENT.md"), "REPL"); err != nil {
+			t.Fatalf("declare REPL in fixture agent: %v", err)
 		}
 	}
 	for _, name := range opts.extraTools {
@@ -201,7 +201,7 @@ func (e *env) writeModels() error {
 
 var modelLine = regexp.MustCompile(`(?m)^\s*model:\s*([A-Za-z0-9._-]+)\s*$`)
 
-// writeSettings pins the process log level and the Script switch, keeping them
+// writeSettings pins the process log level and the REPL switch, keeping them
 // in the workspace the way a deployment configures them.
 func (e *env) writeSettings(level string, scriptEnabled bool) error {
 	settings := map[string]any{}
@@ -213,7 +213,7 @@ func (e *env) writeSettings(level string, scriptEnabled bool) error {
 		}
 	}
 	if scriptEnabled {
-		settings["tools"] = map[string]any{"script": map[string]any{"enabled": true}}
+		settings["tools"] = map[string]any{"repl": map[string]any{"enabled": true}}
 	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
@@ -223,7 +223,7 @@ func (e *env) writeSettings(level string, scriptEnabled bool) error {
 }
 
 // ensureBuiltinTool adds a name to the AGENT.md tools.builtin list when it is
-// absent. Script has no auto-grant (unlike Collect for Team/Spawn), so an agent
+// absent. REPL has no auto-grant (unlike Collect for Team/Spawn), so an agent
 // that does not declare it never sees it — and nothing reports the omission.
 func ensureBuiltinTool(agentFile, name string) error {
 	data, err := os.ReadFile(agentFile)

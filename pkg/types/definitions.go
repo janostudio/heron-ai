@@ -17,7 +17,7 @@ type Definitions struct {
 	// Env 是解析后的全局环境变量（settings.json 的 env 段，相对路径已按配置
 	// 目录展开为绝对路径）。运行时把它注入所有子进程。
 	Env map[string]string
-	// Script 来自 settings.json 的 tools.script 段。零值 = 关闭：不注册
-	// Script 工具、不采集目录，代码路径完全旁路。
+	// Script 来自 settings.json 的 tools.repl 段。零值 = 关闭：不注册
+	// REPL 工具、不采集目录，代码路径完全旁路。
 	Script ScriptConfig
 }

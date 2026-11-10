@@ -120,7 +120,7 @@ func TestApprovalBatchResumePairsEveryToolCall(t *testing.T) {
 func TestBatchRejectionKeepsItsOwnReason(t *testing.T) {
 	calls := []types.ToolCall{
 		{ID: "call-1", Name: "Bash", Arguments: map[string]any{"command": "rm -rf /"}},
-		{ID: "call-2", Name: "Script", Arguments: map[string]any{"code": "return 1"}},
+		{ID: "call-2", Name: "REPL", Arguments: map[string]any{"code": "return 1"}},
 		{ID: "call-3", Name: "Write", Arguments: map[string]any{"file": "a.txt"}},
 	}
 	rejected := map[int]string{0: `Bash command contains restricted operation "rm -rf"`}

@@ -17,7 +17,7 @@ model registry (endpoints and keys), `settings.json` is engine behavior.
 | `knowledge` | `ConfigLoader.LoadKnowledgeSettings` | Which model summarizes learned knowledge |
 | `web` | `ConfigLoader.LoadWebSettings` | Data source for the `WebSearch` / `WebFetch` tools |
 | `mcp` | `ConfigLoader.LoadMCPServers` | MCP servers connected at startup |
-| `tools` | `LoadToolPolicyPhrases`, `LoadScriptSettings` | Extra Bash policy phrases, `Script` tool |
+| `tools` | `LoadToolPolicyPhrases`, `LoadScriptSettings` | Extra Bash policy phrases, `REPL` tool (`tools.repl`) |
 | `env` | `ConfigLoader.LoadGlobalEnv` | Env vars injected into every subprocess |
 
 Sections that are **not** read by any code path are listed in
@@ -207,16 +207,16 @@ servers. A malformed section is an error, not a silent skip.
 Extra phrases merged into the builtin Bash safety floor. The list only grows —
 config cannot unblock a phrase the engine already refuses.
 
-### tools.script
+### tools.repl
 
-The `Script` tool lets a model orchestrate several synchronous tool calls in
+The `REPL` tool lets a model orchestrate several synchronous tool calls in
 one REPL call, keeping intermediate results out of the context. It is **off by
 default**; the switch has to be explicit.
 
 ```json
 {
   "tools": {
-    "script": {
+    "repl": {
       "enabled": false,
       "timeout_ms": 60000,
       "max_steps": 200,

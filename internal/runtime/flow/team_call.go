@@ -357,14 +357,19 @@ func (r *Runtime) awaitTeamSettlement(ctx context.Context, sessionID, teamID str
 	}
 }
 
-// hasPendingTeamCallFrom reports whether this Team still has a call in flight.
-func (r *Runtime) hasPendingTeamCallFrom(ctx context.Context, sessionID, callerTeam string) bool {
+// pendingCallIDs lists the calls this Team dispatched that have not come back,
+// keyed by the call that dispatched them. A call id is what a record carries, so
+// this is the granularity a progress line needs: one Team may hold a finished
+// call and a dispatched one at the same time, and only the second is a progress
+// line (fs_2864455499636f2b).
+func (r *Runtime) pendingCallIDs(ctx context.Context, sessionID, callerTeam string) map[string]bool {
+	pending := make(map[string]bool)
 	if r.tasks == nil || sessionID == "" {
-		return false
+		return pending
 	}
 	tasks, err := r.tasks.List(ctx)
 	if err != nil {
-		return false
+		return pending
 	}
 	for _, task := range tasks {
 		if task.FlowSessionID != sessionID || task.ToolName != types.ToolNameTeamRun {
@@ -373,11 +378,32 @@ func (r *Runtime) hasPendingTeamCallFrom(ctx context.Context, sessionID, callerT
 		if task.Status != types.ToolTaskQueued && task.Status != types.ToolTaskRunning {
 			continue
 		}
-		if caller, _ := task.Arguments["caller_team"].(string); caller == callerTeam {
-			return true
+		if caller, _ := task.Arguments["caller_team"].(string); caller != callerTeam {
+			continue
 		}
+		callID, _ := task.Arguments["call_id"].(string)
+		pending[callID] = true
 	}
-	return false
+	return pending
+}
+
+// callIsPending answers whether a record produced by this call is still waiting
+// for the work behind it. An empty call id falls back to "this Team has
+// something in flight": records written before call ids were stored carry none,
+// and reading them as conclusions is the mistake this exists to prevent.
+func callIsPending(pending map[string]bool, callID string) bool {
+	if len(pending) == 0 {
+		return false
+	}
+	if callID == "" {
+		return true
+	}
+	return pending[callID]
+}
+
+// hasPendingTeamCallFrom reports whether this Team still has a call in flight.
+func (r *Runtime) hasPendingTeamCallFrom(ctx context.Context, sessionID, callerTeam string) bool {
+	return len(r.pendingCallIDs(ctx, sessionID, callerTeam)) > 0
 }
 
 // lastTeamReply reads the Team's most recent conclusion from the event stream.

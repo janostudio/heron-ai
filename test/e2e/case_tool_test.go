@@ -108,7 +108,7 @@ func TestTool2ScriptInnerDispatch(t *testing.T) {
 
 	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-TOOL-2", scriptEnabled: true})
 	e.Mock.script(
-		toolStep("Script", map[string]any{"code": `
+		toolStep("REPL", map[string]any{"code": `
 			const pkg = tools.Read({file: "package.json"});
 			const readme = tools.Read({file: "README.md"});
 			return {pkg_len: pkg.content.length, readme_len: readme.content.length};
@@ -118,17 +118,17 @@ func TestTool2ScriptInnerDispatch(t *testing.T) {
 
 	result := e.runTurn(map[string]any{"input": "用脚本读两个文件"})
 
-	// Script is a reviewed unit by design (ScriptTool.NeedsApproval == true),
+	// REPL is a reviewed unit by design (ScriptTool.NeedsApproval == true),
 	// so the first turn must stop at an approval and hand back a request id.
 	// Asserting this is part of the promise: a script that ran without asking
 	// would be a hole, not a shortcut.
 	if len(result.PendingApprovals) == 0 {
-		t.Fatalf("Script ran without asking for approval; result status=%q reply=%q",
+		t.Fatalf("REPL ran without asking for approval; result status=%q reply=%q",
 			result.Turn.Status, strings.TrimSpace(firstNonEmpty(result.FinalReply, result.Reply)))
 	}
 	approval := result.PendingApprovals[0]
-	if approval.ToolName != "Script" {
-		t.Fatalf("approval requested for %q; want Script", approval.ToolName)
+	if approval.ToolName != "REPL" {
+		t.Fatalf("approval requested for %q; want REPL", approval.ToolName)
 	}
 	if approval.RequestID == "" {
 		t.Fatalf("approval has no request id; the turn cannot be resumed")
@@ -162,7 +162,7 @@ func TestTool2ScriptInnerDispatch(t *testing.T) {
 	// return value only exists if the inner Reads really ran.
 	executed := strings.Contains(second, "pkg_len") || strings.Contains(second, "readme_len")
 
-	scriptEvents := toolEventsOf(events, "Script")
+	scriptEvents := toolEventsOf(events, "REPL")
 	inner := 0
 	for _, ev := range events {
 		if !strings.HasPrefix(ev.Type, "tool_call.") {
@@ -268,13 +268,13 @@ func TestTool4DeniedApprovalDoesNotExecute(t *testing.T) {
 
 	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-APPROVAL-1", scriptEnabled: true})
 	e.Mock.script(
-		toolStep("Script", map[string]any{"code": `return tools.Read({file: "package.json"}).content.length;`}),
+		toolStep("REPL", map[string]any{"code": `return tools.Read({file: "package.json"}).content.length;`}),
 		textStep("被拒绝了"),
 	)
 
 	result := e.runTurn(map[string]any{"input": "用脚本读文件"})
 	if len(result.PendingApprovals) == 0 {
-		t.Fatalf("Script did not ask for approval; status=%q", result.Turn.Status)
+		t.Fatalf("REPL did not ask for approval; status=%q", result.Turn.Status)
 	}
 	approval := result.PendingApprovals[0]
 
@@ -311,7 +311,7 @@ func TestTool4DeniedApprovalDoesNotExecute(t *testing.T) {
 		result.Session.ID, map[string]any{"executed": executed, "explained": explained, "reply": reply})
 
 	if executed {
-		t.Fatalf("denied Script still executed (its output reached the model)")
+		t.Fatalf("denied REPL still executed (its output reached the model)")
 	}
 	if !explained {
 		t.Fatalf("refusal never reached the model: no request carries a denial reason (reply=%q)", reply)
@@ -335,7 +335,7 @@ func TestTool5ApprovalGateStopsTheWholeBatch(t *testing.T) {
 	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-APPROVAL-1", scriptEnabled: true})
 	e.Mock.script(
 		step{toolCalls: []mockToolCall{
-			{ID: "call_script_1", Name: "Script", Args: map[string]any{"code": `return 1;`}},
+			{ID: "call_script_1", Name: "REPL", Args: map[string]any{"code": `return 1;`}},
 			{ID: "call_read_1", Name: "Read", Args: map[string]any{"file": "package.json"}},
 		}},
 		textStep("批处理之后的答复"),
