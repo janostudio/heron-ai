@@ -1,4 +1,5 @@
 {
+  "session": "fs_single_agent",
   "events": [
     {
       "seq": 1,
