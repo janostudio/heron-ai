@@ -53,7 +53,7 @@ func TestProgressRecordIsPendingWhileDownstreamRuns(t *testing.T) {
 		Inputs: types.InputSpec{FlowRecords: []string{"WorkerReport"}},
 	}
 	rt := newTestRuntime(defs, progressTeamRuntime{}, writer, evidence)
-	session := seedMailboxSession(t, rt, "fs-pending", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-pending", types.SessionIdle)
 	rt.SetTaskStore(&memoryTaskStore{tasks: []types.ToolTask{{
 		ID:            "task-verify",
 		FlowSessionID: session.ID,
@@ -149,7 +149,7 @@ func TestResumeForToolResultCarriesOriginalTask(t *testing.T) {
 	transcripts := newMemoryTranscripts()
 	rt.SetTranscriptStore(transcripts)
 
-	session := seedMailboxSession(t, rt, "fs-original", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-original", types.SessionIdle)
 	rt.SetTaskStore(&memoryTaskStore{tasks: []types.ToolTask{{
 		ID:            "task-original",
 		FlowSessionID: session.ID,
@@ -201,7 +201,7 @@ func TestResumeForToolResultTreatsCancelledCallAsFailure(t *testing.T) {
 	transcripts := newMemoryTranscripts()
 	rt.SetTranscriptStore(transcripts)
 
-	session := seedMailboxSession(t, rt, "fs-cancel", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-cancel", types.SessionIdle)
 	id := callerTranscriptID(session.ID, "default", "coordinator")
 	require.NoError(t, transcripts.Save(context.Background(), types.AgentTranscript{
 		ID:            id,
