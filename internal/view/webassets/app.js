@@ -137,12 +137,15 @@
     return el("span", { class: kind });
   }
 
-  function eventClass(type) {
+  function eventClass(event) {
+    var type = (event && event.type) || "";
+    var turn = (event && event.payload && event.payload.turn) || {};
     if (type === "session.turn.started") { return "mm-user"; }
     if (type === "session.tool_call.started" || type === "session.tool_call.completed" || type === "session.tool_call.failed") { return "mm-tool"; }
     if (type === "session.context.compacted") { return "mm-compact"; }
-    if (type.indexOf("wakeup.") === 0) { return "mm-wakeup"; }
-    if (type.indexOf("failed") >= 0 || type === "session.recovery.requested") { return "mm-error"; }
+    if (type.indexOf("session.wakeup.") === 0) { return "mm-wakeup"; }
+    // A failed turn reports `turn.status`, not a "failed" event name.
+    if (turn.status === "failed" || type === "session.recovery.requested") { return "mm-error"; }
     return "mm-step";
   }
 
@@ -747,7 +750,7 @@
     var bar = el("div", { class: "bar" });
     events.forEach(function (event) {
       var segment = el("i", {
-        class: eventClass(event.type),
+        class: eventClass(event),
         style: "flex:1",
         title: "#" + event.seq + " " + event.type
       });
@@ -1308,13 +1311,17 @@
 
     var known = {};   // flow turns already rendered from the record
     groupByTurn(currentRecord.events || []).forEach(function (turn) { known[turn.id] = true; });
+    // Rebuilding the stream re-derives the counter from the record. Without
+    // this reset, switching views back and forth would stack counts and leave
+    // the stop button on after the turn ended.
+    activeTurns = 0;
+    document.body.classList.remove("turn-active");
     // A turn that was already running when the page loaded will not emit
     // another started event — its started is in the record — so the counter has
     // to be primed from the session status, not from the stream.
     if (sessionStatus === "running") { markTurnActive(1); }
     var turns = {};
     var lastSeq = lastSeqOf(currentRecord);
-    var seen = 0;
     var stopped = false;
     var stopFn = null;
     var retry = 1000;
@@ -1340,7 +1347,6 @@
 
     function onEvent(event) {
       if (!event || !event.type) { return; }
-      seen++;
       retry = 1000;
       if (typeof event.seq === "number" && event.seq > lastSeq) { lastSeq = event.seq; }
       /* Keep the loaded record in step: switching mode re-renders from it, and
@@ -1381,59 +1387,7 @@
     connect();
 
     sessionStream = {
-      stop: function () { stopped = true; if (stopFn) { stopFn(); } },
-      count: function () { return seen; }
-    };
-  }
-
-  function startLiveRun(sessionID, container, record) {
-    var turns = {};
-    var activeTurnID = "";
-    var finished = false;
-    var seen = 0;
-
-    function turnFor(flowTurnID) {
-      if (!turns[flowTurnID]) {
-        turns[flowTurnID] = createLiveTurn(flowTurnID);
-        container.appendChild(turns[flowTurnID].box);
-      }
-      activeTurnID = flowTurnID;
-      return turns[flowTurnID];
-    }
-
-    function onEvent(event) {
-      if (!event || !event.type) { return; }
-      seen++;
-      /* Write the event back into the loaded record, or the next send would
-       * resume the stream from a stale seq and replay everything already on
-       * screen — and switching tabs (which re-renders from currentRecord)
-       * would drop every live message. */
-      if (currentRecord) { (currentRecord.events = currentRecord.events || []).push(event); }
-      var flowTurnID = event.flow_turn_id || "flow";
-      var view = turnFor(flowTurnID);
-      if (event.type === "session.turn.idle" || event.type === "session.turn.completed") {
-        view.push(event);
-        view.finish(event);
-        finished = true;
-        return;
-      }
-      view.push(event);
-      applyRunEvent(event);
-      refreshRunView();
-      window.scrollTo(0, document.body.scrollHeight);
-    }
-
-    return {
-      stop: subscribeLive(sessionID, lastSeqOf(record), onEvent, function (error) {
-        if (activeTurnID && turns[activeTurnID]) {
-          turns[activeTurnID].timing.textContent = "\u6d41\u65ad\u5f00\uff1a" + error.message;
-        }
-      }),
-      done: function () { return finished; },
-      count: function () { return seen; },
-      settleAll: function () {
-        Object.keys(turns).forEach(function (id) { turns[id].settle(); });
-      }
+      stop: function () { stopped = true; if (stopFn) { stopFn(); } }
     };
   }
 
@@ -1845,7 +1799,7 @@
     var type = event.type || "";
     var payload = event.payload || {};
 
-    if (type.indexOf("team_session.") === 0) {
+    if (type.indexOf("session.team_session.") === 0) {
       var teamSession = payload.team_session || {};
       var teamKey = teamSession.id || "";
       if (!teamKey) { return; }
@@ -1857,7 +1811,7 @@
       return;
     }
 
-    if (type.indexOf("agent_session.") === 0) {
+    if (type.indexOf("session.agent_session.") === 0) {
       var agentSession = payload.agent_session || {};
       var agentKey = agentSession.id || "";
       if (!agentKey) { return; }
