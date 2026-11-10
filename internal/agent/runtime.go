@@ -670,6 +670,11 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 	}
 
 	for round := startRound; round < maxRounds; round++ {
+		// Nothing more is owed once the turn is cancelled: stop before spending
+		// another model round on work the user withdrew.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("llm chat: %w", ctxErr)
+		}
 		lastRound = round
 		if budgetErr := budget.beforeModel(ctx); budgetErr != nil {
 			t.emitErrorHook(ctx, agent, req, round, budgetErr)
@@ -748,6 +753,21 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			callStarted := time.Now()
 			resp, chatErr = t.model.Chat(ctx, requestMessages, toolSchemas, modelConfig)
 			callDuration = time.Since(callStarted)
+			// The answer may arrive after the user cancelled — a fast model can
+			// finish before the cancel reaches it. Nothing from that response may
+			// be recorded: the model_response event is replayed into the next
+			// turn's context, so keeping it makes the cancelled question
+			// resurface as the next answer.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				logging.Info("model response discarded after cancel", map[string]any{
+					"flow_session_id": req.FlowSessionID,
+					"flow_turn_id":    req.FlowTurnID,
+					"call_id":         req.CallID,
+					"agent_id":        req.AgentID,
+					"round":           round,
+				})
+				return nil, fmt.Errorf("llm chat: %w", ctxErr)
+			}
 			requestStats[requestStatIndex].DurationMS = callDuration.Milliseconds()
 			if resp != nil {
 				requestStats[requestStatIndex].Usage = resp.Usage
