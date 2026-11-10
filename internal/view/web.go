@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -373,4 +374,64 @@ func assetContentType(name string) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// mediaRefPrefix is the only directory an attachment may be read from.
+//
+// The record tells the page what the user attached, but it can only offer a
+// workspace path — which a browser cannot read. Without a way to fetch the bytes
+// the transcript can show a file name and nothing else, and an image attachment
+// looks like a sentence about an image.
+const mediaRefPrefix = ".agents/data/uploads/"
+
+// mediaRefPattern accepts the content-addressed names the media store writes.
+// Anything else (a path, a name with a slash, a guess) is refused before it
+// reaches the file store.
+var mediaRefPattern = regexp.MustCompile(`^[0-9a-f]{32,64}$`)
+
+// HandleMedia serves one stored attachment back to the viewer.
+//
+// The ref is restricted to the uploads directory and to a content-addressed
+// name, so a request cannot walk out of it; the content type is detected from the
+// bytes rather than trusted from the caller, and only real media is served —
+// serving text/html from a user upload would turn an attachment into script on
+// this origin.
+func (h *Handler) HandleMedia(w http.ResponseWriter, r *http.Request) {
+	ref := strings.TrimSpace(r.URL.Query().Get("ref"))
+	if ref == "" {
+		http.Error(w, "ref is required", http.StatusBadRequest)
+		return
+	}
+	clean := path.Clean(ref)
+	if !strings.HasPrefix(clean, mediaRefPrefix) || !mediaRefPattern.MatchString(path.Base(clean)) {
+		http.Error(w, "ref is not a stored attachment", http.StatusBadRequest)
+		return
+	}
+	if h.files == nil {
+		http.Error(w, "session store is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	data, err := h.files.Read(clean)
+	if err != nil {
+		http.Error(w, "attachment "+strconv.Quote(path.Base(clean))+" not found", http.StatusNotFound)
+		return
+	}
+	kind := http.DetectContentType(data)
+	if !mediaContentAllowed(kind) {
+		http.Error(w, "unsupported media type "+kind, http.StatusUnsupportedMediaType)
+		return
+	}
+	w.Header().Set("Content-Type", kind)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	_, _ = w.Write(data)
+}
+
+// mediaContentAllowed keeps the endpoint to media. Anything else (HTML, SVG as
+// text/xml, plain text) is not something the transcript renders, and serving it
+// would hand a caller a same-origin document.
+func mediaContentAllowed(kind string) bool {
+	return strings.HasPrefix(kind, "image/") ||
+		strings.HasPrefix(kind, "audio/") ||
+		strings.HasPrefix(kind, "video/")
 }
