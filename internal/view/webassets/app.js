@@ -464,6 +464,30 @@
     app.appendChild(el("p", null, link("/", "\u2190 \u8fd4\u56de\u4f1a\u8bdd\u5217\u8868")));
   }
 
+  /* ---------- new session helpers ---------- */
+  /* currentSessionID is the id in the address bar, or "" on the list page. */
+  function currentSessionID() {
+    var match = location.pathname.match(/^\/s\/(.+)$/);
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  /* isEmptyRecord answers "does this conversation have anything in it yet".
+   * The created event is the session itself, not content. */
+  function isEmptyRecord(record) {
+    if (!record) { return false; }
+    if ((record.facts || {}).turns) { return false; }
+    var events = record.events || [];
+    for (var i = 0; i < events.length; i++) {
+      if (events[i].type !== "session.created") { return false; }
+    }
+    return events.length > 0;
+  }
+
+  function focusComposer() {
+    var input = app.querySelector(".composer-input");
+    if (input) { input.focus(); }
+  }
+
   /* ---------- new session ---------- */
   /* POST /api/sessions with no body opens an empty conversation; the first turn
    * is typed into that page's composer. Creating a session and starting a turn
@@ -472,7 +496,13 @@
   function renderNewSession() {
     var busy = false;
     var toggle = el("button", { type: "button", class: "new-toggle" }, "\uff0b \u65b0\u5efa\u4f1a\u8bdd");
-    var box = el("div", { class: "new-session" }, toggle);
+    var notice = el("div", { class: "new-notice hidden" });
+    var box = el("div", { class: "new-session" }, toggle, notice);
+
+    function say(text) {
+      notice.textContent = text || "";
+      notice.classList.toggle("hidden", !text);
+    }
 
     function reset() {
       busy = false;
@@ -482,6 +512,19 @@
 
     function create() {
       if (busy) { return; }
+      // Already sitting in an empty session: another one would render the same
+      // page with a different id in 8pt grey, which reads as "the click did
+      // nothing". Reuse it and move the caret where the next action is.
+      //
+      // The test is the page's own marker, not a remembered record: the badge is
+      // drawn from the record that is on screen right now, so the two cannot
+      // disagree about whether this conversation is still empty.
+      if (currentSessionID() && app.querySelector(".badge-new")) {
+        say("\u5df2\u5728\u65b0\u4f1a\u8bdd\u91cc\uff0c\u76f4\u63a5\u8f93\u5165\u7b2c\u4e00\u53e5\u3002");
+        focusComposer();
+        return;
+      }
+      say("");
       busy = true;
       toggle.disabled = true;
       toggle.textContent = "\u521b\u5efa\u4e2d\u2026";
@@ -497,7 +540,7 @@
           });
         })
         .then(function (result) {
-          var id = result && result.Session && result.Session.id;
+          var id = result && result.session && result.session.id;
           if (!id) { throw new Error("\u54cd\u5e94\u91cc\u6ca1\u6709\u4f1a\u8bdd ID"); }
           // The new session is not in the list already fetched; rebuild it so
           // the sidebar shows what was just created.
@@ -507,7 +550,10 @@
         .catch(function (error) {
           if (error && error.unauthorized) { return; }
           reset();
-          toggle.title = "\u521b\u5efa\u5931\u8d25\uff1a" + error.message;
+          // "创建失败" in a hover title is invisible on a click: the button goes
+          // back to its normal text and the page stays put, which is exactly
+          // what "the button did nothing" looks like.
+          say("\u521b\u5efa\u5931\u8d25\uff1a" + error.message);
         });
     }
 
@@ -640,11 +686,17 @@
   function paintRecord(sessionID, record) {
     currentRecord = record;
     resetRunState(record);
+    // A conversation with nothing in it renders the same chrome as one with
+    // history: same header, same counters at zero, no messages. Saying "新会话"
+    // and putting the caret in the box is what makes the arrival visible.
+    var empty = isEmptyRecord(record);
     clear(app);
-    app.appendChild(el("div", { class: "top" },
+    var top = el("div", { class: "top" },
       el("h1", null, "heron-ai"),
       el("span", { class: "crumb" }, link("/", "\u2190 \u4f1a\u8bdd\u5217\u8868")),
-      el("span", { class: "crumb mono" }, sessionID)));
+      el("span", { class: "crumb mono" }, sessionID));
+    if (empty) { top.appendChild(el("span", { class: "badge-new" }, "\u65b0\u4f1a\u8bdd")); }
+    app.appendChild(top);
 
     if (record.truncated) {
       app.appendChild(el("div", { class: "error-box" },
@@ -668,6 +720,7 @@
     showMode(body, "chat");
 
     app.appendChild(renderComposer(sessionID));
+    if (empty) { focusComposer(); }
     if (scrollToBottom) {
       scrollToBottom = false;
       window.scrollTo(0, document.body.scrollHeight);
