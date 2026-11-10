@@ -221,3 +221,34 @@ func TestPointerBlockDirectsToFileTools(t *testing.T) {
 		"the block must say knowledge is not pre-injected, or an empty prompt reads as an empty knowledge base")
 	require.True(t, strings.HasPrefix(text, "## Knowledge Base"))
 }
+
+// TestPointerBlockNamesReadOnlyMounts covers the mounts outside the workspace.
+//
+// An agent that is looking for a repo it cannot find invents a root: the run
+// behind this test produced four calls to "/project/repos" and "/project/knowledge"
+// — paths that existed only in the model's head — before it found one that
+// worked. The block therefore names the mounts, in the absolute form the tools
+// resolve, so there is nothing left to guess.
+func TestPointerBlockNamesReadOnlyMounts(t *testing.T) {
+	ctx := context.Background()
+	files := storage.NewFileStore(t.TempDir())
+	pointer := NewKnowledgePointer(files, ".agents/knowledge", ".agents",
+		"/srv/workspace/repos", "/srv/workspace/knowledge")
+
+	text := pointer.Text(ctx, "agent-a", "")
+	require.Contains(t, text, "/srv/workspace/repos")
+	require.Contains(t, text, "/srv/workspace/knowledge")
+	require.Contains(t, strings.ToLower(text), "read-only",
+		"挂载必须标注为只读，否则模型会尝试写入")
+}
+
+// TestPointerBlockWithoutMountsHasNoMountSection keeps the block quiet when the
+// workspace mounts nothing: an empty section is tokens spent on a non-fact.
+func TestPointerBlockWithoutMountsHasNoMountSection(t *testing.T) {
+	ctx := context.Background()
+	files := storage.NewFileStore(t.TempDir())
+	pointer := NewKnowledgePointer(files, ".agents/knowledge", ".agents")
+
+	text := pointer.Text(ctx, "agent-a", "")
+	require.NotContains(t, strings.ToLower(text), "read-only")
+}

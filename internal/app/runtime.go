@@ -363,7 +363,24 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// The pointer names the knowledge directories an agent may grep. It reads
 	// the same two roots the validation above does, so what it advertises and
 	// what was validated cannot diverge.
-	teamRuntime.SetKnowledgePointer(knowledge.NewKnowledgePointer(files, ".agents/knowledge", ".agents"))
+	// The pointer names the same mounts the tool backend enforces, resolved the
+	// same way (a relative entry is relative to the workspace root). Absolute,
+	// because a relative example is what made an agent invent "/project/repos"
+	// and burn its calls on paths that never existed.
+	var readRootPaths []string
+	if definitions.Workspace != nil {
+		for _, root := range definitions.Workspace.ReadRoots {
+			root = strings.TrimSpace(root)
+			if root == "" {
+				continue
+			}
+			if !filepath.IsAbs(root) {
+				root = filepath.Join(workspaceRoot, root)
+			}
+			readRootPaths = append(readRootPaths, filepath.Clean(root))
+		}
+	}
+	teamRuntime.SetKnowledgePointer(knowledge.NewKnowledgePointer(files, ".agents/knowledge", ".agents", readRootPaths...))
 	sessionWriter := storage.NewJSONLSessionWriter(files)
 	checkpointStore := agent.NewFileCheckpointStore(files)
 	// Transcripts are the running conversation of one Agent inside one Flow

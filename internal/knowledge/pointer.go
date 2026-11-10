@@ -55,6 +55,13 @@ type KnowledgePointer struct {
 	files   storage.FileStore
 	global  string
 	private string
+	// readRoots are the read-only directories mounted outside the workspace
+	// (repo checkouts, the workspace's own knowledge tree). They are named for
+	// the same reason the knowledge directories are: what the model cannot
+	// infer is that these places exist. Told nothing, an agent looking for a
+	// repo invents a plausible root ("/project/repos") and spends calls on
+	// paths that never existed.
+	readRoots []string
 }
 
 // NewKnowledgePointer builds a pointer over the same file store the knowledge
@@ -63,8 +70,14 @@ type KnowledgePointer struct {
 // production (see internal/app). They are parameters rather than literals
 // because the app may hold an absolute config root, and a block that named
 // the wrong path would be an instruction to search the wrong tree.
-func NewKnowledgePointer(files storage.FileStore, global, privateRoot string) *KnowledgePointer {
-	return &KnowledgePointer{files: files, global: global, private: privateRoot}
+func NewKnowledgePointer(files storage.FileStore, global, privateRoot string, readRoots ...string) *KnowledgePointer {
+	roots := make([]string, 0, len(readRoots))
+	for _, root := range readRoots {
+		if trimmed := strings.TrimSpace(root); trimmed != "" {
+			roots = append(roots, trimmed)
+		}
+	}
+	return &KnowledgePointer{files: files, global: global, private: privateRoot, readRoots: roots}
 }
 
 // agentInputs is the resolved set of readable knowledge trees for one caller:
@@ -134,7 +147,7 @@ func (p *KnowledgePointer) Text(ctx context.Context, agentID, teamID string) str
 	if inputs.teamDir != "" {
 		dirs = append(dirs, inputs.teamDir)
 	}
-	return renderPointerBlock(dirs, inputs.hasPrivate)
+	return renderPointerBlock(dirs, inputs.hasPrivate, p.readRoots)
 }
 
 // renderPointerBlock is the block's exact text. It is a pure function of the
@@ -151,7 +164,7 @@ func (p *KnowledgePointer) Text(ctx context.Context, agentID, teamID string) str
 // The private-directory sentence is conditional because a private tree is
 // usually absent, and claiming ownership of one that does not exist would
 // invite a search of a non-existent path.
-func renderPointerBlock(dirs []string, hasPrivate bool) string {
+func renderPointerBlock(dirs []string, hasPrivate bool, readRoots []string) string {
 	var b strings.Builder
 	b.WriteString("## Knowledge Base\n")
 	b.WriteString("Reference knowledge for this workspace lives in files, not in this prompt: ")
@@ -169,6 +182,17 @@ func renderPointerBlock(dirs []string, hasPrivate bool) string {
 	if hasPrivate {
 		b.WriteString("\nThe agent-private and team-private directories above are yours; other\n")
 		b.WriteString("agents' and teams' private knowledge is not readable and will not match.\n")
+	}
+	if len(readRoots) > 0 {
+		// Absolute, because a relative example is what invites the model to
+		// invent its own absolute form. These are mounts: readable with the same
+		// tools, never writable.
+		b.WriteString("\nAlso readable outside this workspace (mounted read-only; writes are refused):\n")
+		for _, root := range readRoots {
+			b.WriteString("- ")
+			b.WriteString(root)
+			b.WriteString("\n")
+		}
 	}
 	b.WriteString("\nKnowledge files are Markdown with YAML frontmatter (id, title, summary,\n")
 	b.WriteString("scope). Prefer an entry whose frontmatter matches the situation at hand\n")
