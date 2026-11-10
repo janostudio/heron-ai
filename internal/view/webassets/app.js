@@ -1431,15 +1431,65 @@
     var items = [];
     blocks.forEach(function (block) {
       (block.parts || []).forEach(function (part) {
-        if (part && part.media) { items.push(part.media); }
+        // ContentPart serialises its attachment as `source` (provider-neutral
+        // wire shape); older recordings and the live-preview path use `media`.
+        // Reading only one of them is why an attached image rendered as nothing.
+        var media = part && (part.source || part.media);
+        if (media) { items.push(media); }
       });
     });
     return items;
   }
 
+  /* Media bytes live on disk, so the page has to fetch them. The bytes are
+   * cached per storage ref: the same attachment shows up in several turns and
+   * should not be downloaded again. */
+  var mediaURLCache = {};
+
+  function loadMedia(ref) {
+    if (!ref) { return Promise.reject(new Error("no storage ref")); }
+    if (mediaURLCache[ref]) { return Promise.resolve(mediaURLCache[ref]); }
+    return apiFetch("/api/media?ref=" + encodeURIComponent(ref)).then(function (response) {
+      if (!response.ok) { throw new Error("HTTP " + response.status); }
+      return response.blob();
+    }).then(function (blob) {
+      var url = URL.createObjectURL(blob);
+      mediaURLCache[ref] = url;
+      return url;
+    });
+  }
+
+  /* mediaNode renders an attachment inline. It returns null for anything the
+   * transcript cannot display, so the caller keeps the chip. */
+  function mediaNode(item) {
+    var kind = item.kind || "";
+    var ref = item.storage_ref || "";
+    var node = null;
+    if (kind === "image") {
+      node = el("img", { class: "msg-media", alt: item.name || "attachment" });
+    } else if (kind === "video") {
+      node = el("video", { class: "msg-media", controls: "controls" });
+    } else if (kind === "audio") {
+      node = el("audio", { class: "msg-media", controls: "controls" });
+    } else {
+      return null;
+    }
+    if (!ref) { return null; }
+    loadMedia(ref).then(function (url) {
+      node.src = url;
+    }).catch(function () {
+      // Keep the chip: the file is gone or unreadable, and a broken <img> says
+      // less than the name and size do.
+      if (node.parentNode) { node.parentNode.removeChild(node); }
+    });
+    return node;
+  }
+
   function attachmentChips(items) {
     var row = el("div", { class: "msg-attachments" });
     items.forEach(function (item) {
+      var preview = mediaNode(item);
+      if (preview) { row.appendChild(preview); }
       row.appendChild(el("span", { class: "chip" },
         el("span", { class: "chip-kind" }, item.kind || "file"),
         el("span", { class: "chip-name" }, item.name || "(\u672a\u547d\u540d)"),
