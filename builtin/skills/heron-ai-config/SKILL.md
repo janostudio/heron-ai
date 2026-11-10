@@ -61,9 +61,9 @@ jq -r 'select(.type=="session.agent.model_response") | "[round \(.payload.round)
 
 | 文件 | 只包含 |
 |---|---|
-| `flow.jsonl` | flow 会话级 + **team turn 级**（`team_turn.*` 在这里） |
-| `team.jsonl` | **call 层**：`agent_turn.*`、`command_turn.*`（**消耗在这里**） |
-| `agent.jsonl` | agent 内部：`session.agent.model_response`、`tool_call.*`（回复原文在 **`payload.text`**） |
+| `flow.jsonl` | flow 会话级 + **team turn 级**（`session.team_turn.*` 在这里） |
+| `team.jsonl` | **call 层**：`session.agent_turn.*`、`session.command_turn.*`（**消耗在这里**） |
+| `agent.jsonl` | agent 内部：`session.agent.model_response`、`session.tool_call.*`（回复原文在 **`payload.text`**） |
 
 所以：在 `team.jsonl` 里找不到 `session.team_turn.completed` 是正常的，不是缺数据。
 同一 `fs_id` 目录**追加式**记录，续聊会继续往里写，所以 `session.turn.started` 会出现多次，每次对应一轮。
@@ -85,7 +85,7 @@ jq -r 'select(.type|startswith("session.turn.")) | .type' $S/flow.jsonl
 
 **排查时的三个高频陷阱**（都验证过真实数据）：
 
-1. **分层**：`team_turn.*` 在 `flow.jsonl`；`command_turn.*` 在 `team.jsonl`。搜不到不等于缺数据。
+1. **分层**：`session.team_turn.*` 在 `flow.jsonl`；`session.command_turn.*` 在 `team.jsonl`。搜不到不等于缺数据。
 2. **字段名**：模型回复原文是 `session.agent.model_response` 的 **`payload.text`**，不是 `content`。
 3. **`round` 是 turn 内局部序号**，每轮从 0 重数；用 `team_turn_id` 区分是否同一轮，
    不要因 `round` 重复就以为数据重复。
@@ -114,7 +114,7 @@ jq -r -s '[.[]|select(.type=="session.agent_turn.completed")]|group_by(.payload.
           |.[]|"\(.a)\ttotal=\(.total)"' $S/team.jsonl
 ```
 
-三级累加：`requests[].usage` → `call_result.usage` → `team_turn.usage` → flow `Tokens`。
+三级累加：`requests[].usage` → `call_result.usage` → `session.team_turn.usage` → flow `Tokens`。
 字段名统一 snake_case（`total_tokens` / `agent_id` 都是）。
 `prompt ≫ completion` 是常态（上下文每轮重发），判定"贵不贵"要看比值而非 total。
 完整算式与 node 写法见 `references/token-usage.md`。

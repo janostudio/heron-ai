@@ -90,7 +90,7 @@ heron --json-rpc --flow .agents/flows/default.yml
 ## 目录与运行时产物
 
 - 会话事件按产生层级落盘三份：`.agents/data/sessions/<fs_id>/flow.jsonl`（flow/team
-  编排 + `shared_record.*`）、`team.jsonl`（agent call 时间线，token 消耗在此可查）、
+  编排 + `session.record.*`）、`team.jsonl`（agent call 时间线，token 消耗在此可查）、
   `agent.jsonl`（模型输出与工具调用）
 - evidence 落盘 `.agents/data/sessions/<fs_id>/evidence.jsonl`（Flow-scope SharedRecord，
   有 Flow 级记录时才出现；被派发的子 Team 产出的记录会以 flow 作用域副本写进来，
