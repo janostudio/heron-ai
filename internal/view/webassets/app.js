@@ -1282,8 +1282,11 @@
 
   function attachSessionStream(body) {
     stopSessionStream();
-    if (!body || !currentRecord || !currentRecord.session) { return; }
-    var sessionID = currentRecord.session.id;
+    if (!body || !currentRecord) { return; }
+    // record.session is the session id as a string; keep accepting an object in
+    // case the record shape grows back into one.
+    var sessionID = currentRecord.session;
+    if (sessionID && sessionID.id) { sessionID = sessionID.id; }
     var container = body.querySelector(".chat");
     if (!sessionID || !container) { return; }
 
