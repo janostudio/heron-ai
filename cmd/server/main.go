@@ -210,6 +210,9 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 	// derived counts. Reading history must not touch live turn state, so it
 	// serves from the file store rather than through the runtime.
 	mux.HandleFunc("GET /api/sessions/{id}/record", handler.HandleRecord)
+	// Attachments live on disk; the page cannot read a workspace path, so the
+	// bytes have to come back over HTTP for an image to be visible at all.
+	mux.HandleFunc("/api/media", handler.HandleMedia)
 	// The page. Everything unmatched falls here and resolves inside the embed
 	// FS, so a traversal attempt can only 404.
 	mux.HandleFunc("/", handler.HandleWebStatic)

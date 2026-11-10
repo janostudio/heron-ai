@@ -40,6 +40,7 @@ var routeMethods = map[string][]string{
 	"/api/tasks/stream":    {http.MethodGet},
 	"/api/recovery/status": {http.MethodGet},
 	"/api/health":          {http.MethodGet},
+	"/api/media":           {http.MethodGet},
 }
 
 // allowedMethods reports the methods a path declares, and whether the path is
