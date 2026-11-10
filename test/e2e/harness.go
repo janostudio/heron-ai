@@ -117,8 +117,10 @@ func newEnv(t *testing.T, opts envOptions) *env {
 		}
 	}
 	if opts.scriptEnabled {
-		if err := ensureBuiltinTool(filepath.Join(e.Root, ".agents", "agents", "assistant", "AGENT.md"), "Script"); err != nil {
-			t.Fatalf("declare Script in fixture agent: %v", err)
+		// The fixture declares the current name. The cases that call it by the
+		// old name ("Script") are the alias coverage: they must keep executing.
+		if err := ensureBuiltinTool(filepath.Join(e.Root, ".agents", "agents", "assistant", "AGENT.md"), "REPL"); err != nil {
+			t.Fatalf("declare REPL in fixture agent: %v", err)
 		}
 	}
 	for _, name := range opts.extraTools {
@@ -213,7 +215,7 @@ func (e *env) writeSettings(level string, scriptEnabled bool) error {
 		}
 	}
 	if scriptEnabled {
-		settings["tools"] = map[string]any{"script": map[string]any{"enabled": true}}
+		settings["tools"] = map[string]any{"repl": map[string]any{"enabled": true}}
 	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

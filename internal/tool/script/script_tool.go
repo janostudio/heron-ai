@@ -14,7 +14,19 @@ import (
 // ToolName is the name the model sees. It is also the recursion guard's key and
 // the name the runtime uses to decide whether to publish a gate, so it is
 // declared once here and referenced from the agent package.
-const ToolName = "Script"
+//
+// It used to be "Script". The tool takes one program and runs it — closer to a
+// code-execution surface than to a shell script, and every comparable agent
+// stack names that surface after code execution (code mode, CodeAgent,
+// Programmatic Tool Calling). "REPL" is the name a reader arrives at fastest,
+// even though this is not an interactive read-eval-print loop: there is no
+// session, each call starts a fresh interpreter and replays for recovery.
+const ToolName = "REPL"
+
+// LegacyToolName is the previous name. Recordings, client-side tool filters and
+// agent definitions written before the rename still say "Script", so the app
+// registers an alias under this name instead of failing them as unknown tools.
+const LegacyToolName = "Script"
 
 // CatalogSource renders the catalog for a set of tool names. A nil slice means
 // "every tool this instance can see", which is what the fallback path uses when

@@ -296,6 +296,10 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 			},
 		})
 		toolRegistry.Register(scriptTool)
+		// The previous name keeps executing the same instance: recordings, client
+		// tool filters and agent definitions predate the rename, and an unknown
+		// tool name fails the call rather than saying "renamed".
+		toolRegistry.Register(scriptAlias{Tool: scriptTool})
 		turnLoop.SetScriptDescription(scriptTool.CodeDescriptionFor)
 	}
 
@@ -925,3 +929,8 @@ func (a promptAdapter) Render(
 		},
 	)
 }
+
+// scriptAlias exposes the code-execution tool under its previous name.
+type scriptAlias struct{ types.Tool }
+
+func (a scriptAlias) Name() string { return script.LegacyToolName }
