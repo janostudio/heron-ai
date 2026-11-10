@@ -69,6 +69,10 @@ const contentTypes = {
  * could ever see it live — which is exactly the state this case exists to
  * check. */
 let streamServed = false;
+/* Served frames are a property of the case, not of the page: a conversation
+ * subscribes on open, so a stream that always pushes would append a phantom
+ * turn to every record assertion. Cases that assert live rendering turn it on. */
+let streamEnabled = false;
 const STREAM_FRAME_DELAY_MS = 120;
 
 const server = createServer(async (req, res) => {
@@ -191,6 +195,25 @@ function apiRouter(options = {}) {
         : files.single;
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(record) });
     }
+    // 202 accepted: the turn runs in the background and its events arrive on the
+    // session stream, so the reply says "accepted", not "done".
+    const eventsPost = url.pathname.match(/^\/api\/sessions\/([^/]+)\/events$/);
+    if (eventsPost && request.method() === "POST") {
+      state.sent = {
+        url: request.url(),
+        method: request.method(),
+        headers: request.headers(),
+        body: JSON.parse(request.postData() || "{}"),
+      };
+      if (options.turnDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.turnDelayMs));
+      }
+      return route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({ session: { id: eventsPost[1], status: "running" }, queued: false }),
+      });
+    }
     if (url.pathname === "/api/sessions/turn") {
       state.sent = {
         url: request.url(),
@@ -207,6 +230,10 @@ function apiRouter(options = {}) {
       return route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
     }
     if (url.pathname === "/api/stream") {
+      if (!streamEnabled) {
+        // An idle conversation: the endpoint stays open with nothing to send.
+        return route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream" }, body: "" });
+      }
       // Served by the local HTTP server, not mocked: frames have to arrive over
       // time for the live assertions to mean anything.
       return route.continue();
@@ -431,7 +458,9 @@ await run("record: multiple agents", async () => {
 
 /* ---------- 7. composer: text, paste, Enter ---------- */
 await run("composer", async () => {
-  const { context, page, state, errors } = await newPage(browser, {});
+  // With a token: this case asserts the request the page sends, and the bearer
+  // header is part of that request on any deployment that requires one.
+  const { context, page, state, errors } = await newPage(browser, { token: TOKEN });
   await page.goto(`${base}/s/fs_single_agent`);
   await page.waitForSelector(".composer-input", { timeout: 5000 });
 
@@ -441,9 +470,9 @@ await run("composer", async () => {
   await page.waitForTimeout(400);
   check("Enter 发出请求", state.sent !== null);
   checkEqual("请求方法", state.sent && state.sent.method, "POST");
-  check("请求带 Bearer", state.sent && (state.sent.headers.authorization || "").startsWith("Bearer ") || state.sent !== null);
+  check("请求带 Bearer", ((state.sent && state.sent.headers.authorization) || "").startsWith("Bearer "));
   checkEqual("请求体 input", state.sent && state.sent.body.input, "文字发送");
-  check("发给当前会话", state.sent && state.sent.url.includes("session_id=fs_single_agent"));
+  check("发给当前会话", state.sent && state.sent.url.endsWith("/api/sessions/fs_single_agent/events"));
 
   state.sent = null;
   await page.evaluate(() => {
@@ -469,25 +498,35 @@ await run("composer", async () => {
 /* ---------- 8. live stream: the turn grows while it runs ---------- */
 await run("live stream", async () => {
   streamServed = false;
-  // The POST is held open long enough for every frame to arrive, the way a real
-  // turn behaves. Replying early would let the client settle before the stream
-  // is done and prove nothing about live rendering.
-  const { context, page, errors } = await newPage(browser, { turnDelayMs: 2200 });
+  streamEnabled = true;
+  // The conversation subscribes as soon as it is opened: the turn's events are
+  // not a reply to the POST, they arrive on the session stream whether or not
+  // this page sent anything.
+  const { context, page, errors } = await newPage(browser, {});
   await page.goto(`${base}/s/fs_single_agent`);
   await page.waitForSelector(".composer-input", { timeout: 5000 });
 
-  await page.fill(".composer-input", "实时用例");
-  await page.click(".composer-send");
-
-  await page.waitForSelector(".turn.live", { timeout: 5000 });
+  await page.waitForSelector(".turn.live", { timeout: 8000 });
   check("订阅了会话事件流", streamServed);
-  check("发送时出现 live 回合", await page.locator(".turn.live").count() === 1);
+  check("流到达时出现 live 回合", await page.locator(".turn.live").count() === 1);
   check("执行中显示停止按钮", await page.locator(".composer-stop").isVisible());
-  check("执行中隐藏发送按钮", await page.locator(".composer-send").isHidden());
+  // 202 means accepted, not done: the box is free again the moment the server
+  // takes the message, and stopping follows the stream.
+  check("提交后输入框立即可用", await page.locator(".composer-input").isEditable());
 
-  // Frames land 120ms apart; the tool row arrives in the third one.
+  // Frames land 120ms apart: the row appears on started, its result on the next
+  // frame. Waiting for the state, not the row, is what makes this assertion
+  // about live updating rather than about timing.
   await page.waitForSelector(".turn.live .tool", { timeout: 5000 });
+  await page.waitForFunction(() => {
+    const states = [...document.querySelectorAll(".turn.live .tool .state")];
+    return states.length > 0 && states[states.length - 1].textContent.trim() === "成功";
+  }, null, { timeout: 5000 });
   checkEqual("实时工具行状态", await page.locator(".turn.live .tool .state").last().innerText(), "成功");
+  await page.waitForFunction(() => {
+    const outs = [...document.querySelectorAll(".turn.live .tool pre.out")];
+    return outs.length > 0 && outs[outs.length - 1].textContent.includes("drwxr-xr-x");
+  }, null, { timeout: 5000 });
   check("实时工具输出已填入", (await page.locator(".turn.live .tool pre.out").last().textContent()).includes("drwxr-xr-x"));
 
   const step = await page.locator(".turn.live .step").last().innerText();

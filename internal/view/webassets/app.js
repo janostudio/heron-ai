@@ -1195,7 +1195,7 @@
           var state = doneRow.querySelector(".step-state");
           if (state) { state.textContent = "\u5b8c\u6210"; }
           var took = elapsed(
-            (payload.team_turn && payload.session.team_turn.started_at) || "",
+            (payload.team_turn && payload.team_turn.started_at) || "",
             event.created_at || "");
           if (took) { doneRow.appendChild(el("span", { class: "took" }, took)); }
         }
@@ -1898,7 +1898,10 @@
     var type = event.type || "";
     var payload = event.payload || {};
 
-    if (type.indexOf("team_session.") === 0) {
+    // Matched on the middle segment, not on a prefix: every event type lives
+    // under the `session.` namespace now, so a prefix test for "team_session."
+    // never fires and the board renders empty.
+    if (type.indexOf("team_session.") >= 0) {
       var teamSession = payload.team_session || {};
       var teamKey = teamSession.id || "";
       if (!teamKey) { return; }
@@ -1910,7 +1913,7 @@
       return;
     }
 
-    if (type.indexOf("agent_session.") === 0) {
+    if (type.indexOf("agent_session.") >= 0) {
       var agentSession = payload.agent_session || {};
       var agentKey = agentSession.id || "";
       if (!agentKey) { return; }
