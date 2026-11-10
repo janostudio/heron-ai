@@ -462,52 +462,30 @@
   }
 
   /* ---------- new session ---------- */
-  /* POST /api/sessions without a session id starts a new flow session: the body
-   * carries the first turn, and the answer only comes back once that turn is
-   * done. There is no "create empty session" call — the first message is what
-   * creates it — so the button has to warn that it may take a while instead of
-   * pretending to be instant. */
+  /* POST /api/sessions with no body opens an empty conversation; the first turn
+   * is typed into that page's composer. Creating a session and starting a turn
+   * are two steps for a person: waiting on this form for the first answer — a
+   * dispatch can take minutes — leaves them with nothing to look at. */
   function renderNewSession() {
     var busy = false;
-    var input = el("textarea", {
-      class: "new-input",
-      rows: "2",
-      placeholder: "\u7b2c\u4e00\u53e5\u8981\u505a\u4ec0\u4e48\uff1f\u8fd9\u4f1a\u521b\u5efa\u4f1a\u8bdd\u5e76\u7acb\u5373\u5f00\u59cb\u7b2c\u4e00\u8f6e\u3002"
-    });
-    var submit = el("button", { type: "button", class: "new-submit" }, "\u521b\u5efa\u5e76\u5f00\u59cb");
-    var cancel = el("button", { type: "button", class: "new-cancel" }, "\u53d6\u6d88");
-    var status = el("span", { class: "new-status" }, "");
     var toggle = el("button", { type: "button", class: "new-toggle" }, "\uff0b \u65b0\u5efa\u4f1a\u8bdd");
-    var form = el("div", { class: "new-form hidden" },
-      input,
-      el("div", { class: "new-bar" }, submit, cancel, status));
-    var box = el("div", { class: "new-session" }, toggle, form);
+    var box = el("div", { class: "new-session" }, toggle);
 
-    function setOpen(value) {
-      form.classList.toggle("hidden", !value);
-      toggle.classList.toggle("hidden", value);
-      if (value) {
-        input.focus();
-        return;
-      }
-      status.textContent = "";
+    function reset() {
+      busy = false;
+      toggle.disabled = false;
+      toggle.textContent = "\uff0b \u65b0\u5efa\u4f1a\u8bdd";
     }
-
-    toggle.addEventListener("click", function () { setOpen(true); });
-    cancel.addEventListener("click", function () { if (!busy) { setOpen(false); } });
 
     function create() {
       if (busy) { return; }
-      var value = input.value.trim();
-      if (!value) { input.focus(); return; }
       busy = true;
-      submit.disabled = true;
-      submit.textContent = "\u521b\u5efa\u4e2d\u2026";
-      status.textContent = "\u9996\u8f6e\u6b63\u5728\u6267\u884c\uff0c\u8dd1\u5b8c\u4f1a\u81ea\u52a8\u6253\u5f00\uff1b\u6d3e\u53d1\u7c7b\u4efb\u52a1\u53ef\u80fd\u8981\u51e0\u5206\u949f\u3002";
+      toggle.disabled = true;
+      toggle.textContent = "\u521b\u5efa\u4e2d\u2026";
       apiFetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input: value })
+        body: "{}"
       })
         .then(function (response) {
           if (response.ok) { return response.json(); }
@@ -518,28 +496,19 @@
         .then(function (result) {
           var id = result && result.Session && result.Session.id;
           if (!id) { throw new Error("\u54cd\u5e94\u91cc\u6ca1\u6709\u4f1a\u8bdd ID"); }
-          // The new session is not in the list we already fetched; rebuild it
-          // so the sidebar shows what was just created.
+          // The new session is not in the list already fetched; rebuild it so
+          // the sidebar shows what was just created.
           sidebarReady = false;
           navigate("/s/" + encodeURIComponent(id));
         })
         .catch(function (error) {
           if (error && error.unauthorized) { return; }
-          busy = false;
-          submit.disabled = false;
-          submit.textContent = "\u521b\u5efa\u5e76\u5f00\u59cb";
-          status.textContent = "\u521b\u5efa\u5931\u8d25\uff1a" + error.message;
+          reset();
+          toggle.title = "\u521b\u5efa\u5931\u8d25\uff1a" + error.message;
         });
     }
 
-    submit.addEventListener("click", create);
-    input.addEventListener("keydown", function (event) {
-      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-        event.preventDefault();
-        create();
-      }
-    });
-
+    toggle.addEventListener("click", create);
     return box;
   }
 
@@ -1357,7 +1326,7 @@
     var wrap = el("div", { class: "chat" });
     var turns = groupByTurn(record.events || []);
     if (turns.length === 0) {
-      wrap.appendChild(el("div", { class: "empty" }, "\u6ca1\u6709\u53ef\u5c55\u793a\u7684\u5bf9\u8bdd\u5185\u5bb9\u3002"));
+      wrap.appendChild(el("div", { class: "empty" }, "\u8fd9\u662f\u4e00\u4e2a\u65b0\u4f1a\u8bdd\uff0c\u5728\u4e0b\u9762\u7684\u8f93\u5165\u6846\u8f93\u5165\u7b2c\u4e00\u6761\u6d88\u606f\u3002"));
       return wrap;
     }
 

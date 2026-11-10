@@ -133,7 +133,9 @@ func TestErr3ErrorBodyExplainsProblem(t *testing.T) {
 	}{
 		{name: "malformed_json", contentType: "application/json", body: []byte(`{"input": `)},
 		{name: "wrong_content_type", contentType: "text/plain", body: []byte(`not json at all`)},
-		{name: "empty_object", contentType: "application/json", body: []byte(`{}`)},
+		// `{}` is a valid request now (it opens an empty session); whitespace
+		// input is the one that still has to explain itself.
+		{name: "whitespace_input", contentType: "application/json", body: []byte(`{"input": "   "}`)},
 	}
 
 	for _, tc := range cases {
