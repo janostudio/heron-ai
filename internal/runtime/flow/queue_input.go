@@ -77,7 +77,7 @@ func (r *Runtime) drainQueuedInput(ctx context.Context, sessionID string) {
 		input, _ := claimed.Payload["input"].(string)
 		if _, err := r.runTurnWithOrigin(ctx, r.definitions.Snapshot(), session, input, nil,
 			[]activation{{teamID: r.definitions.Snapshot().Flow.EntryTeamID}},
-			turnOriginUser, time.Now().UTC(), nil); err != nil {
+			turnOriginUser, time.Now().UTC(), nil, nil); err != nil {
 			logging.Error("run queued user input", map[string]any{
 				"flow_session_id": sessionID,
 				"error":           err.Error(),

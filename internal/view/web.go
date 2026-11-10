@@ -163,7 +163,7 @@ func (h *Handler) HandleRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(facts.Events) == 0 {
-		http.Error(w, "session not found", http.StatusNotFound)
+		http.Error(w, "session "+strconv.Quote(sessionID)+" not found", http.StatusNotFound)
 		return
 	}
 

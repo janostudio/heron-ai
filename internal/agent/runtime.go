@@ -199,6 +199,21 @@ func (t *TurnLoop) emitAgentEvent(ctx context.Context, req types.AgentRequest, r
 	// issued it. Tagging here rather than at each emit site keeps the eight call
 	// sites from drifting: a new tool event gets the fields for free.
 	payload = tagScriptEvent(ctx, payload)
+	// A failed tool call is the single most common cause of "the turn did
+	// something wrong" reports, and the event stream already records it. The
+	// process log needs it too: an operator reads the log first, and finding
+	// nothing there sends them into the session jsonl to search by timestamp.
+	if eventType == types.EventToolCallFailed {
+		logging.Warn("tool call failed", map[string]any{
+			"flow_session_id": req.FlowSessionID,
+			"flow_turn_id":    req.FlowTurnID,
+			"team_id":         req.TeamID,
+			"call_id":         req.CallID,
+			"tool_name":       payload["tool_name"],
+			"tool_call_id":    payload["tool_call_id"],
+			"error":           payload["error"],
+		})
+	}
 	event := storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          eventType,
@@ -496,7 +511,27 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 					approvedResult.Error = "approval no longer valid: " + policyReason
 					policyRejected = true
 				} else {
-					toolResult, execErr := t.toolExecutor.Execute(ctx, pending.ToolName, pending.Arguments)
+					// The approval path executes the same Tool the batch path
+					// does, so it has to report it the same way. Emitting only
+					// the result left the event stream with no record that this
+					// call ever ran, which is exactly what an auditor looks for
+					// after approving a side-effecting Tool.
+					t.emitAgentEvent(ctx, req, startRound, types.EventToolCallStarted, map[string]any{
+						"round":        startRound,
+						"tool_name":    pending.ToolName,
+						"tool_call_id": pending.ToolCallID,
+						"arguments":    pending.Arguments,
+						"approval":     "approved",
+					})
+					// Publish the same caller-side gate the batch path uses. Without
+					// it a Script approved here runs its inner calls straight against
+					// the executor: no event per call, and no policy, bash gate or
+					// PreToolUse hook either — the layer an approval is supposed to
+					// hand the work back to.
+					execCtx := t.withScriptGate(ctx, agent, req, startRound, []types.ToolCall{{
+						ID: pending.ToolCallID, Name: pending.ToolName, Arguments: pending.Arguments,
+					}})
+					toolResult, execErr := t.toolExecutor.Execute(execCtx, pending.ToolName, pending.Arguments)
 					if execErr != nil {
 						approvedResult.Error = execErr.Error()
 					} else if toolResult != nil {
@@ -505,6 +540,24 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 						approvedResult.Error = "tool returned nil result"
 					}
 				}
+			}
+			// The outcome is reported on every branch, refusal included: a Tool
+			// that was denied — by the approver or by a policy that changed while
+			// the decision was pending — still produced a result the model gets,
+			// and the stream has to show why nothing ran.
+			if approvedResult.Success {
+				fields := toolResultEventFields(approvedResult)
+				fields["round"] = startRound
+				fields["tool_name"] = pending.ToolName
+				fields["tool_call_id"] = pending.ToolCallID
+				t.emitAgentEvent(ctx, req, startRound, types.EventToolCallCompleted, fields)
+			} else {
+				t.emitAgentEvent(ctx, req, startRound, types.EventToolCallFailed, map[string]any{
+					"round":        startRound,
+					"tool_name":    pending.ToolName,
+					"tool_call_id": pending.ToolCallID,
+					"error":        approvedResult.Error,
+				})
 			}
 			content := toolResultContent(approvedResult)
 			if addErr := contextManager.AddMessageContext(ctx, types.Message{
@@ -522,10 +575,19 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				successfulTools[pending.ToolName] = true
 			}
 			if approvalRejected || policyRejected {
-				return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
-					startRound, lastText, workspaceOps, toolCalls, types.TurnFailed,
-					errors.New(content), nil,
-					loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
+				// A refusal is a decision that succeeded, and the model is the one
+				// that has to act on it: it can propose a different approach, ask
+				// the user, or explain why the work cannot be done. Ending the turn
+				// here instead left the reason in a tool result nobody read — the
+				// refusal reached the transcript but never the conversation.
+				logging.Info("tool approval refused", map[string]any{
+					"flow_session_id": req.FlowSessionID,
+					"flow_turn_id":    req.FlowTurnID,
+					"call_id":         req.CallID,
+					"tool_name":       pending.ToolName,
+					"policy_rejected": policyRejected,
+					"reason":          approvedResult.Error,
+				})
 			}
 		}
 		if req.ResumeTaskID != "" {
@@ -763,6 +825,12 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 					continue
 				}
 			}
+			// A cancelled call is not a transient failure: retrying it spends the
+			// user's tokens and wall time producing an answer they already said
+			// they do not want.
+			if errors.Is(chatErr, context.Canceled) || ctx.Err() != nil {
+				break
+			}
 			if maxRetries < 0 || !isRetryableModelError(chatErr) || modelRetries >= maxRetries {
 				break
 			}
@@ -798,7 +866,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				"error":       chatErr.Error(),
 			}
 			addProviderErrorFields(fields, chatErr)
-			logging.Error("model chat failed", fields)
+			logging.ErrorUnlessCancelled(chatErr, "model chat failed", fields)
 			t.emitErrorHook(ctx, agent, req, round, chatErr)
 			return nil, fmt.Errorf("llm chat: %w", chatErr)
 		}
@@ -823,8 +891,12 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		totalUsage.PromptCacheMissTokens += resp.Usage.PromptCacheMissTokens
 		totalUsage.CacheReadInputTokens += resp.Usage.CacheReadInputTokens
 		totalUsage.CacheCreationInputTokens += resp.Usage.CacheCreationInputTokens
-		logging.Debug("model request usage", map[string]any{
+		// Info, not debug: a round of model traffic is the unit a production
+		// incident is diagnosed in (latency, retries, token burn, empty replies).
+		// At debug the only record of it in a shipped deployment is nothing.
+		logging.Info("model request usage", map[string]any{
 			"flow_session_id":             req.FlowSessionID,
+			"flow_turn_id":                req.FlowTurnID,
 			"team_id":                     req.TeamID,
 			"call_id":                     req.CallID,
 			"agent_id":                    req.AgentID,
@@ -993,6 +1065,25 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage,
 					round+1, resp.Text, workspaceOps, toolCalls, types.TurnFailed, stuck, nil,
 					loopStateSnapshot(lastToolSignature, sameToolCalls, noProgressRounds, sameModelTexts, usedTools, successfulTools)), nil
+			}
+			// Record what the Agent just told the user, so the next turn in this
+			// session continues the conversation instead of restarting it. Without
+			// this the transcript holds only tool traffic: a follow-up like "say
+			// that conclusion again" arrives with no sign the conclusion was ever
+			// spoken, while "which file did you read" still works — the asymmetry
+			// that made the gap hard to notice from the outside.
+			//
+			// The text recorded is the reply, not resp.Text: a structured turn's
+			// raw output is a JSON envelope, and replaying that as history teaches
+			// the model to keep answering in envelopes.
+			if strings.TrimSpace(reply) != "" {
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "assistant", Content: reply}); addErr != nil {
+					logging.Warn("agent transcript: answer not recorded", map[string]any{
+						"flow_session_id": req.FlowSessionID,
+						"call_id":         req.CallID,
+						"error":           addErr.Error(),
+					})
+				}
 			}
 			return &types.AgentResult{Status: types.TurnCompleted, Reply: reply, Parsed: parsed, Next: route, Usage: totalUsage, WorkspaceOps: workspaceOps, ToolCalls: toolCalls}, nil
 		}

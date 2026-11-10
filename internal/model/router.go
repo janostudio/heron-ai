@@ -107,6 +107,12 @@ func (r *ProviderRouter) ChatStream(ctx context.Context, messages []types.Messag
 			return ch, nil
 		}
 		lastErr = err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// The caller withdrew the request. Falling back would keep spending
+			// time and tokens on an answer nobody is waiting for, and the next
+			// model's slowness would look like the cancel did not work.
+			return nil, ctxErr
+		}
 		var pe *types.ProviderError
 		if errors.As(err, &pe) && pe.Retryable() {
 			r.markCooling(modelName, r.cooldownSeconds(modelName))
@@ -146,6 +152,12 @@ func (r *ProviderRouter) chatWithFallback(ctx context.Context, messages []types.
 			return resp, nil
 		}
 		lastErr = err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// The caller withdrew the request. Falling back would keep spending
+			// time and tokens on an answer nobody is waiting for, and the next
+			// model's slowness would look like the cancel did not work.
+			return nil, ctxErr
+		}
 		var pe *types.ProviderError
 		if errors.As(err, &pe) && pe.Retryable() {
 			r.markCooling(modelName, r.cooldownSeconds(modelName))

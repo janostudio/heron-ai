@@ -239,11 +239,10 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 			result.Error = err.Error()
 			result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
 			result.Turn.Status = types.TurnFailed
-			logging.Error("team batch failed", map[string]any{
+			logging.ErrorUnlessCancelled(err, "team batch failed", map[string]any{
 				"flow_session_id": req.FlowSession.ID,
 				"team_id":         req.Team.ID,
 				"team_turn_id":    req.TeamTurn.ID,
-				"error":           err.Error(),
 			})
 			return result, err
 		}
@@ -559,13 +558,12 @@ func (r *Runtime) runBatch(
 			}
 			callResult, err := r.executors.Execute(execCtx, callReq)
 			if err != nil {
-				logging.Error("call executor failed", map[string]any{
+				logging.ErrorUnlessCancelled(err, "call executor failed", map[string]any{
 					"flow_session_id": req.FlowSession.ID,
 					"team_id":         req.Team.ID,
 					"team_turn_id":    req.TeamTurn.ID,
 					"call_id":         name,
 					"call_type":       string(configured.Type),
-					"error":           err.Error(),
 				})
 			}
 			if callReq.ResumeApproval != nil {

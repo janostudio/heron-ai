@@ -688,6 +688,10 @@ func teamResultSignal(task types.ToolTask) flow.TeamResultSignal {
 		CallerTeam: stringFromAny(task.Arguments["caller_team"]),
 		CallID:     stringFromAny(task.Arguments["call_id"]),
 		Error:      task.Error,
+		Failed:     task.Status == types.ToolTaskFailed,
+	}
+	if task.Result != nil && !task.Result.Success {
+		signal.Failed = true
 	}
 	if task.Result != nil {
 		var payload struct {

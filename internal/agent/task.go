@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -256,6 +257,41 @@ type AsyncToolExecutor struct {
 	starting map[string]bool
 	notified map[string]bool
 	onDone   func(context.Context, types.ToolTask)
+	// instanceBusy and instanceQueue serialize work per Team instance: the task
+	// holding instanceBusy is the one executing, the rest wait in FIFO order.
+	//
+	// Why here and not in the dispatcher: a resident Team is one execution unit,
+	// so a second task for it is not an error, it is work that has to wait. The
+	// dispatcher refuses it because it cannot park it; the queue can. A per_task
+	// Team keys each task separately, so its tasks never meet in this map and
+	// still run concurrently.
+	instanceBusy  map[string]string
+	instanceQueue map[string][]types.ToolTask
+}
+
+// instanceKeyOf names the execution slot a task occupies. Empty means "no
+// slot": a task that is not a Team dispatch runs without serialization.
+//
+// A per_task Team addresses instances by task_key, so two keys are two slots.
+// A resident Team has no key and shares one.
+func instanceKeyOf(task types.ToolTask) string {
+	// Only a Team dispatch occupies an instance. Arguments["team_id"] names the
+	// callee and is what the dispatcher wrote; TeamID on the task is the caller,
+	// kept for provenance. Spawn, Collect and ordinary tools carry no team_id and
+	// must not be serialized — running two children at once is their point.
+	//
+	// Keying on the caller would also serialize two different callees the same
+	// caller dispatched to, which are meant to run in parallel.
+	teamID, _ := task.Arguments["team_id"].(string)
+	teamID = strings.TrimSpace(teamID)
+	if teamID == "" {
+		return ""
+	}
+	key := task.FlowSessionID + "\x00" + teamID
+	if taskKey, _ := task.Arguments["task_key"].(string); strings.TrimSpace(taskKey) != "" {
+		key += "\x00" + strings.TrimSpace(taskKey)
+	}
+	return key
 }
 
 // ProgressToolExecutor is an optional extension for Tools that can report
@@ -394,8 +430,82 @@ func (e *AsyncToolExecutor) start(ctx context.Context, task types.ToolTask, forc
 	if err := e.tasks.Save(ctx, task); err != nil {
 		return err
 	}
+	key := instanceKeyOf(task)
+	e.mu.Lock()
+	acquired := e.acquireInstanceLocked(key, task.ID)
+	if !acquired {
+		e.instanceQueue[key] = append(e.instanceQueue[key], task)
+	}
+	e.mu.Unlock()
+	if !acquired {
+		// Stays queued, not failed: the caller gets a handle it can poll and the
+		// task keeps its place. A refusal here is what made two dispatches to one
+		// resident Team look like a conflict instead of a queue.
+		logging.Info("tool task queued behind a running instance", map[string]any{
+			"task_id":         task.ID,
+			"flow_session_id": task.FlowSessionID,
+			"team_id":         task.TeamID,
+			"tool_name":       task.ToolName,
+			"queued_behind":   e.instanceBusyOf(key),
+		})
+		return nil
+	}
 	go e.run(task)
 	return nil
+}
+
+// acquireInstanceLocked takes the execution slot unless someone else holds it.
+func (e *AsyncToolExecutor) acquireInstanceLocked(key, taskID string) bool {
+	// Both maps are created on first use: an executor built before this queue
+	// existed still works, and a nil map assignment would panic while the lock is
+	// held — which reads as a hang, not a crash.
+	if e.instanceBusy == nil {
+		e.instanceBusy = make(map[string]string)
+	}
+	if e.instanceQueue == nil {
+		e.instanceQueue = make(map[string][]types.ToolTask)
+	}
+	if key == "" {
+		return true
+	}
+	if _, busy := e.instanceBusy[key]; busy {
+		return false
+	}
+	e.instanceBusy[key] = taskID
+	return true
+}
+
+// instanceBusyOf reports who holds the slot, for the log line above.
+func (e *AsyncToolExecutor) instanceBusyOf(key string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.instanceBusy[key]
+}
+
+// releaseInstance gives up the slot and returns the next task waiting for it.
+func (e *AsyncToolExecutor) releaseInstance(key, taskID string) (types.ToolTask, bool) {
+	if key == "" {
+		return types.ToolTask{}, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.instanceBusy[key] != taskID {
+		return types.ToolTask{}, false
+	}
+	queue := e.instanceQueue[key]
+	if len(queue) == 0 {
+		delete(e.instanceBusy, key)
+		delete(e.instanceQueue, key)
+		return types.ToolTask{}, false
+	}
+	next := queue[0]
+	if len(queue) == 1 {
+		delete(e.instanceQueue, key)
+	} else {
+		e.instanceQueue[key] = queue[1:]
+	}
+	e.instanceBusy[key] = next.ID
+	return next, true
 }
 
 func (e *AsyncToolExecutor) Load(ctx context.Context, id string) (*types.ToolTask, error) {
@@ -422,6 +532,12 @@ func (e *AsyncToolExecutor) run(task types.ToolTask) {
 		e.mu.Lock()
 		delete(e.running, task.ID)
 		e.mu.Unlock()
+		// Hand the slot to the next task for this instance. Doing it here rather
+		// than at the call site keeps the queue moving whatever ended the task:
+		// completion, failure or cancellation.
+		if next, ok := e.releaseInstance(instanceKeyOf(task), task.ID); ok {
+			go e.run(next)
+		}
 	}()
 
 	now := time.Now().UTC()

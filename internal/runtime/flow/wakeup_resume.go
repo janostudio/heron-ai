@@ -113,7 +113,7 @@ func (r *Runtime) ResumeForWakeup(ctx context.Context, sessionID string, record 
 	// rendered where a user message would be, which is the one place this text
 	// must never appear.
 	return r.runTurnWithOrigin(ctx, defs, session, "", blocks,
-		[]activation{{teamID: record.TeamID}}, turnOriginWakeup, record.CreatedAt, nil)
+		[]activation{{teamID: record.TeamID}}, turnOriginWakeup, record.CreatedAt, nil, nil)
 }
 
 // wakeupBlocks builds the two blocks a wake-up turn carries: what this is, and

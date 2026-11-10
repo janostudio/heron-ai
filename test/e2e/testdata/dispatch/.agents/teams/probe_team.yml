@@ -1,0 +1,16 @@
+id: probe_team
+goal: 一任务一实例：每个被派发的任务都有独立的 Team 实例。
+
+calls:
+  run:
+    type: agent
+    agent: worker
+    responsibility: 按派发来的任务说明执行并给出结论
+    inputs:
+      user_message: true
+    output:
+      record: WorkerReport
+
+output:
+  from: run
+  record: WorkerReport

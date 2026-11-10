@@ -106,14 +106,14 @@ func TestServeAuthTokenPrefersFlagThenEnv(t *testing.T) {
 	}
 }
 
-// The viewer shell and the liveness probe stay open so a browser can load the
-// page and be asked for the token. Every data route stays guarded.
-func TestRequireBearerTokenLeavesShellAndHealthOpen(t *testing.T) {
+// The viewer shell stays open so a browser can load the page and be asked for
+// the token. Every API route — health included — stays guarded.
+func TestRequireBearerTokenLeavesOnlyTheShellOpen(t *testing.T) {
 	handler := requireBearerToken("secret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	open := []string{"/", "/s/fs_abc123", "/static/app.js", "/static/app.css", "/api/health"}
+	open := []string{"/", "/s/fs_abc123", "/static/app.js", "/static/app.css"}
 	for _, path := range open {
 		t.Run("open "+path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -124,7 +124,7 @@ func TestRequireBearerTokenLeavesShellAndHealthOpen(t *testing.T) {
 		})
 	}
 
-	guarded := []string{"/api", "/api/", "/api/sessions", "/api/sessions/fs_abc123/record", "/api/status", "/api/stream"}
+	guarded := []string{"/api", "/api/", "/api/sessions", "/api/sessions/fs_abc123/record", "/api/status", "/api/stream", "/api/health"}
 	for _, path := range guarded {
 		t.Run("guarded "+path, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -139,8 +139,11 @@ func TestRequireBearerTokenLeavesShellAndHealthOpen(t *testing.T) {
 // Anything new under /api/ is guarded unless it is named, so adding a route
 // cannot silently widen what an unauthenticated caller can reach.
 func TestOpenWithoutTokenFailsClosed(t *testing.T) {
-	if !openWithoutToken("/api/health") {
-		t.Fatal("/api/health must stay open: launchers and monitors poll it without a credential")
+	// Health is guarded like any other API route: it reports how many sessions
+	// are loaded and whether wake-ups are pending, which is deployment activity,
+	// not a liveness byte. The probe that polls it holds the token already.
+	if openWithoutToken("/api/health") {
+		t.Fatal("/api/health must require the token")
 	}
 	if !openWithoutToken("/") || !openWithoutToken("/static/app.js") {
 		t.Fatal("the viewer shell must stay open")

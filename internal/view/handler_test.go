@@ -3,11 +3,13 @@ package view
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -192,18 +194,19 @@ func TestContentBlockText(t *testing.T) {
 // ===== mock runtime =====
 
 type mockRuntime struct {
-	startCalls   int
-	handleCalls  int
-	resumeCalls  int
-	cancelCalls  int
-	statusCalls  int
-	lastInput    string
-	lastBlocks   []types.ContextBlock
-	result       types.FlowTurnResult
-	err          error
-	statusResult types.FlowSession
-	statusErr    error
-	rich         bool
+	startCalls    int
+	handleCalls   int
+	resumeCalls   int
+	cancelCalls   int
+	statusCalls   int
+	lastInput     string
+	lastSessionID string
+	lastBlocks    []types.ContextBlock
+	result        types.FlowTurnResult
+	err           error
+	statusResult  types.FlowSession
+	statusErr     error
+	rich          bool
 }
 
 func (m *mockRuntime) Start(ctx context.Context, req types.StartFlowRequest) (types.FlowTurnResult, error) {
@@ -214,6 +217,7 @@ func (m *mockRuntime) Start(ctx context.Context, req types.StartFlowRequest) (ty
 }
 func (m *mockRuntime) HandleInput(ctx context.Context, sessionID, input string) (types.FlowTurnResult, error) {
 	m.handleCalls++
+	m.lastSessionID = sessionID
 	m.lastInput = input
 	return m.result, m.err
 }
@@ -232,6 +236,7 @@ func (m *mockRuntime) Status(ctx context.Context, sessionID string) (types.FlowS
 }
 func (m *mockRuntime) HandleInputWithContext(ctx context.Context, sessionID, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
 	m.handleCalls++
+	m.lastSessionID = sessionID
 	m.lastInput = input
 	m.lastBlocks = blocks
 	return m.result, m.err
@@ -256,14 +261,20 @@ func TestHandleResult(t *testing.T) {
 		}
 	})
 
-	t.Run("runtime status error maps to 404", func(t *testing.T) {
+	t.Run("unreadable state maps to 500, not to a gone session", func(t *testing.T) {
+		// The failure this guards: an internal error reported as 404 tells the
+		// client the session no longer exists, so it drops work a retry could
+		// still reach. Only "not found" may answer 404.
 		rt := &mockRuntime{statusErr: context.DeadlineExceeded}
 		h := NewRuntimeHandler(rt)
 		rr := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/result?session_id=s1", nil)
 		h.HandleResult(rr, req)
-		if rr.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want %d", rr.Code, http.StatusNotFound)
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want %d", rr.Code, http.StatusInternalServerError)
+		}
+		if body := rr.Body.String(); !strings.Contains(body, "s1") {
+			t.Fatalf("body = %q, want it to name the session", body)
 		}
 	})
 
@@ -295,13 +306,27 @@ func TestHandleResult(t *testing.T) {
 		}
 	})
 
-	t.Run("unconfigured runtime status error maps to 404", func(t *testing.T) {
+	t.Run("unconfigured runtime maps to 500", func(t *testing.T) {
 		h := NewHandler() // unconfiguredRuntime returns error from Status
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/result?session_id=s1", nil)
+		h.HandleResult(rr, req)
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want %d", rr.Code, http.StatusInternalServerError)
+		}
+	})
+
+	t.Run("missing session maps to 404 and names it", func(t *testing.T) {
+		rt := &mockRuntime{statusErr: fmt.Errorf("read state: %w", storage.ErrNotFound)}
+		h := NewRuntimeHandler(rt)
 		rr := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/result?session_id=s1", nil)
 		h.HandleResult(rr, req)
 		if rr.Code != http.StatusNotFound {
 			t.Fatalf("status = %d, want %d", rr.Code, http.StatusNotFound)
+		}
+		if body := rr.Body.String(); !strings.Contains(body, `"s1"`) {
+			t.Fatalf("body = %q, want a 404 that quotes the session id", body)
 		}
 	})
 }
@@ -488,6 +513,79 @@ func TestHandleRun(t *testing.T) {
 		}
 		if rt.lastInput != "from message" {
 			t.Fatalf("lastInput = %q, want from message", rt.lastInput)
+		}
+	})
+
+	// The three subtests below close the gap E-01 left open: this handler is the
+	// other public turn entry, and it answered 400 "file not found" for a session
+	// that no longer exists. A client reading that fixes its request instead of
+	// starting a new session.
+	t.Run("unknown session in body maps to 404 and names it", func(t *testing.T) {
+		rt := &mockRuntime{err: fmt.Errorf("read state: %w", storage.ErrNotFound)}
+		h := NewRuntimeHandler(rt)
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/run",
+			strings.NewReader(`{"flow_session_id":"fs_gone","input":"hi"}`))
+		h.HandleRun(rr, req)
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want %d (body=%s)", rr.Code, http.StatusNotFound, rr.Body.String())
+		}
+		if body := rr.Body.String(); !strings.Contains(body, `"fs_gone"`) {
+			t.Fatalf("body = %q, want a 404 that quotes the session id", body)
+		}
+		if rt.startCalls != 0 {
+			t.Fatalf("startCalls = %d, want 0: an unknown id must not start a session", rt.startCalls)
+		}
+	})
+
+	t.Run("query flow_session_id continues that session", func(t *testing.T) {
+		rt := &mockRuntime{result: types.FlowTurnResult{Reply: "ok"}}
+		h := NewRuntimeHandler(rt)
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/run?flow_session_id=fs_x",
+			strings.NewReader(`{"input":"hi"}`))
+		h.HandleRun(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d (body=%s)", rr.Code, http.StatusOK, rr.Body.String())
+		}
+		if rt.startCalls != 0 || rt.handleCalls != 1 {
+			t.Fatalf("startCalls=%d handleCalls=%d, want 0/1", rt.startCalls, rt.handleCalls)
+		}
+		if rt.lastSessionID != "fs_x" {
+			t.Fatalf("lastSessionID = %q, want fs_x", rt.lastSessionID)
+		}
+	})
+
+	t.Run("unknown session in query is 404, not a new session", func(t *testing.T) {
+		rt := &mockRuntime{err: fmt.Errorf("read state: %w", storage.ErrNotFound)}
+		h := NewRuntimeHandler(rt)
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/run?session_id=fs_gone",
+			strings.NewReader(`{"input":"hi"}`))
+		h.HandleRun(rr, req)
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want %d (body=%s)", rr.Code, http.StatusNotFound, rr.Body.String())
+		}
+		if rt.startCalls != 0 {
+			t.Fatalf("startCalls = %d, want 0: a query id that is gone must not silently start", rt.startCalls)
+		}
+	})
+
+	t.Run("body wins over query when both name a session", func(t *testing.T) {
+		// Both locations are accepted, so the precedence has to be pinned: a
+		// client that sends only one never notices, and a client that sends both
+		// must not have the engine pick the one it did not mean.
+		rt := &mockRuntime{result: types.FlowTurnResult{Reply: "ok"}}
+		h := NewRuntimeHandler(rt)
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/run?flow_session_id=fs_query",
+			strings.NewReader(`{"flow_session_id":"fs_body","input":"hi"}`))
+		h.HandleRun(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d (body=%s)", rr.Code, http.StatusOK, rr.Body.String())
+		}
+		if rt.lastSessionID != "fs_body" {
+			t.Fatalf("lastSessionID = %q, want fs_body (the body names the session)", rt.lastSessionID)
 		}
 	})
 }

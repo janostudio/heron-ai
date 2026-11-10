@@ -452,6 +452,16 @@ func (r *Runtime) resolveTaskDispatch(
 	sessionID, teamID, taskKey string,
 	dispatcher *types.TeamSessionRef,
 ) (taskDispatch, error) {
+	// Allocating "the next ordinal" is a read-then-write over the event stream:
+	// two dispatches from the same response read the same max and both pick
+	// max+1, which makes the second instance collide with the first on its busy
+	// key and get refused as "already running". The ordinal is a per-session
+	// resource, so it is allocated under one lock.
+	r.seqMu.Lock()
+	defer r.seqMu.Unlock()
+	if r.allocatedSeq == nil {
+		r.allocatedSeq = make(map[string]int)
+	}
 	if dispatcher == nil || strings.TrimSpace(dispatcher.TeamSessionID) == "" {
 		return taskDispatch{}, fmt.Errorf(
 			"team %q uses lifecycle per_task; the caller instance is required to own the task", teamID)
@@ -473,6 +483,12 @@ func (r *Runtime) resolveTaskDispatch(
 	}
 
 	maxSeq := 0
+	// Ordinals allocated a moment ago may not be in the stream yet: the instance
+	// this call allocated is written after the lock is released. Without this
+	// floor, the next dispatch reads the same max and picks the same number.
+	if allocated := r.allocatedSeq[sessionID]; allocated > maxSeq {
+		maxSeq = allocated
+	}
 	dispatcherDepth := 0
 	dispatcherContext := ""
 	var match *types.TeamSession
@@ -503,8 +519,10 @@ func (r *Runtime) resolveTaskDispatch(
 	}
 
 	if match == nil {
+		next := maxSeq + 1
+		r.allocatedSeq[sessionID] = next
 		return taskDispatch{
-			sessionSeq:    maxSeq + 1,
+			sessionSeq:    next,
 			dispatchCount: 1,
 			created:       true,
 			depth:         dispatcherDepth + 1,

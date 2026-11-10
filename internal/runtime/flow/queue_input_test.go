@@ -18,7 +18,7 @@ func TestStartQueuesInputWhileTurnRuns(t *testing.T) {
 	session := seedMailboxSession(t, rt, "fs-queue", types.SessionRunning)
 
 	// 本进程正在为这个会话执行回合。
-	clear := rt.markTurnRunning(session.ID)
+	_, clear := rt.markTurnRunning(context.Background(), session.ID)
 	defer clear()
 
 	result, err := rt.HandleInputWithContext(context.Background(), session.ID, "第二个问题", nil)
