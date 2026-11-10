@@ -831,7 +831,7 @@
     var filePicker = el("input", { type: "file", multiple: "multiple", class: "composer-file" });
     var attachButton = el("button", { type: "button", class: "composer-attach" }, "\u9644\u4ef6");
     var sendButton = el("button", { type: "button", class: "composer-send" }, "\u53d1\u9001");
-    var stopButton = el("button", { type: "button", class: "composer-stop hidden" }, "\u505c\u6b62");
+    var stopButton = el("button", { type: "button", class: "composer-stop" }, "\u505c\u6b62");
     var status = el("span", { class: "composer-status" }, "");
 
     var box = el("div", { class: "composer" },
@@ -884,12 +884,15 @@
       });
     }
 
+    // Sending only disables the composer. Whether a turn is running is shown by
+    // the stop button, which the session stream drives (see markTurnActive):
+    // an accepted message frees the composer at once, while the turn it started
+    // may still be running.
     function setBusy(value, text) {
       busy = value;
       input.disabled = value;
       attachButton.disabled = value;
       sendButton.classList.toggle("hidden", value);
-      stopButton.classList.toggle("hidden", !value);
       status.textContent = text || "";
     }
 
@@ -911,14 +914,6 @@
 
       var token = ++runToken;
 
-      /* Subscribe before posting. The turn starts the moment the request
-       * lands; a stream opened afterwards would miss its opening events. The
-       * stream resumes from the last seq already on screen, so nothing replays. */
-      /* The page is already streaming this session; the turn's events arrive
-       * through it. Only remember how much has been seen, so the fallback below
-       * can tell "the stream delivered" from "it stayed silent". */
-      var seenBefore = sessionStream ? sessionStream.count() : 0;
-
       input.value = "";
       autosize();
       pending = [];
@@ -926,7 +921,10 @@
       setBusy(true, "\u5df2\u53d1\u9001\uff0c\u6b63\u5728\u6267\u884c\u2026\u8fc7\u7a0b\u4f1a\u5b9e\u65f6\u51fa\u73b0\u5728\u5bf9\u8bdd\u91cc\u3002");
       window.scrollTo(0, document.body.scrollHeight);
 
-      apiFetch("/api/sessions/turn?session_id=" + encodeURIComponent(sessionID), {
+      /* 202 means accepted, not done: the turn's events arrive on the session
+       * stream like any other turn. The composer is therefore free as soon as
+       * the acceptance lands, and the stop button follows the stream instead. */
+      apiFetch("/api/sessions/" + encodeURIComponent(sessionID) + "/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -940,18 +938,6 @@
         .then(function () {
           if (token !== runToken) { return; }
           setBusy(false, "");
-          // The POST answers when the turn is over, so the stream has nothing
-          // left to add. Give the last frame a beat, then close it.
-          setTimeout(function () {
-            if (token !== runToken) { return; }
-            var missed = !sessionStream || sessionStream.count() === seenBefore;
-            if (missed) {
-              // The stream never delivered a frame; the record is the fallback
-              // so the reader still sees what happened.
-              scrollToBottom = true;
-              renderRecord(sessionID);
-            }
-          }, 800);
         })
         .catch(function (error) {
           if (error && error.unauthorized) { return; }
@@ -967,7 +953,7 @@
      * cannot see. So the copy says "停止" and reports what the server answered,
      * rather than claiming the work definitely ended. */
     function stop() {
-      if (!busy) { return; }
+      if (!document.body.classList.contains("turn-active")) { return; }
       runToken += 1;
       setBusy(false, "\u6b63\u5728\u8bf7\u6c42\u505c\u6b62\u2026");
       apiFetch("/api/cancel?session_id=" + encodeURIComponent(sessionID), { method: "POST" })
@@ -1276,6 +1262,15 @@
    * the log with the page showing nothing new until a reload. */
   var sessionStream = null;
 
+  /* A turn is active from its started event to its terminal one. The stop
+   * button follows this rather than the composer's sending state: a message
+   * that was accepted but whose turn is still running must keep 停止 available. */
+  var activeTurns = 0;
+  function markTurnActive(delta) {
+    activeTurns = Math.max(0, activeTurns + delta);
+    document.body.classList.toggle("turn-active", activeTurns > 0);
+  }
+
   function stopSessionStream() {
     if (sessionStream) { sessionStream.stop(); sessionStream = null; }
   }
@@ -1324,7 +1319,10 @@
       }
       var view = turnFor(id);
       view.push(event);
-      if (event.type === "session.turn.idle" || event.type === "session.turn.completed") {
+      if (event.type === "session.turn.started") { markTurnActive(1); }
+      if (event.type === "session.turn.idle" || event.type === "session.turn.completed" ||
+          event.type === "session.turn.waiting_tool" || event.type === "session.turn.waiting_approval") {
+        markTurnActive(-1);
         view.finish(event);
         return;
       }

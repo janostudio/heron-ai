@@ -215,7 +215,7 @@ func buildRecordResponse(facts *eval.SessionFacts, afterSeq int64, limit int) ma
 		latest = facts.Events[n-1].Seq
 	}
 	return map[string]any{
-		"session":    facts.FlowSessionID,
+		"session":    sessionView(facts),
 		"events":     events,
 		"nodes":      nodes,
 		"facts":      projectFacts(facts),
@@ -223,6 +223,27 @@ func buildRecordResponse(facts *eval.SessionFacts, afterSeq int64, limit int) ma
 		"truncated":  truncated,
 		"after_seq":  afterSeq,
 	}
+}
+
+// sessionView is the record's session header.
+//
+// It carries the status, not just the id: a page that knows the conversation is
+// settled does not need to hold an event stream open for it. The status comes
+// from the session node the correlation graph already builds, so no second pass
+// over the events is needed.
+func sessionView(facts *eval.SessionFacts) map[string]any {
+	view := map[string]any{"id": facts.FlowSessionID}
+	if facts.Graph == nil {
+		return view
+	}
+	for _, node := range facts.Graph.NodesOfKind(eval.NodeFlowSession) {
+		if node.ID != facts.FlowSessionID || node.Status == "" {
+			continue
+		}
+		view["status"] = string(node.Status)
+		break
+	}
+	return view
 }
 
 func projectEvent(event storage.SessionEvent) eventView {

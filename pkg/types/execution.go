@@ -515,6 +515,18 @@ type RichFlowRuntime interface {
 	ResumeWithContext(ctx context.Context, sessionID, input string, blocks []ContextBlock) (FlowTurnResult, error)
 }
 
+// AsyncFlowRuntime is implemented by a runtime that accepts a message without
+// running the turn inline. The result only says the message was taken (and
+// whether it went to the queue); the turn's events arrive on the session
+// stream like any other turn.
+//
+// It exists for callers that already hold a stream: waiting on a second
+// connection that carries no data until the turn ends is the same request
+// twice, and the second copy is the one an intermediary kills.
+type AsyncFlowRuntime interface {
+	SubmitInput(ctx context.Context, sessionID, input string, blocks []ContextBlock) (FlowTurnResult, error)
+}
+
 type ApprovalFlowRuntime interface {
 	ResumeApproval(ctx context.Context, sessionID, approvalID string, approved bool, reason string) (FlowTurnResult, error)
 }

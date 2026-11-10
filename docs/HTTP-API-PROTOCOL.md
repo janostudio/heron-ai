@@ -22,32 +22,28 @@
 代码位置：路由在 `cmd/server/main.go`，处理在 `internal/view/{handler.go,web.go}`，
 事件订阅在 `internal/storage/session.go`。
 
-### 1.2 浏览器实际走的是「先订阅 + 同步提交」的组合
+### 1.2 浏览器实际走的是「常驻跟随 + 同步提交」
 
-前端 `submit()`（`internal/view/webassets/app.js:934-989`）的顺序是：
+页面打开后先取记录、再建立一条**常驻订阅**，之后所有 turn 的事件都从这条流进来
+（`internal/view/webassets/app.js` 的 `connect()` / `sessionStream`）。断线按指数退避
+重连（1s → 2s → … → 15s 封顶）。
 
 ```
-1. GET /api/stream?follow=1        ← 先建订阅（Last-Event-ID = 屏幕上已有的最大 seq）
-2. POST /api/sessions/turn         ← 再提交，同步等整轮结束
-3. setTimeout(800)                 ← POST 返回后再猜 800ms 关流
-4. 若流一帧都没收到 → renderRecord 整页重拉
+进入会话
+  ├── GET /api/sessions/{id}/record        ← 历史 + latest_seq
+  └── GET /api/stream?follow=1             ← 常驻订阅，Last-Event-ID = latest_seq
+        断线 → 退避重连，重连仍带 Last-Event-ID
+
+发消息
+  └── POST /api/sessions/{id}/events       ← 202：受理即返回
+        事件不来自这个响应，而来自上面那条常驻流
 ```
 
-源码注释把这个顺序的动机写得很清楚：
+提交与接收是两条通道：POST 只负责把消息交给引擎并拿到受理确认，事件全部走常驻流。
+**POST 的返回值没有信息量** —— 页面渲染完全依赖流。
 
-```js
-/* Subscribe before posting. The turn starts the moment the request
-   lands; a stream opened afterwards would miss its opening events. */
-```
-
-以及收尾逻辑：
-
-```js
-// The POST answers when the turn is over, so the stream has nothing left to add.
-```
-
-所以当前形态是 **「提前订阅（B 的一半）+ 同步阻塞（C）」的组合**，
-既不是单请求单流（A），也不是轮询。
+> 2026-11-10 之前这里是同步的：`POST /api/sessions/turn` 要等整轮结束才返回，
+> 收尾靠 `setTimeout(800)` 猜最后一帧有没有到。改造后这个猜测已删除。
 
 ### 1.3 后端重连机制：逻辑成立
 
@@ -68,23 +64,17 @@
 另外，非 follow 模式的重连路径用 `streamReplayBoundary` 算了
 「历史结束在哪、是否已 settle」，避免重连时只看到旧 turn 就关流。
 
-### 1.4 端到端不可靠：三个缺口
+### 1.4 端到端缺口：两个已解决，两个仍在
 
-**缺口 1：刷新后不自动重连。**
-`app.js` 只在 `submit()` 里建流。刷新后走 `renderRecord` 只渲染历史，
-不检查会话是否还在跑，也不建流。正在执行的 turn 在页面上表现为静止，
-要再发一条消息才恢复。
+**已解决（2026-11-10，随 `fix/web-interactivity` 合入）：**
 
-**缺口 2：历史接口不直接给会话状态。**
-`GET /record` 返回 `{session, events, nodes, facts, latest_seq, truncated, after_seq}`，
-其中 `session` 是**字符串 id** 而不是对象；`facts` 只有统计
-（turns / usage / calls / models…），没有 status。要判断「还在跑」得遍历
-`nodes` 找 `flow_session` 节点的 Status —— 可行，但没有文档说明该这么做。
+- 刷新后自动跟随：页面常驻订阅，不再只在发送时建流
+- 断线自动重连：指数退避，重连带 `Last-Event-ID`
 
-**缺口 3：流异常断开后不重试。**
-浏览器端用 fetch + ReadableStream 而不是 EventSource（因为要带 Authorization 头，
-见 `app.js` 注释），`pump()` 在 `chunk.done` 时直接返回，不会自动重连。
-只有 `onError` 把「流断开」写进标题栏，没有恢复动作。
+**仍存在：**
+
+两个都已在 2026-11-10 的改造中解决（§3.3 / §3.6）：提交改为 202 受理，
+`record` 的 `session` 改为 `{id, status}` 对象。
 
 ### 1.5 测试盲区
 
@@ -121,66 +111,77 @@
 | **B** 提交/订阅分离 | `POST .../events` → 202 | `GET .../events` 长连接 | 有，需「先注册订阅再写响应头」契约消除 | 2 |
 | **C** 同步阻塞 | `POST` 等整轮 → JSON | 无 | 无，但客户端干等 | 1 |
 
-当前实现是 **B 的一半 + C**。
+当前实现是 **B 的一半 + C**：接收侧已经是常驻订阅（B 的形态），提交仍是同步阻塞（C）。
 
-### 3.2 推荐 A
+### 3.2 A 不再必要
 
-理由不是 A 更常见，而是本仓库已经具备 A 成立的两个前提：
+A（单请求单流）成立的前提是「客户端没有常驻流，需要靠提交这个动作顺便建立订阅」。
+页面改成常驻跟随后这个前提消失了：已经有一条覆盖所有 turn 的流，再让 POST 返回一条流
+只会多出第二条通道，而它只覆盖这一次 turn，用完即废。
 
-1. **「订阅必须先于提交」这个约束已经存在**（`app.js` 注释写明）。A 天然满足它：
-   提交与订阅是同一个动作，不需要靠调用顺序和注释保证。
-2. **流可以重放**（`Subscribe` 会先补 `seq > afterSeq` 的历史）。所以 A 不牺牲恢复能力：
-   连接断掉后转 GET 续传，与 B 完全等价。
+所以剩下要动的只有提交语义，不是推进方式。
 
-A 相比现状直接消掉问题 1、2、3：只有一条通道、turn 期间始终有事件或心跳、
-不需要猜收尾时机。
-
-### 3.3 A 的完整路径
+### 3.3 提交改为 202 受理
 
 ```
-首次进入 / 刷新
-  ├── GET /record?after_seq=0&limit=500        → 历史 + latest_seq
-  └── if status == running:
-        GET /stream?follow=1
-        Last-Event-ID: latest_seq              → 续上正在跑的 turn
+POST /api/sessions/{id}/events
+Idempotency-Key: <客户端 UUID>
+Content-Type: application/json
 
-发新消息
-  └── POST /api/sessions/{id}/events
-      Accept: text/event-stream
-      Idempotency-Key: <客户端 UUID>
-      → 200 OK, text/event-stream
-        data: {"type":"turn.created","turn_id":"ft_x","session_id":"fs_x"}
-        data: {"type":"turn.item.added", ...}
-        data: {"type":"output_text.delta", "delta":"..."}
-        data: {"type":"turn.completed","turn_id":"ft_x","reply":"..."}
+{ "input": "...", "attachments": [...] }
 
-新建会话
-  └── POST /api/sessions
-      Accept: text/event-stream
-      → 首帧 data: {"type":"session.created","session_id":"fs_x"}
-
-断线重连
-  └── GET /stream?follow=1
-      Last-Event-ID: <已看到的最大 seq>
+→ 202 Accepted
+{ "session_id": "fs_abc", "status": "accepted", "queued": false }
 ```
 
-三条硬约束：
+- **不返回 turn_id**：turn 在受理之后才创建，号由常驻流里的 `session.turn.started`
+  携带（客户端本来就用事件里的 `flow_turn_id` 分组）。提前发号需要一个占位 turn，
+  代价大于收益。
+- **202 只表示受理**，不表示完成，也不保证一定能跑完 —— 结果和失败都在流里。
+- **幂等键是 `(session_id, idempotency_key)`**。首轮没有 session id，所以键由客户端生成；
+  重复提交返回同一个受理结果，不重复执行。
 
-1. **流的生命周期 = 一次 turn**。跨 turn 常驻就退化成 B 了；这个需求交给 GET 订阅。
-2. **首帧必须在任何模型调用之前 flush**（`session.created` / `turn.created`），
-   这是客户端拿到 id 做断线恢复的唯一时机。
-3. **断线恢复走 GET，不重发 POST**。优先用 `Last-Event-ID` 续传。
+现有 `POST /api/sessions/turn` / `POST /api/run` 保留同步语义，给 CLI 和脚本用：
+它们没有常驻流，需要一次调用拿到结果。
 
-### 3.4 为什么不选 B
+### 3.4 runtime 侧要补的能力
 
-B 把「先订阅再提交」的责任交给调用方，并且要求服务端遵守
-「先完成订阅注册、再写出 200 响应头」这条不可观测的契约。A 在协议层面消除这个依赖，
-调用方不需要理解它。B 的唯一优势是提交和接收可以分连接，本仓库目前没有这个需求。
+`HandleInput` 现在分两步看会话：忙则入队（`queueUserInput`），闲则同步跑完整轮。
+202 端点需要第三种组合：**总是入队，然后异步排空**。
 
-### 3.5 A 不改变历史获取
+```
+SubmitInput(ctx, sessionID, input, blocks):
+  1. 复用 HandleInput 的前置校验（waiting_approval / interrupted / waiting_tool / 有 running team 都拒绝）
+  2. queueUserInput(...)         —— 入队，返回 Queued
+  3. 若会话空闲 → go drainQueuedInput(ctx, sessionID)   —— 主动排空
+     若会话忙   → 什么也不做，当前回合结束时会自己排空
+```
 
-历史一直是独立接口（`GET /record`），不是从流里读的。刷新后 A 与现状完全一致：
-先查历史，再决定是否订阅。A 只影响「正在进行的 turn 的增量从哪来」。
+`drainQueuedInput` 已经存在且有 `resumeLock` 保护，重复触发是幂等的（队列空就退出）。
+
+### 3.5 客户端路径
+
+```
+进入会话 / 刷新
+  ├── GET /record                             → 历史 + latest_seq + status
+  ├── if status == running: 显示"进行中"
+  └── GET /stream?follow=1                    → 常驻订阅（终态会话可以不建）
+        断线 → 退避重连，带 Last-Event-ID
+
+发消息
+  └── POST /api/sessions/{id}/events → 202
+        事件全部来自上面那条流；不再需要 setTimeout(800) 猜收尾
+```
+
+`setTimeout(800)` 那段 fallback 可以删除：它存在的唯一理由是「提交是同步的，所以
+流里应该没有新东西了，但万一有呢」。提交改成 202 之后，流就是唯一通道，收尾由
+`session.turn.idle` / `session.turn.completed` 事件决定。
+
+### 3.6 顺带把 record 补上 status
+
+`GET /record` 的 `session` 字段目前是字符串 id。改成对象（`{id, status, ...}`）之后，
+页面能判断「这个会话已经终态，不必常驻订阅」，避免给已完结的会话挂空流。
+数据源已存在（事件流里的 `session.created` / `session.updated`），只是没投影出来。
 
 ## 4. 命名规范
 
@@ -299,8 +300,8 @@ flow / team / agent 哪一层（`strings.HasPrefix(eventType, "flow_")` 之类�
 
 | # | 决策 | 选项 | 影响 |
 |---|---|---|---|
-| D1 | 是否采用 A 形态 | A / 保持现状 | 改契约语义；只影响浏览器端（JSON-RPC 与 CLI 不经过 HTTP SSE） |
-| D2 | 是否保留同步端点 | 保留 `POST /api/run` / `/api/sessions/turn` / 还是替换 | 保留则两套语义并存，替换则 CLI/脚本需要改 |
+| D1 | 是否采用 A 形态 | ~~A / 保持现状~~ **已否定**（§3.2） | 页面已有常驻流，A 会多出第二条通道 |
+| D2 | 同步端点如何处理 | 保留同步 + 新增 202 端点 | CLI 与脚本没有常驻流，需要一次调用拿到结果 |
 | D3 | 事件是否改名 | ~~改名 / 保持~~ **已完成**（§4.3） | 所有消费方已同步：Go 常量、浏览器端、e2e 用例、Skill 排查命令 |
 | D4 | 状态词表是否改 | `waiting_input`→`idle` **已完成**（§4.2）；`requires_action` 合并待评估 | 合并会改恢复路径分流，不是命名改动 |
 | D5 | 是否引入 item 概念 | 引入 / 用 seq + call_turn_id 代替 | 引入需要维护 item_id / output_index / content_index |
@@ -313,17 +314,112 @@ flow / team / agent 哪一层（`strings.HasPrefix(eventType, "flow_")` 之类�
 - 字段命名统一 snake_case（§4.1）
 - `waiting_input` → `idle`（§4.2）
 - 事件名统一 `session.` 命名空间（§4.3）
+- 页面常驻跟随 + 断线退避重连（随 `fix/web-interactivity` 合入）
+- 提交改 202 受理 + `record` 返回会话状态（§3.3 / §3.6）
 
-未做，但不需要决策 —— 与 A/B 的选择无关：
+接下来按收益排序：
 
-1. 历史接口返回 `status`（D6）—— 刷新自动重连的前提
-2. 断线窗口测试（§1.5）—— 用测试证明重连可靠
-3. 会话列表分页（§4.7）—— 新增参数，默认行为不变
+1. **断线窗口测试**（§1.5）—— 用测试证明重连补事件可靠
+2. **增量/完结成对**（§4.4）—— 真正的流式渲染
+3. **错误结构化**（§4.5）
+4. **会话列表分页**（§4.7）
+5. **`requires_action` 状态合并**（§4.2）—— 独立任务，需要恢复路径的测试覆盖
 
-需要决策后做：
+## 7. 改造前后对照
 
-4. A 形态（D1/D2）—— 新增端点 + 改浏览器端
-5. 刷新自动重连（依赖 1 和 4）
-6. 增量/完结成对（§4.4）
-7. 错误结构化（§4.5）
-8. `requires_action` 状态合并（§4.2）—— 独立任务，需要恢复路径的测试覆盖
+> 这是 2026-11-10 那次改造的记录。左列是改造前的行为，右列是改造后的行为；
+> 改造已实施，代码与右列一致。
+
+用四个场景说明两种行为的差别。四个场景合起来覆盖了这条链路上
+全部的用户可见问题。
+
+### 7.1 场景一：打开一个刚结束的会话
+
+```
+现在                                    改造后
+────────────────────────────────────    ────────────────────────────────────
+GET /record                             GET /record
+  → { session: "fs_abc", events,          → { session: { id, status: "idle" },
+      latest_seq }                            events, latest_seq }
+GET /stream?follow=1                    status 是终态 → 不订阅
+Last-Event-ID: latest_seq               直接渲染历史，页面不再持有连接
+  → 常驻流挂着，直到用户离开页面
+```
+
+差别：现在每个打开过的会话都挂一条流；改造后只给还会产生事件的会话建流。
+
+### 7.2 场景二：发一条短消息
+
+```
+现在                                    改造后
+────────────────────────────────────    ────────────────────────────────────
+POST /sessions/turn                     POST /sessions/{id}/events
+  → 等 turn 结束                          → 202（毫秒级）
+  → 200 FlowTurnResult                    事件从常驻流进来：
+                                            session.turn.started
+事件同时从常驻流进来                          session.agent.model_response
+                                            session.turn.idle        ← 结束
+POST 返回后 setTimeout(800)
+  判断"流收到过帧吗"
+  没收到 → 整页重拉
+```
+
+差别：现在同一轮的结果有两个来源（POST 响应 + 流），要判断哪个更可信；改造后只有流
+一个来源。
+
+### 7.3 场景三：发一条派发型任务（跑几分钟）
+
+这是问题最集中的场景。
+
+```
+现在                                    改造后
+────────────────────────────────────    ────────────────────────────────────
+POST /sessions/turn                     POST /sessions/{id}/events
+  │                                       → 202，连接立刻释放
+  ├─ 0s   连接建立                        │
+  │       （此后几分钟无任何数据）          ├─ 0s   流：turn.started
+  │                                       ├─ 3s   流：team_turn.started
+  │   ⚠ 代理 60s 空闲超时会掐断这条连接    ├─ 90s  流：agent.model_response
+  │   ⚠ 掐断后客户端看到的是"发送失败"     ├─ ...
+  │      但服务端仍在跑                    ├─ 240s 流：turn.idle
+  │                                       │
+  ├─ 240s 才返回 200                      └─ 全程只有一条流，且一直有事件或心跳
+  │
+  └─ 若连接已被掐断 → 用户看到失败，
+     实际 turn 成功，状态不一致
+```
+
+差别：现在这条 POST 是整条链路里唯一「长时间存在但没有任何数据」的连接，也是最容易
+被中间设备杀掉的；改造后它只活几毫秒。
+
+### 7.4 场景四：长任务期间刷新页面
+
+```
+现在                                    改造后
+────────────────────────────────────    ────────────────────────────────────
+刷新 → GET /record                     刷新 → GET /record
+     → 渲染历史                             → 渲染历史 + status = running
+     → GET /stream?follow=1                → GET /stream?follow=1
+     → Last-Event-ID: 最新 seq              → Last-Event-ID: 最新 seq
+     → 继续收到后续事件                      → 继续收到后续事件
+
+（这条 2026-11-10 之前是坏的：刷新后不订阅，页面静止到用户再发一条消息）
+```
+
+差别：这一场景**已经修好**，改造不改变它。列在这里是为了说明：断线恢复能力与提交
+语义是两件独立的事，前者已经具备，后者才是剩下的问题。
+
+### 7.5 四个场景的效果汇总
+
+| 维度 | 现在 | 改造后 |
+|---|---|---|
+| 提交请求占用连接 | turn 全程（可能几分钟） | 毫秒级 |
+| 长任务期间「无数据的长连接」 | 一条（POST） | 零条 |
+| 一轮结束的判定依据 | POST 返回 + `setTimeout(800)` 猜测 | 流里的 `session.turn.idle` 事件 |
+| 结果的来源 | 两处（POST JSON + 流事件） | 一处（流） |
+| turn 失败与连接失败 | 客户端无法区分 | 流里都有明确事件 |
+| 已终态会话 | 仍挂一条流 | 不订阅 |
+| 刷新后恢复 | 已具备（常驻流 + Last-Event-ID） | 不变 |
+
+一句话：改造不是加功能，是**把「提交」从一条承担结果的连接，降级成一次受理动作**，
+让结果只从流里来。

@@ -249,6 +249,63 @@ func (h *Handler) HandleTurn(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+// HandleSubmitInput serves POST /api/sessions/{id}/events: it accepts the
+// message and answers 202 without waiting for the turn.
+//
+// The turn's events arrive on the session stream like any other turn, which is
+// what lets the caller stop holding a connection open for the whole run. The
+// synchronous entry points stay for callers with no stream to read.
+func (h *Handler) HandleSubmitInput(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if strings.TrimSpace(sessionID) == "" {
+		http.Error(w, "session id is required", http.StatusBadRequest)
+		return
+	}
+	if h.runtime == nil {
+		http.Error(w, "FlowRuntime is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	submitter, ok := h.runtime.(types.AsyncFlowRuntime)
+	if !ok {
+		http.Error(w, "runtime does not support asynchronous input", http.StatusNotImplemented)
+		return
+	}
+	var req flowInputRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	if req.Input == "" {
+		req.Input = req.Message
+	}
+	blocks, err := requestContextBlocks(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Input) == "" && len(blocks) == 0 {
+		http.Error(w, "input, message, content, or attachments is required", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Input) == "" {
+		req.Input = contentBlockText(blocks)
+	}
+	result, err := submitter.SubmitInput(r.Context(), sessionID, req.Input, blocks)
+	if err != nil {
+		writeRuntimeError(w, about("session", sessionID, err))
+		return
+	}
+	// 202 states what happened: the message was taken. It does not promise the
+	// turn will succeed — that, and the answer itself, arrive on the stream.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"session_id": result.Session.ID,
+		"status":     "accepted",
+		"queued":     result.Queued,
+	})
+}
+
 func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	if h.runtime != nil {
 		sessionID := r.URL.Query().Get("session_id")

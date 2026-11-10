@@ -210,6 +210,10 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 	// derived counts. Reading history must not touch live turn state, so it
 	// serves from the file store rather than through the runtime.
 	mux.HandleFunc("GET /api/sessions/{id}/record", handler.HandleRecord)
+	// Asynchronous input: 202 now, the turn's events on the session stream.
+	// The page holds that stream already; the synchronous entry points remain
+	// for callers that do not.
+	mux.HandleFunc("POST /api/sessions/{id}/events", handler.HandleSubmitInput)
 	// Attachments live on disk; the page cannot read a workspace path, so the
 	// bytes have to come back over HTTP for an image to be visible at all.
 	mux.HandleFunc("/api/media", handler.HandleMedia)

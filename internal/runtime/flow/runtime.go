@@ -302,20 +302,6 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	if err != nil {
 		return types.FlowTurnResult{}, err
 	}
-	// Completed is deliberately absent from the rejection list: it only
-	// exists in sessions recorded before the lifecycle refactor, and those
-	// legacy sessions stay continuable with the same session_id. A normally
-	// finished turn is always left in waiting_input.
-	//
-	// Failed, cancelled and interrupted are absent for the same reason: they
-	// describe an earlier turn (or an earlier process), never the conversation.
-	// A new turn starts from the Flow entry team and rewrites the session status
-	// to running, so continuing is safe; blocking here would make one bad turn
-	// permanently end the conversation, which is not what the user sees — they
-	// see that turn's error and then send the next message.
-	if session.Status == types.SessionWaitingApproval {
-		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is already %s", session.ID, session.Status)
-	}
 	// A turn of this process is running: this is the queueing case, and it has to
 	// be decided before the recovery check. That check reads the event log, where
 	// "running right now" and "died mid-flight" look identical except for the
@@ -325,13 +311,75 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
 		return r.queueUserInput(ctx, session, input, blocks)
 	}
+	if err := r.checkNewTurnAllowed(ctx, session); err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	persisted, err := r.persistContextBlocks(ctx, blocks)
+	if err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	return r.runTurnWithContext(ctx, session, input, persisted)
+}
+
+// SubmitInput accepts a message and returns before the turn runs. It is the
+// asynchronous counterpart of HandleInput: the caller learns that the message
+// was taken, and the turn's events arrive on the session stream like any other
+// turn.
+//
+// The message is always queued. A session with a turn in flight drains the
+// queue when that turn ends; an idle one has nothing to end, so the drain
+// starts here. Both paths are the same one the synchronous entry point uses
+// when it finds the session busy, which is what keeps a queued message from
+// being handled two different ways depending on how it arrived.
+func (r *Runtime) SubmitInput(ctx context.Context, sessionID, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
+	session, err := r.loadSession(ctx, sessionID)
+	if err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	busy := session.Status == types.SessionRunning && r.isTurnRunning(sessionID)
+	if !busy {
+		if err := r.checkNewTurnAllowed(ctx, session); err != nil {
+			return types.FlowTurnResult{}, err
+		}
+	}
+	queued, err := r.queueUserInput(ctx, session, input, blocks)
+	if err != nil {
+		return types.FlowTurnResult{}, err
+	}
+	if !busy {
+		// Detached from the caller's context on purpose: the acceptance has
+		// already been written, so cancelling the HTTP request must not cancel
+		// the turn it just accepted.
+		go r.drainQueuedInput(context.Background(), sessionID)
+	}
+	return queued, nil
+}
+
+// checkNewTurnAllowed rejects the states where accepting another message would
+// strand it. Callers must have handled "a turn of this process is running"
+// first: that case is resumable and must not be read as an unfinished
+// execution, and only the caller knows whether the message should be queued.
+func (r *Runtime) checkNewTurnAllowed(ctx context.Context, session types.FlowSession) error {
+	// Completed is deliberately absent from the rejection list: it only
+	// exists in sessions recorded before the lifecycle refactor, and those
+	// legacy sessions stay continuable with the same session_id.
+	//
+	// Failed, cancelled and interrupted are absent for the same reason: they
+	// describe an earlier turn (or an earlier process), never the conversation.
+	// A new turn starts from the Flow entry team and rewrites the session status
+	// to running, so continuing is safe; blocking here would make one bad turn
+	// permanently end the conversation, which is not what the user sees — they
+	// see that turn's error and then send the next message.
+	if session.Status == types.SessionWaitingApproval {
+		return fmt.Errorf("flow session %q is already %s", session.ID, session.Status)
+	}
 	// The recovery check comes before the waiting_tool one on purpose. A session
 	// parked on a Tool whose task record is gone is still status waiting_tool,
 	// but "resume the pending Tool task" is advice that cannot be followed: the
 	// resume fails on the missing record. Reporting it as an unfinished
 	// execution points at the one path that does work — recovery.
-	if interrupted, err := r.RecoveryStatus(ctx, sessionID); err == nil && len(interrupted.Interrupted) > 0 {
-		return types.FlowTurnResult{}, fmt.Errorf("flow session %q has unfinished execution; use recovery status first", sessionID)
+	if interrupted, err := r.RecoveryStatus(ctx, session.ID); err == nil && len(interrupted.Interrupted) > 0 {
+		return fmt.Errorf("flow session %q has unfinished execution; use recovery status first", session.ID)
 	}
 	// waiting_tool is rejected for the same reason waiting_approval is: this
 	// entry point starts a brand-new FlowTurn from the Flow entry team and
@@ -342,24 +390,20 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	// another open turn on top. Resume is the path that resumes pending Tool
 	// tasks; use it instead.
 	if session.Status == types.SessionWaitingTool {
-		return types.FlowTurnResult{}, fmt.Errorf(
+		return fmt.Errorf(
 			"flow session %q is waiting for a Tool: resume the pending Tool task instead of starting a new turn",
 			session.ID,
 		)
 	}
-	if running, err := r.runningTeams(ctx, sessionID); err != nil {
-		return types.FlowTurnResult{}, err
+	if running, err := r.runningTeams(ctx, session.ID); err != nil {
+		return err
 	} else if len(running) > 0 {
-		return types.FlowTurnResult{}, fmt.Errorf(
+		return fmt.Errorf(
 			"flow session %q still has running teams %v: wait for them to finish or cancel the session before starting a new turn",
 			session.ID, running,
 		)
 	}
-	persisted, err := r.persistContextBlocks(ctx, blocks)
-	if err != nil {
-		return types.FlowTurnResult{}, err
-	}
-	return r.runTurnWithContext(ctx, session, input, persisted)
+	return nil
 }
 
 func (r *Runtime) Resume(ctx context.Context, sessionID string, input string) (types.FlowTurnResult, error) {

@@ -402,3 +402,74 @@ func (r *recoveryHandlerRuntime) RecoveryStatus(context.Context, string) (types.
 func (r *recoveryHandlerRuntime) Recover(context.Context, string, types.RecoveryRequest) (types.FlowTurnResult, error) {
 	return types.FlowTurnResult{Session: types.FlowSession{ID: "fs-1"}}, nil
 }
+
+// asyncHandlerRuntime is a FlowRuntime that also accepts input asynchronously,
+// the way the real runtime does.
+type asyncHandlerRuntime struct {
+	handlerFlowRuntime
+	submitted []string
+}
+
+func (r *asyncHandlerRuntime) SubmitInput(
+	_ context.Context, sessionID, input string, _ []types.ContextBlock,
+) (types.FlowTurnResult, error) {
+	r.submitted = append(r.submitted, input)
+	return types.FlowTurnResult{
+		Session: types.FlowSession{ID: sessionID, Status: types.SessionIdle},
+		Queued:  true,
+	}, nil
+}
+
+// The acceptance has to come back before the turn runs: that is the whole point
+// of the endpoint. A 200 with a result body would mean the caller waited.
+func TestHandler_HandleSubmitInputAcceptsWith202(t *testing.T) {
+	runtime := &asyncHandlerRuntime{}
+	handler := NewRuntimeHandler(runtime)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/sessions/{id}/events", handler.HandleSubmitInput)
+
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/sessions/fs-1/events", strings.NewReader(`{"input":"hi"}`),
+	)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusAccepted, recorder.Code)
+	require.Equal(t, []string{"hi"}, runtime.submitted)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Equal(t, "accepted", body["status"])
+	require.Equal(t, "fs-1", body["session_id"])
+	require.Equal(t, true, body["queued"])
+}
+
+func TestHandler_HandleSubmitInputRejectsEmptyInput(t *testing.T) {
+	runtime := &asyncHandlerRuntime{}
+	handler := NewRuntimeHandler(runtime)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/sessions/{id}/events", handler.HandleSubmitInput)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/sessions/fs-1/events", strings.NewReader(`{}`))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Empty(t, runtime.submitted)
+}
+
+// A runtime without the capability must say so rather than silently falling
+// back to the synchronous path: the caller is waiting for an acceptance.
+func TestHandler_HandleSubmitInputNotImplementedWithoutCapability(t *testing.T) {
+	handler := NewRuntimeHandler(&handlerFlowRuntime{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/sessions/{id}/events", handler.HandleSubmitInput)
+
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/sessions/fs-1/events", strings.NewReader(`{"input":"hi"}`),
+	)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusNotImplemented, recorder.Code)
+}
