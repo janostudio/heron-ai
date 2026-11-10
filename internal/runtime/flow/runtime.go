@@ -37,6 +37,11 @@ type Runtime struct {
 	evidence    storage.EvidenceStore
 	limits      types.RuntimeLimits
 	tasks       types.ToolTaskStore
+	// taskControl stops a durable Tool task. The store can only record what a
+	// task is doing; stopping it needs the executor that owns its context.
+	// Optional, and nil-safe: without it Cancel reports what it could not stop
+	// instead of pretending the work ended.
+	taskControl types.ToolTaskCanceller
 	media       types.MediaStore
 	// transcripts is the per-Agent conversation store. A finished Team call
 	// enters the caller's conversation through it as a tool result.
@@ -171,6 +176,17 @@ func (r *Runtime) SetTaskStore(tasks types.ToolTaskStore) {
 	r.tasks = tasks
 }
 
+// SetTaskControl wires the cancel side of durable Tool tasks.
+//
+// The store alone cannot stop work: it records what a task is doing. A durable
+// task runs on its own context, deliberately detached from the turn that
+// created it, so cancelling a session reaches it through this handle or not at
+// all. Optional: a runtime built without one still cancels turns and Teams,
+// and cancelling a Task is refused rather than silently ignored.
+func (r *Runtime) SetTaskControl(control types.ToolTaskCanceller) {
+	r.taskControl = control
+}
+
 func (r *Runtime) SetMediaStore(store types.MediaStore) {
 	r.media = store
 }
@@ -272,6 +288,14 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	if session.Status == types.SessionWaitingApproval {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is already %s", session.ID, session.Status)
 	}
+	// The recovery check comes before the waiting_tool one on purpose. A session
+	// parked on a Tool whose task record is gone is still status waiting_tool,
+	// but "resume the pending Tool task" is advice that cannot be followed: the
+	// resume fails on the missing record. Reporting it as an unfinished
+	// execution points at the one path that does work — recovery.
+	if interrupted, err := r.RecoveryStatus(ctx, sessionID); err == nil && len(interrupted.Interrupted) > 0 {
+		return types.FlowTurnResult{}, fmt.Errorf("flow session %q has unfinished execution; use recovery status first", sessionID)
+	}
 	// waiting_tool is rejected for the same reason waiting_approval is: this
 	// entry point starts a brand-new FlowTurn from the Flow entry team and
 	// never consults pendingTeamResume, so a turn started here has no way to
@@ -298,9 +322,6 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 			"flow session %q still has running teams %v: wait for them to finish or cancel the session before starting a new turn",
 			session.ID, running,
 		)
-	}
-	if interrupted, err := r.RecoveryStatus(ctx, sessionID); err == nil && len(interrupted.Interrupted) > 0 {
-		return types.FlowTurnResult{}, fmt.Errorf("flow session %q has unfinished execution; use recovery status first", sessionID)
 	}
 	persisted, err := r.persistContextBlocks(ctx, blocks)
 	if err != nil {
@@ -515,6 +536,14 @@ func (r *Runtime) RecoveryStatus(ctx context.Context, sessionID string) (types.R
 		return types.RecoveryStatus{}, err
 	}
 	interrupted := interruptedExecutions(replay.Events, r.liveIndexFor(sessionID))
+	// A Team parked on a Tool whose task record is gone is not covered by the
+	// check above: that check treats every waiting turn as resumable, which is
+	// right until the thing it is waiting for no longer exists. Left out, such a
+	// session has no path at all — Resume fails with "task not found",
+	// HandleInput refuses a session waiting on a Tool, and Recover reports
+	// nothing to recover.
+	interrupted = append(interrupted, r.orphanedWaitingExecutions(ctx, replay.Events)...)
+	sortInterrupted(interrupted)
 	history := recoveryHistory(replay.Events)
 	if len(interrupted) > 0 &&
 		session.Status != types.SessionCompleted &&
@@ -661,7 +690,61 @@ func (r *Runtime) Cancel(ctx context.Context, sessionID string) error {
 			"executions":      stopped,
 		})
 	}
+	// A durable Tool task is a third kind of work: not the turn, not a
+	// dispatched Team, but a queued or running task owned by the Agent layer
+	// and running on its own context. Cancelling the session has to reach it by
+	// id, or the child keeps calling models and writing files after the user
+	// asked everything to stop.
+	if stopped := r.cancelSessionTasks(ctx, sessionID); stopped > 0 {
+		logging.Info("cancelled durable Tool tasks for session", map[string]any{
+			"flow_session_id": sessionID,
+			"tasks":           stopped,
+		})
+	}
 	return nil
+}
+
+// cancelSessionTasks stops the durable Tool tasks a session still owns and
+// reports how many were cancelled.
+//
+// Only queued and running tasks are touched: a finished task has nothing left
+// to stop, and re-cancelling it would rewrite a result that already landed.
+// The store listing is unfiltered — there is no per-session index — so this
+// walks it, which is acceptable for a call made once per cancellation.
+func (r *Runtime) cancelSessionTasks(ctx context.Context, sessionID string) int {
+	if r.taskControl == nil || r.tasks == nil {
+		return 0
+	}
+	// Cancelling a task writes its state, so the write must survive a caller
+	// whose request context is already gone.
+	writeCtx := writeEvenIfCancelled(ctx)
+	tasks, err := r.tasks.List(writeCtx)
+	if err != nil {
+		logging.Error("list Tool tasks to cancel", map[string]any{
+			"flow_session_id": sessionID,
+			"error":           err.Error(),
+		})
+		return 0
+	}
+	cancelled := 0
+	for _, task := range tasks {
+		if task.FlowSessionID != sessionID {
+			continue
+		}
+		if task.Status != types.ToolTaskQueued && task.Status != types.ToolTaskRunning {
+			continue
+		}
+		if cancelErr := r.taskControl.Cancel(writeCtx, task.ID); cancelErr != nil {
+			logging.Error("cancel Tool task on session cancel", map[string]any{
+				"flow_session_id": sessionID,
+				"task_id":         task.ID,
+				"error":           cancelErr.Error(),
+			})
+			continue
+		}
+		cancelled++
+	}
+	return cancelled
 }
 
 func (r *Runtime) Status(ctx context.Context, sessionID string) (types.FlowSession, error) {
@@ -2400,6 +2483,74 @@ func pendingTeamResumes(events []storage.SessionEvent) []pendingTeamResumeInfo {
 		resumes = append(resumes, info)
 	}
 	return resumes
+}
+
+// orphanedWaitingExecutions reports Teams paused on a Tool task that is no
+// longer in the store.
+//
+// This is the one waiting state that cannot be resumed. pendingTasksReady loads
+// the task to decide whether the Team may continue; a missing record makes it
+// fail rather than wait. Since interruptedExecutions treats every waiting turn
+// as resumable — correct until the thing being waited for is gone — such a
+// session ends up with no path: Resume fails with "task not found", HandleInput
+// refuses a session waiting on a Tool, and Recover reports nothing. Reporting
+// it as interrupted is what turns a dead session into a recoverable one.
+//
+// Only a definite "not found" counts. Any other read error means the store
+// could not answer, which is not evidence the task is gone: turning a transient
+// IO failure into "your session is unrecoverable" is the worse mistake.
+func (r *Runtime) orphanedWaitingExecutions(ctx context.Context, events []storage.SessionEvent) []types.InterruptedExecution {
+	if r.tasks == nil {
+		return nil
+	}
+	// pendingTeamResumeInfo carries no TeamSessionID, and recovery targets the
+	// instance rather than the Team, so take it from the last event naming the
+	// turn.
+	lastEvent := make(map[string]storage.SessionEvent)
+	for _, event := range events {
+		if event.TeamTurnID != "" {
+			lastEvent[event.TeamTurnID] = event
+		}
+	}
+
+	var orphaned []types.InterruptedExecution
+	for _, team := range pendingTeamResumes(events) {
+		if len(team.PendingToolTasks) == 0 {
+			continue
+		}
+		missing := ""
+		for _, item := range team.PendingToolTasks {
+			// An empty task id means the event did not record what the Team is
+			// waiting for — a malformed or older event, not evidence the task is
+			// gone. Only a definitive "not found" counts as orphaned; anything
+			// else leaves the sitting state as it is.
+			if item.TaskID == "" {
+				continue
+			}
+			if _, err := r.tasks.Load(ctx, item.TaskID); errors.Is(err, types.ErrToolTaskNotFound) {
+				missing = item.TaskID
+				break
+			}
+		}
+		if missing == "" {
+			continue
+		}
+		event := lastEvent[team.TeamTurnID]
+		orphaned = append(orphaned, types.InterruptedExecution{
+			Kind:          "team_turn",
+			FlowTurnID:    team.FlowTurnID,
+			TeamID:        team.TeamID,
+			TeamSessionID: event.TeamSessionID,
+			TeamTurnID:    team.TeamTurnID,
+			Attempt:       team.Attempt,
+			CallerTeam:    team.CallerTeam,
+			StartedEvent:  string(event.Type),
+			SafeToRetry:   true,
+			RetryReason: "the pending Tool task " + missing +
+				" no longer exists, so this turn can never continue; retrying re-runs the Team turn from its start",
+		})
+	}
+	return orphaned
 }
 
 // pendingTeamForApproval narrows a set of paused Teams to the one owning the

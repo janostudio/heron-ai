@@ -2,8 +2,18 @@ package types
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrToolTaskNotFound reports that a durable Tool task is not in the store.
+//
+// It lives here rather than beside the file-backed store because two layers
+// need to agree on it: the store reports it, and the flow runtime decides from
+// it whether a session parked on that task can still be resumed. A caller that
+// treated every read error as "gone" would turn a transient IO failure into an
+// unrecoverable session.
+var ErrToolTaskNotFound = errors.New("tool task not found")
 
 // CurrentAgentCheckpointVersion is the on-disk Agent checkpoint schema
 // version. Older versions remain readable when their compatibility metadata
