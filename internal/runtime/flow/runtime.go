@@ -316,6 +316,15 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	if session.Status == types.SessionWaitingApproval {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is already %s", session.ID, session.Status)
 	}
+	// A turn of this process is running: this is the queueing case, and it has to
+	// be decided before the recovery check. That check reads the event log, where
+	// "running right now" and "died mid-flight" look identical except for the
+	// live index — and the index covers the flow turn, not the team and call
+	// turns inside it, so a healthy turn read as an unfinished execution and the
+	// second message was refused instead of queued.
+	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
+		return r.queueUserInput(ctx, session, input, blocks)
+	}
 	// The recovery check comes before the waiting_tool one on purpose. A session
 	// parked on a Tool whose task record is gone is still status waiting_tool,
 	// but "resume the pending Tool task" is advice that cannot be followed: the
@@ -338,11 +347,7 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 			session.ID,
 		)
 	}
-	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
-		// The turn in flight cannot be interrupted, but the message must not be
-		// lost either: store it and let the running turn start it when it ends.
-		return r.queueUserInput(ctx, session, input, blocks)
-	}
+
 	if running, err := r.runningTeams(ctx, sessionID); err != nil {
 		return types.FlowTurnResult{}, err
 	} else if len(running) > 0 {
