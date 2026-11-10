@@ -704,6 +704,13 @@ func TestRuntimeHandleInputRejectsWaitingTool(t *testing.T) {
 	require.NoError(t, tasks.Save(ctx, types.ToolTask{
 		ID: "task-a", Status: types.ToolTaskRunning, UpdatedAt: time.Now().UTC(),
 	}))
+	// The fixture declares two pending tasks; both have to exist for the session
+	// to be resumable at all. A missing record is a different case — the session
+	// is not resumable and is reported as interrupted — and is covered by
+	// TestOrphanedWaitingTeamIsReportedAsInterrupted.
+	require.NoError(t, tasks.Save(ctx, types.ToolTask{
+		ID: "task-b", Status: types.ToolTaskRunning, UpdatedAt: time.Now().UTC(),
+	}))
 	teamRuntime := &aggregateResumeTeamRuntime{}
 	runtime := newTestRuntime(aggregateResumeDefinitions(), teamRuntime, sessions, nil)
 	runtime.SetTaskStore(tasks)

@@ -493,6 +493,9 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	flowRuntime.SetTranscriptStore(transcriptStore)
 	flowRuntime.SetLimits(definitions.Limits)
 	flowRuntime.SetTaskStore(taskStore)
+	// The store records what a durable task is doing; only the executor can stop
+	// it. Without this handle a session cancel leaves its async Tools running.
+	flowRuntime.SetTaskControl(taskRunner)
 	flowRuntime.SetMediaStore(mediaStore)
 	// P0 mailbox dispatch: the entry team's activate hands the work to a
 	// background team and the FlowTurn ends immediately. When that team

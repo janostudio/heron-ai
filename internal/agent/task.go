@@ -16,7 +16,10 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-var ErrToolTaskNotFound = errors.New("tool task not found")
+// ErrToolTaskNotFound is the store's "no such task" signal. It is defined in
+// pkg/types so the flow runtime can tell a missing task (which makes a parked
+// session unrecoverable) apart from a read error (which does not).
+var ErrToolTaskNotFound = types.ErrToolTaskNotFound
 
 type FileToolTaskStore struct {
 	files   storage.FileStore
