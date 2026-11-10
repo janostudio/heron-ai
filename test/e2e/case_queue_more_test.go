@@ -110,51 +110,18 @@ func TestQueue2AttachmentsSurviveQueueing(t *testing.T) {
 		t.Fatalf("first turn: status=%d err=%v", outcome.Status, outcome.Err)
 	}
 
-	// The queued turn must be the message the user sent: the text and the blocks
-	// that carry the attachment. This judges the queue, not the model request —
-	// whether an attachment reaches the provider is a separate path with its own
-	// gap (recorded in the findings ledger), and folding it in here would make
-	// this case fail for a reason it does not cover.
+	// The queued turn must be the message the user sent: the text, the blocks
+	// that carry the attachment, and the attachment itself in the model request.
 	waitForModelRequest(t, e, "看图", 45*time.Second)
 
-	events := waitForEvent(t, e.Root, sessionID, 30*time.Second, func(events []event) bool {
-		return countEvents(events, "flow_turn.started") >= 2
-	})
-	if started := countEvents(events, "flow_turn.started"); started < 2 {
-		t.Fatalf("flow_turn.started = %d, want 2: the queued message never became a turn", started)
-	}
-
 	carried := false
-	for _, ev := range events {
-		if ev.Type != "flow_turn.started" {
-			continue
-		}
-		payload, _ := ev.Raw["payload"].(map[string]any)
-		turn, _ := payload["turn"].(map[string]any)
-		if turn == nil {
-			continue
-		}
-		if input, _ := turn["input"].(string); input != "看图" {
-			continue
-		}
-		blocks, _ := turn["context_blocks"].([]any)
-		for _, rawBlock := range blocks {
-			block, _ := rawBlock.(map[string]any)
-			if block == nil || block["kind"] != "input" {
-				continue
-			}
-			if text, _ := block["text"].(string); text != "看图" {
-				t.Fatalf("queued turn text = %q, want 看图: the words that came with the attachment were dropped", text)
-			}
-			parts, _ := block["parts"].([]any)
-			if len(parts) == 0 {
-				t.Fatalf("queued turn carried no parts: the attachment was dropped when the message was stored")
-			}
+	for _, req := range e.Mock.requests() {
+		if strings.Contains(requestText(req), "看图") && strings.Contains(string(req.Raw), "image_url") {
 			carried = true
 		}
 	}
 	if !carried {
-		t.Fatal("the queued turn's context_blocks never reached the session event: cannot confirm the attachment survived")
+		t.Fatal("the queued turn reached the model without the image: queueing kept the text but lost the attachment")
 	}
 
 	writeTrace(t, e, httpTrace{Method: http.MethodPost, Path: "/api/run", Status: http.StatusOK},
