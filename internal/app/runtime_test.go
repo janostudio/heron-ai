@@ -139,7 +139,7 @@ func (r *stubFlowRuntime) Resume(context.Context, string, string) (types.FlowTur
 	fn := r.resumeFn
 	r.mu.Unlock()
 	if fn == nil {
-		return types.FlowTurnResult{Session: types.FlowSession{Status: types.SessionWaitingInput}}, nil
+		return types.FlowTurnResult{Session: types.FlowSession{Status: types.SessionIdle}}, nil
 	}
 	return fn()
 }
@@ -223,7 +223,7 @@ func TestWakeFlowOnToolTaskDoneRetriesFailedResume(t *testing.T) {
 		if statusCalls, _ := runtime.counts(); statusCalls < 4 {
 			return types.FlowTurnResult{}, errors.New("session has unfinished execution")
 		}
-		return types.FlowTurnResult{Session: types.FlowSession{Status: types.SessionWaitingInput}}, nil
+		return types.FlowTurnResult{Session: types.FlowSession{Status: types.SessionIdle}}, nil
 	}
 	logger := &captureLogger{}
 
@@ -264,7 +264,7 @@ func TestWakeFlowOnToolTaskDoneAbandonsOnlyLoudly(t *testing.T) {
 // by a tool completion callback.
 func TestWakeFlowOnToolTaskDoneIgnoresNonToolStates(t *testing.T) {
 	for _, status := range []types.SessionStatus{
-		types.SessionWaitingInput,
+		types.SessionIdle,
 		types.SessionCompleted,
 		types.SessionFailed,
 		types.SessionCancelled,

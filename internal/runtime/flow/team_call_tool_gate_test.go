@@ -32,7 +32,7 @@ func TestRunTeamAcceptsAnswerOnlyTeam(t *testing.T) {
 
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	rt := newTestRuntime(defs, &inputRecordingTeamRuntime{}, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-answer-only", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-answer-only", types.SessionIdle)
 
 	outcome, err := rt.RunTeam(context.Background(), types.TeamCallSpec{
 		FlowSessionID: session.ID,
@@ -62,7 +62,7 @@ func TestRunTeamStillRejectsIdleTeamWithTools(t *testing.T) {
 
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	rt := newTestRuntime(defs, &inputRecordingTeamRuntime{}, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-idle-tools", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-idle-tools", types.SessionIdle)
 
 	outcome, err := rt.RunTeam(context.Background(), types.TeamCallSpec{
 		FlowSessionID: session.ID,

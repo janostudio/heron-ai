@@ -35,8 +35,8 @@ type Session struct {
 	UpdatedAt time.Time
 	// Active is true when the session's last turn has not reached a resting
 	// state, i.e. a FlowTurn is still executing. It is derived from the last
-	// flow_turn.* event rather than session.status: flow.jsonl leaves the
-	// last flow_session.updated at "running" and never rewrites it to
+	// session.turn.* event rather than session.status: flow.jsonl leaves the
+	// last session.updated at "running" and never rewrites it to
 	// waiting_input, so session.status alone would mark every session active.
 	Active bool
 }
@@ -120,7 +120,7 @@ func readSession(fs storage.FileStore, id, dir string) (Session, bool) {
 	if sessionUpdatedAt.After(session.UpdatedAt) {
 		session.UpdatedAt = sessionUpdatedAt
 	}
-	// A turn that only ever emitted flow_turn.started (or is parked on a tool /
+	// A turn that only ever emitted session.turn.started (or is parked on a tool /
 	// approval gate) is still executing; completed / waiting_input are at rest.
 	switch lastTurnEvent {
 	case types.EventFlowTurnStarted, types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
@@ -131,10 +131,10 @@ func readSession(fs storage.FileStore, id, dir string) (Session, bool) {
 	return session, true
 }
 
-// sumTeamTokens totals the token usage recorded on agent_turn.completed events.
-// The usage lives at payload.call_result.Usage (Go field name, PascalCase) with
-// its leaves in snake_case — that mixed casing is the published contract, not a
-// typo, so CallResult is decoded as-is rather than flattened by hand.
+// sumTeamTokens totals the token usage recorded on session.agent_turn.completed events.
+// The usage lives at payload.call_result.usage, and CallResult decodes it
+// directly so the wire contract has one definition rather than a hand-rolled
+// path here.
 func sumTeamTokens(fs storage.FileStore, path string) int64 {
 	events, err := readEvents(fs, path)
 	if err != nil {

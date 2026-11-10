@@ -309,7 +309,7 @@ frontmatter 分组：
 
 - 被派发（通过 `Team` 工具调用起来）的子 Team，产出的记录会以 **flow 作用域的副本**写入 `evidence.jsonl`。这样调用方的 `flow_records` 才能按名读到它——否则子 Team 的结论只能留在它自己那一层。
 - 时间窗：被工具结果唤醒的回合只读**派发那一刻之后**产生的记录，上一轮问题的结论不会被当成本轮事实。窗口起点是派发，不是"收到结果"。
-- 想确认某条记录到底被谁消费，读 `shared_record.consumed` 事件（见下文运行时事件字段）。
+- 想确认某条记录到底被谁消费，读 `session.record.consumed` 事件（见下文运行时事件字段）。
 
 ## models.json（`.agents/models.json`）
 
@@ -402,7 +402,7 @@ priority: 10
 | 字段 | 含义 |
 |---|---|
 | `seq` | 全局自增序号，判先后用它，不要用行号 |
-| `type` | 事件类型，如 `flow_turn.started`、`agent_turn.completed` |
+| `type` | 事件类型，如 `session.turn.started`、`session.agent_turn.completed` |
 | `flow_session_id` | 所属 Flow 会话，即目录名 `fs_xxx` |
 | `flow_turn_id` / `team_turn_id` | 轮次 ID，跨三层关联用 |
 | `team_id` | **flow 局部名**（如 `default` / `diagnose`），不是 team 定义 id（`xxx_team`） |
@@ -416,36 +416,36 @@ priority: 10
 
 | 位置 | 字段 | 含义 |
 |---|---|---|
-| `flow_turn.started` | `payload.turn.input` | **本轮用户输入原文** |
+| `session.turn.started` | `payload.turn.input` | **本轮用户输入原文** |
 | `flow_turn.*` | `payload.turn.status` | `running` / `waiting_input` / `failed` / `cancelled` |
-| `flow_turn.*` | `payload.session.status` | 会话级状态，正常结束为 `waiting_input` |
+| `flow_turn.*` | `payload.session.status` | 会话级状态，正常结束为 `idle` |
 | `flow_turn` 终态 | `payload.reply` | 这一轮给用户的答复（`intermediate=true` 时为空） |
 | `flow_turn` 终态 | `payload.team` | **写这条答复的 Team**（`origin` 只说明这轮怎么被唤醒，不是归属） |
 | `flow_turn` 终态 | `payload.contributors[]` | 这轮里每个 Team 说了什么、谁请求的——答复是复述时用它还原来源 |
 | `flow_turn` 终态 | `payload.deliveries[]` | 必须作为独立消息送达用户的结果：`message_id` / `team_id` / `text` |
 | `flow_turn` 终态 | `payload.intermediate` | `true` 表示这是内部进度而不是答案（`reply` 会被清空） |
-| `flow_turn.completed` | `payload.error` + `turn.status=cancelled` | 进程中断留下的悬空回合，在**下一个回合开始时**被补写为这个终态（`intermediate=true`），不属于本次运行的失败 |
-| `team_turn.completed` | `payload.team_result.Turn.next.action` | 路由：`proceed` / `activate` / `return` / `coordinate` / `fail` |
-| `team_turn.completed` | `payload.team_result.Turn.status` | team turn 状态 |
-| `team_turn.completed` | `payload.team_result.Reply` | 该 team 的最终文本 |
-| `team_turn.completed` | `payload.team_result.Records[]` | 该 team 发布的 record |
-| `team_turn.completed` | `payload.team_result.CallResults[]` | 各 call 的结果 |
-| `agent_turn.completed` | `payload.call_result.Status` | call 状态（非 `completed` 即要看 `Error`） |
-| `agent_turn.completed` | `payload.call_result.Requests[]` | **消耗事实源**，每个元素 = 一轮模型调用 |
-| `agent_turn.completed` | `payload.call_result.Requests[].usage` | `prompt_tokens` / `completion_tokens` |
-| `agent.model_response` | `payload.text` | **模型本轮回复原文**（不是 `content`） |
-| `agent.model_response` | `payload.round` / `tool_calls` / `finish_reason` | 第几轮 / 工具调用 / 停止原因 |
-| `tool_call.started` / `.completed` / `.failed` | `payload.tool_name` / `arguments` / `round`；`completed` 另有 `content`（结果）、`matches` 等 | 工具调用详情 |
-| `agent.feedback` | `payload.content`（+ 结构化重试时的 `payload.raw_text`） | 引擎追加的内部提示（如结构化重试）；`raw_text` 为被丢弃的模型原文 |
-| `shared_record.published` | `payload.record` | 发布的 record 全文 |
-| `shared_record.published` | `payload.record.producer` | 产出者：`team_id` / `call_id` / `call_turn_id` / `team_turn_id`（**顶层 `team_id` 为空，归属看这里**） |
-| `shared_record.published` | `payload.record.scope` | `team`（默认，产出者自用）/ `flow`（整个 flow 可见） |
-| `shared_record.consumed` | `payload.record` + `payload.consumer_team` | **某条 record 被交给了谁**（Flow 侧的移交事实，比从文本推断可靠） |
+| `session.turn.completed` | `payload.error` + `turn.status=cancelled` | 进程中断留下的悬空回合，在**下一个回合开始时**被补写为这个终态（`intermediate=true`），不属于本次运行的失败 |
+| `session.team_turn.completed` | `payload.team_result.turn.next.action` | 路由：`proceed` / `activate` / `return` / `coordinate` / `fail` |
+| `session.team_turn.completed` | `payload.team_result.turn.status` | team turn 状态 |
+| `session.team_turn.completed` | `payload.team_result.reply` | 该 team 的最终文本 |
+| `session.team_turn.completed` | `payload.team_result.records[]` | 该 team 发布的 record |
+| `session.team_turn.completed` | `payload.team_result.call_results[]` | 各 call 的结果 |
+| `session.agent_turn.completed` | `payload.call_result.status` | call 状态（非 `completed` 即要看 `error`） |
+| `session.agent_turn.completed` | `payload.call_result.requests[]` | **消耗事实源**，每个元素 = 一轮模型调用 |
+| `session.agent_turn.completed` | `payload.call_result.requests[].usage` | `prompt_tokens` / `completion_tokens` |
+| `session.agent.model_response` | `payload.text` | **模型本轮回复原文**（不是 `content`） |
+| `session.agent.model_response` | `payload.round` / `tool_calls` / `finish_reason` | 第几轮 / 工具调用 / 停止原因 |
+| `session.tool_call.started` / `.completed` / `.failed` | `payload.tool_name` / `arguments` / `round`；`completed` 另有 `content`（结果）、`matches` 等 | 工具调用详情 |
+| `session.agent.feedback` | `payload.content`（+ 结构化重试时的 `payload.raw_text`） | 引擎追加的内部提示（如结构化重试）；`raw_text` 为被丢弃的模型原文 |
+| `session.record.published` | `payload.record` | 发布的 record 全文 |
+| `session.record.published` | `payload.record.producer` | 产出者：`team_id` / `call_id` / `call_turn_id` / `team_turn_id`（**顶层 `team_id` 为空，归属看这里**） |
+| `session.record.published` | `payload.record.scope` | `team`（默认，产出者自用）/ `flow`（整个 flow 可见） |
+| `session.record.consumed` | `payload.record` + `payload.consumer_team` | **某条 record 被交给了谁**（Flow 侧的移交事实，比从文本推断可靠） |
 | `evidence.jsonl` 每行 | `summary` / `basis[]` | 成品文本 / 依据的文件与行号 |
 
-> **大小写**：`payload.team_result` 下，叶子类型用小写（`Turn.next`、
-> `Turn.record_ids`、`Turn.team_id`），容器结构体用 Go 字段名大写（`Next`、
-> `Records`、`CallResults`、`Requests`、`Usage`）。这是已发布契约，不是笔误。
+> **字段命名**：三层 jsonl 的字段名统一 snake_case，包括 `team_result` / `call_result`
+> 这一层（`turn` / `reply` / `records` / `call_results` / `requests` / `usage`）。
+> Go 代码里的标识符是大驼峰，但那只影响代码，不影响落盘格式。已发布契约，改动是破坏性变更。
 >
-> **轮次**：一次模型/工具循环 = `Requests[]` 里一个元素；`agent.model_response`
+> **轮次**：一次模型/工具循环 = `Requests[]` 里一个元素；`session.agent.model_response`
 > 的 `round` 与之对应。

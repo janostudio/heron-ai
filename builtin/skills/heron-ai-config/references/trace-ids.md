@@ -20,28 +20,28 @@ flow_session_id           → sessions/<fs_id>/ 目录（一次对话）
 
 | 文件 | 事件 | flow_session_id | flow_turn_id | team_id | team_turn_id | call_id | call_turn_id |
 |---|---|---|---|---|---|---|---|
-| flow | `flow_turn.started` | ✓ | ✓ | | | | |
-| flow | `team_turn.started` | ✓ | ✓ | ✓ | ✓ | | |
-| flow | `team_turn.completed` | ✓ | ✓ | ✓ | ✓ | | |
-| flow | `shared_record.published` | ✓ | ✓ | **✗** | ✓ | | |
-| flow | `shared_record.consumed` | ✓ | ✓ | ✓ | ✓ | | |
+| flow | `session.turn.started` | ✓ | ✓ | | | | |
+| flow | `session.team_turn.started` | ✓ | ✓ | ✓ | ✓ | | |
+| flow | `session.team_turn.completed` | ✓ | ✓ | ✓ | ✓ | | |
+| flow | `session.record.published` | ✓ | ✓ | **✗** | ✓ | | |
+| flow | `session.record.consumed` | ✓ | ✓ | ✓ | ✓ | | |
 | team | `agent_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | team | `command_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| agent | `agent.model_response` | ✓ | **✗** | ✓ | ✓ | ✓ | ✓ |
+| agent | `session.agent.model_response` | ✓ | **✗** | ✓ | ✓ | ✓ | ✓ |
 
 三个反直觉点：
 
-1. **`shared_record.published` 顶层没有 `team_id`**（取到 `null`）。
+1. **`session.record.published` 顶层没有 `team_id`**（取到 `null`）。
    要串 record 的归属，读 `payload.record.producer`——那里**六个 ID 全有**，
    是链路最完整的入口。
-2. **`agent.model_response` 没有 `flow_turn_id`**。想从某一轮模型输出回溯到
+2. **`session.agent.model_response` 没有 `flow_turn_id`**。想从某一轮模型输出回溯到
    "是用户的哪次提问"，必须先拿 `team_turn_id` 去 `flow.jsonl` 查 `flow_turn_id`，
    不能一步到位。
 3. **只有 agent call 会写 `agent.jsonl`**。command call（`command_turn.*`）只出现在
-   `team.jsonl`，没有对应的 `agent.model_response`；它的输出在
-   `command_turn.completed.payload` 里。
+   `team.jsonl`，没有对应的 `session.agent.model_response`；它的输出在
+   `session.command_turn.completed.payload` 里。
 
-补一条正面对照：**`shared_record.consumed` 顶层有 `team_id`**，值是消费方（拿到这条
+补一条正面对照：**`session.record.consumed` 顶层有 `team_id`**，值是消费方（拿到这条
 record 的 Team 绑定名）。查"B 的产出交给了谁"用它，不必反推 `producer`：
 `published` 说明谁写的，`consumed` 说明谁用了，两者是独立事实。
 
@@ -51,31 +51,31 @@ record 的 Team 绑定名）。查"B 的产出交给了谁"用它，不必反推
 S=.agents/data/sessions/<fs_id>
 
 # ① ft → tt：一次会话里，每个用户轮次激活了哪些 team
-jq -r 'select(.type=="team_turn.started") | "\(.flow_turn_id) → \(.team_turn_id) [\(.team_id)]"' $S/flow.jsonl
+jq -r 'select(.type=="session.team_turn.started") | "\(.flow_turn_id) → \(.team_turn_id) [\(.team_id)]"' $S/flow.jsonl
 
 # ② tt → call：某个 team turn 内跑了哪些 call（含 agent 与 command）
-TT=$(jq -r 'select(.type=="team_turn.started")|.team_turn_id' $S/flow.jsonl | head -1)
+TT=$(jq -r 'select(.type=="session.team_turn.started")|.team_turn_id' $S/flow.jsonl | head -1)
 jq -r --arg tt "$TT" 'select(.team_turn_id==$tt and (.type|endswith(".started")))
        | "\(.call_type)\t\(.call_id)\t→ \(.call_turn_id)"' $S/team.jsonl
 
 # ③ call → 轮次：某个 agent call 的每一轮模型输出
 CT="tt_a30e5880acfb5afe:search"        # 换成 ② 查到的 call_turn_id
-jq -r --arg ct "$CT" 'select(.call_turn_id==$ct and .type=="agent.model_response")
+jq -r --arg ct "$CT" 'select(.call_turn_id==$ct and .type=="session.agent.model_response")
        | "round=\(.payload.round) finish=\(.payload.finish_reason) len=\((.payload.text//"")|length)"' $S/agent.jsonl
 
 # ④ record → 产地（team 在 producer 里，不在事件顶层）
-jq -r 'select(.type=="shared_record.published")
+jq -r 'select(.type=="session.record.published")
        | "\(.payload.record.name) ← \(.payload.record.producer.team_id)/\(.payload.record.producer.call_id)"' \
   $S/flow.jsonl
 
-# ⑤ 反查：已知 agent.model_response，回溯到用户提问
+# ⑤ 反查：已知 session.agent.model_response，回溯到用户提问
 #    因 model_response 无 flow_turn_id，需经 team_turn_id 中转
-TT=$(jq -r 'select(.type=="agent.model_response")|.team_turn_id' $S/agent.jsonl | head -1)
-FT=$(jq -r --arg tt "$TT" 'select(.type=="team_turn.started" and .team_turn_id==$tt)|.flow_turn_id' $S/flow.jsonl)
-jq -r --arg ft "$FT" 'select(.type=="flow_turn.started" and .payload.turn.id==$ft)|.payload.turn.input' $S/flow.jsonl
+TT=$(jq -r 'select(.type=="session.agent.model_response")|.team_turn_id' $S/agent.jsonl | head -1)
+FT=$(jq -r --arg tt "$TT" 'select(.type=="session.team_turn.started" and .team_turn_id==$tt)|.flow_turn_id' $S/flow.jsonl)
+jq -r --arg ft "$FT" 'select(.type=="session.turn.started" and .payload.turn.id==$ft)|.payload.turn.input' $S/flow.jsonl
 
 # record 的完整溯源（六 ID 齐全）
-jq -c 'select(.type=="shared_record.published") | .payload.record.producer' $S/flow.jsonl
+jq -c 'select(.type=="session.record.published") | .payload.record.producer' $S/flow.jsonl
 ```
 
 ### 9.4 一条完整链路长什么样
@@ -83,18 +83,18 @@ jq -c 'select(.type=="shared_record.published") | .payload.record.producer' $S/f
 以 `fs_xxx` 第 2 轮为例，从提问串到答复：
 
 ```text
-flow_turn.started        ft_e6212632…  input='提问：这个功能应该怎么配置'
-  team_turn.started      tt_4757a023…  team=default
-    agent_turn.started   call=planner      call_turn=tt_4757a023…:planner
-      agent.model_response round=0  finish=stop  text=''      ← 结构化校验失败
-      agent.feedback       round=0  重试提示
-      agent.model_response round=1  finish=tool_calls  → Glob ×2
-      agent.model_response round=2  finish=tool_calls  → Read
-      agent.model_response round=3  finish=stop  text='{"reply":…}'
-    agent_turn.completed Requests=4  Usage.total_tokens=29218
-  team_turn.completed    next.action=proceed
-  shared_record.published PlannerReply
-flow_turn.waiting_input
+session.turn.started        ft_e6212632…  input='提问：这个功能应该怎么配置'
+  session.team_turn.started      tt_4757a023…  team=default
+    session.agent_turn.started   call=planner      call_turn=tt_4757a023…:planner
+      session.agent.model_response round=0  finish=stop  text=''      ← 结构化校验失败
+      session.agent.feedback       round=0  重试提示
+      session.agent.model_response round=1  finish=tool_calls  → Glob ×2
+      session.agent.model_response round=2  finish=tool_calls  → Read
+      session.agent.model_response round=3  finish=stop  text='{"reply":…}'
+    session.agent_turn.completed Requests=4  Usage.total_tokens=29218
+  session.team_turn.completed    next.action=proceed
+  session.record.published PlannerReply
+session.turn.idle
 ```
 
 **注意 `round` 在 `agent_turn` 内从 0 重数**，跨 `agent_turn` 不连续——用

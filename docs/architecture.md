@@ -89,8 +89,8 @@ Agent Calls produce signals that control Flow execution:
 | Signal | Effect |
 |--------|--------|
 | `continue` | Proceed with the next orchestration step |
-| `wait_input` | End the turn; the session stays `waiting_input` and can be continued |
-| `goal_achieved` | End the turn; the session stays `waiting_input` and can be continued |
+| `wait_input` | End the turn; the session stays `idle` and can be continued |
+| `goal_achieved` | End the turn; the session stays `idle` and can be continued |
 | `goal_failed` | End the turn as failed; the session stays continuable |
 | `goal_impossible` | End the turn as failed; the session stays continuable |
 

@@ -538,7 +538,7 @@ func executeFlowTurn(
 		return types.FlowTurnResult{}, err
 	}
 	switch session.Status {
-	case types.SessionWaitingInput:
+	case types.SessionIdle:
 		return runtime.Resume(ctx, sessionID, input)
 	case types.SessionWaitingApproval:
 		// Return the session so the error response can still carry

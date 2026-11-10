@@ -12,7 +12,7 @@ agent，只读 `team.jsonl` 一个文件即可（`team_id` 与 `AgentID` 都在�
 
 ```text
 Request（一轮模型调用，usage.prompt_tokens / completion_tokens）
-  → call_result.Usage                      ← 单个 call 内所有轮次的加总
+  → call_result.usage                      ← 单个 call 内所有轮次的加总
     → team_turn.Usage                      ← 该 team 内所有 call 的加总
       → flow 级 Tokens（终端显示值）        ← 所有 team 的加总
 ```
@@ -23,27 +23,27 @@ Request（一轮模型调用，usage.prompt_tokens / completion_tokens）
 S=.agents/data/sessions/<fs_id>
 
 # 1) 总计（应等于终端 Tokens: 行）
-jq -s '[.[] | select(.type=="agent_turn.completed")
-        | .payload.call_result.Usage.total_tokens] | add' $S/team.jsonl
+jq -s '[.[] | select(.type=="session.agent_turn.completed")
+        | .payload.call_result.usage.total_tokens] | add' $S/team.jsonl
 
 # 2) 按 team 汇总
-jq -r -s '[.[] | select(.type=="agent_turn.completed")]
+jq -r -s '[.[] | select(.type=="session.agent_turn.completed")]
           | group_by(.team_id)
           | map({team: .[0].team_id,
-                 prompt: ([.[].payload.call_result.Usage.prompt_tokens] | add),
-                 completion: ([.[].payload.call_result.Usage.completion_tokens] | add),
-                 total: ([.[].payload.call_result.Usage.total_tokens] | add)})
+                 prompt: ([.[].payload.call_result.usage.prompt_tokens] | add),
+                 completion: ([.[].payload.call_result.usage.completion_tokens] | add),
+                 total: ([.[].payload.call_result.usage.total_tokens] | add)})
           | .[] | "\(.team)\tprompt=\(.prompt)\tcompletion=\(.completion)\ttotal=\(.total)"' \
   $S/team.jsonl
 
 # 3) 按 agent 汇总
-jq -r -s '[.[] | select(.type=="agent_turn.completed")]
-          | group_by(.payload.call_result.AgentID)
-          | map({agent: .[0].payload.call_result.AgentID,
+jq -r -s '[.[] | select(.type=="session.agent_turn.completed")]
+          | group_by(.payload.call_result.agent_id)
+          | map({agent: .[0].payload.call_result.agent_id,
                  team: ([.[].team_id] | unique | join(",")),
-                 prompt: ([.[].payload.call_result.Usage.prompt_tokens] | add),
-                 completion: ([.[].payload.call_result.Usage.completion_tokens] | add),
-                 total: ([.[].payload.call_result.Usage.total_tokens] | add)})
+                 prompt: ([.[].payload.call_result.usage.prompt_tokens] | add),
+                 completion: ([.[].payload.call_result.usage.completion_tokens] | add),
+                 total: ([.[].payload.call_result.usage.total_tokens] | add)})
           | .[] | "\(.agent)\tteam=\(.team)\tprompt=\(.prompt)\tcompletion=\(.completion)\ttotal=\(.total)"' \
   $S/team.jsonl
 ```
@@ -68,16 +68,16 @@ agent=researcher       team=research   prompt=566563  completion=17606  total=58
 2. **`prompt` 会因上下文重复发送而膨胀**。同一 agent 多轮时，每轮都把前序工具输出
    重新发给模型，`prompt_tokens` 逐轮累加。所以 `prompt ≫ completion` 是常态，
    不能只看 `total` 判断"某个 agent 很贵"——要看 `prompt / completion` 比值。
-3. **字段大小写**：`call_result.Usage` 内是小写 `prompt_tokens` / `completion_tokens` /
-   `total_tokens`（叶子结构）；而同级兄弟 `AgentID` / `Requests` / `Records` 是大写
-   （容器用 Go 字段名）。写成 `Usage.PromptTokens` 会得到 `null`。
+3. **字段命名**：`call_result` 这一层也是 snake_case（`usage` / `agent_id` / `requests` /
+   `records`），叶子是 `prompt_tokens` / `completion_tokens` / `total_tokens`。
+   写成 `Usage.PromptTokens` 会得到 `null`。
 
 ### 单 agent 的逐轮消耗（定位消息膨胀）
 
 ```bash
 # 看某 agent 每一轮各自的 usage，找出哪一轮开始膨胀
-jq -r 'select(.type=="agent_turn.completed" and .payload.call_result.AgentID=="researcher")
-       | .payload.call_result.Requests[]
+jq -r 'select(.type=="session.agent_turn.completed" and .payload.call_result.agent_id=="researcher")
+       | .payload.call_result.requests[]
        | "prompt=\(.usage.prompt_tokens) completion=\(.usage.completion_tokens)"' \
   $S/team.jsonl
 ```
@@ -90,12 +90,12 @@ const fs = require("fs");
 const team = process.argv[1];
 const rows = fs.readFileSync(team, "utf8").split("\n").filter(Boolean)
   .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-  .filter((e) => e && e.type === "agent_turn.completed");
+  .filter((e) => e && e.type === "session.agent_turn.completed");
 const byTeam = {}, byAgent = {};
 let total = 0;
 for (const e of rows) {
-  const u = (e.payload.call_result || {}).Usage || {};
-  const agent = (e.payload.call_result || {}).AgentID || "?";
+  const u = (e.payload.call_result || {}).usage || {};
+  const agent = (e.payload.call_result || {}).agent_id || "?";
   total += u.total_tokens || 0;
   for (const [bag, key] of [[byTeam, e.team_id], [byAgent, agent]]) {
     bag[key] = bag[key] || { prompt: 0, completion: 0, total: 0 };

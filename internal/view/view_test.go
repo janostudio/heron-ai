@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -176,7 +177,7 @@ func TestHandler_HandleStreamReplaysFromLastEventID(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, `"type":"one"`) || !strings.Contains(body, `"type":"two"`) || !strings.Contains(body, `"type":"flow_turn.completed"`) {
+	if strings.Contains(body, `"type":"one"`) || !strings.Contains(body, `"type":"two"`) || !strings.Contains(body, `"type":"session.turn.completed"`) {
 		t.Fatalf("unexpected SSE replay: %s", body)
 	}
 	if !strings.Contains(body, "id: 2") || !strings.Contains(body, "id: 3") {
@@ -287,6 +288,57 @@ func TestHandler_HandleTaskStreamSendsInitialAndFinalState(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"task-stream"`)
 }
 
+// An idle task stream can sit in one state for minutes — a slow command, a tool
+// waiting on a human. Without a heartbeat an intermediary closes the connection
+// before the terminal state arrives, and the caller that subscribed for it never
+// sees the answer.
+func TestHandler_HandleTaskStreamEmitsHeartbeatWhileIdle(t *testing.T) {
+	tasks := &idleTaskSubscriber{testTaskSubscriber{
+		task: types.ToolTask{ID: "task-idle", Status: types.ToolTaskRunning},
+	}}
+	handler := NewRuntimeHandlerWithSessionsAndTasks(nil, nil, tasks, tasks)
+	handler.streamHeartbeat = 20 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/tasks/stream?task_id=task-idle", nil).WithContext(ctx)
+	recorder := newSyncRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		handler.HandleTaskStream(recorder, req)
+		close(done)
+	}()
+
+	deadline := time.After(3 * time.Second)
+	for !strings.Contains(recorder.String(), ": ping") {
+		select {
+		case <-deadline:
+			t.Fatal("no heartbeat frame on an idle task stream")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the task stream did not stop after the client went away")
+	}
+}
+
+// idleTaskSubscriber never delivers a task: the stream stays open and silent,
+// which is exactly the case a heartbeat exists for.
+type idleTaskSubscriber struct{ testTaskSubscriber }
+
+func (s *idleTaskSubscriber) Subscribe(ctx context.Context, _ string) (<-chan types.ToolTask, error) {
+	ch := make(chan types.ToolTask)
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch, nil
+}
+
 type testTaskStore struct {
 	task types.ToolTask
 }
@@ -349,4 +401,75 @@ func (r *recoveryHandlerRuntime) RecoveryStatus(context.Context, string) (types.
 
 func (r *recoveryHandlerRuntime) Recover(context.Context, string, types.RecoveryRequest) (types.FlowTurnResult, error) {
 	return types.FlowTurnResult{Session: types.FlowSession{ID: "fs-1"}}, nil
+}
+
+// asyncHandlerRuntime is a FlowRuntime that also accepts input asynchronously,
+// the way the real runtime does.
+type asyncHandlerRuntime struct {
+	handlerFlowRuntime
+	submitted []string
+}
+
+func (r *asyncHandlerRuntime) SubmitInput(
+	_ context.Context, sessionID, input string, _ []types.ContextBlock,
+) (types.FlowTurnResult, error) {
+	r.submitted = append(r.submitted, input)
+	return types.FlowTurnResult{
+		Session: types.FlowSession{ID: sessionID, Status: types.SessionIdle},
+		Queued:  true,
+	}, nil
+}
+
+// The acceptance has to come back before the turn runs: that is the whole point
+// of the endpoint. A 200 with a result body would mean the caller waited.
+func TestHandler_HandleSubmitInputAcceptsWith202(t *testing.T) {
+	runtime := &asyncHandlerRuntime{}
+	handler := NewRuntimeHandler(runtime)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/sessions/{id}/events", handler.HandleSubmitInput)
+
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/sessions/fs-1/events", strings.NewReader(`{"input":"hi"}`),
+	)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusAccepted, recorder.Code)
+	require.Equal(t, []string{"hi"}, runtime.submitted)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Equal(t, "accepted", body["status"])
+	require.Equal(t, "fs-1", body["session_id"])
+	require.Equal(t, true, body["queued"])
+}
+
+func TestHandler_HandleSubmitInputRejectsEmptyInput(t *testing.T) {
+	runtime := &asyncHandlerRuntime{}
+	handler := NewRuntimeHandler(runtime)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/sessions/{id}/events", handler.HandleSubmitInput)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/sessions/fs-1/events", strings.NewReader(`{}`))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Empty(t, runtime.submitted)
+}
+
+// A runtime without the capability must say so rather than silently falling
+// back to the synchronous path: the caller is waiting for an acceptance.
+func TestHandler_HandleSubmitInputNotImplementedWithoutCapability(t *testing.T) {
+	handler := NewRuntimeHandler(&handlerFlowRuntime{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/sessions/{id}/events", handler.HandleSubmitInput)
+
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/sessions/fs-1/events", strings.NewReader(`{"input":"hi"}`),
+	)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusNotImplemented, recorder.Code)
 }

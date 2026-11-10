@@ -8,12 +8,12 @@ import (
 )
 
 // teamSessionPayloadKey is the payload key that carries a TeamSession in a
-// team_session.created / team_session.updated event, matching the
+// session.team_session.created / session.team_session.updated event, matching the
 // payload:{"record": record} convention used elsewhere in this package.
 const teamSessionPayloadKey = "team_session"
 
 // agentSessionPayloadKey is the payload key that carries an AgentSession in an
-// agent_session.created / agent_session.updated event.
+// session.agent_session.created / session.agent_session.updated event.
 const agentSessionPayloadKey = "agent_session"
 
 // loadTeamSessions folds the session's team_session events into the latest

@@ -163,11 +163,23 @@ func TestQueue4QueuedInputsRunInOrder(t *testing.T) {
 		t.Fatalf("first turn: status=%d err=%v", outcome.Status, outcome.Err)
 	}
 
+	// Wait for the backlog to drain, not just to start: `turn.started` is written
+	// before the model request goes out, so waiting on it would read the mock's
+	// request log while the last queued turn is still in flight. A turn that
+	// answers normally ends in `turn.idle`, not `turn.completed`, so both count.
 	events := waitForEvent(t, e.Root, sessionID, 60*time.Second, func(events []event) bool {
-		return countEvents(events, "flow_turn.started") >= 4
+		ended := 0
+		for _, ev := range events {
+			switch ev.Type {
+			case "session.turn.completed", "session.turn.idle",
+				"session.turn.waiting_tool", "session.turn.waiting_approval":
+				ended++
+			}
+		}
+		return ended >= 4
 	})
-	if started := countEvents(events, "flow_turn.started"); started < 4 {
-		t.Fatalf("flow_turn.started = %d, want 4 (the opening turn plus three queued ones)", started)
+	if started := countEvents(events, "session.turn.started"); started < 4 {
+		t.Fatalf("session.turn.started = %d, want 4 (the opening turn plus three queued ones)", started)
 	}
 
 	// The order is read off the model requests: each queued input produced one.

@@ -78,7 +78,7 @@ func TestLoop3StreamWithEmptyFramesCompletes(t *testing.T) {
 
 	tokens := 0.0
 	for _, ev := range events {
-		if ev.Type != "agent.model_response" {
+		if ev.Type != "session.agent.model_response" {
 			continue
 		}
 		payload, _ := ev.Raw["payload"].(map[string]any)

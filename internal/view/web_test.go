@@ -37,6 +37,13 @@ func newWebFixture(t *testing.T) (*Handler, string) {
 		Origin:        "user",
 		Input:         "看看构建为什么失败",
 	}
+	// Every real session starts here; the fixture needs it too now that the
+	// record reports the session status from this event.
+	appendEvent(types.EventFlowSessionCreated, "", map[string]any{
+		"session": types.FlowSession{
+			ID: sessionID, FlowID: "demo", Status: types.SessionIdle,
+		},
+	})
 	appendEvent(types.EventFlowTurnStarted, "ft_1", map[string]any{"input": turn.Input, "turn": turn})
 	appendEvent(types.EventAgentModelResponse, "ft_1", map[string]any{
 		"model": "gpt-4o", "text": "我调用一次工具。", "round": 0,
@@ -88,7 +95,10 @@ func TestRecordReturnsTimelineTreeAndFacts(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	var payload struct {
-		Session  string      `json:"session"`
+		Session struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"session"`
 		Events   []eventView `json:"events"`
 		Nodes    []nodeView  `json:"nodes"`
 		Facts    factsView   `json:"facts"`
@@ -97,9 +107,10 @@ func TestRecordReturnsTimelineTreeAndFacts(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
 
-	require.Equal(t, sessionID, payload.Session)
-	require.Len(t, payload.Events, 5)
-	require.Equal(t, int64(5), payload.Latest)
+	require.Equal(t, sessionID, payload.Session.ID)
+	require.NotEmpty(t, payload.Session.Status, "the record must carry the session status so a settled conversation needs no stream")
+	require.Len(t, payload.Events, 6)
+	require.Equal(t, int64(6), payload.Latest)
 	require.Zero(t, payload.Truncate)
 
 	// Facts come from eval observations, not from counting in the handler.
@@ -131,7 +142,7 @@ func TestRecordPaginatesByAfterSeq(t *testing.T) {
 		Events []eventView `json:"events"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
-	require.Len(t, payload.Events, 2, "seq 4 and 5 remain after after_seq=3")
+	require.Len(t, payload.Events, 3, "seq 4 to 6 remain after after_seq=3")
 	require.Equal(t, int64(4), payload.Events[0].Seq)
 }
 

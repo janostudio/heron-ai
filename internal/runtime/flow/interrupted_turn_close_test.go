@@ -82,7 +82,7 @@ func TestCloseInterruptedTurnsLeavesResumableTurnAlone(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	writer := storage.NewJSONLSessionWriter(fileStore)
 	rt := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-resumable", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-resumable", types.SessionIdle)
 
 	require.NoError(t, rt.appendSessionEvent(context.Background(), session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{Type: types.EventFlowTurnStarted, FlowSessionID: session.ID, FlowTurnID: "ft-waiting"},

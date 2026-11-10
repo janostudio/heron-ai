@@ -108,7 +108,7 @@ func TestFlowTurnUsesSingleSnapshot(t *testing.T) {
 		Input:  "start the turn that swaps",
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, first.Session.Status)
+	require.Equal(t, types.SessionIdle, first.Session.Status)
 	assert.Empty(t, first.Error)
 
 	// The whole turn ran on generation 1, including the activation resolved
@@ -119,7 +119,7 @@ func TestFlowTurnUsesSingleSnapshot(t *testing.T) {
 	// The next turn resolves against the published tree.
 	second, err := runtime.HandleInput(context.Background(), first.Session.ID, "next turn")
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, second.Session.Status)
+	require.Equal(t, types.SessionIdle, second.Session.Status)
 	assert.Equal(t, []string{"gen1-team", "gen1-second", "gen1-team", "gen2-team"},
 		teamRuntime.seen,
 		"the change must be visible on the next turn")
@@ -148,7 +148,7 @@ func TestFlowTurnSnapshotSurvivesSwapBeforeEntry(t *testing.T) {
 		Input:  "start after the swap",
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+	require.Equal(t, types.SessionIdle, result.Session.Status)
 	// Without the mid-turn swap the activation chain is entry -> second ->
 	// coordinator, all drawn from generation 2.
 	assert.Equal(t, []string{"gen2-team", "gen2-second", "gen2-team"}, teamRuntime.seen,

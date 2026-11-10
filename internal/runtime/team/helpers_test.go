@@ -700,7 +700,7 @@ func TestSessionStatusForCall(t *testing.T) {
 		status   types.TurnStatus
 		expected types.SessionStatus
 	}{
-		{"waiting input", types.TurnWaitingInput, types.SessionWaitingInput},
+		{"waiting input", types.TurnWaitingInput, types.SessionIdle},
 		{"waiting tool", types.TurnWaitingTool, types.SessionWaitingTool},
 		{"waiting approval", types.TurnWaitingApproval, types.SessionWaitingApproval},
 		{"completed", types.TurnCompleted, types.SessionCompleted},

@@ -141,7 +141,7 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	// record window starts when the call was dispatched — not when the callee
 	// finished. Anchoring at "now" excluded the very record that triggered the
 	// resume (published a moment earlier), which left the caller's declared
-	// flow_records empty and produced no shared_record.consumed edge for the
+	// flow_records empty and produced no session.record.consumed edge for the
 	// display layer to draw (A→B fixture, 2026-10-28).
 	scopeSince := time.Now().UTC()
 	if r.tasks != nil {
@@ -224,7 +224,7 @@ func (r *Runtime) waitForIdle(ctx context.Context, sessionID string, limit time.
 			return err
 		}
 		switch session.Status {
-		case types.SessionWaitingInput, types.SessionCreated:
+		case types.SessionIdle, types.SessionCreated:
 			return nil
 		}
 		if time.Now().After(deadline) {

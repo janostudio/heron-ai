@@ -210,6 +210,10 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 	// derived counts. Reading history must not touch live turn state, so it
 	// serves from the file store rather than through the runtime.
 	mux.HandleFunc("GET /api/sessions/{id}/record", handler.HandleRecord)
+	// Asynchronous input: 202 now, the turn's events on the session stream.
+	// The page holds that stream already; the synchronous entry points remain
+	// for callers that do not.
+	mux.HandleFunc("POST /api/sessions/{id}/events", handler.HandleSubmitInput)
 	// Attachments live on disk; the page cannot read a workspace path, so the
 	// bytes have to come back over HTTP for an image to be visible at all.
 	mux.HandleFunc("/api/media", handler.HandleMedia)
@@ -330,7 +334,7 @@ func writePromptResult(w io.Writer, flowID, modelName string, result types.FlowT
 }
 
 // extractSharedRecords collects every SharedRecord published to a session's
-// event timeline. Each shared_record.published event carries its record under
+// event timeline. Each session.record.published event carries its record under
 // payload["record"]; after JSON round-trip the record value is a map[string]any
 // that must be re-marshaled back into types.SharedRecord.
 func extractSharedRecords(replay *storage.SessionReplay) []types.SharedRecord {
@@ -545,23 +549,39 @@ func learnOneSessionWithFiles(
 	return saved > 0, nil
 }
 
-// eventLayer maps a session event type to its source layer (flow/team/agent).
-// flow_* and shared_record.published are flow; team_* is team; agent-layer
-// events (agent_*, agent.*, tool_call.*, context.compacted) are agent.
-// Team-orchestrated events without a clear prefix (approval, command_turn,
-// webhook_turn) default to team.
+// eventLayer names the execution layer an event belongs to, which is what the
+// layered summarizer reports on. The mapping is explicit rather than
+// prefix-based: every event type now lives in the `session.` namespace, so a
+// prefix no longer says which layer produced it.
 func eventLayer(eventType string) string {
-	switch {
-	case eventType == types.EventSharedRecordPublished:
+	switch eventType {
+	case types.EventFlowSessionCreated, types.EventFlowSessionUpdated,
+		types.EventFlowTurnStarted, types.EventFlowTurnCompleted,
+		types.EventFlowTurnWaitingInput, types.EventFlowTurnWaitingTool,
+		types.EventFlowTurnWaitingApproval,
+		types.EventSharedRecordPublished, types.EventSharedRecordConsumed,
+		types.EventRecoveryRequested, types.EventRecoveryCompleted,
+		types.EventMailboxMessageEnqueued, types.EventMailboxMessageClaimed,
+		types.EventMailboxMessageDelivered, types.EventMailboxMessageDead,
+		types.EventMailboxBatchDispatched,
+		types.EventWakeupCreated, types.EventWakeupFired, types.EventWakeupSkipped,
+		types.EventWakeupCancelled, types.EventWakeupExpired:
 		return "flow"
-	case strings.HasPrefix(eventType, "flow_"):
-		return "flow"
-	case strings.HasPrefix(eventType, "team_"):
+	case types.EventTeamSessionCreated, types.EventTeamSessionUpdated,
+		types.EventTeamTurnStarted, types.EventTeamTurnCompleted,
+		types.EventTeamTurnWaitingInput, types.EventTeamTurnWaitingTool,
+		types.EventTeamTurnWaitingApproval,
+		types.EventApprovalRequested, types.EventApprovalResolved,
+		types.EventCommandTurnStarted, types.EventCommandTurnCompleted,
+		types.EventWebhookTurnStarted, types.EventWebhookTurnCompleted:
 		return "team"
-	case strings.HasPrefix(eventType, "agent_"),
-		strings.HasPrefix(eventType, "agent."),
-		strings.HasPrefix(eventType, "tool_call"),
-		strings.HasPrefix(eventType, "context.compacted"):
+	case types.EventAgentSessionCreated, types.EventAgentSessionUpdated,
+		types.EventAgentTurnStarted, types.EventAgentTurnCompleted,
+		types.EventAgentTurnWaitingInput, types.EventAgentTurnWaitingTool,
+		types.EventAgentTurnWaitingApproval,
+		types.EventAgentModelResponse, types.EventAgentFeedback,
+		types.EventToolCallStarted, types.EventToolCallCompleted,
+		types.EventToolCallFailed, types.EventContextCompacted:
 		return "agent"
 	default:
 		return "team"

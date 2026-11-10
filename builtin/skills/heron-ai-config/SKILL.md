@@ -47,14 +47,14 @@ S=.agents/data/sessions/<fs_id>                  # 下文命令沿用这个变�
 
 | 你要看的 | 位置 | 字段 |
 |---|---|---|
-| 用户每一轮的提问 | `flow.jsonl` → `flow_turn.started` | `payload.turn.input` |
-| 模型每轮原始回复 | `agent.jsonl` → `agent.model_response` | **`payload.text`**、`payload.round` |
+| 用户每一轮的提问 | `flow.jsonl` → `session.turn.started` | `payload.turn.input` |
+| 模型每轮原始回复 | `agent.jsonl` → `session.agent.model_response` | **`payload.text`**、`payload.round` |
 | 这一轮对用户答了什么、谁写的 | `flow.jsonl` → `flow_turn` 终态 | `payload.reply`、`payload.team`（`intermediate=true` 时没有答复） |
 | 成品文本与依据 | `evidence.jsonl` 的 SharedRecord | `summary`、`basis[]` |
 
 ```bash
-jq -r 'select(.type=="flow_turn.started") | .payload.turn.input' $S/flow.jsonl
-jq -r 'select(.type=="agent.model_response") | "[round \(.payload.round)] \(.payload.text)"' $S/agent.jsonl
+jq -r 'select(.type=="session.turn.started") | .payload.turn.input' $S/flow.jsonl
+jq -r 'select(.type=="session.agent.model_response") | "[round \(.payload.round)] \(.payload.text)"' $S/agent.jsonl
 ```
 
 **三份 jsonl 按 run 层级分流，不是同级混放**——这是排查时最容易错的一点：
@@ -63,30 +63,30 @@ jq -r 'select(.type=="agent.model_response") | "[round \(.payload.round)] \(.pay
 |---|---|
 | `flow.jsonl` | flow 会话级 + **team turn 级**（`team_turn.*` 在这里） |
 | `team.jsonl` | **call 层**：`agent_turn.*`、`command_turn.*`（**消耗在这里**） |
-| `agent.jsonl` | agent 内部：`agent.model_response`、`tool_call.*`（回复原文在 **`payload.text`**） |
+| `agent.jsonl` | agent 内部：`session.agent.model_response`、`tool_call.*`（回复原文在 **`payload.text`**） |
 
-所以：在 `team.jsonl` 里找不到 `team_turn.completed` 是正常的，不是缺数据。
-同一 `fs_id` 目录**追加式**记录，续聊会继续往里写，所以 `flow_turn.started` 会出现多次，每次对应一轮。
+所以：在 `team.jsonl` 里找不到 `session.team_turn.completed` 是正常的，不是缺数据。
+同一 `fs_id` 目录**追加式**记录，续聊会继续往里写，所以 `session.turn.started` 会出现多次，每次对应一轮。
 
 **快速体检**（轮次 / 路由 / 失败 / 终态 / 消耗）：
 
 ```bash
 S=.agents/data/sessions/<fs_id>
-jq -r 'select(.type=="team_turn.completed") | .payload.team_result.Turn
+jq -r 'select(.type=="session.team_turn.completed") | .payload.team_result.turn
        | "\(.team_id) \(.status) next=\(.next.action)"' $S/flow.jsonl
-jq -r 'select(.type=="agent_turn.completed") | .payload.call_result
-       | "\(.AgentID) 轮次=\(.Requests|length) tokens=\([.Requests[].usage.prompt_tokens]|add)"' $S/team.jsonl
-jq -r 'select(.type|startswith("flow_turn.")) | .type' $S/flow.jsonl
+jq -r 'select(.type=="session.agent_turn.completed") | .payload.call_result
+       | "\(.agent_id) 轮次=\(.requests|length) tokens=\([.requests[].usage.prompt_tokens]|add)"' $S/team.jsonl
+jq -r 'select(.type|startswith("session.turn.")) | .type' $S/flow.jsonl
 ```
 
-> 字段大小写要留意：`payload.team_result.Turn` 里是**小写** `next` / `record_ids`
-> （内层叶子类型），而它的兄弟 `team_result.Next` / `team_result.Records` 是**大写**
-> （容器结构体用 Go 字段名）。写错取到 `null`，不报错。
+> 字段名统一 snake_case，`team_result` / `call_result` 这一层也是（`turn` / `reply` /
+> `records` / `call_results`，再往里是 `next` / `team_id`）。Go 代码里的标识符是大驼峰，
+> 但那只影响代码，不影响落盘格式。写错取到 `null`，不报错。
 
 **排查时的三个高频陷阱**（都验证过真实数据）：
 
 1. **分层**：`team_turn.*` 在 `flow.jsonl`；`command_turn.*` 在 `team.jsonl`。搜不到不等于缺数据。
-2. **字段名**：模型回复原文是 `agent.model_response` 的 **`payload.text`**，不是 `content`。
+2. **字段名**：模型回复原文是 `session.agent.model_response` 的 **`payload.text`**，不是 `content`。
 3. **`round` 是 turn 内局部序号**，每轮从 0 重数；用 `team_turn_id` 区分是否同一轮，
    不要因 `round` 重复就以为数据重复。
 
@@ -101,21 +101,21 @@ jq -r 'select(.type|startswith("flow_turn.")) | .type' $S/flow.jsonl
 
 ```bash
 # 总计（应等于终端 Tokens: 行）
-jq -s '[.[]|select(.type=="agent_turn.completed")|.payload.call_result.Usage.total_tokens]|add' $S/team.jsonl
+jq -s '[.[]|select(.type=="session.agent_turn.completed")|.payload.call_result.usage.total_tokens]|add' $S/team.jsonl
 
 # 按 team 汇总
-jq -r -s '[.[]|select(.type=="agent_turn.completed")]|group_by(.team_id)
-          |map({t:.[0].team_id,total:([.[].payload.call_result.Usage.total_tokens]|add)})
+jq -r -s '[.[]|select(.type=="session.agent_turn.completed")]|group_by(.team_id)
+          |map({t:.[0].team_id,total:([.[].payload.call_result.usage.total_tokens]|add)})
           |.[]|"\(.t)\ttotal=\(.total)"' $S/team.jsonl
 
 # 按 agent 汇总
-jq -r -s '[.[]|select(.type=="agent_turn.completed")]|group_by(.payload.call_result.AgentID)
-          |map({a:.[0].payload.call_result.AgentID,total:([.[].payload.call_result.Usage.total_tokens]|add)})
+jq -r -s '[.[]|select(.type=="session.agent_turn.completed")]|group_by(.payload.call_result.agent_id)
+          |map({a:.[0].payload.call_result.agent_id,total:([.[].payload.call_result.usage.total_tokens]|add)})
           |.[]|"\(.a)\ttotal=\(.total)"' $S/team.jsonl
 ```
 
-三级累加：`Request.usage` → `call_result.Usage` → `team_turn.Usage` → flow `Tokens`。
-注意 `Usage` 内是小写字段名（`total_tokens`），同级 `AgentID` 是大写。
+三级累加：`requests[].usage` → `call_result.usage` → `team_turn.usage` → flow `Tokens`。
+字段名统一 snake_case（`total_tokens` / `agent_id` 都是）。
 `prompt ≫ completion` 是常态（上下文每轮重发），判定"贵不贵"要看比值而非 total。
 完整算式与 node 写法见 `references/token-usage.md`。
 

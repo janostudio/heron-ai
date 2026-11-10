@@ -19,6 +19,7 @@
 | 文档 | 内容 |
 |---|---|
 | [CLI.md](./CLI.md)（EN） | 全部 flag、TUI、slash 命令、HTTP server、JSON-RPC、`stream-json`、`heron teams`、`heron knowledge` |
+| [HTTP-API-PROTOCOL.md](./HTTP-API-PROTOCOL.md)（中） | `--serve` 的 HTTP/SSE 现状、重连可靠性、A/B/C 形态对比、命名规范与待定决策 |
 | [CONNECT-CLI-JSONRPC.md](./CONNECT-CLI-JSONRPC.md)（中） | `heron-connect` 以子进程方式接入的 JSON-RPC 协议设计与边界 |
 | [MULTIMEDIA-INPUT.md](./MULTIMEDIA-INPUT.md)（EN） | 图片/文件等多媒体输入的传输格式（HTTP 与 CLI） |
 

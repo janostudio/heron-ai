@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
 // TestRun1SingleTurnProducesTerminalResult covers I-RUN-1: one request produces
@@ -52,18 +54,22 @@ func TestRun1SingleTurnProducesTerminalResult(t *testing.T) {
 	}
 
 	events := waitForEvent(t, e.Root, result.Session.ID, 10*time.Second, turnTerminated)
-	if !hasEvent(events, "agent.model_response") {
-		t.Fatalf("no agent.model_response event; types=%v", typesOf(events))
+	if !hasEvent(events, "session.agent.model_response") {
+		t.Fatalf("no session.agent.model_response event; types=%v", typesOf(events))
 	}
 	if status := finalTurnStatus(events); status == "" {
 		t.Fatalf("turn never reached a terminal status; types=%v", typesOf(events))
 	}
 }
 
-// TestRun2RejectsEmptyInputWithoutExecuting covers I-RUN-2: a request with no
-// content must not start a turn. "Rejected" and "created a session that then
-// failed" are different outcomes for the caller.
-func TestRun2RejectsEmptyInputWithoutExecuting(t *testing.T) {
+// TestRun2EmptyBodyOpensASessionWithoutExecuting covers I-RUN-2 with the shape a
+// person's "new session" takes: no content, no turn, just a conversation to type
+// into.
+//
+// What this pins is the boundary between three requests that look similar:
+// `{}` opens an empty session and runs nothing, `{"input":"   "}` is a caller
+// that meant to send something and gets 400, and malformed JSON creates nothing.
+func TestRun2EmptyBodyOpensASessionWithoutExecuting(t *testing.T) {
 	judge(t, "I-RUN-2", "http")
 
 	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-RUN-2"})
@@ -73,8 +79,28 @@ func TestRun2RejectsEmptyInputWithoutExecuting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST /api/run: %v", err)
 	}
+	if status != http.StatusOK {
+		t.Fatalf("empty body: status=%d body=%s; want 200 with an empty session", status, strings.TrimSpace(string(body)))
+	}
+	var created turnResult
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("decode created session: %v body=%s", err, strings.TrimSpace(string(body)))
+	}
+	if created.Session.ID == "" {
+		t.Fatalf("empty body returned no session id: %s", strings.TrimSpace(string(body)))
+	}
+	if created.Session.Status != string(types.SessionCreated) {
+		t.Fatalf("new session status = %q, want %q: opening a conversation must not start a turn",
+			created.Session.Status, types.SessionCreated)
+	}
+
+	// Whitespace is a caller mistake, not a request for an empty session.
+	body, status, err = e.do(http.MethodPost, "/api/run", map[string]any{"input": "   "})
+	if err != nil {
+		t.Fatalf("POST whitespace input: %v", err)
+	}
 	if status != http.StatusBadRequest {
-		t.Fatalf("empty body: status=%d body=%s; want 400", status, strings.TrimSpace(string(body)))
+		t.Fatalf("whitespace input: status=%d body=%s; want 400", status, strings.TrimSpace(string(body)))
 	}
 
 	malformed := []byte(`{"input": `)
@@ -86,11 +112,13 @@ func TestRun2RejectsEmptyInputWithoutExecuting(t *testing.T) {
 		t.Fatalf("malformed body: status=%d body=%s; want 400", status, strings.TrimSpace(string(body)))
 	}
 
-	if after := sessionDirs(t, e.Root); len(after) != len(before) {
-		t.Fatalf("rejected requests created sessions: before=%v after=%v", before, after)
+	// Exactly one session exists: the empty one. The rejected requests created
+	// nothing, and nothing reached the model.
+	if after := sessionDirs(t, e.Root); len(after) != len(before)+1 {
+		t.Fatalf("sessions before=%v after=%v; want exactly one new (empty) session", before, after)
 	}
 	if calls := e.Mock.callCount(); calls != 0 {
-		t.Fatalf("rejected requests reached the model %d times; want 0", calls)
+		t.Fatalf("requests reached the model %d times; want 0", calls)
 	}
 }
 

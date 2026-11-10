@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -125,8 +126,13 @@ func (h *Handler) HandleRun(w http.ResponseWriter, r *http.Request) {
 
 	var req flowInputRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeDecodeError(w, err)
-		return
+		// An empty body asks for a blank session rather than reporting a bad
+		// request: the "new session" button sends `{}`, and a client that opens
+		// the conversation first sends nothing at all.
+		if !errors.Is(err, io.EOF) {
+			writeDecodeError(w, err)
+			return
+		}
 	}
 	if req.Input == "" {
 		req.Input = req.Message
@@ -145,6 +151,24 @@ func (h *Handler) HandleRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	// No session to continue and nothing to say yet: open an empty conversation.
+	// The page navigates into it and the user types there, instead of waiting on
+	// a form for a first turn that may take minutes to come back.
+	// Input is compared without trimming on purpose: `{}` means "just open a
+	// session", while `{"input":"   "}` is a caller that sent whitespace by
+	// mistake and deserves the 400 below.
+	if strings.TrimSpace(req.FlowSessionID) == "" &&
+		req.Input == "" && len(blocks) == 0 {
+		if creator, ok := h.runtime.(types.SessionCreator); ok {
+			session, createErr := creator.CreateSession(r.Context(), req.FlowID)
+			if createErr != nil {
+				writeRuntimeError(w, about("flow", req.FlowID, createErr))
+				return
+			}
+			writeJSON(w, types.FlowTurnResult{Session: session})
+			return
+		}
 	}
 	if strings.TrimSpace(req.Input) == "" {
 		if len(blocks) == 0 {
@@ -223,6 +247,63 @@ func (h *Handler) HandleTurn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, result)
+}
+
+// HandleSubmitInput serves POST /api/sessions/{id}/events: it accepts the
+// message and answers 202 without waiting for the turn.
+//
+// The turn's events arrive on the session stream like any other turn, which is
+// what lets the caller stop holding a connection open for the whole run. The
+// synchronous entry points stay for callers with no stream to read.
+func (h *Handler) HandleSubmitInput(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if strings.TrimSpace(sessionID) == "" {
+		http.Error(w, "session id is required", http.StatusBadRequest)
+		return
+	}
+	if h.runtime == nil {
+		http.Error(w, "FlowRuntime is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	submitter, ok := h.runtime.(types.AsyncFlowRuntime)
+	if !ok {
+		http.Error(w, "runtime does not support asynchronous input", http.StatusNotImplemented)
+		return
+	}
+	var req flowInputRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeDecodeError(w, err)
+		return
+	}
+	if req.Input == "" {
+		req.Input = req.Message
+	}
+	blocks, err := requestContextBlocks(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Input) == "" && len(blocks) == 0 {
+		http.Error(w, "input, message, content, or attachments is required", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Input) == "" {
+		req.Input = contentBlockText(blocks)
+	}
+	result, err := submitter.SubmitInput(r.Context(), sessionID, req.Input, blocks)
+	if err != nil {
+		writeRuntimeError(w, about("session", sessionID, err))
+		return
+	}
+	// 202 states what happened: the message was taken. It does not promise the
+	// turn will succeed — that, and the answer itself, arrive on the stream.
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"session_id": result.Session.ID,
+		"status":     "accepted",
+		"queued":     result.Queued,
+	})
 }
 
 func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
@@ -830,14 +911,36 @@ func (h *Handler) HandleTaskStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	for task := range events {
-		if err := writer.WriteTask(task); err != nil {
+	// A durable task can sit in one state for minutes — a long command, a tool
+	// waiting on a human — so an idle stream here is normal, not a sign the
+	// task died. Without a heartbeat an intermediary closes it and the caller
+	// never sees the terminal state it subscribed for.
+	interval := h.streamHeartbeat
+	if interval <= 0 {
+		interval = streamHeartbeatInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
 			return
-		}
-		if task.Status == types.ToolTaskCompleted ||
-			task.Status == types.ToolTaskFailed ||
-			task.Status == types.ToolTaskCancelled {
-			return
+		case <-ticker.C:
+			if err := writer.WriteComment("ping"); err != nil {
+				return
+			}
+		case task, ok := <-events:
+			if !ok {
+				return
+			}
+			if err := writer.WriteTask(task); err != nil {
+				return
+			}
+			if task.Status == types.ToolTaskCompleted ||
+				task.Status == types.ToolTaskFailed ||
+				task.Status == types.ToolTaskCancelled {
+				return
+			}
 		}
 	}
 }

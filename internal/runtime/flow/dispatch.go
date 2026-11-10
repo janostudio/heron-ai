@@ -269,7 +269,7 @@ func (r *Runtime) dispatchWork(ctx context.Context, session types.FlowSession, c
 
 // wakeRetry bounds the re-check of a session that was still running when the
 // wake-up arrived. The window covers the dispatching turn's own write-out: its
-// flow_session.updated lands before the background Team finishes, so a wake-up
+// session.updated lands before the background Team finishes, so a wake-up
 // that arrives in between has to wait rather than give up. One wait per session
 // at a time (pendingWakes), so several Teams finishing together do not stack
 // timers.
@@ -325,7 +325,7 @@ func (r *Runtime) wakeIfIdleAttempt(ctx context.Context, sessionID string, attem
 		return
 	}
 	switch session.Status {
-	case types.SessionWaitingInput,
+	case types.SessionIdle,
 		types.SessionWaitingTool,
 		types.SessionWaitingApproval,
 		types.SessionCreated:

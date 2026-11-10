@@ -18,7 +18,7 @@ func TestTaskChainSinceUsesLatestUserTurn(t *testing.T) {
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
 	runtime := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
 	ctx := context.Background()
-	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionIdle)
 
 	userTurnAt := time.Now().UTC().Add(-2 * time.Minute)
 	for _, turn := range []types.FlowTurn{
@@ -41,7 +41,7 @@ func TestTaskChainSinceUsesLatestUserTurn(t *testing.T) {
 		"窗口必须取最近一次用户回合的开始时间，忽略更晚的后台回合")
 
 	// 没有任何用户回合时退回调用方给的边界，而不是放开全部历史。
-	empty := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+	empty := seedMailboxSession(t, runtime, newID("fs"), types.SessionIdle)
 	require.True(t, runtime.taskChainSince(ctx, empty.ID, fallback).Equal(fallback))
 }
 

@@ -74,13 +74,13 @@ func TestQueue1SecondInputMidTurnDispatchesAnotherTeam(t *testing.T) {
 	workerB := waitForModelRequest(t, e, "You are 第二执行者", 60*time.Second)
 
 	events := waitForEvent(t, e.Root, sessionID, 60*time.Second, func(events []event) bool {
-		return countEvents(events, "flow_turn.started") >= 2
+		return countEvents(events, "session.turn.started") >= 2
 	})
-	if started := countEvents(events, "flow_turn.started"); started < 2 {
-		t.Fatalf("flow_turn.started = %d, want >= 2: the queued input never became a turn", started)
+	if started := countEvents(events, "session.turn.started"); started < 2 {
+		t.Fatalf("session.turn.started = %d, want >= 2: the queued input never became a turn", started)
 	}
-	if !hasEvent(events, "mailbox.message.enqueued") {
-		t.Fatal("no mailbox.message.enqueued event: the second input was not stored for the next turn")
+	if !hasEvent(events, "session.mailbox.message.enqueued") {
+		t.Fatal("no session.mailbox.message.enqueued event: the second input was not stored for the next turn")
 	}
 
 	// Two teams, one conversation: the first turn reached worker, the queued turn

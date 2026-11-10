@@ -127,7 +127,7 @@ func TestEntryHopClearsIntermediateOnMailboxTurn(t *testing.T) {
 		Turn:                turn,
 		FinalReply:          "仓库 heron-connect 的主分支是 main",
 		FinalReplyFromEntry: true,
-	}, types.SessionWaitingInput, nil)
+	}, types.SessionIdle, nil)
 	require.NoError(t, err)
 	require.False(t, result.Turn.Intermediate)
 
@@ -204,7 +204,7 @@ func TestResumeForMailboxFeedsDispatchedTask(t *testing.T) {
 	}
 	rt := newTestRuntime(defs, recorder, writer, nil)
 
-	session := seedMailboxSession(t, rt, "fs-task", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-task", types.SessionIdle)
 	turn := types.FlowTurn{ID: "ft-1", FlowSessionID: session.ID}
 	const task = "查看仓库repo-a，目前主分支是什么"
 	_, err := rt.enqueueResultMessage(context.Background(), session, turn,

@@ -167,7 +167,7 @@ func (s *stream) waitForTerminal(timeout time.Duration) []sseFrame {
 
 func isTerminalFrame(frame sseFrame) bool {
 	eventType := frameTypeOf(frame.Data)
-	return eventType == "flow_turn.completed" || strings.HasPrefix(eventType, "flow_turn.waiting")
+	return eventType == "session.turn.completed" || (strings.HasPrefix(eventType, "session.turn.waiting") || eventType == "session.turn.idle")
 }
 
 // frameTypeOf extracts the event type of a session frame payload.
@@ -309,7 +309,7 @@ func TestStream4FinishedSessionClosesWithLatestTurn(t *testing.T) {
 	if lastTurn != second.Turn.ID {
 		t.Fatalf("stream ended on turn %q, want the newest turn %q (an old turn replayed as if it were the answer)", lastTurn, second.Turn.ID)
 	}
-	if !strings.HasPrefix(lastType, "flow_turn.") {
+	if !strings.HasPrefix(lastType, "session.turn.") {
 		t.Fatalf("last frame is %q; a turn stream must end on a turn event", lastType)
 	}
 }

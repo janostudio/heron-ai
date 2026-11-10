@@ -47,7 +47,7 @@ const (
 // internal bookkeeping and must not reach a caller.
 //
 // Fields are FLAT on params on purpose (no nested message/block container):
-// heron's model response and tool_call.started are peer events, so merging
+// heron's model response and session.tool_call.started are peer events, so merging
 // them into an assistant message would mean re-ordering state in the
 // projection layer and would force the connector into counter-intuitive
 // rules such as "ignore tool_use blocks inside assistant".
@@ -217,7 +217,7 @@ func hoistContributors(value any) []map[string]any {
 	return trimmed
 }
 
-// waitingEventStatus maps the flow_turn.waiting_* event to the session status
+// waitingEventStatus maps the session.turn.waiting_* event to the session status
 // it leaves the session in.
 func waitingEventStatus(eventType string) string {
 	switch eventType {
@@ -226,7 +226,7 @@ func waitingEventStatus(eventType string) string {
 	case types.EventFlowTurnWaitingTool:
 		return string(types.SessionWaitingTool)
 	case types.EventFlowTurnWaitingInput:
-		return string(types.SessionWaitingInput)
+		return string(types.SessionIdle)
 	default:
 		return ""
 	}
@@ -727,7 +727,7 @@ type progressEnvelope struct {
 }
 
 // statusNotificationsFromResult covers the case where a turn ends parked in a
-// waiting state: the flow_turn.waiting_* event may have been published after
+// waiting state: the session.turn.waiting_* event may have been published after
 // the subscription window closed, so the terminal result is the authoritative
 // source for the pending state.
 func statusNotificationFromResult(result types.FlowTurnResult) map[string]any {

@@ -11,38 +11,41 @@ import (
 // callResultWireFields is the published payload contract. CallResult is the
 // fact source external consumers read token usage from, so this list is
 // frozen: adding a field is fine, renaming one is a breaking change.
+//
+// Go field names are exported identifiers and stay PascalCase; these are the
+// json tag names, which carry the wire format.
 var callResultWireFields = []string{
-	"Status",
-	"Reply",
-	"CallTurnID",
-	"AgentID",
-	"Records",
-	"Next",
-	"Usage",
-	"Requests",
-	"WorkspaceOps",
-	"ToolCalls",
-	"Error",
-	"CheckpointID",
-	"Checkpoint",
-	"TaskID",
-	"PendingApproval",
-	"Approval",
+	"status",
+	"reply",
+	"call_turn_id",
+	"agent_id",
+	"records",
+	"next",
+	"usage",
+	"requests",
+	"workspace_ops",
+	"tool_calls",
+	"error",
+	"checkpoint_id",
+	"checkpoint",
+	"task_id",
+	"pending_approval",
+	"approval",
 }
 
 // teamTurnResultWireFields is the same contract for the team_result payload.
 // TeamTurnResult is what internal/runtime/flow decodes when it needs to
 // resume a Team turn that ended waiting on a tool or an approval.
 var teamTurnResultWireFields = []string{
-	"Turn",
-	"Reply",
-	"Records",
-	"CallResults",
-	"PendingToolTasks",
-	"PendingApprovals",
-	"Usage",
-	"Next",
-	"Error",
+	"turn",
+	"reply",
+	"records",
+	"call_results",
+	"pending_tool_tasks",
+	"pending_approvals",
+	"usage",
+	"next",
+	"error",
 }
 
 // flowTurnResultWireFields is the HTTP response contract. Unlike the two
@@ -50,14 +53,14 @@ var teamTurnResultWireFields = []string{
 // straight into HTTP response bodies by internal/view/handler.go, so this
 // set is what HTTP clients see.
 var flowTurnResultWireFields = []string{
-	"Session",
-	"Turn",
-	"TeamResults",
-	"PendingToolTasks",
-	"PendingApprovals",
-	"Records",
-	"Reply",
-	"Error",
+	"session",
+	"turn",
+	"team_results",
+	"pending_tool_tasks",
+	"pending_approvals",
+	"records",
+	"reply",
+	"error",
 }
 
 // assertWireFields fails if the marshaled struct does not expose exactly the
@@ -88,16 +91,16 @@ func TestCallResultMarshalUsesPublishedFieldNames(t *testing.T) {
 
 func TestCallResultMarshalKeepsEmptyFields(t *testing.T) {
 	// No omitempty: consumers can rely on every field being present, even
-	// when null. This matches every session jsonl written so far.
+	// when null.
 	fields := assertWireFields(t, CallResult{Status: TurnCompleted}, callResultWireFields)
-	require.JSONEq(t, `"completed"`, string(fields["Status"]))
-	require.Equal(t, "null", string(fields["Checkpoint"]))
+	require.JSONEq(t, `"completed"`, string(fields["status"]))
+	require.Equal(t, "null", string(fields["checkpoint"]))
 }
 
-func TestCallResultLeafTypesStaySnakeCase(t *testing.T) {
-	// The mixed shape is intentional: CallResult is PascalCase, the leaf
-	// types nested in it are snake_case. Lock both halves so a future
-	// "consistency cleanup" cannot silently drop one.
+func TestCallResultWireFormatIsSnakeCase(t *testing.T) {
+	// Both halves matter: the container and the leaf types nested in it use
+	// snake_case, and neither may drift. Pin both so a future change cannot
+	// silently rename one side.
 	data, err := json.Marshal(CallResult{
 		Usage:    TokenUsage{PromptTokens: 2195, CompletionTokens: 81, TotalTokens: 2276},
 		Requests: []ModelRequestStats{{Round: 3, MessageCount: 2, Model: "hy3-ioa"}},
@@ -126,20 +129,19 @@ func TestCallResultLeafTypesStaySnakeCase(t *testing.T) {
 	require.Equal(t, "hy3-ioa", fields.Requests[0].Model)
 }
 
-// TestCallResultUnmarshalLegacyPayload decodes a real call_result payload
-// taken verbatim from an on-disk session jsonl (examples/, 2026-09). Every
-// session jsonl produced so far uses these PascalCase names, so reading
-// them back must keep working.
-func TestCallResultUnmarshalLegacyPayload(t *testing.T) {
-	const legacy = `{
-		"Status": "completed",
-		"Reply": "hi",
-		"CallTurnID": "tt_5eb9655c3700b924:answer",
-		"AgentID": "assistant",
-		"Records": [],
-		"Next": {"action": "proceed"},
-		"Usage": {"prompt_tokens": 2195, "completion_tokens": 81, "total_tokens": 2276},
-		"Requests": [{
+// TestCallResultUnmarshalPublishedPayload decodes a call_result payload in
+// the published wire format. This is what external parsers and resume both
+// read, so the shape has to keep working.
+func TestCallResultUnmarshalPublishedPayload(t *testing.T) {
+	const payload = `{
+		"status": "completed",
+		"reply": "hi",
+		"call_turn_id": "tt_5eb9655c3700b924:answer",
+		"agent_id": "assistant",
+		"records": [],
+		"next": {"action": "proceed"},
+		"usage": {"prompt_tokens": 2195, "completion_tokens": 81, "total_tokens": 2276},
+		"requests": [{
 			"round": 0,
 			"message_count": 2,
 			"system_chars": 3781,
@@ -150,18 +152,18 @@ func TestCallResultUnmarshalLegacyPayload(t *testing.T) {
 			"usage": {"prompt_tokens": 2195, "completion_tokens": 81, "total_tokens": 2276},
 			"model": "hy3-ioa"
 		}],
-		"WorkspaceOps": null,
-		"ToolCalls": 0,
-		"Error": "",
-		"CheckpointID": "",
-		"Checkpoint": null,
-		"TaskID": "",
-		"PendingApproval": null,
-		"Approval": null
+		"workspace_ops": null,
+		"tool_calls": 0,
+		"error": "",
+		"checkpoint_id": "",
+		"checkpoint": null,
+		"task_id": "",
+		"pending_approval": null,
+		"approval": null
 	}`
 
 	var result CallResult
-	require.NoError(t, json.Unmarshal([]byte(legacy), &result))
+	require.NoError(t, json.Unmarshal([]byte(payload), &result))
 
 	require.Equal(t, TurnCompleted, result.Status)
 	require.Equal(t, "hi", result.Reply)
@@ -225,10 +227,9 @@ func TestTeamTurnResultMarshalUsesPublishedFieldNames(t *testing.T) {
 	assertWireFields(t, TeamTurnResult{}, teamTurnResultWireFields)
 }
 
-// TestTeamTurnResultLeafTypesStaySnakeCase pins the other half of the mixed
-// contract: TeamTurnResult is PascalCase but the TeamTurn nested in it is
-// snake_case. Both halves have to stay put.
-func TestTeamTurnResultLeafTypesStaySnakeCase(t *testing.T) {
+// TestTeamTurnResultWireFormatIsSnakeCase pins the container and the TeamTurn
+// nested in it: both use snake_case, and both have to stay put.
+func TestTeamTurnResultWireFormatIsSnakeCase(t *testing.T) {
 	data, err := json.Marshal(TeamTurnResult{
 		Turn: TeamTurn{
 			ID:         "tt_1",
@@ -253,17 +254,17 @@ func TestTeamTurnResultLeafTypesStaySnakeCase(t *testing.T) {
 			Status     TurnStatus `json:"status"`
 			CallerTeam string     `json:"caller_team"`
 			RecoveryOf string     `json:"recovery_of"`
-		}
+		} `json:"turn"`
 		PendingToolTasks []struct {
 			CallID       string `json:"call_id"`
 			TaskID       string `json:"task_id"`
 			CheckpointID string `json:"checkpoint_id"`
-		}
+		} `json:"pending_tool_tasks"`
 		Usage struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
 			TotalTokens      int `json:"total_tokens"`
-		}
+		} `json:"usage"`
 	}
 	require.NoError(t, json.Unmarshal(data, &decoded))
 
@@ -281,14 +282,13 @@ func TestTeamTurnResultLeafTypesStaySnakeCase(t *testing.T) {
 	require.Equal(t, 30, decoded.Usage.TotalTokens)
 }
 
-// TestTeamTurnResultUnmarshalLegacyPayload decodes a real team_result
-// payload taken verbatim from an on-disk session jsonl (examples/,
-// 2026-10-08). Every session jsonl written so far uses these PascalCase
-// names, so reading them back must keep working — this is the path
-// internal/runtime/flow uses to resume a Team turn that ended waiting.
-func TestTeamTurnResultUnmarshalLegacyPayload(t *testing.T) {
-	const legacy = `{
-		"Turn": {
+// TestTeamTurnResultUnmarshalPublishedPayload decodes a team_result payload in
+// the published wire format. This is the path internal/runtime/flow uses to
+// resume a Team turn that ended waiting, so the embedded call_results map has
+// to survive intact.
+func TestTeamTurnResultUnmarshalPublishedPayload(t *testing.T) {
+	const payload = `{
+		"turn": {
 			"id": "tt_7b562393f6deca50",
 			"flow_turn_id": "ft_b6a1a45aaea98e86",
 			"team_session_id": "fs_test_session:default",
@@ -300,31 +300,31 @@ func TestTeamTurnResultUnmarshalLegacyPayload(t *testing.T) {
 			"started_at": "2026-10-08T08:45:44.463241Z",
 			"finished_at": "2026-10-08T08:45:46.020982Z"
 		},
-		"Reply": "请问有什么可以帮您？",
-		"Records": [],
-		"CallResults": {
+		"reply": "请问有什么可以帮您？",
+		"records": [],
+		"call_results": {
 			"answer": {
-				"Status": "completed",
-				"Reply": "请问有什么可以帮您？",
-				"CallTurnID": "tt_7b562393f6deca50:answer",
-				"AgentID": "assistant",
-				"Next": {"action": "proceed"},
-				"Usage": {"prompt_tokens": 2295, "completion_tokens": 7, "total_tokens": 2302},
-				"Requests": [],
-				"ToolCalls": 0,
-				"CheckpointID": "",
-				"TaskID": ""
+				"status": "completed",
+				"reply": "请问有什么可以帮您？",
+				"call_turn_id": "tt_7b562393f6deca50:answer",
+				"agent_id": "assistant",
+				"next": {"action": "proceed"},
+				"usage": {"prompt_tokens": 2295, "completion_tokens": 7, "total_tokens": 2302},
+				"requests": [],
+				"tool_calls": 0,
+				"checkpoint_id": "",
+				"task_id": ""
 			}
 		},
-		"PendingToolTasks": null,
-		"PendingApprovals": null,
-		"Usage": {"prompt_tokens": 2295, "completion_tokens": 7, "total_tokens": 2302},
-		"Next": {"action": "proceed"},
-		"Error": ""
+		"pending_tool_tasks": null,
+		"pending_approvals": null,
+		"usage": {"prompt_tokens": 2295, "completion_tokens": 7, "total_tokens": 2302},
+		"next": {"action": "proceed"},
+		"error": ""
 	}`
 
 	var result TeamTurnResult
-	require.NoError(t, json.Unmarshal([]byte(legacy), &result))
+	require.NoError(t, json.Unmarshal([]byte(payload), &result))
 
 	require.Equal(t, "tt_7b562393f6deca50", result.Turn.ID)
 	require.Equal(t, "ft_b6a1a45aaea98e86", result.Turn.FlowTurnID)
@@ -337,11 +337,11 @@ func TestTeamTurnResultUnmarshalLegacyPayload(t *testing.T) {
 	require.NotNil(t, result.Next)
 	require.Equal(t, "proceed", string(result.Next.Action))
 
-	// The embedded CallResult must survive too; this is the part a
-	// snake_case rename of CallResults would silently wipe out.
+	// The embedded CallResult must survive too: it is the value resume reads
+	// back to decide which call was waiting.
 	require.Len(t, result.CallResults, 1)
 	callResult, ok := result.CallResults["answer"]
-	require.True(t, ok, `payload.team_result.CallResults["answer"] missing`)
+	require.True(t, ok, `payload.team_result.call_results["answer"] missing`)
 	require.Equal(t, TurnCompleted, callResult.Status)
 	require.Equal(t, "tt_7b562393f6deca50:answer", callResult.CallTurnID)
 	require.Equal(t, "assistant", callResult.AgentID)
@@ -406,12 +406,12 @@ func TestFlowTurnResultMarshalUsesPublishedFieldNames(t *testing.T) {
 	assertWireFields(t, FlowTurnResult{}, flowTurnResultWireFields)
 }
 
-// TestFlowTurnResultLeafTypesStaySnakeCase pins the other half: the result
-// container is PascalCase and everything nested in it (FlowSession, FlowTurn,
-// the embedded TeamTurnResult, PendingToolTask, SharedRecord) is snake_case.
-func TestFlowTurnResultLeafTypesStaySnakeCase(t *testing.T) {
+// TestFlowTurnResultWireFormatIsSnakeCase pins both halves: the result
+// container and everything nested in it (FlowSession, FlowTurn, the embedded
+// TeamTurnResult, PendingToolTask, SharedRecord) use snake_case.
+func TestFlowTurnResultWireFormatIsSnakeCase(t *testing.T) {
 	data, err := json.Marshal(FlowTurnResult{
-		Session:     FlowSession{ID: "fs_1", FlowID: "default", Status: SessionWaitingInput},
+		Session:     FlowSession{ID: "fs_1", FlowID: "default", Status: SessionIdle},
 		Turn:        FlowTurn{ID: "ft_1", Input: "hello"},
 		TeamResults: []TeamTurnResult{{Turn: TeamTurn{ID: "tt_1", TeamID: "default"}}},
 		Records:     []SharedRecord{{RecordID: "rec_1", Name: "Answer"}},
@@ -423,27 +423,27 @@ func TestFlowTurnResultLeafTypesStaySnakeCase(t *testing.T) {
 			ID     string        `json:"id"`
 			FlowID string        `json:"flow_id"`
 			Status SessionStatus `json:"status"`
-		}
+		} `json:"session"`
 		Turn struct {
 			ID    string `json:"id"`
 			Input string `json:"input"`
-		}
+		} `json:"turn"`
 		TeamResults []struct {
 			Turn struct {
 				ID     string `json:"id"`
 				TeamID string `json:"team_id"`
-			}
-		}
+			} `json:"turn"`
+		} `json:"team_results"`
 		Records []struct {
 			RecordID string `json:"record_id"`
 			Name     string `json:"name"`
-		}
+		} `json:"records"`
 	}
 	require.NoError(t, json.Unmarshal(data, &decoded))
 
 	require.Equal(t, "fs_1", decoded.Session.ID)
 	require.Equal(t, "default", decoded.Session.FlowID)
-	require.Equal(t, SessionWaitingInput, decoded.Session.Status)
+	require.Equal(t, SessionIdle, decoded.Session.Status)
 	require.Equal(t, "ft_1", decoded.Turn.ID)
 	require.Equal(t, "hello", decoded.Turn.Input)
 	require.Len(t, decoded.TeamResults, 1)

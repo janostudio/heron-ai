@@ -48,14 +48,14 @@ func TestFailedTurnLeavesSessionContinuable(t *testing.T) {
 	first, err := runtime.Start(ctx, types.StartFlowRequest{FlowID: "code-fix", Input: "boom"})
 	require.Error(t, err, "the turn itself must report failure")
 	require.Equal(t, types.TurnFailed, first.Turn.Status)
-	require.Equal(t, types.SessionWaitingInput, first.Session.Status, "the session must stay continuable")
+	require.Equal(t, types.SessionIdle, first.Session.Status, "the session must stay continuable")
 
 	second, err := runtime.HandleInputWithContext(ctx, first.Session.ID, "retry", nil)
 	require.NoError(t, err, "a failed turn must not block the next one")
 	require.Equal(t, first.Session.ID, second.Session.ID)
 	require.NotEqual(t, first.Turn.ID, second.Turn.ID)
 	require.Equal(t, types.TurnWaitingInput, second.Turn.Status)
-	require.Equal(t, types.SessionWaitingInput, second.Session.Status)
+	require.Equal(t, types.SessionIdle, second.Session.Status)
 }
 
 // Cancel stops the running turn; it must not strand the conversation either.
@@ -74,7 +74,7 @@ func TestCancelledSessionAcceptsNewTurn(t *testing.T) {
 
 	second, err := runtime.HandleInputWithContext(ctx, first.Session.ID, "continue", nil)
 	require.NoError(t, err, "a cancelled session must accept the next turn")
-	require.Equal(t, types.SessionWaitingInput, second.Session.Status)
+	require.Equal(t, types.SessionIdle, second.Session.Status)
 }
 
 // A failed turn may leave an async Team running. Continuation must wait for it
@@ -121,7 +121,7 @@ func TestRunningTeamBlocksNewTurnUntilItDrains(t *testing.T) {
 
 	second, err := runtime.HandleInputWithContext(ctx, first.Session.ID, "next", nil)
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, second.Session.Status)
+	require.Equal(t, types.SessionIdle, second.Session.Status)
 }
 
 // A session recorded as failed by an older build must still be usable after the
@@ -147,5 +147,5 @@ func TestLegacyFailedSessionAcceptsNewTurn(t *testing.T) {
 
 	second, err := runtime.HandleInputWithContext(ctx, legacy.ID, "continue", nil)
 	require.NoError(t, err, "a session marked failed by an older build must still accept a turn")
-	require.Equal(t, types.SessionWaitingInput, second.Session.Status)
+	require.Equal(t, types.SessionIdle, second.Session.Status)
 }

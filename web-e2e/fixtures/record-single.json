@@ -2,7 +2,7 @@
   "events": [
     {
       "seq": 1,
-      "type": "flow_turn.started",
+      "type": "session.turn.started",
       "flow_turn_id": "ft_single",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -41,7 +41,7 @@
     },
     {
       "seq": 2,
-      "type": "team_turn.started",
+      "type": "session.team_turn.started",
       "flow_turn_id": "ft_single",
       "team_turn_id": "tt_single",
       "call_turn_id": "",
@@ -58,7 +58,7 @@
     },
     {
       "seq": 3,
-      "type": "agent_turn.started",
+      "type": "session.agent_turn.started",
       "flow_turn_id": "ft_single",
       "team_turn_id": "tt_single",
       "call_turn_id": "tt_single:coordinator",
@@ -70,7 +70,7 @@
     },
     {
       "seq": 4,
-      "type": "tool_call.started",
+      "type": "session.tool_call.started",
       "flow_turn_id": "ft_single",
       "team_turn_id": "tt_single",
       "call_turn_id": "tt_single:coordinator",
@@ -86,7 +86,7 @@
     },
     {
       "seq": 5,
-      "type": "tool_call.completed",
+      "type": "session.tool_call.completed",
       "flow_turn_id": "ft_single",
       "team_turn_id": "tt_single",
       "call_turn_id": "tt_single:coordinator",
@@ -100,7 +100,7 @@
     },
     {
       "seq": 6,
-      "type": "agent.model_response",
+      "type": "session.agent.model_response",
       "flow_turn_id": "ft_single",
       "team_turn_id": "tt_single",
       "call_turn_id": "tt_single:coordinator",
@@ -122,7 +122,7 @@
     },
     {
       "seq": 7,
-      "type": "agent_turn.completed",
+      "type": "session.agent_turn.completed",
       "flow_turn_id": "ft_single",
       "team_turn_id": "tt_single",
       "call_turn_id": "tt_single:coordinator",
@@ -134,7 +134,7 @@
     },
     {
       "seq": 8,
-      "type": "team_turn.completed",
+      "type": "session.team_turn.completed",
       "flow_turn_id": "ft_single",
       "team_turn_id": "tt_single",
       "call_turn_id": "",
@@ -151,7 +151,7 @@
     },
     {
       "seq": 9,
-      "type": "flow_turn.waiting_input",
+      "type": "session.turn.idle",
       "flow_turn_id": "ft_single",
       "team_turn_id": "",
       "call_turn_id": "",

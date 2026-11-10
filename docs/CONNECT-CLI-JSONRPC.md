@@ -128,7 +128,7 @@ heron --prompt "请检查项目中的 .gitignore"
 Flow: my_agent
 Model: hy3-ioa
 FlowSession: fs_xxx
-Status: waiting_input
+Status: idle
 Tokens: 1234 (prompt 1000, completion 234)
 
 已经完成检查。
@@ -386,7 +386,7 @@ bundle.Flow.Start(ctx, types.StartFlowRequest{
 bundle.Flow.HandleInput(ctx, sessionID, input)
 ```
 
-如果当前会话明确处于 `waiting_input`，可以使用：
+如果当前会话明确处于 `idle`，可以使用：
 
 ```go
 bundle.Flow.Resume(ctx, sessionID, input)
@@ -398,7 +398,7 @@ bundle.Flow.Resume(ctx, sessionID, input)
 
 | Session 状态 | 含义 | `turn` 行为 |
 |---|---|---|
-| `waiting_input` | 轮次正常结束（可续聊），或 Team 中途暂停等待用户输入 | 继续同一个 FlowSession |
+| `idle` | 轮次正常结束（可续聊），或 Team 中途暂停等待用户输入 | 继续同一个 FlowSession |
 | `created` / `running` | 会话已建立或正在执行 | 调用 `HandleInput` |
 | `waiting_approval` | 中途审批门禁 | 必须先调用 `approve` 响应审批（§6.3），不能直接发送普通 `turn` |
 | `waiting_tool` | 停在异步 Tool 任务上 | 等任务结束后 `Resume`；普通 `turn` 会被拒绝（返回 `-32002`）——新轮次不继承 pending 任务，会造孤儿 |
@@ -491,7 +491,7 @@ bundle.Flow.ResumeApprovalWithResponse(ctx, sessionID, types.HITLResponse{
   "result": {
     "session_id": "fs_123456",
     "flow_turn_id": "ft_123456",
-    "status": "waiting_input",
+    "status": "idle",
     "reply": "已经完成 .gitignore 检查和修复。",
     "records": [
       {
@@ -509,7 +509,7 @@ bundle.Flow.ResumeApprovalWithResponse(ctx, sessionID, types.HITLResponse{
 |---|---|---|
 | `session_id` | string | FlowSession ID |
 | `flow_turn_id` | string | 本次 FlowTurn ID |
-| `status` | string | 完整枚举（`pkg/types/session.go`）：`created`、`running`、`waiting_input`、`waiting_tool`、`waiting_approval`、`interrupted`、`completed`、`failed`、`cancelled`。各状态下 `turn` 的行为见 §6.2 表格；`completed` 仅存在于旧数据回放 |
+| `status` | string | 完整枚举（`pkg/types/session.go`）：`created`、`running`、`idle`、`waiting_tool`、`waiting_approval`、`interrupted`、`completed`、`failed`、`cancelled`。各状态下 `turn` 的行为见 §6.2 表格；`completed` 仅存在于旧数据回放 |
 | `reply` | string | 用户可见的最终回复 |
 | `records` | array | 可选的记录摘要 |
 | `error` | string | 可选的业务错误信息 |
@@ -885,7 +885,7 @@ progress
 tool_started
 tool_completed
 record_published
-waiting_input
+idle
 ```
 
 这些是 Heron 自定义扩展，不属于第一期必须协议。
@@ -926,7 +926,7 @@ heron-connect 保存 session_id
   → Heron 从 flow.jsonl / team.jsonl / agent.jsonl 恢复 FlowSession
   → 继续处理新输入
 
-轮次正常结束的会话（waiting_input）可以一直复用同一个 session_id 继续对话。
+轮次正常结束的会话（idle）可以一直复用同一个 session_id 继续对话。
 只有上一次响应的状态是 `failed` 或 `cancelled` 时，才不要把该 ID 当作
 永久聊天线程 ID；下一次新任务应省略 `session_id`。
 ```
@@ -962,7 +962,7 @@ heron-connect 保存 session_id
 {
   "seq": 12,
   "event_id": "fs_001-12",
-  "type": "team_turn.completed",
+  "type": "session.team_turn.completed",
   "flow_session_id": "fs_001",
   "flow_turn_id": "ft_001",
   "team_session_id": "ts_001",
@@ -1043,7 +1043,7 @@ heron --json-rpc --flow .agents/flows/default.yml
 输出：
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"session_id":"fs_001","flow_turn_id":"ft_001","status":"waiting_input","reply":"已完成检查。"}}
+{"jsonrpc":"2.0","id":1,"result":{"session_id":"fs_001","flow_turn_id":"ft_001","status":"idle","reply":"已完成检查。"}}
 ```
 
 新的输入（轮次正常结束，继续同一个 FlowSession）：
@@ -1055,7 +1055,7 @@ heron --json-rpc --flow .agents/flows/default.yml
 输出：
 
 ```json
-{"jsonrpc":"2.0","id":2,"result":{"session_id":"fs_001","flow_turn_id":"ft_002","status":"waiting_input","reply":"已完成修复并通过验证。"}}
+{"jsonrpc":"2.0","id":2,"result":{"session_id":"fs_001","flow_turn_id":"ft_002","status":"idle","reply":"已完成修复并通过验证。"}}
 ```
 
 错误：

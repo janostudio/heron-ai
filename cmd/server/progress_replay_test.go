@@ -34,7 +34,7 @@ func TestFollowAsyncDoesNotReplayOnEveryPoll(t *testing.T) {
 	sessionID := "fs_follow_no_replay"
 	_, err := writer.Append(context.Background(), sessionID, storage.LayerFlow, storage.SessionEvent{
 		EventHeader: types.EventHeader{Type: types.EventFlowSessionCreated, FlowSessionID: sessionID},
-		Payload:     map[string]any{"session": types.FlowSession{ID: sessionID, FlowID: "f", Status: types.SessionWaitingInput}},
+		Payload:     map[string]any{"session": types.FlowSession{ID: sessionID, FlowID: "f", Status: types.SessionIdle}},
 	})
 	require.NoError(t, err)
 

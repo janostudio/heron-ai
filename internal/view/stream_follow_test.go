@@ -152,8 +152,10 @@ func TestStreamFollowEmitsHeartbeat(t *testing.T) {
 	}
 }
 
-// The heartbeat belongs to the followed stream only: a per-turn stream must
-// stay byte-identical for existing clients.
+// The heartbeat belongs to the followed stream only: a per-turn stream ends at
+// the turn boundary, so it carries no keep-alive frame. Its opening retry
+// directive comes from NewSSEWriter and is shared by every stream — it is a
+// connection parameter, not an event, and compliant clients skip it.
 func TestStreamWithoutFollowHasNoHeartbeat(t *testing.T) {
 	handler, sessionID := newStreamFixture(t)
 	handler.streamHeartbeat = time.Millisecond

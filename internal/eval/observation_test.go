@@ -99,7 +99,7 @@ func TestObserveCallFacts(t *testing.T) {
 	if searcher.ModelRequests != 2 || searcher.ToolCalls != 3 {
 		t.Fatalf("searcher model/tool counts = %d / %d", searcher.ModelRequests, searcher.ToolCalls)
 	}
-	// tool_call.failed only exists in agent.jsonl, not in CallResult.
+	// session.tool_call.failed only exists in agent.jsonl, not in CallResult.
 	if searcher.ToolFailures != 1 {
 		t.Fatalf("searcher tool failures = %d, want 1", searcher.ToolFailures)
 	}

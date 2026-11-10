@@ -292,7 +292,7 @@ func TestHandleResult(t *testing.T) {
 	})
 
 	t.Run("success wraps session in FlowTurnResult", func(t *testing.T) {
-		rt := &mockRuntime{statusResult: types.FlowSession{ID: "s1", FlowID: "f1", Status: types.SessionWaitingInput}}
+		rt := &mockRuntime{statusResult: types.FlowSession{ID: "s1", FlowID: "f1", Status: types.SessionIdle}}
 		h := NewRuntimeHandler(rt)
 		rr := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/result?session_id=s1", nil)

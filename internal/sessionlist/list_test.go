@@ -48,13 +48,13 @@ func TestListMissingDirectoryIsNotAnError(t *testing.T) {
 func TestListSummarizesSession(t *testing.T) {
 	root := t.TempDir()
 	writeSession(t, root, "fs_abc", []string{
-		`{"seq":1,"type":"flow_session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_abc","flow_id":"default","status":"created","updated_at":"2026-10-09T09:00:00Z"}}}`,
-		`{"seq":2,"type":"flow_turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"hello world"}}`,
-		`{"seq":3,"type":"flow_turn.started","created_at":"2026-10-09T09:01:00Z","payload":{"input":"second"}}`,
-		`{"seq":4,"type":"flow_turn.waiting_input","created_at":"2026-10-09T09:02:00Z","payload":{}}`,
+		`{"seq":1,"type":"session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_abc","flow_id":"default","status":"created","updated_at":"2026-10-09T09:00:00Z"}}}`,
+		`{"seq":2,"type":"session.turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"hello world"}}`,
+		`{"seq":3,"type":"session.turn.started","created_at":"2026-10-09T09:01:00Z","payload":{"input":"second"}}`,
+		`{"seq":4,"type":"session.turn.idle","created_at":"2026-10-09T09:02:00Z","payload":{}}`,
 	}, []string{
-		`{"seq":1,"type":"agent_turn.completed","payload":{"call_result":{"Usage":{"prompt_tokens":100,"total_tokens":120}}}}`,
-		`{"seq":2,"type":"agent_turn.completed","payload":{"call_result":{"Usage":{"prompt_tokens":200,"total_tokens":230}}}}`,
+		`{"seq":1,"type":"session.agent_turn.completed","payload":{"call_result":{"Usage":{"prompt_tokens":100,"total_tokens":120}}}}`,
+		`{"seq":2,"type":"session.agent_turn.completed","payload":{"call_result":{"Usage":{"prompt_tokens":200,"total_tokens":230}}}}`,
 	})
 
 	sessions, err := List(storage.NewFileStore(root), SessionsDir)
@@ -72,10 +72,10 @@ func TestListSummarizesSession(t *testing.T) {
 
 func TestListMarksRunningSessionActive(t *testing.T) {
 	root := t.TempDir()
-	// A turn in flight: flow_turn.started with no terminal/waiting event after.
+	// A turn in flight: session.turn.started with no terminal/waiting event after.
 	writeSession(t, root, "fs_run", []string{
-		`{"seq":1,"type":"flow_session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_run","flow_id":"default","status":"running","updated_at":"2026-10-09T09:00:00Z"}}}`,
-		`{"seq":2,"type":"flow_turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"in flight"}}`,
+		`{"seq":1,"type":"session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_run","flow_id":"default","status":"running","updated_at":"2026-10-09T09:00:00Z"}}}`,
+		`{"seq":2,"type":"session.turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"in flight"}}`,
 	}, nil)
 
 	sessions, err := List(storage.NewFileStore(root), SessionsDir)
@@ -86,13 +86,13 @@ func TestListMarksRunningSessionActive(t *testing.T) {
 
 func TestListNotActiveAfterWaitingInput(t *testing.T) {
 	root := t.TempDir()
-	// Even though the last flow_session.updated still says "running" (the engine
-	// never rewrites it), flow_turn.waiting_input means the turn is at rest.
+	// Even though the last session.updated still says "running" (the engine
+	// never rewrites it), session.turn.idle means the turn is at rest.
 	writeSession(t, root, "fs_idle", []string{
-		`{"seq":1,"type":"flow_session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_idle","flow_id":"default","status":"created","updated_at":"2026-10-09T09:00:00Z"}}}`,
-		`{"seq":2,"type":"flow_session.updated","created_at":"2026-10-09T09:00:01Z","payload":{"session":{"id":"fs_idle","flow_id":"default","status":"running","updated_at":"2026-10-09T09:00:01Z"}}}`,
-		`{"seq":3,"type":"flow_turn.started","created_at":"2026-10-09T09:00:02Z","payload":{"input":"done"}}`,
-		`{"seq":4,"type":"flow_turn.waiting_input","created_at":"2026-10-09T09:00:03Z","payload":{}}`,
+		`{"seq":1,"type":"session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_idle","flow_id":"default","status":"created","updated_at":"2026-10-09T09:00:00Z"}}}`,
+		`{"seq":2,"type":"session.updated","created_at":"2026-10-09T09:00:01Z","payload":{"session":{"id":"fs_idle","flow_id":"default","status":"running","updated_at":"2026-10-09T09:00:01Z"}}}`,
+		`{"seq":3,"type":"session.turn.started","created_at":"2026-10-09T09:00:02Z","payload":{"input":"done"}}`,
+		`{"seq":4,"type":"session.turn.idle","created_at":"2026-10-09T09:00:03Z","payload":{}}`,
 	}, nil)
 
 	sessions, err := List(storage.NewFileStore(root), SessionsDir)
@@ -104,11 +104,11 @@ func TestListNotActiveAfterWaitingInput(t *testing.T) {
 func TestListSkipsCorruptLines(t *testing.T) {
 	root := t.TempDir()
 	writeSession(t, root, "fs_bad", []string{
-		`{"seq":1,"type":"flow_session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_bad","status":"waiting_input","updated_at":"2026-10-09T09:00:00Z"}}}`,
+		`{"seq":1,"type":"session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_bad","status":"waiting_input","updated_at":"2026-10-09T09:00:00Z"}}}`,
 		`{ this is not json`,
-		`{"seq":3,"type":"flow_turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"survives"}}`,
+		`{"seq":3,"type":"session.turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"survives"}}`,
 	}, []string{
-		`{"seq":1,"type":"agent_turn.completed","payload":{"call_result":{"Usage":{"total_tokens":10}}}}`,
+		`{"seq":1,"type":"session.agent_turn.completed","payload":{"call_result":{"Usage":{"total_tokens":10}}}}`,
 		`garbage`,
 	})
 
@@ -124,8 +124,8 @@ func TestListTruncatesLongTitle(t *testing.T) {
 	root := t.TempDir()
 	long := "先确认当前分支，然后需要切换到 feat/134 分支之后再重新构建整个项目并跑一遍完整的测试套件确认没有回归问题然后提交代码"
 	writeSession(t, root, "fs_long", []string{
-		`{"seq":1,"type":"flow_session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_long","status":"waiting_input","updated_at":"2026-10-09T09:00:00Z"}}}`,
-		`{"seq":2,"type":"flow_turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"` + long + `"}}`,
+		`{"seq":1,"type":"session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_long","status":"waiting_input","updated_at":"2026-10-09T09:00:00Z"}}}`,
+		`{"seq":2,"type":"session.turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"` + long + `"}}`,
 	}, nil)
 
 	sessions, err := List(storage.NewFileStore(root), SessionsDir)
@@ -153,7 +153,7 @@ func TestListSortsByUpdatedAtDescending(t *testing.T) {
 	root := t.TempDir()
 	mk := func(id, ts string) {
 		writeSession(t, root, id, []string{
-			`{"seq":1,"type":"flow_session.created","created_at":"` + ts + `","payload":{"session":{"id":"` + id + `","status":"waiting_input","updated_at":"` + ts + `"}}}`,
+			`{"seq":1,"type":"session.created","created_at":"` + ts + `","payload":{"session":{"id":"` + id + `","status":"waiting_input","updated_at":"` + ts + `"}}}`,
 		}, nil)
 	}
 	mk("old", "2026-10-01T00:00:00Z")

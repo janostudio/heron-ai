@@ -146,19 +146,19 @@ func TestDispatch2TurnDoesNotWaitForDownstream(t *testing.T) {
 	elapsed := time.Since(startedAt)
 
 	events := waitForEvent(t, e.Root, result.Session.ID, 20*time.Second, func(events []event) bool {
-		return hasEvent(events, "mailbox.message.enqueued") || countEvents(events, "flow_turn.started") >= 2
+		return hasEvent(events, "session.mailbox.message.enqueued") || countEvents(events, "session.turn.started") >= 2
 	})
 	writeTrace(t, e, httpTrace{Method: http.MethodPost, Path: "/api/run", Status: http.StatusOK,
 		DurationMS: elapsed.Milliseconds()}, result.Session.ID, map[string]any{
 		"turn_ms":   elapsed.Milliseconds(),
-		"turns":     countEvents(events, "flow_turn.started"),
+		"turns":     countEvents(events, "session.turn.started"),
 		"worker_ms": workerDelay.Milliseconds(),
-		"mailbox":   countEvents(events, "mailbox.message.enqueued"),
+		"mailbox":   countEvents(events, "session.mailbox.message.enqueued"),
 	})
 
 	if elapsed >= workerDelay {
-		t.Fatalf("caller's request returned after %s while the worker takes %s (%d flow_turn.started so far): the turn waited for the downstream team instead of ending at the handoff",
-			elapsed, workerDelay, countEvents(events, "flow_turn.started"))
+		t.Fatalf("caller's request returned after %s while the worker takes %s (%d session.turn.started so far): the turn waited for the downstream team instead of ending at the handoff",
+			elapsed, workerDelay, countEvents(events, "session.turn.started"))
 	}
 }
 
@@ -194,7 +194,7 @@ func TestDispatch3ResultBecomesTheConclusion(t *testing.T) {
 
 	terminals := 0
 	for _, ev := range events {
-		if strings.HasPrefix(ev.Type, "flow_turn.waiting") || ev.Type == "flow_turn.completed" {
+		if (strings.HasPrefix(ev.Type, "session.turn.waiting") || ev.Type == "session.turn.idle") || ev.Type == "session.turn.completed" {
 			terminals++
 		}
 	}
@@ -239,7 +239,7 @@ func TestDispatch4DownstreamFailureIsReported(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 	after := readSession(t, e.Root, result.Session.ID)
 
-	turns := countEvents(after, "flow_turn.started")
+	turns := countEvents(after, "session.turn.started")
 	turnError, errorSeen := turnErrorOf(after)
 	workerCalls := len(requestsOf(e.Mock.requests(), "You are 执行者"))
 	reply, _ := conclusionOf(after)
@@ -274,7 +274,7 @@ func TestDispatch4DownstreamFailureIsReported(t *testing.T) {
 func turnErrorOf(events []event) (string, bool) {
 	last := ""
 	for _, ev := range events {
-		if !strings.HasPrefix(ev.Type, "flow_turn.waiting") && ev.Type != "flow_turn.completed" {
+		if !(strings.HasPrefix(ev.Type, "session.turn.waiting") || ev.Type == "session.turn.idle") && ev.Type != "session.turn.completed" {
 			continue
 		}
 		payload, _ := ev.Raw["payload"].(map[string]any)
@@ -297,7 +297,7 @@ func recordValue(record map[string]any, key string) map[string]any {
 func terminalCount(events []event) int {
 	count := 0
 	for _, ev := range events {
-		if strings.HasPrefix(ev.Type, "flow_turn.waiting") || ev.Type == "flow_turn.completed" {
+		if (strings.HasPrefix(ev.Type, "session.turn.waiting") || ev.Type == "session.turn.idle") || ev.Type == "session.turn.completed" {
 			count++
 		}
 	}
@@ -307,7 +307,7 @@ func terminalCount(events []event) int {
 // twoTurnsTerminated reports whether the handoff turn and the turn that
 // consumes its result have both closed.
 func twoTurnsTerminated(events []event) bool {
-	return countEvents(events, "flow_turn.started") >= 2 && terminalCount(events) >= 2
+	return countEvents(events, "session.turn.started") >= 2 && terminalCount(events) >= 2
 }
 
 // conclusionOf returns the last user-facing conclusion and how many there were.
@@ -317,7 +317,7 @@ func conclusionOf(events []event) (string, int) {
 	reply := ""
 	count := 0
 	for _, ev := range events {
-		if !strings.HasPrefix(ev.Type, "flow_turn.waiting") && ev.Type != "flow_turn.completed" {
+		if !(strings.HasPrefix(ev.Type, "session.turn.waiting") || ev.Type == "session.turn.idle") && ev.Type != "session.turn.completed" {
 			continue
 		}
 		payload, _ := ev.Raw["payload"].(map[string]any)

@@ -75,7 +75,7 @@ type CallTurnFact struct {
 	// usage entries summed into Usage.
 	ModelRequests int
 	ToolCalls     int
-	// ToolFailures counts `tool_call.failed` events in agent.jsonl. It is
+	// ToolFailures counts `session.tool_call.failed` events in agent.jsonl. It is
 	// not available from CallResult, which only reports successful tool
 	// call counts.
 	ToolFailures int

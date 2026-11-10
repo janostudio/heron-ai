@@ -71,12 +71,12 @@ func TestLoadAgentSessionsFoldsLatestPerAgent(t *testing.T) {
 	appendAgentSessionEvent(t, rt, session.ID, "writer", types.SessionRunning)
 	appendAgentSessionEvent(t, rt, session.ID, "reviewer", types.SessionRunning)
 	appendAgentSessionEvent(t, rt, session.ID, "reviewer", types.SessionCompleted)
-	appendAgentSessionEvent(t, rt, session.ID, "writer", types.SessionWaitingInput)
+	appendAgentSessionEvent(t, rt, session.ID, "writer", types.SessionIdle)
 
 	sessions, err := rt.loadAgentSessions(ctx, session.ID)
 	require.NoError(t, err)
 	require.Len(t, sessions, 2)
-	require.Equal(t, types.SessionWaitingInput, sessions[session.ID+":writer"].Status)
+	require.Equal(t, types.SessionIdle, sessions[session.ID+":writer"].Status)
 	require.Equal(t, types.SessionCompleted, sessions[session.ID+":reviewer"].Status)
 	require.Equal(t, "writer", sessions[session.ID+":writer"].AgentID)
 }
@@ -123,12 +123,12 @@ func TestLoadTeamSessionsFoldsLatestPerTeam(t *testing.T) {
 	appendTeamSessionEvent(t, rt, session.ID, "owner", types.SessionRunning)
 	appendTeamSessionEvent(t, rt, session.ID, "worktree", types.SessionRunning)
 	appendTeamSessionEvent(t, rt, session.ID, "worktree", types.SessionCompleted)
-	appendTeamSessionEvent(t, rt, session.ID, "owner", types.SessionWaitingInput)
+	appendTeamSessionEvent(t, rt, session.ID, "owner", types.SessionIdle)
 
 	sessions, err := rt.loadTeamSessions(ctx, session.ID)
 	require.NoError(t, err)
 	require.Len(t, sessions, 2)
-	require.Equal(t, types.SessionWaitingInput, sessions["owner"].Status)
+	require.Equal(t, types.SessionIdle, sessions["owner"].Status)
 	require.Equal(t, types.SessionCompleted, sessions["worktree"].Status)
 }
 

@@ -217,7 +217,7 @@ stdin:
 stdout:
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"session_id":"fs_001","flow_turn_id":"ft_001","status":"waiting_input","reply":"已完成检查。"}}
+{"jsonrpc":"2.0","id":1,"result":{"session_id":"fs_001","flow_turn_id":"ft_001","status":"idle","reply":"已完成检查。"}}
 ```
 
 Rules:
@@ -227,7 +227,7 @@ Rules:
 - logs go to stderr;
 - the first `turn` without `session_id` creates a FlowSession;
 - later turns send the returned `session_id`; a normally finished turn
-  leaves the session in `waiting_input`, so the same `session_id` can be
+  leaves the session in `idle`, so the same `session_id` can be
   reused as a permanent chat thread ID;
 - `flow.jsonl`, `team.jsonl` and `agent.jsonl` remain internal storage
   formats and are not sent directly over stdout.
@@ -256,7 +256,7 @@ Input lines are objects discriminated by `type`:
 Output lines are one of:
 
 ```json
-{"type":"result","subtype":"input_required","session_id":"fs_001","status":"waiting_input","reply":"...","error":"","pending_approvals":[],"pending_tool_tasks":[],"records":[]}
+{"type":"result","subtype":"input_required","session_id":"fs_001","status":"idle","reply":"...","error":"","pending_approvals":[],"pending_tool_tasks":[],"records":[]}
 {"type":"error","subtype":"parse_error","error":"..."}
 ```
 
@@ -408,7 +408,7 @@ Each FlowSession produces data in `.agents/data/sessions/<flow_session_id>/`:
 .agents/data/sessions/<flow_session_id>/
 ├── flow.jsonl                    # flow_session.* / flow_turn.* / team_session.* / team_turn.* / shared_record.*
 ├── team.jsonl                    # agent_session.* / agent_turn.*（token 消耗的事实源）
-├── agent.jsonl                   # agent.model_response
+├── agent.jsonl                   # session.agent.model_response
 ├── teams/<team_id>/state.md      # Team 状态快照
 ├── agents/<team_id>/<call_id>/state.md   # Agent 状态快照
 └── evidence.jsonl                # Flow-scope SharedRecord（有 Flow 级记录时才出现）
@@ -419,7 +419,7 @@ event goes to the file of the layer that produced it, but sequence numbers come
 from a single per-session counter, so the three can always be re-merged into
 one monotonic timeline. `flow.jsonl` carries the Flow/Team orchestration
 timeline including `shared_record.*`; `team.jsonl` carries the per-Agent call
-timeline (`agent_turn.completed` → `payload.call_result.Requests[]` is where
+timeline (`session.agent_turn.completed` → `payload.call_result.requests[]` is where
 token usage lives); `agent.jsonl` carries model responses.
 
 `evidence.jsonl` is separate from the three event streams: it holds the

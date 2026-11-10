@@ -154,8 +154,8 @@ func tail(values []string, limit int) []string {
 func turnTerminated(events []event) bool {
 	for _, ev := range events {
 		switch ev.Type {
-		case "flow_turn.completed", "flow_turn.waiting_input",
-			"flow_turn.waiting_tool", "flow_turn.waiting_approval":
+		case "session.turn.completed", "session.turn.idle",
+			"session.turn.waiting_tool", "session.turn.waiting_approval":
 			return true
 		}
 	}
@@ -167,8 +167,8 @@ func finalTurnStatus(events []event) string {
 	for index := len(events) - 1; index >= 0; index-- {
 		ev := events[index]
 		switch ev.Type {
-		case "flow_turn.completed", "flow_turn.waiting_input",
-			"flow_turn.waiting_tool", "flow_turn.waiting_approval":
+		case "session.turn.completed", "session.turn.idle",
+			"session.turn.waiting_tool", "session.turn.waiting_approval":
 			if payload, ok := ev.Raw["payload"].(map[string]any); ok {
 				if turn, ok := payload["turn"].(map[string]any); ok {
 					if status, ok := turn["status"].(string); ok && status != "" {

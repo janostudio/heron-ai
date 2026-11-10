@@ -55,7 +55,7 @@ func TestResumeForToolResultAppendsToolResult(t *testing.T) {
 	transcripts := newMemoryTranscripts()
 	rt.SetTranscriptStore(transcripts)
 
-	session := seedMailboxSession(t, rt, "fs-tool", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-tool", types.SessionIdle)
 	id := callerTranscriptID(session.ID, "default", "coordinator")
 	require.NoError(t, transcripts.Save(context.Background(), types.AgentTranscript{
 		ID:            id,
@@ -141,7 +141,7 @@ func TestResumeForToolResultWithoutTranscript(t *testing.T) {
 	transcripts := newMemoryTranscripts()
 	rt.SetTranscriptStore(transcripts)
 
-	session := seedMailboxSession(t, rt, "fs-none", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-none", types.SessionIdle)
 
 	err := rt.ResumeForToolResult(context.Background(), session.ID, TeamResultSignal{
 		TaskID: "task-1", CallerTeam: "default", CallID: "coordinator", Status: "done", Reply: "x",
@@ -157,7 +157,7 @@ func TestRunTeamRefusesConcurrentCall(t *testing.T) {
 	recorder := &inputRecordingTeamRuntime{}
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	rt := newTestRuntime(testDefinitions(), recorder, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-busy-team", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-busy-team", types.SessionIdle)
 
 	require.True(t, rt.tryMarkTeamBusy(session.ID, "default"))
 	defer rt.clearTeamBusy(session.ID, "default")
@@ -178,7 +178,7 @@ func TestRunTeamRefusesConcurrentCall(t *testing.T) {
 func TestListTeamsReturnsCallerEdges(t *testing.T) {
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	rt := newTestRuntime(testDefinitions(), &inputRecordingTeamRuntime{}, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-catalog", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-catalog", types.SessionIdle)
 
 	entries, err := rt.ListTeams(context.Background(), types.TeamCatalogSpec{
 		FlowSessionID: session.ID,
@@ -194,7 +194,7 @@ func TestListTeamsReturnsCallerEdges(t *testing.T) {
 func TestListTeamsEmptyForLeafTeam(t *testing.T) {
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	rt := newTestRuntime(testDefinitions(), &inputRecordingTeamRuntime{}, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-catalog-leaf", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-catalog-leaf", types.SessionIdle)
 
 	entries, err := rt.ListTeams(context.Background(), types.TeamCatalogSpec{
 		FlowSessionID: session.ID,
@@ -215,7 +215,7 @@ func TestResumeForToolResultIsIdempotent(t *testing.T) {
 	transcripts := newMemoryTranscripts()
 	rt.SetTranscriptStore(transcripts)
 
-	session := seedMailboxSession(t, rt, "fs-idem", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-idem", types.SessionIdle)
 	id := callerTranscriptID(session.ID, "default", "coordinator")
 	require.NoError(t, transcripts.Save(context.Background(), types.AgentTranscript{
 		ID:            id,
@@ -245,7 +245,7 @@ func TestResumeForToolResultIsIdempotent(t *testing.T) {
 // 被调用方的结果回到调用方时，调用方声明了 flow_records，那条记录必须落进
 // 本轮的记录窗口。窗口若按"收到结果的那一刻"起算，刚产出的记录会因为它早
 // 了几百毫秒而被丢掉：调用方拿到了空输入，展示层也收不到 B→A 的消费边
-// （A→B fixture，2026-10-28 实测无 shared_record.consumed）。
+// （A→B fixture，2026-10-28 实测无 session.record.consumed）。
 func TestResumeForToolResultKeepsRecordsPublishedAfterDispatch(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	writer := storage.NewJSONLSessionWriter(fileStore)
@@ -262,7 +262,7 @@ func TestResumeForToolResultKeepsRecordsPublishedAfterDispatch(t *testing.T) {
 	transcripts := newMemoryTranscripts()
 	rt.SetTranscriptStore(transcripts)
 
-	session := seedMailboxSession(t, rt, "fs-scope", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-scope", types.SessionIdle)
 
 	dispatched := time.Now().UTC().Add(-time.Minute)
 	require.NoError(t, evidence.Publish(context.Background(), session.ID, types.SharedRecord{

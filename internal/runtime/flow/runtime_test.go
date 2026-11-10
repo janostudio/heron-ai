@@ -126,7 +126,7 @@ func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
 		Input:  "verify the change",
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+	require.Equal(t, types.SessionIdle, result.Session.Status)
 	require.Equal(t, types.TurnWaitingInput, result.Turn.Status)
 	require.Contains(t, result.Reply, "verification passed")
 	// Reply concatenates every hop; FinalReply is the hop that ended the turn
@@ -139,7 +139,7 @@ func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
 
 	status, err := runtime.Status(context.Background(), result.Session.ID)
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, status.Status)
+	require.Equal(t, types.SessionIdle, status.Status)
 
 	replay, err := sessionWriter.Replay(context.Background(), result.Session.ID)
 	require.NoError(t, err)
@@ -180,17 +180,17 @@ func TestRuntimeSessionStaysResumableAcrossTurns(t *testing.T) {
 		Input:  "verify the change",
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, first.Session.Status)
+	require.Equal(t, types.SessionIdle, first.Session.Status)
 
 	second, err := runtime.HandleInput(context.Background(), first.Session.ID, "one more thing")
 	require.NoError(t, err)
 	require.Equal(t, first.Session.ID, second.Session.ID)
-	require.Equal(t, types.SessionWaitingInput, second.Session.Status)
+	require.Equal(t, types.SessionIdle, second.Session.Status)
 
 	third, err := runtime.Resume(context.Background(), first.Session.ID, "continue")
 	require.NoError(t, err)
 	require.Equal(t, first.Session.ID, third.Session.ID)
-	require.Equal(t, types.SessionWaitingInput, third.Session.Status)
+	require.Equal(t, types.SessionIdle, third.Session.Status)
 }
 
 func TestRuntimeResumeRejectsCancelledSession(t *testing.T) {
@@ -201,7 +201,7 @@ func TestRuntimeResumeRejectsCancelledSession(t *testing.T) {
 
 	result, err := runtime.Start(context.Background(), types.StartFlowRequest{FlowID: "code-fix"})
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+	require.Equal(t, types.SessionIdle, result.Session.Status)
 	require.NoError(t, runtime.Cancel(context.Background(), result.Session.ID))
 	_, err = runtime.Resume(context.Background(), result.Session.ID, "continue")
 	require.ErrorContains(t, err, "not waiting for input")
@@ -255,7 +255,7 @@ func TestRuntimeTeamWaitingInputStatusSuspendsSession(t *testing.T) {
 		FlowID: "code-fix", Input: "needs a question answered",
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+	require.Equal(t, types.SessionIdle, result.Session.Status)
 	require.Len(t, result.TeamResults, 2)
 	require.Equal(t, "verify", result.TeamResults[1].Turn.TeamID)
 	require.Equal(t, types.TurnWaitingInput, result.TeamResults[1].Turn.Status)
@@ -355,7 +355,7 @@ func TestRuntimeResumeAggregatesMultipleToolTasks(t *testing.T) {
 
 	resumed, err := runtime.Resume(context.Background(), first.Session.ID, "")
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, resumed.Session.Status)
+	require.Equal(t, types.SessionIdle, resumed.Session.Status)
 	require.Equal(t, 1, teamRuntime.resumes)
 	require.Len(t, teamRuntime.lastReq.ResumeCalls, 2)
 	require.Contains(t, resumed.Reply, "all agents resumed")
@@ -454,7 +454,7 @@ func TestRuntimeResumeApprovalResumesWaitingAgentCall(t *testing.T) {
 		context.Background(), first.Session.ID, "approval-1", true, "approved by tester",
 	)
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, resumed.Session.Status)
+	require.Equal(t, types.SessionIdle, resumed.Session.Status)
 	require.True(t, teamRuntime.resumed)
 	require.Contains(t, resumed.Reply, "approved tool completed")
 }
@@ -479,7 +479,7 @@ func TestRuntimeResumeApprovalPreservesAuditingFields(t *testing.T) {
 	}
 	resumed, err := runtime.ResumeApprovalWithResponse(context.Background(), first.Session.ID, decision)
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, resumed.Session.Status)
+	require.Equal(t, types.SessionIdle, resumed.Session.Status)
 
 	require.NotEmpty(t, resumed.TeamResults)
 	var approval *types.HITLResponse
@@ -677,7 +677,7 @@ func TestRuntimeRecoveryRetryRunsContainingTeamAndMarksRecoveryComplete(t *testi
 		Input:                 "retry verify",
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+	require.Equal(t, types.SessionIdle, result.Session.Status)
 	require.Contains(t, result.Reply, "verification passed")
 
 	status, err := runtime.RecoveryStatus(context.Background(), sessionID)

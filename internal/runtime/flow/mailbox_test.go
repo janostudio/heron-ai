@@ -26,7 +26,7 @@ func mailboxTestSession(t *testing.T) (types.FlowSession, types.FlowTurn) {
 	session := types.FlowSession{
 		ID:     newID("fs"),
 		FlowID: "code-fix",
-		Status: types.SessionWaitingInput,
+		Status: types.SessionIdle,
 	}
 	turn := types.FlowTurn{ID: newID("ft"), FlowSessionID: session.ID}
 	return session, turn

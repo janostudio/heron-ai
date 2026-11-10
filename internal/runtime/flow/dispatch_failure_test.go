@@ -110,7 +110,7 @@ func TestDispatchWorkMarksMessageDeadOnTeamFailure(t *testing.T) {
 	runtime := newTestRuntime(testDefinitions(), fake, sessionWriter, nil)
 
 	ctx := context.Background()
-	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionIdle)
 	turn := types.FlowTurn{ID: newID("ft"), FlowSessionID: session.ID}
 
 	msg, err := runtime.enqueueWorkMessage(ctx, session, turn,
@@ -171,7 +171,7 @@ func TestDispatchWorkRecoversPanicAndMarksDead(t *testing.T) {
 	runtime := newTestRuntime(testDefinitions(), fake, sessionWriter, nil)
 
 	ctx := context.Background()
-	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionIdle)
 	turn := types.FlowTurn{ID: newID("ft"), FlowSessionID: session.ID}
 
 	msg, err := runtime.enqueueWorkMessage(ctx, session, turn,
@@ -208,7 +208,7 @@ func TestLaunchAsyncDispatchDefersWhenTeamBusy(t *testing.T) {
 	runtime := newTestRuntime(testDefinitions(), fake, sessionWriter, nil)
 
 	ctx := context.Background()
-	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionIdle)
 	turn := types.FlowTurn{ID: newID("ft"), FlowSessionID: session.ID}
 
 	msg, err := runtime.enqueueWorkMessage(ctx, session, turn,
@@ -241,7 +241,7 @@ func TestDispatchWorkFillsMissingRoutingFields(t *testing.T) {
 	runtime := newTestRuntime(testDefinitions(), &failingTeamRuntime{}, sessionWriter, nil)
 
 	ctx := context.Background()
-	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionIdle)
 	causeTurnID := newID("ft")
 
 	// A bare message: no target Team, no cause turn, exactly what a caller
@@ -269,7 +269,7 @@ func TestWakeIfIdleOnlyWakesIdleSessions(t *testing.T) {
 		wake   bool
 	}{
 		{types.SessionCreated, true},
-		{types.SessionWaitingInput, true},
+		{types.SessionIdle, true},
 		{types.SessionWaitingTool, true},
 		{types.SessionWaitingApproval, true},
 		{types.SessionRunning, false},
@@ -317,7 +317,7 @@ func TestWakeIfIdleWithoutWakerIsNoop(t *testing.T) {
 	sessionWriter := storage.NewJSONLSessionWriter(fileStore)
 	runtime := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
 
-	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionIdle)
 	require.NotPanics(t, func() {
 		runtime.wakeIfIdle(context.Background(), session.ID)
 	})
@@ -348,7 +348,7 @@ func TestRecordBatchDispatchedDoesNotEscalateWriteFailure(t *testing.T) {
 	runtime := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, writer, nil)
 
 	ctx := context.Background()
-	session := types.FlowSession{ID: newID("fs"), FlowID: "code-fix", Status: types.SessionWaitingInput}
+	session := types.FlowSession{ID: newID("fs"), FlowID: "code-fix", Status: types.SessionIdle}
 	turn := types.FlowTurn{ID: newID("ft"), FlowSessionID: session.ID}
 
 	require.NotPanics(t, func() {
@@ -369,7 +369,7 @@ func TestRecordBatchDispatchedWritesMessageIDs(t *testing.T) {
 	runtime := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
 
 	ctx := context.Background()
-	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionIdle)
 	turn := types.FlowTurn{ID: newID("ft"), FlowSessionID: session.ID}
 
 	runtime.recordBatchDispatched(ctx, session, turn, []string{"mb_1", "mb_2"})
@@ -401,7 +401,7 @@ func TestDrainTeamInboxLaunchesPendingMessage(t *testing.T) {
 	runtime := newTestRuntime(testDefinitions(), fake, sessionWriter, nil)
 
 	ctx := context.Background()
-	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionIdle)
 	turn := types.FlowTurn{ID: newID("ft"), FlowSessionID: session.ID}
 
 	msg, err := runtime.enqueueWorkMessage(ctx, session, turn,

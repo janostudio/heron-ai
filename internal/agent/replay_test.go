@@ -287,7 +287,7 @@ func (m *toolCallModel) ChatStream(ctx context.Context, messages []types.Message
 }
 
 // metadataToolExecutor returns a tool result with Metadata so tests can assert
-// tool_call.completed events expose metadata as top-level fields.
+// session.tool_call.completed events expose metadata as top-level fields.
 type metadataToolExecutor struct{}
 
 func (m *metadataToolExecutor) Execute(ctx context.Context, name string, args map[string]any) (*types.ToolResult, error) {
@@ -303,7 +303,7 @@ func (m *metadataToolExecutor) Execute(ctx context.Context, name string, args ma
 }
 
 // TestToolCallEventExposesMetadataEndToEnd verifies the emitted
-// tool_call.completed event carries metadata (exit_code etc.) as top-level
+// session.tool_call.completed event carries metadata (exit_code etc.) as top-level
 // fields rather than flattened into the content string.
 func TestToolCallEventExposesMetadataEndToEnd(t *testing.T) {
 	w := &fakeSessionWriter{}
@@ -335,7 +335,7 @@ func TestToolCallEventExposesMetadataEndToEnd(t *testing.T) {
 			completed = &event
 		}
 	}
-	require.NotNil(t, completed, "expected a tool_call.completed event")
+	require.NotNil(t, completed, "expected a session.tool_call.completed event")
 	assert.Equal(t, 0, completed.Payload["exit_code"])
 	assert.Equal(t, "ls output", completed.Payload["stdout"])
 	assert.Equal(t, "ls output", completed.Payload["content"])
