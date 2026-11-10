@@ -1643,7 +1643,7 @@ func (r *Runtime) executeTeamTurn(
 		return execution, err
 	}
 
-	teamRecords := selectFlowRecordsForBinding(records, binding, scopeSince, teamSession.TaskContextID)
+	teamRecords := selectFlowRecordsForBinding(records, binding, scopeSince, teamSession.TaskContextID, flowTurn.ID)
 	// Record the hand-off before the Team runs: the consumer is what a display
 	// layer needs to draw "B → A" without repeating B's content. Writing it here
 	// (not in the Team) keeps the edge a Flow fact — the Team only knows it
@@ -1763,7 +1763,30 @@ func (r *Runtime) executeTeamTurn(
 	teamResult.Turn.RecordIDs = recordIDs(teamResult.Records)
 	teamResult.Turn.FinishedAt = &now
 
-	for _, record := range teamResult.Records {
+	// A Team that finishes its turn while a call it dispatched is still running
+	// has not concluded anything: the reply is a progress line ("handed it on,
+	// waiting for the answer"). Publishing that as an active record is what let
+	// "正在取证" travel as the current state two minutes after the work behind it
+	// died (fs_2864455499636f2b). The record is marked pending so no consumer
+	// reads it as an answer, and resumeToolResult settles the same record when
+	// the call behind it returns.
+	//
+	// The unit is the call, not the Team: a Team with two calls has two records,
+	// and only the call that dispatched is a progress line. Downgrading every
+	// record of the turn would throw away a sibling call's finished conclusion.
+	pendingCalls := r.pendingCallIDs(ctx, session.ID, teamTurn.TeamID)
+
+	// Written back through the index, not the range copy: the same slice is
+	// appended to allRecords below, and the rest of this turn reads it. A copy
+	// would leave the in-memory record active while the published one says
+	// pending — the exact divergence that lets a progress line be consumed in
+	// the turn that produced it.
+	for index := range teamResult.Records {
+		record := &teamResult.Records[index]
+		if record.Kind == "agent_result" && record.Status == types.RecordActive &&
+			callIsPending(pendingCalls, record.Producer.CallID) {
+			record.Status = types.RecordPending
+		}
 		// A Team that ran as a sub-task produces its records for the conversation
 		// that dispatched it. Its own scope says "team", so the caller's follow-up
 		// turn — which reads flow scope and matches `flow_records` by name — would
@@ -1777,7 +1800,7 @@ func (r *Runtime) executeTeamTurn(
 			publishScope = types.RecordScopeFlow
 		}
 		if publishScope == types.RecordScopeFlow && r.evidence != nil {
-			published := record
+			published := *record
 			published.Scope = publishScope
 			if err := r.evidence.Publish(ctx, session.ID, published); err != nil {
 				return execution, err
@@ -1791,7 +1814,7 @@ func (r *Runtime) executeTeamTurn(
 				TeamSessionID: teamSession.ID,
 				TeamTurnID:    teamTurn.ID,
 			},
-			Payload: map[string]any{"record": record},
+			Payload: map[string]any{"record": *record},
 		}); err != nil {
 			return execution, err
 		}
@@ -2916,10 +2939,10 @@ func recordTaskContextOf(session types.TeamSession) string {
 // selectFlowRecords keeps the session-wide contract: only records outside any
 // task context are considered.
 func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec, since time.Time) []types.SharedRecord {
-	return selectFlowRecordsInContext(records, spec, since, "")
+	return selectFlowRecordsInContext(records, spec, since, "", "", "")
 }
 
-func selectFlowRecordsInContext(records []types.SharedRecord, spec types.InputSpec, since time.Time, taskContextID string) []types.SharedRecord {
+func selectFlowRecordsInContext(records []types.SharedRecord, spec types.InputSpec, since time.Time, taskContextID, consumerTeam, flowTurnID string) []types.SharedRecord {
 	if spec.FlowRecords == nil && spec.Records == nil {
 		return nil
 	}
@@ -2934,9 +2957,37 @@ func selectFlowRecordsInContext(records []types.SharedRecord, spec types.InputSp
 		}
 	}
 
+	// Evidence is append-only, so one record id appears once per revision.
+	// Without folding to the latest revision, a record that has since been
+	// settled reads as active again the moment its earlier copy is scanned.
+	latest := make(map[string]int, len(records))
+	for index, record := range records {
+		latest[record.RecordID] = index
+	}
+
 	selected := make([]types.SharedRecord, 0, len(records))
-	for _, record := range records {
+	for index, record := range records {
+		if latest[record.RecordID] != index {
+			continue
+		}
 		if _, ok := allowed[record.Name]; !ok {
+			continue
+		}
+		// Only an active record is input. A pending one is a progress line whose
+		// work has not come back yet; superseded or invalidated text has already
+		// been replaced or contradicted by what happened after it.
+		if record.Status != "" && record.Status != types.RecordActive {
+			continue
+		}
+		// A Team does not read its own words from an earlier turn as input. It
+		// wrote them, and feeding a progress line back is how the entry Team
+		// answered the user with its own sentence from five minutes earlier
+		// (fs_2864455499636f2b). Within one turn the record stays readable: that
+		// is a Team continuing its own work, and examples/novel-rp relies on a
+		// Team reading the record it produced (lobby declares ScenePlan as both
+		// output and input).
+		if consumerTeam != "" && record.Producer.TeamID == consumerTeam &&
+			flowTurnID != "" && record.Producer.FlowTurnID != flowTurnID {
 			continue
 		}
 		// 记录跨轮留存：上一轮问题产生的结论不能被当成本轮已确认的事实。
@@ -2956,8 +3007,8 @@ func selectFlowRecordsInContext(records []types.SharedRecord, spec types.InputSp
 	return selected
 }
 
-func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding, since time.Time, taskContextID string) []types.SharedRecord {
-	return selectFlowRecordsInContext(records, binding.Inputs, since, taskContextID)
+func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding, since time.Time, taskContextID, flowTurnID string) []types.SharedRecord {
+	return selectFlowRecordsInContext(records, binding.Inputs, since, taskContextID, binding.ID, flowTurnID)
 }
 
 func recordIDs(records []types.SharedRecord) []string {

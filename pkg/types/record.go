@@ -14,7 +14,15 @@ const (
 type RecordStatus string
 
 const (
-	RecordActive      RecordStatus = "active"
+	RecordActive RecordStatus = "active"
+	// RecordPending marks a progress line, not a conclusion: the producer ended
+	// its turn while a call it dispatched is still running. The text is honest
+	// about the state at the time ("I handed it on, waiting for the answer")
+	// but it is not an answer, so a consumer must not read it as one. The same
+	// record is superseded when that call returns and invalidated when it
+	// fails, which is what stops a stale "still working on it" from travelling
+	// as the current state after the work behind it died.
+	RecordPending     RecordStatus = "pending"
 	RecordSuperseded  RecordStatus = "superseded"
 	RecordInvalidated RecordStatus = "invalidated"
 )
