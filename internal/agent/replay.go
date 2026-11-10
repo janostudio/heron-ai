@@ -16,7 +16,7 @@ import (
 //
 // initial is the freshly rendered system + user prompt. The replay appends the
 // runtime increments (model responses, tool results, feedback) on top of it,
-// and honors context.compacted events as fold points that replace the
+// and honors session.context.compacted events as fold points that replace the
 // accumulated messages with the surviving snapshot.
 func (t *TurnLoop) replayAgentContext(ctx context.Context, req types.AgentRequest, initial []types.Message) []types.Message {
 	if t.sessionWriter == nil || strings.TrimSpace(req.FlowSessionID) == "" || req.CallID == "" {
@@ -190,7 +190,7 @@ func payloadInt(payload map[string]any, key string) int {
 }
 
 // modelResponseMessage reconstructs the assistant message from an
-// agent.model_response event payload.
+// session.agent.model_response event payload.
 func modelResponseMessage(payload map[string]any) types.Message {
 	msg := types.Message{Role: "assistant", Content: payloadString(payload, "text")}
 	if raw, ok := payload["tool_calls"]; ok {
@@ -225,8 +225,8 @@ func dropFirst(ids []string, id string) []string {
 	return ids
 }
 
-// toolResultMessage reconstructs the tool message from a tool_call.completed /
-// tool_call.failed event payload.
+// toolResultMessage reconstructs the tool message from a session.tool_call.completed /
+// session.tool_call.failed event payload.
 //
 // A failed call's payload carries `error` where a completed one carries
 // `content`; fall back to the error so the tool message is not empty. The

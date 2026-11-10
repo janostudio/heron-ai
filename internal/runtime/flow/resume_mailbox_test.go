@@ -41,7 +41,7 @@ func TestResumeForMailboxSilentWhenEmpty(t *testing.T) {
 	runtime := newTestRuntime(testDefinitions(), &fakeTeamRuntime{}, sessionWriter, nil)
 
 	ctx := context.Background()
-	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionWaitingInput)
+	session := seedMailboxSession(t, runtime, newID("fs"), types.SessionIdle)
 
 	result, err := runtime.ResumeForMailbox(ctx, session.ID)
 	require.NoError(t, err, "an empty inbox is not an error")
@@ -49,7 +49,7 @@ func TestResumeForMailboxSilentWhenEmpty(t *testing.T) {
 
 	status, err := runtime.Status(ctx, session.ID)
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, status.Status, "status must be untouched")
+	require.Equal(t, types.SessionIdle, status.Status, "status must be untouched")
 }
 
 // TestResumeForMailboxSilentWhenRunning pins the running guard: a wake that

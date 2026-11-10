@@ -87,7 +87,7 @@ func TestRecover1InterruptedTurnIsIdentifiable(t *testing.T) {
 	}
 	// Wait until the turn actually started, so the crash lands mid-turn.
 	waitForEvent(t, e.Root, sessionID, 10*time.Second, func(events []event) bool {
-		return hasEvent(events, "flow_turn.started")
+		return hasEvent(events, "session.turn.started")
 	})
 
 	e.killAndRestart()
@@ -130,7 +130,7 @@ func TestRecover2InterruptedWorkIsNotReportedAsSuccess(t *testing.T) {
 		t.Fatalf("turn never created a session")
 	}
 	waitForEvent(t, e.Root, sessionID, 10*time.Second, func(events []event) bool {
-		return hasEvent(events, "flow_turn.started")
+		return hasEvent(events, "session.turn.started")
 	})
 
 	e.killAndRestart()

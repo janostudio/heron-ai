@@ -18,7 +18,7 @@ import (
 // the published contract. types.EventHeader carries a single `call_turn_id`
 // for all three call types, discriminated by `call_type`, and no agent
 // session id at all — the AgentSession id only appears inside the
-// `agent_session.created` payload. This graph therefore models one call_turn
+// `session.agent_session.created` payload. This graph therefore models one call_turn
 // node kind plus a separate agent_session kind hanging off the TeamSession,
 // which is what the event stream can actually support.
 type NodeKind string

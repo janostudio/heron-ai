@@ -14,9 +14,9 @@ func TestEventLayer(t *testing.T) {
 		types.EventTeamTurnCompleted:     "team",
 		types.EventAgentTurnCompleted:    "agent",
 		types.EventToolCallCompleted:     "agent",
-		"command_turn.completed":         "team",
-		"webhook_turn.started":           "team",
-		"approval.requested":             "team",
+		"session.command_turn.completed":         "team",
+		"session.webhook_turn.started":           "team",
+		"session.approval.requested":             "team",
 	}
 	for eventType, want := range cases {
 		if got := eventLayer(eventType); got != want {

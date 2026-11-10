@@ -29,7 +29,7 @@ func toolCallPayload(ev event) (name, callID, scriptID string, step int) {
 func toolEventsOf(events []event, name string) []event {
 	var out []event
 	for _, ev := range events {
-		if !strings.HasPrefix(ev.Type, "tool_call.") {
+		if !strings.HasPrefix(ev.Type, "session.tool_call.") {
 			continue
 		}
 		if got, _, _, _ := toolCallPayload(ev); got != name {
@@ -70,11 +70,11 @@ func TestTool1DirectCallRoundTrip(t *testing.T) {
 	if len(readEvents) < 2 {
 		t.Fatalf("expected started+completed for Read, got %d tool events; types=%v", len(readEvents), typesOf(events))
 	}
-	if readEvents[0].Type != "tool_call.started" {
-		t.Fatalf("first Read event is %q; want tool_call.started", readEvents[0].Type)
+	if readEvents[0].Type != "session.tool_call.started" {
+		t.Fatalf("first Read event is %q; want session.tool_call.started", readEvents[0].Type)
 	}
-	if readEvents[len(readEvents)-1].Type != "tool_call.completed" {
-		t.Fatalf("last Read event is %q; want tool_call.completed", readEvents[len(readEvents)-1].Type)
+	if readEvents[len(readEvents)-1].Type != "session.tool_call.completed" {
+		t.Fatalf("last Read event is %q; want session.tool_call.completed", readEvents[len(readEvents)-1].Type)
 	}
 
 	requests := e.Mock.requests()
@@ -147,10 +147,10 @@ func TestTool2ScriptInnerDispatch(t *testing.T) {
 	}
 
 	events := waitForEvent(t, e.Root, result.Session.ID, 20*time.Second, func(events []event) bool {
-		return hasEvent(events, "approval.resolved") && turnTerminated(events)
+		return hasEvent(events, "session.approval.resolved") && turnTerminated(events)
 	})
-	if !hasEvent(events, "approval.requested") {
-		t.Fatalf("no approval.requested event; types=%v", typesOf(events))
+	if !hasEvent(events, "session.approval.requested") {
+		t.Fatalf("no session.approval.requested event; types=%v", typesOf(events))
 	}
 
 	requests := e.Mock.requests()
@@ -165,7 +165,7 @@ func TestTool2ScriptInnerDispatch(t *testing.T) {
 	scriptEvents := toolEventsOf(events, "Script")
 	inner := 0
 	for _, ev := range events {
-		if !strings.HasPrefix(ev.Type, "tool_call.") {
+		if !strings.HasPrefix(ev.Type, "session.tool_call.") {
 			continue
 		}
 		name, _, scriptID, step := toolCallPayload(ev)
@@ -217,18 +217,18 @@ func TestTool3FailureIsVisibleToModel(t *testing.T) {
 	events := waitForEvent(t, e.Root, result.Session.ID, 15*time.Second, turnTerminated)
 	failures := 0
 	for _, ev := range events {
-		if ev.Type == "tool_call.failed" {
+		if ev.Type == "session.tool_call.failed" {
 			failures++
 		}
 	}
 	completed := 0
 	for _, ev := range toolEventsOf(events, "Read") {
-		if ev.Type == "tool_call.completed" {
+		if ev.Type == "session.tool_call.completed" {
 			completed++
 		}
 	}
 	if failures == 0 {
-		t.Fatalf("missing file produced no tool_call.failed event; types=%v", typesOf(events))
+		t.Fatalf("missing file produced no session.tool_call.failed event; types=%v", typesOf(events))
 	}
 
 	requests := e.Mock.requests()
@@ -290,7 +290,7 @@ func TestTool4DeniedApprovalDoesNotExecute(t *testing.T) {
 	denyBody := strings.TrimSpace(string(body))
 
 	events := waitForEvent(t, e.Root, result.Session.ID, 20*time.Second, func(events []event) bool {
-		return hasEvent(events, "approval.resolved") && turnTerminated(events)
+		return hasEvent(events, "session.approval.resolved") && turnTerminated(events)
 	})
 
 	executed := false
@@ -367,7 +367,7 @@ func TestTool5ApprovalGateStopsTheWholeBatch(t *testing.T) {
 	}
 
 	events := waitForEvent(t, e.Root, result.Session.ID, 20*time.Second, func(events []event) bool {
-		return hasEvent(events, "approval.resolved") && turnTerminated(events)
+		return hasEvent(events, "session.approval.resolved") && turnTerminated(events)
 	})
 
 	// After the decision: both calls carry results, because the assistant

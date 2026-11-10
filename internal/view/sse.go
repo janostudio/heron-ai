@@ -16,6 +16,11 @@ type SSEWriter struct {
 	mu      sync.Mutex
 }
 
+// sseRetryMillis is the reconnection delay announced to EventSource clients.
+// The value is the browser default; stating it explicitly makes the interval
+// part of the contract instead of an implementation detail the client guesses.
+const sseRetryMillis = 3000
+
 func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -25,6 +30,16 @@ func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// Nginx buffers proxied responses by default, which turns a live stream
+	// into batches delivered when the buffer fills or the stream ends.
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	// The retry directive must precede the first event: a client that
+	// reconnects mid-stream has already read it by then. Writing it before the
+	// first flush also gets the response headers to the client immediately.
+	if _, err := fmt.Fprintf(w, "retry: %d\n\n", sseRetryMillis); err != nil {
+		return nil, err
+	}
 	flusher.Flush()
 
 	return &SSEWriter{w: w, flusher: flusher}, nil

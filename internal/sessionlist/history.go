@@ -141,13 +141,13 @@ func operations(ops []types.WorkspaceOperation) []Operation {
 }
 
 // teamTurnFields decodes the container fields this package reads from a
-// team_result payload. Containers use Go field names (Reply, Usage, …); Usage's
-// own leaves stay snake_case — the published contract.
+// team_result payload. Field names follow the published wire format
+// (snake_case), which is what the jsonl actually contains.
 type teamTurnFields struct {
-	Reply       string                    `json:"Reply"`
-	Usage       types.TokenUsage          `json:"Usage"`
-	Turn        teamTurnRef               `json:"Turn"`
-	CallResults map[string]teamCallResult `json:"CallResults"`
+	Reply       string                    `json:"reply"`
+	Usage       types.TokenUsage          `json:"usage"`
+	Turn        teamTurnRef               `json:"turn"`
+	CallResults map[string]teamCallResult `json:"call_results"`
 }
 
 // teamTurnRef carries the team identifier embedded in a team_result.Turn.
@@ -157,9 +157,9 @@ type teamTurnRef struct {
 
 // teamCallResult is the subset of a CallResult this package reads.
 type teamCallResult struct {
-	AgentID      string                     `json:"AgentID"`
-	Reply        string                     `json:"Reply"`
-	WorkspaceOps []types.WorkspaceOperation `json:"WorkspaceOps"`
+	AgentID      string                     `json:"agent_id"`
+	Reply        string                     `json:"reply"`
+	WorkspaceOps []types.WorkspaceOperation `json:"workspace_ops"`
 }
 
 func teamTurnData(payload map[string]any) teamTurnFields {

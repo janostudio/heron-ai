@@ -176,7 +176,7 @@ func TestSessionFlowRunnerRun(t *testing.T) {
 
 	t.Run("start branch when no session", func(t *testing.T) {
 		stub := &runnerFlowRuntimeStub{
-			startResult: newTurnResult("fs-1", types.SessionWaitingInput),
+			startResult: newTurnResult("fs-1", types.SessionIdle),
 		}
 		runner := &sessionFlowRunner{runtime: stub}
 		res, err := runner.Run(context.Background(), "hello")
@@ -184,7 +184,7 @@ func TestSessionFlowRunnerRun(t *testing.T) {
 		require.Equal(t, 1, stub.startCalls)
 		require.Equal(t, 0, stub.handleCalls)
 		require.Equal(t, "fs-1", runner.sessionID)
-		require.Equal(t, types.SessionWaitingInput, res.Status)
+		require.Equal(t, types.SessionIdle, res.Status)
 		require.Len(t, res.Teams, 1)
 		require.Equal(t, "team-1", res.Teams[0].TeamID)
 		require.Equal(t, 30, res.Usage.TotalTokens)
@@ -192,7 +192,7 @@ func TestSessionFlowRunnerRun(t *testing.T) {
 
 	t.Run("handle branch when session exists", func(t *testing.T) {
 		stub := &runnerFlowRuntimeStub{
-			handleResult: newTurnResult("fs-1", types.SessionWaitingInput),
+			handleResult: newTurnResult("fs-1", types.SessionIdle),
 		}
 		runner := &sessionFlowRunner{runtime: stub, sessionID: "fs-1"}
 		res, err := runner.Run(context.Background(), "continue")
@@ -200,7 +200,7 @@ func TestSessionFlowRunnerRun(t *testing.T) {
 		require.Equal(t, 0, stub.startCalls)
 		require.Equal(t, 1, stub.handleCalls)
 		require.Equal(t, "fs-1", runner.sessionID)
-		require.Equal(t, types.SessionWaitingInput, res.Status)
+		require.Equal(t, types.SessionIdle, res.Status)
 	})
 
 	t.Run("session id updates after start", func(t *testing.T) {
@@ -227,7 +227,7 @@ func TestWritePromptResult(t *testing.T) {
 			teamResults = append(teamResults, types.TeamTurnResult{Usage: usage})
 		}
 		return types.FlowTurnResult{
-			Session:     types.FlowSession{ID: "fs-1", Status: types.SessionWaitingInput},
+			Session:     types.FlowSession{ID: "fs-1", Status: types.SessionIdle},
 			Reply:       "done",
 			Records:     []types.SharedRecord{{Name: "DiagnosisReport", Summary: "found one issue"}},
 			TeamResults: teamResults,
@@ -245,7 +245,7 @@ func TestWritePromptResult(t *testing.T) {
 		require.Contains(t, out, "Flow: test-flow\n")
 		require.Contains(t, out, "Model: hy3\n")
 		require.Contains(t, out, "FlowSession: fs-1\n")
-		require.Contains(t, out, "Status: waiting_input\n")
+		require.Contains(t, out, "Status: idle\n")
 		// Same aggregation the JSON-RPC result uses: 30 + 3.
 		require.Contains(t, out, "Tokens: 33 (prompt 11, completion 22)\n")
 		require.Contains(t, out, "\ndone\n")

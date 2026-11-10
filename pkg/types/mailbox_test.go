@@ -118,11 +118,11 @@ func TestMailboxMessageStatusValues(t *testing.T) {
 
 func TestMailboxEventConstants(t *testing.T) {
 	cases := map[string]string{
-		EventMailboxMessageEnqueued:  "mailbox.message.enqueued",
-		EventMailboxMessageClaimed:   "mailbox.message.claimed",
-		EventMailboxMessageDelivered: "mailbox.message.delivered",
-		EventMailboxMessageDead:      "mailbox.message.dead",
-		EventMailboxBatchDispatched:  "mailbox.batch.dispatched",
+		EventMailboxMessageEnqueued:  "session.mailbox.message.enqueued",
+		EventMailboxMessageClaimed:   "session.mailbox.message.claimed",
+		EventMailboxMessageDelivered: "session.mailbox.message.delivered",
+		EventMailboxMessageDead:      "session.mailbox.message.dead",
+		EventMailboxBatchDispatched:  "session.mailbox.batch.dispatched",
 	}
 	for got, want := range cases {
 		if got != want {

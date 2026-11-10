@@ -2,7 +2,7 @@
   "events": [
     {
       "seq": 1,
-      "type": "team_session.created",
+      "type": "session.team_session.created",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -21,7 +21,7 @@
     },
     {
       "seq": 2,
-      "type": "agent_session.created",
+      "type": "session.agent_session.created",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "tt_dummy:coordinator",
@@ -41,7 +41,7 @@
     },
     {
       "seq": 3,
-      "type": "team_session.created",
+      "type": "session.team_session.created",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -60,7 +60,7 @@
     },
     {
       "seq": 4,
-      "type": "agent_session.created",
+      "type": "session.agent_session.created",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "tt_dummy:terrain",
@@ -80,7 +80,7 @@
     },
     {
       "seq": 5,
-      "type": "team_session.created",
+      "type": "session.team_session.created",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -99,7 +99,7 @@
     },
     {
       "seq": 6,
-      "type": "agent_session.created",
+      "type": "session.agent_session.created",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "tt_dummy:inspect",
@@ -119,7 +119,7 @@
     },
     {
       "seq": 7,
-      "type": "team_session.created",
+      "type": "session.team_session.created",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -138,7 +138,7 @@
     },
     {
       "seq": 8,
-      "type": "agent_session.created",
+      "type": "session.agent_session.created",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "tt_dummy:inspect",
@@ -158,7 +158,7 @@
     },
     {
       "seq": 9,
-      "type": "team_session.created",
+      "type": "session.team_session.created",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -177,7 +177,7 @@
     },
     {
       "seq": 10,
-      "type": "agent_session.created",
+      "type": "session.agent_session.created",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "tt_dummy:analyze",
@@ -197,7 +197,7 @@
     },
     {
       "seq": 11,
-      "type": "flow_turn.started",
+      "type": "session.turn.started",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -209,7 +209,7 @@
     },
     {
       "seq": 12,
-      "type": "team_turn.started",
+      "type": "session.team_turn.started",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_a",
       "call_turn_id": "",
@@ -225,7 +225,7 @@
     },
     {
       "seq": 13,
-      "type": "agent_turn.started",
+      "type": "session.agent_turn.started",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_a",
       "call_turn_id": "tt_a:coordinator",
@@ -237,7 +237,7 @@
     },
     {
       "seq": 14,
-      "type": "agent.model_response",
+      "type": "session.agent.model_response",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_a",
       "call_turn_id": "tt_a:coordinator",
@@ -251,7 +251,7 @@
     },
     {
       "seq": 15,
-      "type": "agent_turn.completed",
+      "type": "session.agent_turn.completed",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_a",
       "call_turn_id": "tt_a:coordinator",
@@ -261,7 +261,7 @@
     },
     {
       "seq": 16,
-      "type": "team_turn.completed",
+      "type": "session.team_turn.completed",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_a",
       "call_turn_id": "",
@@ -278,7 +278,7 @@
     },
     {
       "seq": 17,
-      "type": "tool_call.started",
+      "type": "session.tool_call.started",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_a",
       "call_turn_id": "tt_a:coordinator",
@@ -295,7 +295,7 @@
     },
     {
       "seq": 18,
-      "type": "team_turn.started",
+      "type": "session.team_turn.started",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_b",
       "call_turn_id": "",
@@ -311,7 +311,7 @@
     },
     {
       "seq": 19,
-      "type": "agent_turn.started",
+      "type": "session.agent_turn.started",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_b",
       "call_turn_id": "tt_b:terrain",
@@ -321,7 +321,7 @@
     },
     {
       "seq": 20,
-      "type": "agent.model_response",
+      "type": "session.agent.model_response",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_b",
       "call_turn_id": "tt_b:terrain",
@@ -335,7 +335,7 @@
     },
     {
       "seq": 21,
-      "type": "agent_turn.completed",
+      "type": "session.agent_turn.completed",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_b",
       "call_turn_id": "tt_b:terrain",
@@ -345,7 +345,7 @@
     },
     {
       "seq": 22,
-      "type": "team_turn.completed",
+      "type": "session.team_turn.completed",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_b",
       "call_turn_id": "",
@@ -362,7 +362,7 @@
     },
     {
       "seq": 23,
-      "type": "team_turn.started",
+      "type": "session.team_turn.started",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_c",
       "call_turn_id": "",
@@ -378,7 +378,7 @@
     },
     {
       "seq": 24,
-      "type": "agent.model_response",
+      "type": "session.agent.model_response",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_c",
       "call_turn_id": "tt_c:inspect",
@@ -392,7 +392,7 @@
     },
     {
       "seq": 25,
-      "type": "team_turn.completed",
+      "type": "session.team_turn.completed",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_c",
       "call_turn_id": "",
@@ -409,7 +409,7 @@
     },
     {
       "seq": 26,
-      "type": "team_turn.started",
+      "type": "session.team_turn.started",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_d",
       "call_turn_id": "",
@@ -425,7 +425,7 @@
     },
     {
       "seq": 27,
-      "type": "agent.model_response",
+      "type": "session.agent.model_response",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_d",
       "call_turn_id": "tt_d:inspect",
@@ -439,7 +439,7 @@
     },
     {
       "seq": 28,
-      "type": "team_turn.completed",
+      "type": "session.team_turn.completed",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_d",
       "call_turn_id": "",
@@ -456,7 +456,7 @@
     },
     {
       "seq": 29,
-      "type": "team_turn.started",
+      "type": "session.team_turn.started",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_e",
       "call_turn_id": "",
@@ -472,7 +472,7 @@
     },
     {
       "seq": 30,
-      "type": "agent.model_response",
+      "type": "session.agent.model_response",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_e",
       "call_turn_id": "tt_e:analyze",
@@ -486,7 +486,7 @@
     },
     {
       "seq": 31,
-      "type": "team_turn.completed",
+      "type": "session.team_turn.completed",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_e",
       "call_turn_id": "",
@@ -503,7 +503,7 @@
     },
     {
       "seq": 32,
-      "type": "flow_turn.waiting_input",
+      "type": "session.turn.idle",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -517,7 +517,7 @@
     },
     {
       "seq": 33,
-      "type": "team_session.updated",
+      "type": "session.team_session.updated",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -536,7 +536,7 @@
     },
     {
       "seq": 34,
-      "type": "agent_session.updated",
+      "type": "session.agent_session.updated",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "tt_dummy:coordinator",
@@ -556,7 +556,7 @@
     },
     {
       "seq": 35,
-      "type": "team_session.updated",
+      "type": "session.team_session.updated",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -575,7 +575,7 @@
     },
     {
       "seq": 36,
-      "type": "agent_session.updated",
+      "type": "session.agent_session.updated",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "tt_dummy:terrain",
@@ -595,7 +595,7 @@
     },
     {
       "seq": 37,
-      "type": "team_session.updated",
+      "type": "session.team_session.updated",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -614,7 +614,7 @@
     },
     {
       "seq": 38,
-      "type": "agent_session.updated",
+      "type": "session.agent_session.updated",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "tt_dummy:inspect",
@@ -634,7 +634,7 @@
     },
     {
       "seq": 39,
-      "type": "team_session.updated",
+      "type": "session.team_session.updated",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -653,7 +653,7 @@
     },
     {
       "seq": 40,
-      "type": "agent_session.updated",
+      "type": "session.agent_session.updated",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "tt_dummy:inspect",
@@ -673,7 +673,7 @@
     },
     {
       "seq": 41,
-      "type": "team_session.updated",
+      "type": "session.team_session.updated",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "",
@@ -692,7 +692,7 @@
     },
     {
       "seq": 42,
-      "type": "agent_session.updated",
+      "type": "session.agent_session.updated",
       "flow_turn_id": "",
       "team_turn_id": "",
       "call_turn_id": "tt_dummy:analyze",

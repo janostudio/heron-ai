@@ -6,6 +6,12 @@ import "time"
 // The Seq is globally monotonic per FlowSession (allocated by the storage
 // layer), so events from flow.jsonl / team.jsonl / agent.jsonl can be
 // re-ordered into a single timeline when needed.
+//
+// The id fields keep their internal names (flow_session_id / flow_turn_id):
+// they identify layer objects whose Go types are FlowSession / FlowTurn, and
+// renaming the fields would touch every producer and consumer for no wire
+// benefit. The event `type` values, by contrast, are the public vocabulary and
+// live in the `session.` namespace below.
 type EventHeader struct {
 	Seq           int64     `json:"seq"`
 	EventID       string    `json:"event_id"`
@@ -24,71 +30,75 @@ type EventHeader struct {
 }
 
 // Flow event types (flow.jsonl).
+//
+// Every event lives in the `session.` namespace; the second segment names the
+// object and the last one the action. Actions are past tense: an event records
+// something that already happened, not a state to be reached.
 const (
-	EventFlowSessionCreated      = "flow_session.created"
-	EventFlowSessionUpdated      = "flow_session.updated"
-	EventFlowTurnStarted         = "flow_turn.started"
-	EventFlowTurnCompleted       = "flow_turn.completed"
-	EventFlowTurnWaitingInput    = "flow_turn.waiting_input"
-	EventFlowTurnWaitingTool     = "flow_turn.waiting_tool"
-	EventFlowTurnWaitingApproval = "flow_turn.waiting_approval"
-	EventTeamTurnStarted         = "team_turn.started"
-	EventTeamTurnCompleted       = "team_turn.completed"
-	EventTeamTurnWaitingInput    = "team_turn.waiting_input"
-	EventTeamTurnWaitingTool     = "team_turn.waiting_tool"
-	EventTeamTurnWaitingApproval = "team_turn.waiting_approval"
-	EventSharedRecordPublished   = "shared_record.published"
+	EventFlowSessionCreated      = "session.created"
+	EventFlowSessionUpdated      = "session.updated"
+	EventFlowTurnStarted         = "session.turn.started"
+	EventFlowTurnCompleted       = "session.turn.completed"
+	EventFlowTurnWaitingInput    = "session.turn.idle"
+	EventFlowTurnWaitingTool     = "session.turn.waiting_tool"
+	EventFlowTurnWaitingApproval = "session.turn.waiting_approval"
+	EventTeamTurnStarted         = "session.team_turn.started"
+	EventTeamTurnCompleted       = "session.team_turn.completed"
+	EventTeamTurnWaitingInput    = "session.team_turn.idle"
+	EventTeamTurnWaitingTool     = "session.team_turn.waiting_tool"
+	EventTeamTurnWaitingApproval = "session.team_turn.waiting_approval"
+	EventSharedRecordPublished   = "session.record.published"
 	// EventSharedRecordConsumed records that a Team is being handed an existing
 	// record. It exists so a display layer can say which Team uses which
 	// production ("B → A") without duplicating the content: the production is
 	// shown once, at its producer, and every use is an edge.
-	EventSharedRecordConsumed = "shared_record.consumed"
-	EventRecoveryRequested    = "recovery.requested"
-	EventRecoveryCompleted    = "recovery.completed"
+	EventSharedRecordConsumed = "session.record.consumed"
+	EventRecoveryRequested    = "session.recovery.requested"
+	EventRecoveryCompleted    = "session.recovery.completed"
 
 	// Mailbox events (also recorded in flow.jsonl).
-	EventMailboxMessageEnqueued  = "mailbox.message.enqueued"
-	EventMailboxMessageClaimed   = "mailbox.message.claimed"
-	EventMailboxMessageDelivered = "mailbox.message.delivered"
-	EventMailboxMessageDead      = "mailbox.message.dead"
-	EventMailboxBatchDispatched  = "mailbox.batch.dispatched"
+	EventMailboxMessageEnqueued  = "session.mailbox.message.enqueued"
+	EventMailboxMessageClaimed   = "session.mailbox.message.claimed"
+	EventMailboxMessageDelivered = "session.mailbox.message.delivered"
+	EventMailboxMessageDead      = "session.mailbox.message.dead"
+	EventMailboxBatchDispatched  = "session.mailbox.batch.dispatched"
 
 	// Self-scheduled wake-ups (also recorded in flow.jsonl). The payload
 	// carries the whole WakeupRecord, so replay can rebuild the pending set
 	// without a second store. A wake-up performs no work, so these are the
 	// only states it has.
-	EventWakeupCreated   = "wakeup.created"
-	EventWakeupFired     = "wakeup.fired"
-	EventWakeupSkipped   = "wakeup.skipped"
-	EventWakeupCancelled = "wakeup.cancelled"
-	EventWakeupExpired   = "wakeup.expired"
+	EventWakeupCreated   = "session.wakeup.created"
+	EventWakeupFired     = "session.wakeup.fired"
+	EventWakeupSkipped   = "session.wakeup.skipped"
+	EventWakeupCancelled = "session.wakeup.cancelled"
+	EventWakeupExpired   = "session.wakeup.expired"
 )
 
 // Team event types (team.jsonl).
 const (
-	EventTeamSessionCreated       = "team_session.created"
-	EventTeamSessionUpdated       = "team_session.updated"
-	EventAgentSessionCreated      = "agent_session.created"
-	EventAgentSessionUpdated      = "agent_session.updated"
-	EventAgentTurnStarted         = "agent_turn.started"
-	EventAgentTurnCompleted       = "agent_turn.completed"
-	EventAgentTurnWaitingInput    = "agent_turn.waiting_input"
-	EventAgentTurnWaitingTool     = "agent_turn.waiting_tool"
-	EventAgentTurnWaitingApproval = "agent_turn.waiting_approval"
-	EventApprovalRequested        = "approval.requested"
-	EventApprovalResolved         = "approval.resolved"
-	EventCommandTurnStarted       = "command_turn.started"
-	EventCommandTurnCompleted     = "command_turn.completed"
-	EventWebhookTurnStarted       = "webhook_turn.started"
-	EventWebhookTurnCompleted     = "webhook_turn.completed"
+	EventTeamSessionCreated       = "session.team_session.created"
+	EventTeamSessionUpdated       = "session.team_session.updated"
+	EventAgentSessionCreated      = "session.agent_session.created"
+	EventAgentSessionUpdated      = "session.agent_session.updated"
+	EventAgentTurnStarted         = "session.agent_turn.started"
+	EventAgentTurnCompleted       = "session.agent_turn.completed"
+	EventAgentTurnWaitingInput    = "session.agent_turn.idle"
+	EventAgentTurnWaitingTool     = "session.agent_turn.waiting_tool"
+	EventAgentTurnWaitingApproval = "session.agent_turn.waiting_approval"
+	EventApprovalRequested        = "session.approval.requested"
+	EventApprovalResolved         = "session.approval.resolved"
+	EventCommandTurnStarted       = "session.command_turn.started"
+	EventCommandTurnCompleted     = "session.command_turn.completed"
+	EventWebhookTurnStarted       = "session.webhook_turn.started"
+	EventWebhookTurnCompleted     = "session.webhook_turn.completed"
 )
 
 // Agent event types (agent.jsonl).
 const (
-	EventAgentModelResponse = "agent.model_response"
-	EventAgentFeedback      = "agent.feedback"
-	EventToolCallStarted    = "tool_call.started"
-	EventToolCallCompleted  = "tool_call.completed"
-	EventToolCallFailed     = "tool_call.failed"
-	EventContextCompacted   = "context.compacted"
+	EventAgentModelResponse = "session.agent.model_response"
+	EventAgentFeedback      = "session.agent.feedback"
+	EventToolCallStarted    = "session.tool_call.started"
+	EventToolCallCompleted  = "session.tool_call.completed"
+	EventToolCallFailed     = "session.tool_call.failed"
+	EventContextCompacted   = "session.context.compacted"
 )

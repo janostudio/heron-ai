@@ -493,19 +493,19 @@ type turnResult struct {
 		ID     string `json:"id"`
 		FlowID string `json:"flow_id"`
 		Status string `json:"status"`
-	} `json:"Session"`
+	} `json:"session"`
 	Turn struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
-	} `json:"Turn"`
-	Reply            string            `json:"Reply"`
-	FinalReply       string            `json:"FinalReply"`
+	} `json:"turn"`
+	Reply            string            `json:"reply"`
+	FinalReply       string            `json:"final_reply"`
 	FinalReplyTeam   string            `json:"final_reply_team"`
-	Queued           bool              `json:"Queued"`
-	Deliveries       []any             `json:"Deliveries"`
-	PendingApprovals []pendingApproval `json:"PendingApprovals"`
-	PendingToolTasks []any             `json:"PendingToolTasks"`
-	TeamResults      []any             `json:"TeamResults"`
+	Queued           bool              `json:"queued"`
+	Deliveries       []any             `json:"deliveries"`
+	PendingApprovals []pendingApproval `json:"pending_approvals"`
+	PendingToolTasks []any             `json:"pending_tool_tasks"`
+	TeamResults      []any             `json:"team_results"`
 }
 
 // pendingApproval is the handle a client needs to answer an approval; without

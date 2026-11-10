@@ -431,8 +431,8 @@ func TestServerWriterSerialisesNotificationsAndResponses(t *testing.T) {
 
 // TestProjectFlowTurnCarriesReplyAndOrigin covers the notification a caller
 // uses to relay an unattended turn's answer. A finished turn ends as
-// flow_turn.waiting_input (every normal turn does), so the announcement has to
-// ride on that event as well as on flow_turn.completed.
+// session.turn.idle (every normal turn does), so the announcement has to
+// ride on that event as well as on session.turn.completed.
 func TestProjectFlowTurnCarriesReplyAndOrigin(t *testing.T) {
 	payload := map[string]any{
 		"turn":         types.FlowTurn{ID: "ft-bg", Status: types.TurnWaitingInput, Origin: "mailbox"},

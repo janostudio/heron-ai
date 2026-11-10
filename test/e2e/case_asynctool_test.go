@@ -15,7 +15,7 @@ import (
 // *team* turn (the agent declared the tool async, so it hands the turn back and
 // the task runs in the background), while the caller's flow turn is still
 // `waiting_input` because the dispatch was accepted. The test pins both: a
-// team_turn.waiting_tool event exists, and the session stays continuable.
+// session.team_turn.waiting_tool event exists, and the session stays continuable.
 func TestTool6AsyncToolSuspendsTeamTurnAndResumes(t *testing.T) {
 	judge(t, "I-TOOL-4", "tool")
 
@@ -35,10 +35,10 @@ func TestTool6AsyncToolSuspendsTeamTurnAndResumes(t *testing.T) {
 
 	// The team turn parks on the async tool instead of waiting inline.
 	events := waitForEvent(t, e.Root, result.Session.ID, 30*time.Second, func(events []event) bool {
-		return hasEvent(events, "team_turn.waiting_tool")
+		return hasEvent(events, "session.team_turn.waiting_tool")
 	})
-	if !hasEvent(events, "team_turn.waiting_tool") {
-		t.Fatalf("no team_turn.waiting_tool event; types=%v", typesOf(events))
+	if !hasEvent(events, "session.team_turn.waiting_tool") {
+		t.Fatalf("no session.team_turn.waiting_tool event; types=%v", typesOf(events))
 	}
 
 	// The async task really is a durable task, and it finishes.
@@ -65,7 +65,7 @@ func TestTool6AsyncToolSuspendsTeamTurnAndResumes(t *testing.T) {
 
 	writeTrace(t, e, httpTrace{Method: http.MethodPost, Path: "/api/run", Status: http.StatusOK},
 		result.Session.ID, map[string]any{
-			"team_waiting_tool": hasEvent(events, "team_turn.waiting_tool"),
+			"team_waiting_tool": hasEvent(events, "session.team_turn.waiting_tool"),
 			"session_status":    truncate(string(body), 80),
 		})
 }

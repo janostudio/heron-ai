@@ -89,7 +89,7 @@ type Runtime struct {
 
 	// wakeupMu guards wakeupIndex: the self-scheduled wake-ups this process
 	// knows about, per session. The index is a cache over the event stream
-	// (wakeup.created / fired / skipped / cancelled / expired), which stays
+	// (session.wakeup.created / fired / skipped / cancelled / expired), which stays
 	// the source of truth so a restart rebuilds what is still due.
 	wakeupMu    sync.Mutex
 	wakeupIndex map[string]*wakeupIndex
@@ -288,6 +288,18 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 	if session.Status == types.SessionWaitingApproval {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is already %s", session.ID, session.Status)
 	}
+	// A turn already in flight takes the message rather than being judged by the
+	// recovery check below. That check reads the event stream, where a turn that
+	// has started and not yet finished is indistinguishable from one a crash
+	// left behind; the running turn has simply not written its terminal event
+	// yet. Queueing is the path that keeps the message and lets the running turn
+	// start it when it ends. ResumeWithContext already orders these two checks
+	// this way; this entry point had them reversed.
+	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
+		// The turn in flight cannot be interrupted, but the message must not be
+		// lost either: store it and let the running turn start it when it ends.
+		return r.queueUserInput(ctx, session, input, blocks)
+	}
 	// The recovery check comes before the waiting_tool one on purpose. A session
 	// parked on a Tool whose task record is gone is still status waiting_tool,
 	// but "resume the pending Tool task" is advice that cannot be followed: the
@@ -309,11 +321,6 @@ func (r *Runtime) HandleInputWithContext(ctx context.Context, sessionID, input s
 			"flow session %q is waiting for a Tool: resume the pending Tool task instead of starting a new turn",
 			session.ID,
 		)
-	}
-	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
-		// The turn in flight cannot be interrupted, but the message must not be
-		// lost either: store it and let the running turn start it when it ends.
-		return r.queueUserInput(ctx, session, input, blocks)
 	}
 	if running, err := r.runningTeams(ctx, sessionID); err != nil {
 		return types.FlowTurnResult{}, err
@@ -347,7 +354,7 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 	if session.Status == types.SessionRunning && r.isTurnRunning(sessionID) {
 		return r.queueUserInput(ctx, session, input, blocks)
 	}
-	if session.Status != types.SessionWaitingInput &&
+	if session.Status != types.SessionIdle &&
 		session.Status != types.SessionWaitingTool {
 		return types.FlowTurnResult{}, fmt.Errorf("flow session %q is not waiting for input or tool", session.ID)
 	}
@@ -1309,7 +1316,7 @@ func (r *Runtime) runTurnWithOrigin(
 			case hasWaitTool:
 				return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionWaitingTool, nil)
 			case hasWaitInput:
-				return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionWaitingInput, nil)
+				return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionIdle, nil)
 			}
 		}
 	}
@@ -1318,7 +1325,7 @@ func (r *Runtime) runTurnWithOrigin(
 	recordDispatched()
 	// A normally finished FlowTurn stays continuable: the session lifecycle
 	// is a runtime decision, not a Flow configuration.
-	return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionWaitingInput, nil)
+	return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionIdle, nil)
 }
 
 // callerTeamOf returns the caller that dispatched the work a wake-up drains,
@@ -1691,7 +1698,7 @@ func (r *Runtime) executeTeamTurn(
 		// A Team that ran as a sub-task produces its records for the conversation
 		// that dispatched it. Its own scope says "team", so the caller's follow-up
 		// turn — which reads flow scope and matches `flow_records` by name — would
-		// find nothing, and no shared_record.consumed edge would ever be written
+		// find nothing, and no session.record.consumed edge would ever be written
 		// (A→B fixture, 2026-10-28: caller declared flow_records: [WorkerReport],
 		// received zero records, produced zero consumed events). Publish a
 		// flow-scope copy so the hand-off is a Flow fact; the event below keeps
@@ -1972,7 +1979,7 @@ func (r *Runtime) finishTurn(
 	}
 	eventType := types.EventFlowTurnCompleted
 	switch status {
-	case types.SessionWaitingInput:
+	case types.SessionIdle:
 		eventType = types.EventFlowTurnWaitingInput
 	case types.SessionWaitingTool:
 		eventType = types.EventFlowTurnWaitingTool
@@ -1999,7 +2006,7 @@ func (r *Runtime) finishTurn(
 	// conclusion appears. Saying so keeps a client from presenting "已转给执行侧…"
 	// as if it were the outcome — the shape that made multi-hop work look like
 	// three repeated non-answers.
-	if status == types.SessionWaitingInput && r.hasPendingTeamCall(ctx, result.Session.ID) {
+	if status == types.SessionIdle && r.hasPendingTeamCall(ctx, result.Session.ID) {
 		result.Turn.Intermediate = true
 	}
 	// An intermediate turn has no answer, so it must not carry one in *any* shape.
@@ -2257,7 +2264,7 @@ func sessionStatusForTurn(status types.TurnStatus) types.SessionStatus {
 	case types.TurnCompleted:
 		return types.SessionCompleted
 	case types.TurnWaitingInput:
-		return types.SessionWaitingInput
+		return types.SessionIdle
 	case types.TurnWaitingTool:
 		return types.SessionWaitingTool
 	case types.TurnCancelled:
@@ -2896,7 +2903,7 @@ func recordIDs(records []types.SharedRecord) []string {
 
 func turnStatusForSession(status types.SessionStatus) types.TurnStatus {
 	switch status {
-	case types.SessionWaitingInput:
+	case types.SessionIdle:
 		return types.TurnWaitingInput
 	case types.SessionWaitingTool:
 		return types.TurnWaitingTool
@@ -3132,7 +3139,7 @@ func (r *Runtime) cancelSessionWork(sessionID string) int {
 
 func sessionStatusAfterTurn(status types.SessionStatus) types.SessionStatus {
 	if status == types.SessionFailed {
-		return types.SessionWaitingInput
+		return types.SessionIdle
 	}
 	return status
 }

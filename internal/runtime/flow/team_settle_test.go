@@ -17,7 +17,7 @@ import (
 func TestLastTeamReplyPicksCalleeConclusion(t *testing.T) {
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	rt := newTestRuntime(testDefinitions(), &inputRecordingTeamRuntime{}, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-reply", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-reply", types.SessionIdle)
 	ctx := context.Background()
 
 	for _, event := range []struct{ team, reply string }{
@@ -54,7 +54,7 @@ func TestAwaitTeamSettlementReturnsAfterPendingClears(t *testing.T) {
 		Arguments:     map[string]any{"caller_team": "owner"},
 	}}}
 	rt.SetTaskStore(store)
-	session := seedMailboxSession(t, rt, "fs-settle", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-settle", types.SessionIdle)
 
 	go func() {
 		time.Sleep(300 * time.Millisecond)
@@ -91,7 +91,7 @@ func TestAwaitTeamSettlementGivesUpOnCancel(t *testing.T) {
 		Arguments:     map[string]any{"caller_team": "owner"},
 	}}}
 	rt.SetTaskStore(store)
-	session := seedMailboxSession(t, rt, "fs-forever", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-forever", types.SessionIdle)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
@@ -115,7 +115,7 @@ func TestAwaitTeamSettlementWaitsForConclusionNotReceipt(t *testing.T) {
 		Arguments:     map[string]any{"caller_team": "owner"},
 	}}}
 	rt.SetTaskStore(store)
-	session := seedMailboxSession(t, rt, "fs-receipt", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-receipt", types.SessionIdle)
 	ctx := context.Background()
 
 	// 被调用方此刻已经说过"我派下去了"。
@@ -172,7 +172,7 @@ func TestIntermediateTurnPublishesNoReply(t *testing.T) {
 func TestRunTeamRejectsIdleCallee(t *testing.T) {
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	rt := newTestRuntime(testDefinitions(), &inputRecordingTeamRuntime{}, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-idle", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-idle", types.SessionIdle)
 
 	outcome, err := rt.RunTeam(context.Background(), types.TeamCallSpec{
 		FlowSessionID: session.ID,
@@ -191,7 +191,7 @@ func TestRunTeamRejectsIdleCallee(t *testing.T) {
 func TestRunTeamIdleCheckOnlyAppliesToTeamCalls(t *testing.T) {
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	rt := newTestRuntime(testDefinitions(), &inputRecordingTeamRuntime{}, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-idle-entry", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-idle-entry", types.SessionIdle)
 
 	outcome, err := rt.RunTeam(context.Background(), types.TeamCallSpec{
 		FlowSessionID: session.ID,
@@ -209,7 +209,7 @@ func TestIntermediateTurnClearsResponseReply(t *testing.T) {
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	recorder := &inputRecordingTeamRuntime{}
 	rt := newTestRuntime(testDefinitions(), recorder, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-resp", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-resp", types.SessionIdle)
 
 	// 这个会话里还有一个 Team 调用在跑，所以本轮结束后它仍是"等待中"。
 	store := &memoryTaskStore{tasks: []types.ToolTask{{
@@ -250,7 +250,7 @@ func (progressTextTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest)
 func TestIntermediateTurnLeaksNoProgressText(t *testing.T) {
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	rt := newTestRuntime(testDefinitions(), progressTextTeamRuntime{}, writer, nil)
-	session := seedMailboxSession(t, rt, "fs-leak", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-leak", types.SessionIdle)
 
 	// 这个会话里还有一个 Team 调用在跑 → 本轮结束后仍是"等待中"。
 	store := &memoryTaskStore{tasks: []types.ToolTask{{

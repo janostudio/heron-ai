@@ -9,13 +9,13 @@ import (
 	"testing"
 )
 
-// TestStatus1ReportsWaitingInputWhenIdle covers I-STATUS-1 in its simplest
+// TestStatus1ReportsIdleWhenTurnWaitsForInput covers I-STATUS-1 in its simplest
 // form: after a turn the session waits for the user, and the status endpoint
 // says so. The interesting half of this promise (waiting on a tool must not be
 // reported as waiting on a person) needs a dispatch, which this stage does not
 // yet drive; it is asserted here against the turn's own terminal event so the
 // two sources are compared rather than each trusted alone.
-func TestStatus1ReportsWaitingInputWhenIdle(t *testing.T) {
+func TestStatus1ReportsIdleWhenTurnWaitsForInput(t *testing.T) {
 	judge(t, "I-STATUS-1", "state")
 
 	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-STATUS-1"})
@@ -49,7 +49,7 @@ func TestStatus1ReportsWaitingInputWhenIdle(t *testing.T) {
 	if !strings.Contains(turnStatus, "waiting_input") {
 		t.Fatalf("turn ended as %q; test assumes an interactive fixture that waits for the user", turnStatus)
 	}
-	if session.Status != "waiting_input" {
+	if session.Status != "idle" {
 		t.Fatalf("status endpoint says %q while the turn ended as %q", session.Status, turnStatus)
 	}
 }

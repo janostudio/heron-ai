@@ -94,7 +94,7 @@ allows orchestration actions: `proceed`, `return`, `coordinate`,
 `activate`, `fail`.
 
 Session lifecycle is not configurable: a normally finished turn always
-leaves the FlowSession in `waiting_input` so the client can continue the
+leaves the FlowSession in `idle` so the client can continue the
 same `session_id`. Configuring `complete` or `wait_input` in `on_proceed`
 is a load-time validation error.
 

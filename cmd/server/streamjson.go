@@ -175,7 +175,7 @@ func (c *streamJSONClient) writeResult(raw json.RawMessage) error {
 	switch result.Session.Status {
 	case types.SessionWaitingApproval:
 		subtype = "permission_required"
-	case types.SessionWaitingInput:
+	case types.SessionIdle:
 		subtype = "input_required"
 	case types.SessionWaitingTool:
 		subtype = "tool_waiting"

@@ -2147,7 +2147,7 @@ func toolResultContent(result *types.ToolResult) string {
 	return ""
 }
 
-// toolResultEventFields builds the payload for a tool_call.completed event.
+// toolResultEventFields builds the payload for a session.tool_call.completed event.
 // Unlike toolResultContent (which flattens Metadata into the content string for
 // the model), it exposes Metadata keys as top-level fields so analysis tools
 // can query them structurally (e.g. jq '.exit_code', '.stdout', '.file').

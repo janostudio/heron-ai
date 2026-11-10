@@ -68,8 +68,8 @@ func TestJSONLSessionWriterIgnoresPartialFinalLine(t *testing.T) {
 	root := t.TempDir()
 	store := NewFileStore(root)
 	path := filepath.Join(".agents", "data", "sessions", "flow-1", "flow.jsonl")
-	require.NoError(t, store.Append(path, []byte(`{"seq":1,"event_id":"e1","type":"flow_session.created"}`+"\n")))
-	require.NoError(t, store.Append(path, []byte(`{"seq":2,"event_id":"e2","type":"flow_turn.started"`)))
+	require.NoError(t, store.Append(path, []byte(`{"seq":1,"event_id":"e1","type":"session.created"}`+"\n")))
+	require.NoError(t, store.Append(path, []byte(`{"seq":2,"event_id":"e2","type":"session.turn.started"`)))
 
 	replay, err := NewJSONLSessionWriter(store).Replay(context.Background(), "flow-1")
 	require.NoError(t, err)

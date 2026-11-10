@@ -70,12 +70,12 @@ func TestTurn1EachTurnKeepsItsOwnReply(t *testing.T) {
 
 	sessionID := results[0].Session.ID
 	events := readSession(t, e.Root, sessionID)
-	if started := countEvents(events, "flow_turn.started"); started != turns {
-		t.Fatalf("session has %d flow_turn.started events; want %d", started, turns)
+	if started := countEvents(events, "session.turn.started"); started != turns {
+		t.Fatalf("session has %d session.turn.started events; want %d", started, turns)
 	}
 	terminal := 0
 	for _, ev := range events {
-		if strings.HasPrefix(ev.Type, "flow_turn.waiting") || ev.Type == "flow_turn.completed" {
+		if (strings.HasPrefix(ev.Type, "session.turn.waiting") || ev.Type == "session.turn.idle") || ev.Type == "session.turn.completed" {
 			terminal++
 		}
 	}

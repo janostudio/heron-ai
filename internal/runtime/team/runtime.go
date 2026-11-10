@@ -904,7 +904,7 @@ func (r *Runtime) appendAgentSessionUpdated(
 func sessionStatusForCall(status types.TurnStatus) types.SessionStatus {
 	switch status {
 	case types.TurnWaitingInput:
-		return types.SessionWaitingInput
+		return types.SessionIdle
 	case types.TurnWaitingTool:
 		return types.SessionWaitingTool
 	case types.TurnWaitingApproval:

@@ -53,8 +53,8 @@ func TestQueue5InputDuringApprovalIsRefusedNotQueued(t *testing.T) {
 	// Nothing ran and nothing was stored: the session still holds exactly the
 	// one turn it started with, and the mailbox has no user message waiting.
 	events := readSession(t, e.Root, result.Session.ID)
-	if started := countEvents(events, "flow_turn.started"); started != 1 {
-		t.Fatalf("flow_turn.started = %d, want 1: the refused message started a turn", started)
+	if started := countEvents(events, "session.turn.started"); started != 1 {
+		t.Fatalf("session.turn.started = %d, want 1: the refused message started a turn", started)
 	}
 	if queued := queuedUserMessages(events); queued != 0 {
 		t.Fatalf("queued user messages = %d, want 0: a refused message must not be parked in the mailbox", queued)
@@ -70,7 +70,7 @@ func TestQueue5InputDuringApprovalIsRefusedNotQueued(t *testing.T) {
 		t.Fatalf("POST /api/approvals: status=%d err=%v body=%s", approveStatus, err, strings.TrimSpace(string(approveBody)))
 	}
 	waitForEvent(t, e.Root, result.Session.ID, 25*time.Second, func(events []event) bool {
-		return hasEvent(events, "approval.resolved") && turnTerminated(events)
+		return hasEvent(events, "session.approval.resolved") && turnTerminated(events)
 	})
 
 	writeTrace(t, e, httpTrace{Method: http.MethodPost, Path: "/api/run", Status: status},
@@ -81,7 +81,7 @@ func TestQueue5InputDuringApprovalIsRefusedNotQueued(t *testing.T) {
 func queuedUserMessages(events []event) int {
 	count := 0
 	for _, ev := range events {
-		if ev.Type != "mailbox.message.enqueued" {
+		if ev.Type != "session.mailbox.message.enqueued" {
 			continue
 		}
 		payload, _ := ev.Raw["payload"].(map[string]any)

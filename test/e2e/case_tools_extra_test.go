@@ -68,8 +68,8 @@ func TestWrite2CreateOnExistingFileFails(t *testing.T) {
 	result := e.runTurn(map[string]any{"input": "新建一个已存在的文件"})
 	events := waitForEvent(t, e.Root, result.Session.ID, 20*time.Second, turnTerminated)
 
-	if countEvents(events, "tool_call.failed") == 0 {
-		t.Fatalf("create on an existing file produced no tool_call.failed; types=%v", typesOf(events))
+	if countEvents(events, "session.tool_call.failed") == 0 {
+		t.Fatalf("create on an existing file produced no session.tool_call.failed; types=%v", typesOf(events))
 	}
 	original, err := os.ReadFile(filepath.Join(e.Root, "package.json"))
 	if err != nil || !strings.Contains(string(original), "simple-qa-fixture") {
@@ -85,7 +85,7 @@ func TestWrite2CreateOnExistingFileFails(t *testing.T) {
 	}
 
 	writeTrace(t, e, httpTrace{Method: http.MethodPost, Path: "/api/run", Status: http.StatusOK},
-		result.Session.ID, map[string]any{"failed_events": countEvents(events, "tool_call.failed")})
+		result.Session.ID, map[string]any{"failed_events": countEvents(events, "session.tool_call.failed")})
 }
 
 // TestSearch1GlobAndGrepReturnRealHits covers the read-tool family: Glob lists
@@ -146,12 +146,12 @@ func TestStructured1EnvelopeBecomesReadableReply(t *testing.T) {
 	}
 
 	events := waitForEvent(t, e.Root, result.Session.ID, 20*time.Second, func(events []event) bool {
-		return hasEvent(events, "shared_record.published") && turnTerminated(events)
+		return hasEvent(events, "session.record.published") && turnTerminated(events)
 	})
 
 	var data map[string]any
 	for _, ev := range events {
-		if ev.Type != "shared_record.published" {
+		if ev.Type != "session.record.published" {
 			continue
 		}
 		payload, _ := ev.Raw["payload"].(map[string]any)
@@ -231,7 +231,7 @@ func TestEntry1TurnAndResumePaths(t *testing.T) {
 	}
 
 	events := readSession(t, e.Root, first.Session.ID)
-	if turns := countEvents(events, "flow_turn.started"); turns != 3 {
+	if turns := countEvents(events, "session.turn.started"); turns != 3 {
 		t.Fatalf("session has %d turns; want 3 (run + turn + resume)", turns)
 	}
 

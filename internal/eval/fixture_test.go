@@ -97,7 +97,7 @@ func (f *fixtureBuilder) build() *fixtureBuilder {
 	finished := f.clock
 	f.append(storage.LayerFlow, types.EventHeader{Type: types.EventFlowTurnCompleted, FlowSessionID: fixtureSession, FlowTurnID: fixtureFlow1, Attempt: 1},
 		map[string]any{
-			"session": map[string]any{"id": fixtureSession, "flow_id": "eval_fixture", "status": types.SessionWaitingInput},
+			"session": map[string]any{"id": fixtureSession, "flow_id": "eval_fixture", "status": types.SessionIdle},
 			"turn": types.FlowTurn{
 				ID: fixtureFlow1, FlowSessionID: fixtureSession, Attempt: 1,
 				Input: "fix the bug", Status: types.TurnCompleted,
@@ -120,7 +120,7 @@ func (f *fixtureBuilder) build() *fixtureBuilder {
 	finished = f.clock
 	f.append(storage.LayerFlow, types.EventHeader{Type: types.EventFlowTurnWaitingInput, FlowSessionID: fixtureSession, FlowTurnID: fixtureFlow2, Attempt: 1},
 		map[string]any{
-			"session": map[string]any{"id": fixtureSession, "flow_id": "eval_fixture", "status": types.SessionWaitingInput},
+			"session": map[string]any{"id": fixtureSession, "flow_id": "eval_fixture", "status": types.SessionIdle},
 			"turn": types.FlowTurn{
 				ID: fixtureFlow2, FlowSessionID: fixtureSession, Attempt: 1,
 				Input: "thanks", Status: types.TurnWaitingInput,

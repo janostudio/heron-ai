@@ -338,7 +338,7 @@ func TestWakeupTurnReplyBecomesDelivery(t *testing.T) {
 		Reply:      text,
 		FinalReply: text,
 	}
-	finished, err := rt.finishTurn(context.Background(), result, types.SessionWaitingInput, nil)
+	finished, err := rt.finishTurn(context.Background(), result, types.SessionIdle, nil)
 	require.NoError(t, err)
 	require.Empty(t, finished.Reply, "an intermediate turn still carries no reply")
 	require.Len(t, finished.Deliveries, 1, "but a wake-up's conclusion must survive as a delivery")
@@ -356,7 +356,7 @@ func TestNonWakeupIntermediateTurnProducesNoDelivery(t *testing.T) {
 		Reply:      "已转给执行侧",
 		FinalReply: "已转给执行侧",
 	}
-	finished, err := rt.finishTurn(context.Background(), result, types.SessionWaitingInput, nil)
+	finished, err := rt.finishTurn(context.Background(), result, types.SessionIdle, nil)
 	require.NoError(t, err)
 	require.Empty(t, finished.Deliveries)
 }

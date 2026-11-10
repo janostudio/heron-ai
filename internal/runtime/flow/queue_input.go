@@ -142,7 +142,7 @@ func (r *Runtime) pendingUserInput(ctx context.Context, sessionID string) (types
 		return types.MailboxMessage{}, types.FlowSession{}, false
 	}
 	switch session.Status {
-	case types.SessionWaitingInput, types.SessionCreated:
+	case types.SessionIdle, types.SessionCreated:
 	default:
 		// Still running: the current turn will call us again when it ends.
 		return types.MailboxMessage{}, types.FlowSession{}, false

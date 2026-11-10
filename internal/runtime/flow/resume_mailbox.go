@@ -34,7 +34,7 @@ func (r *Runtime) ResumeForMailbox(ctx context.Context, sessionID string) (types
 	}
 
 	switch session.Status {
-	case types.SessionWaitingInput, types.SessionWaitingTool, types.SessionWaitingApproval, types.SessionCreated:
+	case types.SessionIdle, types.SessionWaitingTool, types.SessionWaitingApproval, types.SessionCreated:
 		// Idle enough to wake.
 	default:
 		// Running (a wake raced another turn) or terminal (failed/cancelled/
@@ -398,8 +398,8 @@ func (r *Runtime) nextWakingTeam(ctx context.Context, sessionID string) (string,
 // renderMailboxInbox renders a Team's inbox messages into a single
 // human-readable text block for the waking turn. Each message contributes its
 // originating team and, when present and structurally sound, the dispatched
-// team's Reply (team_result is a TeamTurnResult whose reply field is the
-// published PascalCase container field Reply).
+// team's Reply (team_result decodes as a TeamTurnResult; its wire field is
+// `reply`).
 //
 // The renderer never fails and never panics: a message whose team_result is
 // missing or of an unexpected shape degrades to a header carrying the message

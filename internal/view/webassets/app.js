@@ -138,11 +138,11 @@
   }
 
   function eventClass(type) {
-    if (type === "flow_turn.started") { return "mm-user"; }
-    if (type === "tool_call.started" || type === "tool_call.completed" || type === "tool_call.failed") { return "mm-tool"; }
-    if (type === "context.compacted") { return "mm-compact"; }
+    if (type === "session.turn.started") { return "mm-user"; }
+    if (type === "session.tool_call.started" || type === "session.tool_call.completed" || type === "session.tool_call.failed") { return "mm-tool"; }
+    if (type === "session.context.compacted") { return "mm-compact"; }
     if (type.indexOf("wakeup.") === 0) { return "mm-wakeup"; }
-    if (type.indexOf("failed") >= 0 || type === "recovery.requested") { return "mm-error"; }
+    if (type.indexOf("failed") >= 0 || type === "session.recovery.requested") { return "mm-error"; }
     return "mm-step";
   }
 
@@ -1143,7 +1143,7 @@
       var payload = event.payload || {};
       var call = event.call_turn_id || "";
 
-      if (event.type === "flow_turn.started") {
+      if (event.type === "session.turn.started") {
         view.startedAt = event.created_at || "";
         if (payload.input || turnAttachments(payload).length) {
           var liveMessage = el("div", { class: "msg from-user" },
@@ -1156,17 +1156,17 @@
         return;
       }
 
-      if (event.type === "agent_turn.started" && call) {
+      if (event.type === "session.agent_turn.started" && call) {
         view.spans[call] = { start: event.created_at || "", end: "" };
         return;
       }
-      if (event.type === "agent_turn.completed" && call) {
+      if (event.type === "session.agent_turn.completed" && call) {
         if (!view.spans[call]) { view.spans[call] = { start: "", end: "" }; }
         view.spans[call].end = event.created_at || "";
         return;
       }
 
-      if (event.type === "team_turn.started") {
+      if (event.type === "session.team_turn.started") {
         var team = (payload.team_turn && payload.team_turn.team_id) || event.team_id || "";
         var teamID = (payload.team_turn && payload.team_turn.id) || "";
         var row = el("div", { class: "step team-step", "data-team-turn": teamID },
@@ -1178,21 +1178,21 @@
         view["team_" + teamID] = row;
         return;
       }
-      if (event.type === "team_turn.completed") {
+      if (event.type === "session.team_turn.completed") {
         var doneID = (payload.team_turn && payload.team_turn.id) || "";
         var doneRow = view["team_" + doneID];
         if (doneRow) {
           var state = doneRow.querySelector(".step-state");
           if (state) { state.textContent = "\u5b8c\u6210"; }
           var took = elapsed(
-            (payload.team_turn && payload.team_turn.started_at) || "",
+            (payload.team_turn && payload.session.team_turn.started_at) || "",
             event.created_at || "");
           if (took) { doneRow.appendChild(el("span", { class: "took" }, took)); }
         }
         return;
       }
 
-      if (event.type === "agent.model_response") {
+      if (event.type === "session.agent.model_response") {
         var reply = modelReply(payload);
         if (!reply.body) { return; }
         view.lastText = reply.body;
@@ -1218,7 +1218,7 @@
         return;
       }
 
-      if (event.type === "tool_call.started") {
+      if (event.type === "session.tool_call.started") {
         var key = payload.tool_call_id || ("seq-" + event.seq);
         var node = el("details", { class: "tool running" },
           el("summary", null,
@@ -1234,19 +1234,19 @@
         view.body.appendChild(node);
         return;
       }
-      if (event.type === "tool_call.completed" || event.type === "tool_call.failed") {
+      if (event.type === "session.tool_call.completed" || event.type === "session.tool_call.failed") {
         var target = view.tools[payload.tool_call_id || ""];
         if (!target) { return; }
         target.classList.remove("running");
         var label = target.querySelector(".state");
-        if (label) { label.textContent = event.type === "tool_call.failed" ? "\u5931\u8d25" : "\u6210\u529f"; }
+        if (label) { label.textContent = event.type === "session.tool_call.failed" ? "\u5931\u8d25" : "\u6210\u529f"; }
         var pre = target.querySelector("pre.out");
         if (pre) {
-          pre.textContent = event.type === "tool_call.failed"
+          pre.textContent = event.type === "session.tool_call.failed"
             ? (payload.error || "")
             : (typeof payload.content === "string" ? payload.content : JSON.stringify(payload.content || "", null, 2));
         }
-        if (event.type === "tool_call.failed") { target.open = true; }
+        if (event.type === "session.tool_call.failed") { target.open = true; }
         return;
       }
     };
@@ -1322,7 +1322,7 @@
       if (currentRecord) { (currentRecord.events = currentRecord.events || []).push(event); }
       var flowTurnID = event.flow_turn_id || "flow";
       var view = turnFor(flowTurnID);
-      if (event.type === "flow_turn.waiting_input" || event.type === "flow_turn.completed") {
+      if (event.type === "session.turn.idle" || event.type === "session.turn.completed") {
         view.push(event);
         view.finish(event);
         finished = true;
@@ -1399,18 +1399,18 @@
       var turn = map[key];
       turn.events.push(event);
       var payload = event.payload || {};
-      if (event.type === "agent.model_response") {
+      if (event.type === "session.agent.model_response") {
         var usage = payload.usage || {};
         if (payload.model && turn.models.indexOf(payload.model) < 0) { turn.models.push(payload.model); }
         turn.promptTokens += usage.prompt_tokens || 0;
         turn.completionTokens += usage.completion_tokens || 0;
       }
-      if (event.type === "flow_turn.started") {
+      if (event.type === "session.turn.started") {
         if (payload.input) { turn.input = payload.input; }
         turn.attachments = turnAttachments(payload);
         turn.startedAt = event.created_at || turn.startedAt;
       }
-      if (event.type === "flow_turn.waiting_input" || event.type === "flow_turn.completed") {
+      if (event.type === "session.turn.idle" || event.type === "session.turn.completed") {
         turn.origin = payload.origin || turn.origin;
         turn.reply = payload.reply || turn.reply;
         turn.error = payload.error || turn.error;
@@ -1532,7 +1532,7 @@
     return { team: team, agent: agent };
   }
 
-  /* agent.model_response carries the reply twice: `reply` is what the engine
+  /* session.agent.model_response carries the reply twice: `reply` is what the engine
    * unwrapped for the caller, `text` is what the model literally emitted —
    * usually a JSON envelope holding reply/intent_hint/next.action/user_request.
    * Reading the envelope aloud is noise, so show `reply` and keep `text` behind
@@ -1565,7 +1565,7 @@
     var box = el("div", { class: cls });
 
     /* Per-call spans, so a message can say how long its agent actually ran.
-     * agent_turn.started/completed carry the same call_turn_id as the messages;
+     * session.agent_turn.started/completed carry the same call_turn_id as the messages;
      * a call that never completed (still running, or the turn was cut) simply
      * has no end and shows no duration. */
     var spans = {};
@@ -1573,14 +1573,14 @@
     turn.events.forEach(function (event) {
       var call = event.call_turn_id || "";
       if (!call) { return; }
-      if (event.type === "agent_turn.started") {
+      if (event.type === "session.agent_turn.started") {
         spans[call] = { start: event.created_at || "", end: "" };
       }
-      if (event.type === "agent_turn.completed") {
+      if (event.type === "session.agent_turn.completed") {
         if (!spans[call]) { spans[call] = { start: "", end: "" }; }
         spans[call].end = event.created_at || "";
       }
-      if (event.type === "agent.model_response") {
+      if (event.type === "session.agent.model_response") {
         lastSeqOfCall[call] = event.seq;
       }
     });
@@ -1621,7 +1621,7 @@
     var lastText = "";
     turn.events.forEach(function (event) {
       var payload = event.payload || {};
-      if (event.type === "agent.model_response") {
+      if (event.type === "session.agent.model_response") {
         var view = modelReply(payload);
         if (view.body) {
           lastText = view.body;
@@ -1648,24 +1648,24 @@
         }
         return;
       }
-      if (event.type === "tool_call.started") {
+      if (event.type === "session.tool_call.started") {
         var key = payload.tool_call_id || ("seq-" + event.seq);
         tools[key] = appendTool(box, payload);
         return;
       }
-      if (event.type === "tool_call.completed" || event.type === "tool_call.failed") {
+      if (event.type === "session.tool_call.completed" || event.type === "session.tool_call.failed") {
         var node = tools[payload.tool_call_id || ""];
         if (!node) { return; }
         var state = node.querySelector(".state");
-        if (state) { state.textContent = event.type === "tool_call.failed" ? "\u5931\u8d25" : "\u6210\u529f"; }
+        if (state) { state.textContent = event.type === "session.tool_call.failed" ? "\u5931\u8d25" : "\u6210\u529f"; }
         var pre = node.querySelector("pre.out");
         if (pre) {
-          var output = event.type === "tool_call.failed"
+          var output = event.type === "session.tool_call.failed"
             ? (payload.error || "")
             : (typeof payload.content === "string" ? payload.content : JSON.stringify(payload.content || "", null, 2));
           pre.textContent = output;
         }
-        if (event.type === "tool_call.failed") { node.open = true; }
+        if (event.type === "session.tool_call.failed") { node.open = true; }
         return;
       }
     });
@@ -1761,7 +1761,7 @@
       var teamKey = teamSession.id || "";
       if (!teamKey) { return; }
       var teamEntry = upsertRunEntry("teams", teamKey, teamSession.team_id || event.team_id || "?", "");
-      if (type === "team_session.created") {
+      if (type === "session.team_session.created") {
         teamEntry.startedAt = teamSession.created_at || "";
       }
       teamEntry.status = teamSession.status || teamEntry.status;
@@ -1777,7 +1777,7 @@
       var agentEntry = upsertRunEntry("agents", agentKey,
         agentSession.agent_id || agentSession.call_id || "?", parts[parts.length - 1] || "");
       agentEntry.teamSessionKey = agentSession.team_session_id || "";
-      if (type === "agent_session.created") {
+      if (type === "session.agent_session.created") {
         agentEntry.startedAt = agentSession.created_at || "";
       }
       agentEntry.status = agentSession.status || agentEntry.status;
@@ -1797,7 +1797,7 @@
     var turnTeam = {};
     var events = (record && record.events) || [];
     events.forEach(function (event) {
-      if (event.type === "team_turn.started") {
+      if (event.type === "session.team_turn.started") {
         var teamTurn = (event.payload || {}).team_turn || {};
         if (teamTurn.id) { turnTeam[teamTurn.id] = teamTurn.team_id || event.team_id || ""; }
       }
@@ -1805,12 +1805,12 @@
     var pendingCaller = "";
     events.forEach(function (event) {
       var payload = event.payload || {};
-      if (event.type === "tool_call.started" && payload.tool_name === "Team") {
+      if (event.type === "session.tool_call.started" && payload.tool_name === "Team") {
         var callTurn = event.call_turn_id || "";
         pendingCaller = turnTeam[callTurn.split(":")[0]] || "";
         return;
       }
-      if (event.type === "team_turn.started") {
+      if (event.type === "session.team_turn.started") {
         var teamTurn = payload.team_turn || {};
         var entity = teamsByName[teamTurn.team_id || event.team_id || ""] ||
           teamsByName[turnTeam[event.team_turn_id || teamTurn.id || ""]] || null;
@@ -2060,23 +2060,23 @@
 
     events.forEach(function (event) {
       var payload = event.payload || {};
-      if (event.type === "team_turn.started" || event.type === "team_turn.completed") {
+      if (event.type === "session.team_turn.started" || event.type === "session.team_turn.completed") {
         var teamTurn = payload.team_turn || {};
         var teamID = teamTurn.id || "";
         if (!teamID) { return; }
         var team = teamTurn.team_id || event.team_id || "";
         var teamSlot = slot(teamID, "team " + (team || "?"));
-        if (event.type === "team_turn.started") { teamSlot.start = event.created_at || teamSlot.start; }
+        if (event.type === "session.team_turn.started") { teamSlot.start = event.created_at || teamSlot.start; }
         else { teamSlot.end = event.created_at || teamSlot.end; }
         return;
       }
-      if (event.type === "agent_turn.started" || event.type === "agent_turn.completed") {
+      if (event.type === "session.agent_turn.started" || event.type === "session.agent_turn.completed") {
         var call = event.call_turn_id || "";
         if (!call) { return; }
         var speaker = speakerLabel(event);
         var label = speaker.team ? speaker.team + " / " + speaker.agent : (speaker.agent || call);
         var callSlot = slot(call, label);
-        if (event.type === "agent_turn.started") { callSlot.start = event.created_at || callSlot.start; }
+        if (event.type === "session.agent_turn.started") { callSlot.start = event.created_at || callSlot.start; }
         else { callSlot.end = event.created_at || callSlot.end; }
       }
     });

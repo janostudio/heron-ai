@@ -125,7 +125,7 @@ func testFlowTurnResult(status types.SessionStatus, reply string) types.FlowTurn
 
 func TestJSONRPCServerTurnStartsNewSession(t *testing.T) {
 	stub := &jsonRPCFlowRuntimeStub{
-		startResult: testFlowTurnResult(types.SessionWaitingInput, "done"),
+		startResult: testFlowTurnResult(types.SessionIdle, "done"),
 	}
 	var output bytes.Buffer
 	server := newJSONRPCServer(stub, "test-flow", &output)
@@ -162,8 +162,8 @@ func TestJSONRPCServerTurnStartsNewSession(t *testing.T) {
 func TestJSONRPCServerContinuesSessionWithCorrectMethod(t *testing.T) {
 	t.Run("waiting input uses resume", func(t *testing.T) {
 		stub := &jsonRPCFlowRuntimeStub{
-			status:       types.FlowSession{ID: "fs-1", Status: types.SessionWaitingInput},
-			resumeResult: testFlowTurnResult(types.SessionWaitingInput, "resumed"),
+			status:       types.FlowSession{ID: "fs-1", Status: types.SessionIdle},
+			resumeResult: testFlowTurnResult(types.SessionIdle, "resumed"),
 		}
 		var output bytes.Buffer
 		server := newJSONRPCServer(stub, "test-flow", &output)
@@ -181,7 +181,7 @@ func TestJSONRPCServerContinuesSessionWithCorrectMethod(t *testing.T) {
 	t.Run("running session uses handle input", func(t *testing.T) {
 		stub := &jsonRPCFlowRuntimeStub{
 			status:       types.FlowSession{ID: "fs-1", Status: types.SessionRunning},
-			handleResult: testFlowTurnResult(types.SessionWaitingInput, "handled"),
+			handleResult: testFlowTurnResult(types.SessionIdle, "handled"),
 		}
 		var output bytes.Buffer
 		server := newJSONRPCServer(stub, "test-flow", &output)
@@ -202,7 +202,7 @@ func TestJSONRPCServerContinuesSessionWithCorrectMethod(t *testing.T) {
 	t.Run("legacy completed session uses handle input", func(t *testing.T) {
 		stub := &jsonRPCFlowRuntimeStub{
 			status:       types.FlowSession{ID: "fs-1", Status: types.SessionCompleted},
-			handleResult: testFlowTurnResult(types.SessionWaitingInput, "handled"),
+			handleResult: testFlowTurnResult(types.SessionIdle, "handled"),
 		}
 		var output bytes.Buffer
 		server := newJSONRPCServer(stub, "test-flow", &output)
@@ -284,7 +284,7 @@ func TestJSONRPCServerMapsCanceledTurnToCanceledErrorCode(t *testing.T) {
 
 func TestJSONRPCServerIgnoresNotifications(t *testing.T) {
 	stub := &jsonRPCFlowRuntimeStub{
-		startResult: testFlowTurnResult(types.SessionWaitingInput, "done"),
+		startResult: testFlowTurnResult(types.SessionIdle, "done"),
 	}
 	var output bytes.Buffer
 	server := newJSONRPCServer(stub, "test-flow", &output)
@@ -326,7 +326,7 @@ func TestValidJSONRPCID(t *testing.T) {
 
 func TestJSONRPCServerReturnsProtocolErrorsAndContinues(t *testing.T) {
 	stub := &jsonRPCFlowRuntimeStub{
-		startResult: testFlowTurnResult(types.SessionWaitingInput, "done"),
+		startResult: testFlowTurnResult(types.SessionIdle, "done"),
 	}
 	var output bytes.Buffer
 	server := newJSONRPCServer(stub, "test-flow", &output)
@@ -368,11 +368,11 @@ func TestJSONRPCTurnResultFrom(t *testing.T) {
 	})
 
 	t.Run("full result", func(t *testing.T) {
-		in := testFlowTurnResult(types.SessionWaitingInput, "hello")
+		in := testFlowTurnResult(types.SessionIdle, "hello")
 		got := jsonRPCTurnResultFrom(in)
 		require.Equal(t, "fs-1", got.SessionID)
 		require.Equal(t, "ft-1", got.FlowTurnID)
-		require.Equal(t, types.SessionWaitingInput, got.Status)
+		require.Equal(t, types.SessionIdle, got.Status)
 		require.Equal(t, "hello", got.Reply)
 		require.Len(t, got.Records, 1)
 		require.Equal(t, "record-1", got.Records[0].RecordID)
@@ -498,7 +498,7 @@ func lastResponseLine(t *testing.T, raw []byte) jsonRPCResponse {
 func approvalWaitingStub() *jsonRPCFlowRuntimeStub {
 	return &jsonRPCFlowRuntimeStub{
 		status:      types.FlowSession{ID: "fs-1", Status: types.SessionWaitingApproval},
-		approvalRes: testFlowTurnResult(types.SessionWaitingInput, "resumed after approval"),
+		approvalRes: testFlowTurnResult(types.SessionIdle, "resumed after approval"),
 	}
 }
 
@@ -571,8 +571,8 @@ func TestJSONRPCServerApproveRequiresSessionAndApprovalID(t *testing.T) {
 // is reported as a state error (-32002), not as a generic turn failure.
 func TestJSONRPCServerApproveRejectsSessionNotWaiting(t *testing.T) {
 	stub := &jsonRPCFlowRuntimeStub{
-		status:      types.FlowSession{ID: "fs-1", Status: types.SessionWaitingInput},
-		approvalRes: testFlowTurnResult(types.SessionWaitingInput, "must not run"),
+		status:      types.FlowSession{ID: "fs-1", Status: types.SessionIdle},
+		approvalRes: testFlowTurnResult(types.SessionIdle, "must not run"),
 	}
 	response := serveOne(t, stub,
 		`{"jsonrpc":"2.0","id":1,"method":"approve","params":{"session_id":"fs-1","approval_id":"req-1","approved":true}}`)

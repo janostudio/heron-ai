@@ -175,13 +175,13 @@ ls -1dt .agents/data/sessions/fs_* | head -3
 S=$(ls -1dt .agents/data/sessions/fs_* | head -1)
 
 # 用户每一轮问了什么
-jq -r 'select(.type=="flow_turn.started") | .payload.turn.input' $S/flow.jsonl
+jq -r 'select(.type=="session.turn.started") | .payload.turn.input' $S/flow.jsonl
 
 # 模型每一轮原始回复
-jq -r 'select(.type=="agent.model_response") | .payload.text' $S/agent.jsonl
+jq -r 'select(.type=="session.agent.model_response") | .payload.text' $S/agent.jsonl
 
 # 本轮 token 消耗（team.jsonl 是消耗的事实源）
-jq -s '[.[]|select(.type=="agent_turn.completed")|.payload.call_result.Usage.total_tokens]|add' $S/team.jsonl
+jq -s '[.[]|select(.type=="session.agent_turn.completed")|.payload.call_result.usage.total_tokens]|add' $S/team.jsonl
 ```
 
 三份 jsonl 按**产生它的层级**分流，不是同级混放：`flow.jsonl` 是 flow + team turn，

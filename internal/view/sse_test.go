@@ -29,7 +29,28 @@ func TestNewSSEWriter(t *testing.T) {
 		if got := rr.Header().Get("Connection"); got != "keep-alive" {
 			t.Fatalf("Connection = %q, want keep-alive", got)
 		}
+		// A buffering reverse proxy delivers an SSE stream as batches, so the
+		// header that disables it is part of the transport contract.
+		if got := rr.Header().Get("X-Accel-Buffering"); got != "no" {
+			t.Fatalf("X-Accel-Buffering = %q, want no", got)
+		}
+		if got := rr.Body.String(); !strings.HasPrefix(got, "retry: ") {
+			t.Fatalf("stream must open with a retry directive, got %q", got)
+		}
 	})
+}
+
+// firstDataLine returns the payload of the first data frame. The stream opens
+// with a retry directive, so the first line of the body is not the payload.
+func firstDataLine(t *testing.T, body string) string {
+	t.Helper()
+	for _, line := range strings.Split(body, "\n") {
+		if payload, ok := strings.CutPrefix(line, "data: "); ok {
+			return payload
+		}
+	}
+	t.Fatalf("no data frame in body: %q", body)
+	return ""
 }
 
 func TestWriteEvent(t *testing.T) {
@@ -50,7 +71,7 @@ func TestWriteEvent(t *testing.T) {
 		t.Fatalf("missing trailing newlines: %q", body)
 	}
 	var decoded types.SSEEvent
-	raw := strings.TrimPrefix(strings.TrimSpace(strings.Split(body, "\n")[0]), "data: ")
+	raw := firstDataLine(t, body)
 	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
 		t.Fatalf("unmarshal event: %v", err)
 	}
@@ -65,7 +86,7 @@ func TestWriteSessionEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	ev := storage.SessionEvent{EventHeader: types.EventHeader{Seq: 42, Type: "flow_turn.completed", FlowSessionID: "s1"}}
+	ev := storage.SessionEvent{EventHeader: types.EventHeader{Seq: 42, Type: "session.turn.completed", FlowSessionID: "s1"}}
 	if err := w.WriteSessionEvent(ev); err != nil {
 		t.Fatalf("WriteSessionEvent: %v", err)
 	}
@@ -107,7 +128,7 @@ func TestWriteChunk(t *testing.T) {
 		t.Fatalf("WriteChunk: %v", err)
 	}
 	body := rr.Body.String()
-	line := strings.TrimPrefix(strings.Split(body, "\n")[0], "data: ")
+	line := firstDataLine(t, body)
 	var ev types.SSEEvent
 	if err := json.Unmarshal([]byte(line), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -127,7 +148,7 @@ func TestWriteCallChunk(t *testing.T) {
 		t.Fatalf("WriteCallChunk: %v", err)
 	}
 	body := rr.Body.String()
-	line := strings.TrimPrefix(strings.Split(body, "\n")[0], "data: ")
+	line := firstDataLine(t, body)
 	var ev types.SSEEvent
 	if err := json.Unmarshal([]byte(line), &ev); err != nil {
 		t.Fatalf("unmarshal: %v", err)

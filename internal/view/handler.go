@@ -830,14 +830,36 @@ func (h *Handler) HandleTaskStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	for task := range events {
-		if err := writer.WriteTask(task); err != nil {
+	// A durable task can sit in one state for minutes — a long command, a tool
+	// waiting on a human — so an idle stream here is normal, not a sign the
+	// task died. Without a heartbeat an intermediary closes it and the caller
+	// never sees the terminal state it subscribed for.
+	interval := h.streamHeartbeat
+	if interval <= 0 {
+		interval = streamHeartbeatInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
 			return
-		}
-		if task.Status == types.ToolTaskCompleted ||
-			task.Status == types.ToolTaskFailed ||
-			task.Status == types.ToolTaskCancelled {
-			return
+		case <-ticker.C:
+			if err := writer.WriteComment("ping"); err != nil {
+				return
+			}
+		case task, ok := <-events:
+			if !ok {
+				return
+			}
+			if err := writer.WriteTask(task); err != nil {
+				return
+			}
+			if task.Status == types.ToolTaskCompleted ||
+				task.Status == types.ToolTaskFailed ||
+				task.Status == types.ToolTaskCancelled {
+				return
+			}
 		}
 	}
 }

@@ -34,13 +34,13 @@ checkpoint / 异步工具任务按需生成，不保证存在，不要假定其�
 
 | 文件 | 只包含 | 事件 |
 |---|---|---|
-| `flow.jsonl` | flow 会话级 + **team turn 级** | `flow_session.*`、`flow_turn.*`、`team_session.*`、`team_turn.*`、`shared_record.published`、`recovery.*` |
+| `flow.jsonl` | flow 会话级 + **team turn 级** | `flow_session.*`、`flow_turn.*`、`team_session.*`、`team_turn.*`、`session.record.published`、`recovery.*` |
 | `team.jsonl` | **call 层**：agent / command / webhook | `agent_session.*`、`agent_turn.*`、`command_turn.*`、`webhook_turn.*`、`approval.*` |
-| `agent.jsonl` | agent **内部**行为 | `agent.model_response`、`tool_call.*`、`agent.feedback`、`context.compacted` |
+| `agent.jsonl` | agent **内部**行为 | `session.agent.model_response`、`tool_call.*`、`session.agent.feedback`、`session.context.compacted` |
 
 由此得出两个高频误判：
 
-- **`team_turn.completed` 在 `flow.jsonl`，不在 `team.jsonl`。** 在 `team.jsonl`
+- **`session.team_turn.completed` 在 `flow.jsonl`，不在 `team.jsonl`。** 在 `team.jsonl`
   里搜它必然一条都找不到——这是正常的分层，不是数据缺失。
 - **`command_turn.*` 在 `team.jsonl`，不在 `flow.jsonl`。** command 是 team 的
   一个 call，所以和 `agent_turn.*` 同级。
@@ -53,37 +53,37 @@ checkpoint / 异步工具任务按需生成，不保证存在，不要假定其�
 
 | type | 含义 |
 |---|---|
-| `flow_session.created` / `flow_session.updated` | 会话创建/更新 |
-| `flow_turn.started` / `flow_turn.completed` / `flow_turn.waiting_input` / `flow_turn.failed` | 一轮 flow turn 生命周期 |
-| `team_session.created` / `team_session.updated` | team 会话 |
-| `team_turn.started` / `team_turn.completed` | team turn（**路由结果在这里**） |
-| `shared_record.published` | 发布 SharedRecord |
-| `recovery.requested` / `recovery.completed` | 恢复 |
+| `session.created` / `session.updated` | 会话创建/更新 |
+| `session.turn.started` / `session.turn.completed` / `session.turn.idle` / `flow_turn.failed` | 一轮 flow turn 生命周期 |
+| `session.team_session.created` / `session.team_session.updated` | team 会话 |
+| `session.team_turn.started` / `session.team_turn.completed` | team turn（**路由结果在这里**） |
+| `session.record.published` | 发布 SharedRecord |
+| `session.recovery.requested` / `session.recovery.completed` | 恢复 |
 
 ### team.jsonl
 
 | type | 含义 |
 |---|---|
-| `agent_session.created` / `agent_session.updated` | agent call 会话 |
-| `agent_turn.started` / `agent_turn.completed` | agent turn（**消耗在这里**） |
-| `command_turn.started` / `command_turn.completed` | command call |
-| `approval.requested` / `approval.resolved` | HITL 审批 |
+| `session.agent_session.created` / `session.agent_session.updated` | agent call 会话 |
+| `session.agent_turn.started` / `session.agent_turn.completed` | agent turn（**消耗在这里**） |
+| `session.command_turn.started` / `session.command_turn.completed` | command call |
+| `session.approval.requested` / `session.approval.resolved` | HITL 审批 |
 
 ### agent.jsonl
 
 | type | 含义 | 关键字段 |
 |---|---|---|
-| `agent.model_response` | 模型单次输出 | **`text`**（不是 `content`）/ `tool_calls` / `usage` / `finish_reason` / `model` / `round` |
-| `tool_call.started` / `tool_call.completed` / `tool_call.failed` | 工具调用 | `tool_name` / `arguments` / `content` / `exit_code` |
-| `agent.feedback` | 内部 user 消息（结构化重试提示等） | `content` / `round` / `raw_text`（结构化重试时携带被丢弃的模型原文） |
-| `context.compacted` | 上下文压缩 | `summary` / `dropped_count` |
+| `session.agent.model_response` | 模型单次输出 | **`text`**（不是 `content`）/ `tool_calls` / `usage` / `finish_reason` / `model` / `round` |
+| `session.tool_call.started` / `session.tool_call.completed` / `session.tool_call.failed` | 工具调用 | `tool_name` / `arguments` / `content` / `exit_code` |
+| `session.agent.feedback` | 内部 user 消息（结构化重试提示等） | `content` / `round` / `raw_text`（结构化重试时携带被丢弃的模型原文） |
+| `session.context.compacted` | 上下文压缩 | `summary` / `dropped_count` |
 
-> `agent.model_response` 的回复原文在 **`payload.text`**。写成 `payload.content`
+> `session.agent.model_response` 的回复原文在 **`payload.text`**。写成 `payload.content`
 > 会读到空值，从而误判成"模型没输出"。
 
 ### `round` 是 turn 内局部序号
 
-`agent.model_response.payload.round` **在每个 `agent_turn` 内从 0 重新计数**，
+`session.agent.model_response.payload.round` **在每个 `agent_turn` 内从 0 重新计数**，
 不是整个会话递增。所以同一个会话的多轮里，`round=0` 会反复出现。
 
 排查时不要用「`round` 重复」推断数据重复——要用 `team_turn_id` 区分。
@@ -91,12 +91,12 @@ checkpoint / 异步工具任务按需生成，不保证存在，不要假定其�
 
 ```bash
 # 按 turn 分组看各自的轮次
-jq -r 'select(.type=="agent.model_response")
+jq -r 'select(.type=="session.agent.model_response")
        | "\(.team_turn_id) round=\(.payload.round) finish=\(.payload.finish_reason) text_len=\((.payload.text // "")|length)"' \
   $S/agent.jsonl
 ```
 
-### `agent.model_response` 的 `text` 可能为空（正常，不是数据丢失）
+### `session.agent.model_response` 的 `text` 可能为空（正常，不是数据丢失）
 
 三种情况 `text` 是空串，都**不是**落库故障：
 
@@ -106,7 +106,7 @@ jq -r 'select(.type=="agent.model_response")
 | 结构化重试丢弃 | `stop` | 无 | 见下（原始输出被丢弃） |
 | 结构化输出已解析 | `stop` | 无 | 成品在 `evidence.jsonl` 的 `summary` |
 
-全库统计（`sessions/*/agent.jsonl` 共 148 条 `agent.model_response`）印证了这三类：
+全库统计（`sessions/*/agent.jsonl` 共 148 条 `session.agent.model_response`）印证了这三类：
 
 ```
 (text空, tool_calls, 有工具)   -> 84   纯工具调用轮
@@ -115,20 +115,20 @@ jq -r 'select(.type=="agent.model_response")
 (text空, stop, 无工具)         -> 4    结构化重试丢弃
 ```
 
-**结构化重试场景**（会看到 `agent.feedback`）：agent 配了 `structured_output`
+**结构化重试场景**（会看到 `session.agent.feedback`）：agent 配了 `structured_output`
 但模型没按 schema 输出时，引擎会：
 
 1. 丢弃该轮的 `resp.Text`
-2. 追加一条 `agent.feedback`，`content` 为固定的重试提示，
+2. 追加一条 `session.agent.feedback`，`content` 为固定的重试提示，
    **`raw_text` 为被丢弃的模型原始输出**（便于回溯）
 3. 下一轮重试
 
 真实样例（某次运行的 `fs_xxx`）：
 
 ```
-seq=21  agent.model_response  round=0  finish=stop  text=''  completion_tokens=2
-seq=22  agent.feedback        round=0  content='The previous response was not valid JSON for the required schema...'  raw_text='<被丢弃的原文>'
-seq=23  agent.model_response  round=1  finish=tool_calls  text=''   ← 重试后改为调工具
+seq=21  session.agent.model_response  round=0  finish=stop  text=''  completion_tokens=2
+seq=22  session.agent.feedback        round=0  content='The previous response was not valid JSON for the required schema...'  raw_text='<被丢弃的原文>'
+seq=23  session.agent.model_response  round=1  finish=tool_calls  text=''   ← 重试后改为调工具
 ```
 
 > ⚠️ `raw_text` 是在 `2026-10-09` 之后才落盘的。**更早**的历史会话
@@ -137,11 +137,11 @@ seq=23  agent.model_response  round=1  finish=tool_calls  text=''   ← 重试�
 
 ### 排查手法：区分"模型输出异常"与"schema 定义过严"
 
-丢弃轮的原始输出可从 `agent.feedback.payload.raw_text` 直接读取：
+丢弃轮的原始输出可从 `session.agent.feedback.payload.raw_text` 直接读取：
 
 ```bash
 # 查看结构化重试时模型到底输出了什么
-jq -r 'select(.type=="agent.feedback")
+jq -r 'select(.type=="session.agent.feedback")
        | "round=\(.payload.round) raw=\(.payload.raw_text // "<旧数据，无 raw_text>")"' \
   $S/agent.jsonl
 ```
@@ -150,7 +150,7 @@ jq -r 'select(.type=="agent.feedback")
 
 ```bash
 # 列出所有被丢弃的轮及其 completion_tokens
-jq -r 'select(.type=="agent.model_response"
+jq -r 'select(.type=="session.agent.model_response"
               and ((.payload.text // "")|length)==0
               and .payload.finish_reason=="stop")
        | "round=\(.payload.round) completion=\(.payload.usage.completion_tokens)"' \
@@ -164,7 +164,7 @@ jq -r 'select(.type=="agent.model_response"
 | 很小（实测 4 条全是 **2**） | 模型侧输出异常（只吐 2 个 token 就 stop） | 属正常自愈，**不需要兼容** |
 | 正常量级（几百）却仍不合法 | schema 定义与实际输出形态不匹配 | 考虑放宽 schema |
 
-**判断是否自愈**：`agent.feedback` 之后紧接有 `agent.model_response`，且该 turn
+**判断是否自愈**：`session.agent.feedback` 之后紧接有 `session.agent.model_response`，且该 turn
 最终 `status=completed` → 重试成功（正常）；若重试耗尽
 （`structuredRetries` 上限 1 次）后仍失败 → 该 turn 会 `failed`。
 
@@ -181,31 +181,31 @@ jq -r 'select(.type=="agent.model_response"
 `producer` 是归属依据（`team_id` / `call_id` / `call_turn_id`）。注意：**被派发的子 Team
 产出的记录会以 flow 作用域副本写进这里**，所以这个文件里出现"不是入口 Team 写的"
 记录是正常的，不是串数据。想知道某条记录交给了谁，看 `flow.jsonl` 的
-`shared_record.consumed`（`payload.consumer_team`）。
+`session.record.consumed`（`payload.consumer_team`）。
 ## 3. 聊天记录在哪看（用户问了什么 / 模型答了什么）
 
 这是最高频的排查需求。**对话不是存在一个"聊天记录文件"里，而是按层分散在三个位置**：
 
 | 你要看的 | 去哪读 | 字段 |
 |---|---|---|
-| **用户输入**（每一轮的提问原文） | `flow.jsonl` 的 `flow_turn.started` | `payload.turn.input` |
-| **模型每轮的原始回复** | `agent.jsonl` 的 `agent.model_response` | `payload.text`（含思考/JSON）、`payload.round` 标第几轮 |
+| **用户输入**（每一轮的提问原文） | `flow.jsonl` 的 `session.turn.started` | `payload.turn.input` |
+| **模型每轮的原始回复** | `agent.jsonl` 的 `session.agent.model_response` | `payload.text`（含思考/JSON）、`payload.round` 标第几轮 |
 | **这一轮对用户答了什么、谁写的** | `flow.jsonl` 的 `flow_turn` 终态 | `payload.reply` + `payload.team`（`intermediate=true` 表示这是进度不是答复，`reply` 为空） |
 | **成品文本与依据** | `evidence.jsonl` 的 SharedRecord | `summary`、`basis[]` |
 | 工具调用过程 | `agent.jsonl` 的 `tool_call.*` | `payload.tool_name` / `arguments` / `content` |
-| 内部提示（结构化重试等） | `agent.jsonl` 的 `agent.feedback` | `payload.content` |
+| 内部提示（结构化重试等） | `agent.jsonl` 的 `session.agent.feedback` | `payload.content` |
 
 ```bash
 S=.agents/data/sessions/<fs_id>
 
 # 用户提问时间线
-jq -r 'select(.type=="flow_turn.started") | .payload.turn.input' $S/flow.jsonl
+jq -r 'select(.type=="session.turn.started") | .payload.turn.input' $S/flow.jsonl
 
 # 模型每轮回复（text 里可能含 <think> 或待解析的 JSON）
-jq -r 'select(.type=="agent.model_response") | "[round \(.payload.round)] \(.payload.text)"' $S/agent.jsonl
+jq -r 'select(.type=="session.agent.model_response") | "[round \(.payload.round)] \(.payload.text)"' $S/agent.jsonl
 
 # 这一轮答了什么、由哪个 Team 写的（intermediate 的进度行没有 reply）
-jq -r 'select(.type|startswith("flow_turn.")) | select((.payload.reply // "") != "")
+jq -r 'select(.type|startswith("session.turn.")) | select((.payload.reply // "") != "")
        | "\(.flow_turn_id) [\(.payload.team // "-")] \(.payload.reply)"' $S/flow.jsonl
 
 # 最终答复（成品）
@@ -213,7 +213,7 @@ jq -r '.summary' $S/evidence.jsonl
 ```
 
 一个会话可以续聊多轮：**同一 `sessions/<fs_id>/` 目录会持续追加**，
-所以 `flow_turn.started` 会出现多次，每次的 `payload.turn.input` 就是那一轮的用户输入。
+所以 `session.turn.started` 会出现多次，每次的 `payload.turn.input` 就是那一轮的用户输入。
 ## 4. 执行日志（logs/<日期>.log）
 
 JSON 行，字段：`ts`、`level`（debug/info/warn/error）、`msg`、`round`、

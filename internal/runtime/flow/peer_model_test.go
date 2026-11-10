@@ -121,7 +121,7 @@ func TestEntryProceedWaitsForInput(t *testing.T) {
 
 	result, err := runPeer(t, defs, fake, types.RuntimeLimits{}, false)
 	require.NoError(t, err)
-	require.Equal(t, types.SessionWaitingInput, result.Session.Status)
+	require.Equal(t, types.SessionIdle, result.Session.Status)
 	require.Equal(t, 1, fake.runs["entry"])
 }
 
@@ -136,7 +136,7 @@ func TestEntryFailureFailsSession(t *testing.T) {
 
 	result, err := runPeer(t, defs, fake, types.RuntimeLimits{}, false)
 	require.Error(t, err)
-	require.Equal(t, types.SessionWaitingInput, result.Session.Status, "a failed turn must leave the session continuable")
+	require.Equal(t, types.SessionIdle, result.Session.Status, "a failed turn must leave the session continuable")
 	require.Equal(t, types.TurnFailed, result.Turn.Status)
 }
 

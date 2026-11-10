@@ -130,40 +130,35 @@ type CallRequest struct {
 // Webhook executor.
 //
 // Wire contract: CallResult is persisted verbatim as the `call_result`
-// payload of `agent_turn.completed` / `command_turn.completed` /
-// `webhook_turn.completed` events in team.jsonl, and nested inside the
-// `team_result` payload's `CallResults` map. That event stream is the fact
+// payload of `session.agent_turn.completed` / `session.command_turn.completed` /
+// `session.webhook_turn.completed` events in team.jsonl, and nested inside the
+// `team_result` payload's `call_results` map. That event stream is the fact
 // source external consumers read token usage from, so the JSON names below
-// are a published contract, not an accident of Go naming.
+// are a published contract: adding a field is fine, renaming one is a
+// breaking change for those parsers.
 //
-// They deliberately stay in Go field name form (PascalCase). Two reasons:
-//   - Every session jsonl already on disk uses these names. Renaming them
-//     would split the stream into two dialects that external parsers must
-//     both handle.
-//   - encoding/json only falls back to case-insensitive matching. Names
-//     that differ by more than case (`CallTurnID` vs `call_turn_id`) are
-//     silently dropped on read, with no error.
-//
-// Do not "clean up" these tags into snake_case without a migration. The
-// nested leaf types (TokenUsage, ModelRequestStats, SharedRecord) do use
-// snake_case; that mixed shape is intentional and load-bearing.
+// Go field names are exported identifiers and stay PascalCase; the json tags
+// carry the wire format, which is snake_case like the rest of pkg/types. The
+// two are independent — a tag rename changes the payload, a field rename
+// changes Go code — so there is no reason for the wire format to inherit Go's
+// naming. `callResultWireFields` in execution_json_test.go pins the set.
 type CallResult struct {
-	Status          TurnStatus            `json:"Status"`
-	Reply           string                `json:"Reply"`
-	CallTurnID      string                `json:"CallTurnID"`
-	AgentID         string                `json:"AgentID"`
-	Records         []SharedRecord        `json:"Records"`
-	Next            *Route                `json:"Next"`
-	Usage           TokenUsage            `json:"Usage"`
-	Requests        []ModelRequestStats   `json:"Requests"`
-	WorkspaceOps    []WorkspaceOperation  `json:"WorkspaceOps"`
-	ToolCalls       int                   `json:"ToolCalls"`
-	Error           string                `json:"Error"`
-	CheckpointID    string                `json:"CheckpointID"`
-	Checkpoint      *AgentCheckpoint      `json:"Checkpoint"`
-	TaskID          string                `json:"TaskID"`
-	PendingApproval *AgentPendingApproval `json:"PendingApproval"`
-	Approval        *HITLResponse         `json:"Approval"`
+	Status          TurnStatus            `json:"status"`
+	Reply           string                `json:"reply"`
+	CallTurnID      string                `json:"call_turn_id"`
+	AgentID         string                `json:"agent_id"`
+	Records         []SharedRecord        `json:"records"`
+	Next            *Route                `json:"next"`
+	Usage           TokenUsage            `json:"usage"`
+	Requests        []ModelRequestStats   `json:"requests"`
+	WorkspaceOps    []WorkspaceOperation  `json:"workspace_ops"`
+	ToolCalls       int                   `json:"tool_calls"`
+	Error           string                `json:"error"`
+	CheckpointID    string                `json:"checkpoint_id"`
+	Checkpoint      *AgentCheckpoint      `json:"checkpoint"`
+	TaskID          string                `json:"task_id"`
+	PendingApproval *AgentPendingApproval `json:"pending_approval"`
+	Approval        *HITLResponse         `json:"approval"`
 }
 
 // ModelRequestStats is a privacy-preserving summary of one request sent to a
@@ -242,28 +237,22 @@ type TeamCallResume struct {
 
 // TeamTurnResult is the normalized result of one TeamTurn.
 //
-// Wire contract, same shape and same rules as CallResult: TeamTurnResult is
-// persisted verbatim as the `team_result` payload of the team waiting
-// events, and it embeds CallResult values in CallResults. The JSON names
-// below stay in Go field name form (PascalCase) because every session jsonl
-// on disk already uses them, and because encoding/json only falls back to
-// case-insensitive matching — renaming `CallResults` or `PendingToolTasks`
-// to snake_case would silently drop them on read, with no error, and break
-// resume of interrupted Team turns.
-//
-// The nested leaf types (TeamTurn, SharedRecord, PendingToolTask,
-// AgentPendingApproval, TokenUsage) do use snake_case. That mixed shape is
-// intentional and load-bearing; see docs/context-management.md §6.4.
+// Wire contract, same rules as CallResult: persisted verbatim as the
+// `team_result` payload of the team waiting events, and it embeds CallResult
+// values in `call_results`. Go identifiers stay PascalCase, json tags carry
+// snake_case — a tag rename changes the payload only, so the wire format does
+// not inherit Go naming. `teamTurnResultWireFields` in execution_json_test.go
+// pins the set.
 type TeamTurnResult struct {
-	Turn             TeamTurn               `json:"Turn"`
-	Reply            string                 `json:"Reply"`
-	Records          []SharedRecord         `json:"Records"`
-	CallResults      map[string]CallResult  `json:"CallResults"`
-	PendingToolTasks []PendingToolTask      `json:"PendingToolTasks"`
-	PendingApprovals []AgentPendingApproval `json:"PendingApprovals"`
-	Usage            TokenUsage             `json:"Usage"`
-	Next             *Route                 `json:"Next"`
-	Error            string                 `json:"Error"`
+	Turn             TeamTurn               `json:"turn"`
+	Reply            string                 `json:"reply"`
+	Records          []SharedRecord         `json:"records"`
+	CallResults      map[string]CallResult  `json:"call_results"`
+	PendingToolTasks []PendingToolTask      `json:"pending_tool_tasks"`
+	PendingApprovals []AgentPendingApproval `json:"pending_approvals"`
+	Usage            TokenUsage             `json:"usage"`
+	Next             *Route                 `json:"next"`
+	Error            string                 `json:"error"`
 }
 
 // TeamRuntime executes a TeamTurn.
@@ -290,13 +279,12 @@ type StartFlowRequest struct {
 //   - But it IS an HTTP response contract. internal/view/handler.go encodes
 //     it directly with json.NewEncoder in the start / handle / resume /
 //     status / approval / recovery endpoints, so clients of the HTTP view
-//     API do see these PascalCase names. Renaming a field is a breaking
-//     change for those HTTP clients even though it is harmless for jsonl.
+//     API do see these names. Renaming a field is a breaking change for
+//     those HTTP clients even though it is harmless for jsonl.
 //
-// The json tags below therefore freeze the HTTP response shape. They match
-// the current Go field names exactly, so the bytes on the wire are
-// unchanged; they exist to make the contract explicit rather than an
-// accident of Go naming.
+// Tags are snake_case like the rest of pkg/types; Go identifiers stay
+// PascalCase. `flowTurnResultWireFields` in execution_json_test.go pins the
+// set.
 //
 // Forward-looking hazard: FlowTurnResult currently has no Usage field. Flow
 // level token usage is computed on the consumer side by summing
@@ -304,8 +292,9 @@ type StartFlowRequest struct {
 // child tasks. If a future change makes the flow layer aggregate usage from
 // the event stream instead and puts it here, this struct stops being
 // jsonl-invisible and its field names become part of the published event
-// contract too. At that point re-check the frozen set: a new Usage field
+// contract too. At that point re-check the pinned set: a new Usage field
 // needs a tag before that change ships, not after.
+
 // UserDelivery is one mailbox result addressed to the user.
 type UserDelivery struct {
 	MessageID string `json:"message_id,omitempty"`
@@ -314,28 +303,28 @@ type UserDelivery struct {
 }
 
 type FlowTurnResult struct {
-	Session          FlowSession            `json:"Session"`
-	Turn             FlowTurn               `json:"Turn"`
-	TeamResults      []TeamTurnResult       `json:"TeamResults"`
-	PendingToolTasks []PendingToolTask      `json:"PendingToolTasks"`
-	PendingApprovals []AgentPendingApproval `json:"PendingApprovals"`
-	Records          []SharedRecord         `json:"Records"`
+	Session          FlowSession            `json:"session"`
+	Turn             FlowTurn               `json:"turn"`
+	TeamResults      []TeamTurnResult       `json:"team_results"`
+	PendingToolTasks []PendingToolTask      `json:"pending_tool_tasks"`
+	PendingApprovals []AgentPendingApproval `json:"pending_approvals"`
+	Records          []SharedRecord         `json:"records"`
 	// Deliveries are mailbox results that must reach the user as their own
 	// messages, attributed to the Team that produced them. The engine does not
 	// judge whether the coordinating reply already covered them: a result is a
 	// first-class delivery, and the model's reply is commentary on top of it.
-	Deliveries []UserDelivery `json:"Deliveries,omitempty"`
+	Deliveries []UserDelivery `json:"deliveries,omitempty"`
 	// Queued is set when the message arrived while the session was still
 	// running: it was stored, not executed, and the current turn will start it
 	// as soon as it finishes. The caller should tell the user it was received
 	// rather than treat this as the answer.
-	Queued bool   `json:"Queued,omitempty"`
-	Reply  string `json:"Reply"`
+	Queued bool   `json:"queued,omitempty"`
+	Reply  string `json:"reply"`
 	// FinalReply is the reply of the hop that ended the turn — the Team that
 	// handed the result back to nobody (no activator) or to the user. Reply
 	// is the concatenation of every Team's reply in the turn, which includes
 	// intermediate hops; FinalReply is the only one meant for the caller.
-	FinalReply string `json:"FinalReply,omitempty"`
+	FinalReply string `json:"final_reply,omitempty"`
 	// FinalReplyFromEntry records whether FinalReply came from a hop that had
 	// nobody to hand the result to — the entry Team answering the user. A
 	// mailbox turn whose intermediate hops end up dispatching the entry Team
@@ -346,7 +335,7 @@ type FlowTurnResult struct {
 	// how the turn was woken ("mailbox" means a mailbox message woke it), never
 	// who produced the text.
 	FinalReplyTeam string `json:"final_reply_team,omitempty"`
-	Error          string `json:"Error"`
+	Error          string `json:"error"`
 }
 
 // RuntimeLimits bounds one FlowSession. These are safety defaults, not a new

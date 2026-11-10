@@ -1,27 +1,27 @@
 id: 300
-data: {"seq":300,"type":"flow_turn.started","flow_turn_id":"ft_live","team_turn_id":"","call_turn_id":"","team_id":"","created_at":"2026-11-03T03:00:00.000Z","payload":{"input":"实时用例"}}
+data: {"seq":300,"type":"session.turn.started","flow_turn_id":"ft_live","team_turn_id":"","call_turn_id":"","team_id":"","created_at":"2026-11-03T03:00:00.000Z","payload":{"input":"实时用例"}}
 
 id: 301
-data: {"seq":301,"type":"team_turn.started","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"","team_id":"live-probe","created_at":"2026-11-03T03:00:01.000Z","payload":{"team_turn":{"id":"tt_live","team_id":"live-probe","status":"running"}}}
+data: {"seq":301,"type":"session.team_turn.started","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"","team_id":"live-probe","created_at":"2026-11-03T03:00:01.000Z","payload":{"team_turn":{"id":"tt_live","team_id":"live-probe","status":"running"}}}
 
 id: 302
-data: {"seq":302,"type":"agent_turn.started","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"tt_live:terrain","team_id":"live-probe","created_at":"2026-11-03T03:00:01.500Z","payload":{}}
+data: {"seq":302,"type":"session.agent_turn.started","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"tt_live:terrain","team_id":"live-probe","created_at":"2026-11-03T03:00:01.500Z","payload":{}}
 
 id: 303
-data: {"seq":303,"type":"tool_call.started","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"tt_live:terrain","team_id":"live-probe","created_at":"2026-11-03T03:00:02.000Z","payload":{"tool_call_id":"live-c1","tool_name":"Bash","arguments":{"command":"ls -la"}}}
+data: {"seq":303,"type":"session.tool_call.started","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"tt_live:terrain","team_id":"live-probe","created_at":"2026-11-03T03:00:02.000Z","payload":{"tool_call_id":"live-c1","tool_name":"Bash","arguments":{"command":"ls -la"}}}
 
 id: 304
-data: {"seq":304,"type":"tool_call.completed","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"tt_live:terrain","team_id":"live-probe","created_at":"2026-11-03T03:00:06.000Z","payload":{"tool_call_id":"live-c1","tool_name":"Bash","content":"total 8\ndrwxr-xr-x 4 root root"}}
+data: {"seq":304,"type":"session.tool_call.completed","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"tt_live:terrain","team_id":"live-probe","created_at":"2026-11-03T03:00:06.000Z","payload":{"tool_call_id":"live-c1","tool_name":"Bash","content":"total 8\ndrwxr-xr-x 4 root root"}}
 
 id: 305
-data: {"seq":305,"type":"agent.model_response","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"tt_live:terrain","team_id":"live-probe","created_at":"2026-11-03T03:00:07.000Z","payload":{"structured":true,"reply":"实时渲染的这条消息应该边跑边出现。","text":"{\"reply\":\"实时渲染的这条消息应该边跑边出现。\",\"next\":{\"action\":\"proceed\"}}"}}
+data: {"seq":305,"type":"session.agent.model_response","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"tt_live:terrain","team_id":"live-probe","created_at":"2026-11-03T03:00:07.000Z","payload":{"structured":true,"reply":"实时渲染的这条消息应该边跑边出现。","text":"{\"reply\":\"实时渲染的这条消息应该边跑边出现。\",\"next\":{\"action\":\"proceed\"}}"}}
 
 id: 306
-data: {"seq":306,"type":"agent_turn.completed","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"tt_live:terrain","team_id":"live-probe","created_at":"2026-11-03T03:00:07.500Z","payload":{}}
+data: {"seq":306,"type":"session.agent_turn.completed","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"tt_live:terrain","team_id":"live-probe","created_at":"2026-11-03T03:00:07.500Z","payload":{}}
 
 id: 307
-data: {"seq":307,"type":"team_turn.completed","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"","team_id":"live-probe","created_at":"2026-11-03T03:00:22.000Z","payload":{"team_turn":{"id":"tt_live","team_id":"live-probe","status":"completed","started_at":"2026-11-03T03:00:01.000Z"}}}
+data: {"seq":307,"type":"session.team_turn.completed","flow_turn_id":"ft_live","team_turn_id":"tt_live","call_turn_id":"","team_id":"live-probe","created_at":"2026-11-03T03:00:22.000Z","payload":{"team_turn":{"id":"tt_live","team_id":"live-probe","status":"completed","started_at":"2026-11-03T03:00:01.000Z"}}}
 
 id: 308
-data: {"seq":308,"type":"flow_turn.waiting_input","flow_turn_id":"ft_live","team_turn_id":"","call_turn_id":"","team_id":"","created_at":"2026-11-03T03:00:23.000Z","payload":{"reply":"实时渲染的这条消息应该边跑边出现。","origin":"user"}}
+data: {"seq":308,"type":"session.turn.idle","flow_turn_id":"ft_live","team_turn_id":"","call_turn_id":"","team_id":"","created_at":"2026-11-03T03:00:23.000Z","payload":{"reply":"实时渲染的这条消息应该边跑边出现。","origin":"user"}}
 

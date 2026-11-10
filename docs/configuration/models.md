@@ -137,8 +137,8 @@ Agent 文件只需要指定模型名称；没有在 Agent 上显式配置的参�
   600 秒），到期自动恢复。
 - 冷却只影响被动备选的跳过；用户显式指定的主模型始终会尝试。
 - cooldown 状态保存在进程内存中，不持久化，重启后重置。
-- 实际使用的模型名会记录在 team.jsonl 的 `agent_turn.completed` 事件里，路径是
-  `payload.call_result.Requests[].model`（注意 `Requests` 是大驼峰，见
+- 实际使用的模型名会记录在 team.jsonl 的 `session.agent_turn.completed` 事件里，路径是
+  `payload.call_result.requests[].model`（`requests` 是 snake_case，见
   `docs/context-management.md` §6.4）。
 
 ## Agent 覆盖规则

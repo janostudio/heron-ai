@@ -475,7 +475,7 @@ func TestSessionPersistenceUnaffected(t *testing.T) {
 	// internal/state does, with no workspace and no restriction in sight.
 	eventPath := filepath.ToSlash(filepath.Join(
 		".agents", "data", "sessions", "fs-1", "agent.jsonl"))
-	require.NoError(t, files.Append(eventPath, []byte(`{"type":"agent_turn.completed"}`+"\n")))
+	require.NoError(t, files.Append(eventPath, []byte(`{"type":"session.agent_turn.completed"}`+"\n")))
 	require.NoError(t, files.Append(eventPath, []byte(`{"payload":{"text":"MODEL_OUTPUT_TEXT"}}`+"\n")))
 	require.NoError(t, files.Write(
 		filepath.ToSlash(filepath.Join(".agents", "data", "sessions", "fs-1", "agents", "t1", "x", "state.md")),
@@ -484,7 +484,7 @@ func TestSessionPersistenceUnaffected(t *testing.T) {
 	// And reads it back, so the write is not merely a file on disk.
 	data, err := files.Read(eventPath)
 	require.NoError(t, err)
-	require.Contains(t, string(data), "agent_turn.completed")
+	require.Contains(t, string(data), "session.agent_turn.completed")
 	require.True(t, files.Exists(eventPath))
 
 	// The same paths through the workspace with the restriction applied are

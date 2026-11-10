@@ -155,5 +155,5 @@ upsert 的合并规则（容易误判，务必记住）：
 | upsert 后 `tools.builtin` 变少了 | 列表是整体替换，spec 里要写全 |
 | 改完当轮看不到效果 | 正常，下一轮才生效 |
 
-验证某次调用是否真的落地，读会话日志里的 `tool_call.completed` 事件
+验证某次调用是否真的落地，读会话日志里的 `session.tool_call.completed` 事件
 （`payload.tool_name == "Define"`），并检查 `payload.effective == "next_turn"`。

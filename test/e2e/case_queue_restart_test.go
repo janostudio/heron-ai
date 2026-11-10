@@ -54,8 +54,8 @@ func TestQueue6RestartKeepsQueuedInputUntilRecovery(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 	events := readSession(t, e.Root, sessionID)
-	if started := countEvents(events, "flow_turn.started"); started != 1 {
-		t.Fatalf("flow_turn.started = %d, want 1: the restored process started the queued message without being asked", started)
+	if started := countEvents(events, "session.turn.started"); started != 1 {
+		t.Fatalf("session.turn.started = %d, want 1: the restored process started the queued message without being asked", started)
 	}
 	if queued := queuedUserMessages(events); queued != 1 {
 		t.Fatalf("queued user messages = %d, want 1: the message stored before the crash is gone", queued)

@@ -300,10 +300,10 @@ agent.jsonl 记录 agent 内部行为（增量事件，非完整 prompt 快照�
 
 | 事件 | 内容 | 回放行为 |
 |---|---|---|
-| `agent.model_response` | text/tool_calls/usage/finish_reason | 追加 assistant 消息 |
-| `tool_call.completed` | tool_name/content | 追加 tool 消息 |
-| `agent.feedback` | content（completion feedback / structured retry 提示） | 追加 user 消息 |
-| `context.compacted` | summary/dropped_count | 折叠：前 N 组 → 摘要 |
+| `session.agent.model_response` | text/tool_calls/usage/finish_reason | 追加 assistant 消息 |
+| `session.tool_call.completed` | tool_name/content | 追加 tool 消息 |
+| `session.agent.feedback` | content（completion feedback / structured retry 提示） | 追加 user 消息 |
+| `session.context.compacted` | summary/dropped_count | 折叠：前 N 组 → 摘要 |
 
 **回放恢复**（`internal/agent/replay.go`）：场景 A（TurnCompleted 续聊）时，agent
 回放 agent.jsonl，从后往前重建 active 上下文，实现"执行完再执行，context 持续"。
@@ -321,45 +321,46 @@ agent.jsonl 记录 agent 内部行为（增量事件，非完整 prompt 快照�
 ### 6.4 事件 payload 的字段命名契约
 
 三层 jsonl 是外部系统消费运行数据（尤其是 token 消耗）的唯一事实源，字段名属于**已发布
-契约**，改动等于破坏性变更。当前契约是**混合命名**，这是有意为之，不是笔误：
+契约**，改动等于破坏性变更。当前契约是**统一 snake_case**；Go 标识符与 wire 格式是分离的
+两层：
 
-| 层次 | 命名风格 | 例子 |
+| 层次 | 命名 | 例子 |
 |---|---|---|
-| payload **容器**结构体 | Go 字段名大驼峰 | `call_result.Requests`、`call_result.CallTurnID`、`team_result.CallResults`、`team_result.PendingToolTasks` |
-| 嵌套的**叶子**类型 | snake_case | `Usage.prompt_tokens`、`Requests[].message_count`、`Records[].record_id`、`Turn.team_id` |
+| Go 里的字段标识符 | 大驼峰 | `CallTurnID`、`PendingToolTasks` |
+| 序列化到 jsonl / HTTP 的字段名 | snake_case | `call_turn_id`、`pending_tool_tasks` |
 
-所以一条真实的 `agent_turn.completed` 长这样（两层风格并存）：
+所以一条真实的 `session.agent_turn.completed` 长这样：
 
 ```json
-{"type":"agent_turn.completed","payload":{"call_result":{
-  "Status":"completed",
-  "CallTurnID":"tt_5eb9655c3700b924:answer",
-  "Usage":{"prompt_tokens":2195,"completion_tokens":81,"total_tokens":2276},
-  "Requests":[{"round":0,"message_count":2,"usage":{"prompt_tokens":2195}}]
+{"type":"session.agent_turn.completed","payload":{"call_result":{
+  "status":"completed",
+  "call_turn_id":"tt_5eb9655c3700b924:answer",
+  "usage":{"prompt_tokens":2195,"completion_tokens":81,"total_tokens":2276},
+  "requests":[{"round":0,"message_count":2,"usage":{"prompt_tokens":2195}}]
 }}}
 ```
 
-`team_turn.waiting_tool` / `waiting_approval` 的 `team_result` 同理，而且它把 `CallResult`
+`session.team_turn.waiting_tool` / `waiting_approval` 的 `team_result` 同理，而且它把 `call_result`
 再嵌一层：
 
 ```json
-{"type":"team_turn.waiting_tool","payload":{"team_result":{
-  "Turn":{"id":"tt_1","team_id":"default","status":"waiting_tool"},
-  "CallResults":{"answer":{"Status":"waiting_tool","CallTurnID":"tt_1:answer","TaskID":"task_1"}},
-  "PendingToolTasks":[{"call_id":"answer","task_id":"task_1","checkpoint_id":"cp_1"}],
-  "Usage":{"prompt_tokens":2295,"completion_tokens":7,"total_tokens":2302}
+{"type":"session.team_turn.waiting_tool","payload":{"team_result":{
+  "turn":{"id":"tt_1","team_id":"default","status":"waiting_tool"},
+  "call_results":{"answer":{"status":"waiting_tool","call_turn_id":"tt_1:answer","task_id":"task_1"}},
+  "pending_tool_tasks":[{"call_id":"answer","task_id":"task_1","checkpoint_id":"cp_1"}],
+  "usage":{"prompt_tokens":2295,"completion_tokens":7,"total_tokens":2302}
 }}}
 ```
 
 约束：
 
-- **不要为了让风格统一而把容器字段改成 snake_case。** `encoding/json` 只在"仅大小写不同"
-  时做不敏感匹配；`CallTurnID` 与 `call_turn_id` 差了下划线，读入旧数据时会**静默丢弃**
-  （`err == nil`，字段变零值），历史会话的续聊/恢复会悄悄失效。
-- 叶子类型的 snake_case 是安全的（加了 tag 也不影响旧数据读取），但也不要改。
-- `pkg/types/execution.go` 的 `CallResult` 和 `TeamTurnResult` 上有显式 json tag 把这套
-  名字固定下来，`pkg/types/execution_json_test.go` 会用测试锁死字段名集合。改 tag 会直接
-  测试失败。
+- **两层互不影响**：改 json tag 只改 wire 格式，改 Go 字段只改代码。不要因为 Go 用大驼峰
+  就给 tag 也写大驼峰——tag 描述的是对外格式，不是 Go 的命名习惯。
+- **改 tag 是破坏性变更**：外部解析器依赖它。仓库当前没有需要兼容的历史数据，
+  但对外发布后这条就成立。
+- `pkg/types/execution_json_test.go` 用 `callResultWireFields` / `teamTurnResultWireFields` /
+  `flowTurnResultWireFields` 三个列表锁死字段名，改 tag 会直接测试失败。这是有意设计：
+  让改动必须显式更新契约集合，而不是顺手改掉。
 - `AgentRequest`、`CallRequest`、`AgentResult`（同文件）**不在契约内**：都是进程内传递
   结构，从不整体序列化（jsonl 里 grep 不到，也没有结构体嵌入它们）。字段名可以自由改。
 
@@ -376,8 +377,8 @@ agent.jsonl 记录 agent 内部行为（增量事件，非完整 prompt 快照�
 `FlowTurnResult` 是唯一横跨判断容易出错的：**它不写进三层 jsonl**（flow 层事件流只写自己
 挑出的字段），所以改它对 jsonl 兼容性无害；**但它被直接编码进 HTTP 响应体**——
 `internal/view/handler.go` 有 6 处，覆盖 start / handle / resume / status / approval /
-recovery。HTTP 客户端看到的就是 `{"Session":...,"TeamResults":...,"PendingToolTasks":...}`
-这套大驼峰名字，所以它**有契约**，只是属于 HTTP 面而非事件流面。
+recovery。HTTP 客户端看到的就是 `{"session":...,"team_results":...,"pending_tool_tasks":...}`
+这套 snake_case 名字，所以它**有契约**，只是属于 HTTP 面而非事件流面。
 
 JSON-RPC 反而不受影响：`cmd/server/jsonrpc.go` 的 `jsonRPCTurnResultFrom` 会先转成独立的
 带 snake_case tag 的 `jsonRPCTurnResult`，不直接吐 `FlowTurnResult`。

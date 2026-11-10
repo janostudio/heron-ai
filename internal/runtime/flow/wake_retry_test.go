@@ -58,7 +58,7 @@ func TestWakeRetriesWhileSessionStillRunning(t *testing.T) {
 
 	// The dispatching turn finishes its write-out: the session is idle now, and
 	// the pending retry must deliver the wake-up instead of having dropped it.
-	session.Status = types.SessionWaitingInput
+	session.Status = types.SessionIdle
 	appendSessionStatus(t, writer, session)
 
 	select {

@@ -9,9 +9,12 @@ import (
 type SessionStatus string
 
 const (
-	SessionCreated         SessionStatus = "created"
-	SessionRunning         SessionStatus = "running"
-	SessionWaitingInput    SessionStatus = "waiting_input"
+	SessionCreated SessionStatus = "created"
+	SessionRunning SessionStatus = "running"
+	// SessionIdle means the session has nothing in flight and will accept
+	// another turn. It describes what the caller can do, not what the engine
+	// is waiting for.
+	SessionIdle            SessionStatus = "idle"
 	SessionWaitingTool     SessionStatus = "waiting_tool"
 	SessionWaitingApproval SessionStatus = "waiting_approval"
 	SessionInterrupted     SessionStatus = "interrupted"

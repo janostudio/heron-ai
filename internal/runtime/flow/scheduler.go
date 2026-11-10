@@ -247,7 +247,7 @@ func (r *Runtime) parkDispatchedSession(
 ) error {
 	status := sessionStatusForTurn(execution.result.Turn.Status)
 	switch status {
-	case types.SessionWaitingInput, types.SessionWaitingTool, types.SessionWaitingApproval:
+	case types.SessionIdle, types.SessionWaitingTool, types.SessionWaitingApproval:
 	default:
 		return nil
 	}

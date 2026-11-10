@@ -46,7 +46,7 @@ func TestDispatchedCalleeRecordIsVisibleToTheFlow(t *testing.T) {
 		Inputs: types.InputSpec{FlowRecords: []string{"WorkerReport"}},
 	}
 	rt := newTestRuntime(defs, calleeRecordTeamRuntime{}, writer, evidence)
-	session := seedMailboxSession(t, rt, "fs-callee", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-callee", types.SessionIdle)
 
 	_, err := rt.runTurnWithOrigin(context.Background(), defs, session, "", nil,
 		[]activation{{teamID: "verify", callerTeam: "default"}},
@@ -72,7 +72,7 @@ func TestEntryTeamRecordStaysInTeamScope(t *testing.T) {
 
 	defs := testDefinitions()
 	rt := newTestRuntime(defs, calleeRecordTeamRuntime{}, writer, evidence)
-	session := seedMailboxSession(t, rt, "fs-entry", types.SessionWaitingInput)
+	session := seedMailboxSession(t, rt, "fs-entry", types.SessionIdle)
 
 	_, err := rt.runTurnWithOrigin(context.Background(), defs, session, "查版本号", nil,
 		[]activation{{teamID: "default"}}, turnOriginUser, session.CreatedAt, nil, nil)
