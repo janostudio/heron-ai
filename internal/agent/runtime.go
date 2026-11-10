@@ -1702,12 +1702,15 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 	}
 	filtered := make([]types.ToolCall, len(calls))
 	copy(filtered, calls)
+	// Why a call never reaches the executor, keyed by position in the batch.
+	// This used to be encoded by blanking Name and stuffing the reason into
+	// Arguments, which made the reason unreadable without reverse-engineering
+	// the arguments and rewrote the call the model made: the tool_call event is
+	// supposed to show the arguments as sent.
+	rejected := make(map[int]string, len(calls))
 	for i, call := range filtered {
 		if _, ok := allowed[call.Name]; !ok {
-			// Keep the requested name: the rejection event still has to
-			// tell the caller which tool the model asked for.
-			filtered[i].Arguments = map[string]any{"_rejected": "tool is not allowed for this Agent"}
-			filtered[i].Name = ""
+			rejected[i] = "tool is not allowed for this Agent"
 		}
 	}
 	// A model may omit the tool call id. The started/completed/failed events
@@ -1719,22 +1722,22 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 		}
 	}
 	for i, call := range filtered {
-		if call.Name == "" {
+		// Already refused for a reason of its own; the policy has nothing to add
+		// and must not overwrite it.
+		if _, ok := rejected[i]; ok {
 			continue
 		}
 		decision, reason, policyErr := t.toolDecision(ctx, agent, req, call)
 		if policyErr != nil {
-			filtered[i].Name = ""
-			filtered[i].Arguments = map[string]any{"_policy_error": policyErr.Error()}
+			rejected[i] = policyErr.Error()
 			continue
 		}
 		if decision == ToolDeny {
-			filtered[i].Name = ""
-			filtered[i].Arguments = map[string]any{"_policy_error": reason}
+			rejected[i] = reason
 			continue
 		}
 		if decision == ToolRequireApproval {
-			return approvalResults(filtered, i, req, reason)
+			return approvalResults(filtered, rejected, i, req, reason)
 		}
 	}
 	if batch, ok := t.toolExecutor.(BatchToolExecutor); ok && parallelToolsEnabled(agent) {
@@ -1742,8 +1745,8 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 		parallelCalls := make([]types.ToolCall, 0, len(filtered))
 		parallelIndexes := make([]int, 0, len(filtered))
 		for i, call := range filtered {
-			if call.Name == "" {
-				results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, rejectionReason(call))
+			if why, ok := rejected[i]; ok {
+				results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, why)
 				continue
 			}
 			if err := t.executeHook(ctx, HookOnToolStart, hookPayload(agent, req, round, &call, nil)); err != nil {
@@ -1788,8 +1791,8 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 
 	results := make([]*types.ToolResult, len(filtered))
 	for i, call := range filtered {
-		if call.Name == "" {
-			results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, rejectionReason(call))
+		if why, ok := rejected[i]; ok {
+			results[i] = t.rejectToolCall(ctx, agent, req, round, calls[i], call, why)
 			continue
 		}
 		if t.toolExecutor == nil {
@@ -1909,7 +1912,7 @@ func (t *TurnLoop) toolDecision(ctx context.Context, agent types.AgentConfig, re
 // turn sent N tool_calls with one tool reply and strict providers rejected the
 // whole request with 400. The resumed turn only ever fills in the approval, so
 // nothing else would ever have produced those messages.
-func approvalResults(calls []types.ToolCall, index int, req types.AgentRequest, reason string) []*types.ToolResult {
+func approvalResults(calls []types.ToolCall, rejected map[int]string, index int, req types.AgentRequest, reason string) []*types.ToolResult {
 	results := make([]*types.ToolResult, len(calls))
 	call := calls[index]
 	pending := &types.AgentPendingApproval{
@@ -1933,6 +1936,16 @@ func approvalResults(calls []types.ToolCall, index int, req types.AgentRequest, 
 	// message the pairing requires.
 	for i := range results {
 		if i == index {
+			continue
+		}
+		// A call that was already going to be refused keeps its own reason: the
+		// batch stopping for approval is not why it did not run.
+		if why, ok := rejected[i]; ok {
+			results[i] = &types.ToolResult{
+				Success: false,
+				Error:   why,
+				Next:    &types.Route{Action: types.NextProceed},
+			}
 			continue
 		}
 		results[i] = &types.ToolResult{
@@ -1966,21 +1979,6 @@ func (t *TurnLoop) contextConfig(agent types.AgentConfig) types.ContextConfig {
 		}
 	}
 	return config
-}
-
-// rejectionReason reports why a Tool call never reached the executor. The
-// allowlist and the policy layer both blank the name before handing the call
-// over, so the reason has to come from the arguments they left behind: the
-// model used to be told "tool is not allowed for this Agent" even when the real
-// reason was a policy denial, and a wrong reason is what it acts on next.
-func rejectionReason(call types.ToolCall) string {
-	if reason, ok := call.Arguments["_policy_error"].(string); ok && strings.TrimSpace(reason) != "" {
-		return reason
-	}
-	if reason, ok := call.Arguments["_rejected"].(string); ok && strings.TrimSpace(reason) != "" {
-		return reason
-	}
-	return "tool is not allowed for this Agent"
 }
 
 // rejectToolCall records a tool invocation that never reached the executor

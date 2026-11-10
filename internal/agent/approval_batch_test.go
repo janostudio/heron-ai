@@ -112,19 +112,26 @@ func TestApprovalBatchResumePairsEveryToolCall(t *testing.T) {
 	require.Equal(t, 2, toolReplies, "each tool_call needs its own tool message after resume")
 }
 
-// TestPolicyDenialReportsItsOwnReason covers the rejection message: a policy
-// denial blanks the Tool name before the call reaches rejectToolCall, so the
-// reason has to travel in the arguments. The model used to be told the call was
-// "not allowed for this Agent" even when Bash had been refused for a restricted
-// command, and that is the message it reasons from on the next round.
-func TestPolicyDenialReportsItsOwnReason(t *testing.T) {
-	call := types.ToolCall{
-		ID:        "call-1",
-		Name:      "",
-		Arguments: map[string]any{"_policy_error": `Bash command contains restricted operation "rm -rf"`},
+// TestBatchRejectionKeepsItsOwnReason covers the reason each unanswered call
+// reports. Two things can keep a call from running in the same batch: its own
+// policy denial, or another call in the batch waiting for approval. Each has to
+// report its own cause — a policy-denied Bash told "another call is waiting for
+// approval" is a message the model cannot act on.
+func TestBatchRejectionKeepsItsOwnReason(t *testing.T) {
+	calls := []types.ToolCall{
+		{ID: "call-1", Name: "Bash", Arguments: map[string]any{"command": "rm -rf /"}},
+		{ID: "call-2", Name: "Script", Arguments: map[string]any{"code": "return 1"}},
+		{ID: "call-3", Name: "Write", Arguments: map[string]any{"file": "a.txt"}},
 	}
-	require.Contains(t, rejectionReason(call), "restricted operation")
-	require.Contains(t, rejectionReason(types.ToolCall{Arguments: map[string]any{}}), "not allowed")
+	rejected := map[int]string{0: `Bash command contains restricted operation "rm -rf"`}
+
+	results := approvalResults(calls, rejected, 1, types.AgentRequest{CallID: "c"}, "script needs approval")
+	require.Len(t, results, 3)
+
+	require.Contains(t, results[0].Error, "restricted operation", "被策略拒绝的调用要保留自己的理由")
+	require.Equal(t, "tool approval required", results[1].Error)
+	require.NotNil(t, results[1].PendingApproval)
+	require.Contains(t, results[2].Error, "waiting for human approval", "同批其他调用说明是被审批挡住")
 }
 
 // TestMissingToolCallIDIsSharedByTranscriptAndResult covers the id that used to
