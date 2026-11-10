@@ -47,6 +47,9 @@ npm install -g @qinghuangniao/heron-ai
 heron --version
 ```
 
+The binary comes from a per-platform npm package (`@qinghuangniao/heron-ai-<platform>`),
+so installation only talks to the npm registry — no GitHub download is involved.
+
 From source (Go 1.26+):
 
 ```bash
