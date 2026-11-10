@@ -28,6 +28,7 @@
 | 文档 | 内容 |
 |---|---|
 | [architecture.md](./architecture.md)（EN） | 三层编排模型、包结构、信号路由、Agent 能力全景 |
+| [TEAM-CONCURRENCY.md](./TEAM-CONCURRENCY.md)（中） | Team 并发的实际边界：lifecycle、busy key、撞车时的两条路径与排队时机 |
 | [context-management.md](./context-management.md)（中） | 单个 AgentTurn 的上下文组成、压缩锚定、与 State/Knowledge 的边界 |
 | [context-caching-design.md](./context-caching-design.md)（中） | 对标 Claude Code 的上下文优化全景（缓存、裁剪、注入策略） |
 | [skill-progressive-disclosure.md](./skill-progressive-disclosure.md)（EN） | Skill / Knowledge 的渐进式披露：先给目录，再按需读正文 |
