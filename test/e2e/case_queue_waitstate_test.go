@@ -22,7 +22,7 @@ func TestQueue5InputDuringApprovalIsRefusedNotQueued(t *testing.T) {
 
 	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-QUEUE-2", scriptEnabled: true})
 	e.Mock.script(
-		toolStep("Script", map[string]any{"code": `
+		toolStep("REPL", map[string]any{"code": `
 			const pkg = tools.Read({file: "package.json"});
 			return {len: pkg.content.length};
 		`}),
@@ -31,7 +31,7 @@ func TestQueue5InputDuringApprovalIsRefusedNotQueued(t *testing.T) {
 
 	result := e.runTurn(map[string]any{"input": "用脚本读文件"})
 	if len(result.PendingApprovals) == 0 {
-		t.Fatalf("Script ran without asking for approval; status=%q", result.Turn.Status)
+		t.Fatalf("REPL ran without asking for approval; status=%q", result.Turn.Status)
 	}
 	approval := result.PendingApprovals[0]
 

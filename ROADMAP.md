@@ -16,7 +16,7 @@
 
 **Agent 运行时**
 
-- [x] 模型/工具回合循环，20 个内置工具（`Script` 为第 21 个，需显式开启）
+- [x] 模型/工具回合循环，20 个内置工具（`REPL` 为第 21 个，需显式开启）
 - [x] Guardrail、Hooks、结构化输出、Handoff、HITL 审批
 - [x] 上下文压缩与缓存锚定
 - [x] 子 agent：`Spawn` / `Collect`，以及 Team 间派发与结果回流

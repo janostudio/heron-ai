@@ -252,11 +252,11 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// missing.
 	toolRegistry.Register(agent.NewDefineTool(definitionwriter.NewWriter(store), store))
 
-	// Script (REPL code mode) is opt-in through settings.json tools.script.
+	// REPL (code mode) is opt-in through settings.json tools.repl.
 	// Everything it needs is constructed here rather than inside the tool so the
 	// feature has exactly one switch and no hidden defaults.
 	//
-	// The catalog lists every registered builtin except Script itself, not the
+	// The catalog lists every registered builtin except REPL itself, not the
 	// per-agent whitelist: the catalog is rendered per session but the agent
 	// config is not available at this point. That is safe because visibility is
 	// not authorization — an inner call goes back through executeToolCalls,
@@ -296,10 +296,6 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 			},
 		})
 		toolRegistry.Register(scriptTool)
-		// The previous name keeps executing the same instance: recordings, client
-		// tool filters and agent definitions predate the rename, and an unknown
-		// tool name fails the call rather than saying "renamed".
-		toolRegistry.Register(scriptAlias{Tool: scriptTool})
 		turnLoop.SetScriptDescription(scriptTool.CodeDescriptionFor)
 	}
 
@@ -929,8 +925,3 @@ func (a promptAdapter) Render(
 		},
 	)
 }
-
-// scriptAlias exposes the code-execution tool under its previous name.
-type scriptAlias struct{ types.Tool }
-
-func (a scriptAlias) Name() string { return script.LegacyToolName }
