@@ -1,0 +1,42 @@
+id: e2e_dispatch
+entry: frontdesk
+
+# Two teams, one edge: frontdesk may hand work to worker and nothing else.
+# The edge is declared here rather than in the agent so the reach belongs to the
+# flow, and the Team tool refuses a target outside it.
+teams:
+  frontdesk:
+    team: frontdesk_team
+    can_activate:
+      - worker
+      - worker-b
+      - probe
+    inputs:
+      user_message: true
+
+  worker-b:
+    team: worker_b_team
+    on_proceed:
+      - frontdesk
+    inputs:
+      user_message: true
+
+  worker:
+    team: worker_team
+    # The result goes back to the user-facing team, not to whoever happened to
+    # wake the worker.
+    on_proceed:
+      - frontdesk
+    inputs:
+      user_message: true
+
+  # One instance per dispatched task: two tasks in flight at once are two
+  # instances, not a conflict. Declaring it here is what makes the reach and the
+  # lifecycle part of the flow rather than of the caller's habits.
+  probe:
+    team: probe_team
+    lifecycle: per_task
+    on_proceed:
+      - frontdesk
+    inputs:
+      user_message: true
