@@ -447,6 +447,9 @@
      * that into the login form, and a clean 200 renders straight through. */
     var match = location.pathname.match(/^\/s\/(.+)$/);
     var sessionID = match ? decodeURIComponent(match[1]) : "";
+    // Leaving a conversation must close its stream: one open subscription per
+    // visited session would pile up silently.
+    stopSessionStream();
     renderSidebar(sessionID);
     if (sessionID) {
       renderRecord(sessionID);
@@ -690,6 +693,7 @@
     if (!body || !currentRecord) { return; }
     currentMode = mode;
     stopRunLinks();
+    stopSessionStream();
     clear(body);
     var hint = document.getElementById("mode-hint");
     if (mode === "run") {
@@ -714,6 +718,7 @@
     }
     body.appendChild(renderChat(currentRecord));
     if (hint) { hint.textContent = "\u5bf9\u8bdd\uff1a\u4eba\u80fd\u8bfb\u7684\u6d88\u606f\u6d41\u3002"; }
+    attachSessionStream(body);
   }
 
   /* ---------- kpi ---------- */
@@ -893,7 +898,6 @@
       input.style.height = Math.min(input.scrollHeight || 0, 180) + "px";
     }
 
-    var liveRun = null;
     /* Bumped on every send and on every stop. A POST that answers after the
      * reader already stopped (or started another turn) must not touch the UI. */
     var runToken = 0;
@@ -910,9 +914,10 @@
       /* Subscribe before posting. The turn starts the moment the request
        * lands; a stream opened afterwards would miss its opening events. The
        * stream resumes from the last seq already on screen, so nothing replays. */
-      var chat = document.querySelector("#record-body .chat");
-      if (liveRun) { liveRun.stop(); liveRun = null; }
-      if (chat && currentRecord) { liveRun = startLiveRun(sessionID, chat, currentRecord); }
+      /* The page is already streaming this session; the turn's events arrive
+       * through it. Only remember how much has been seen, so the fallback below
+       * can tell "the stream delivered" from "it stayed silent". */
+      var seenBefore = sessionStream ? sessionStream.count() : 0;
 
       input.value = "";
       autosize();
@@ -939,8 +944,7 @@
           // left to add. Give the last frame a beat, then close it.
           setTimeout(function () {
             if (token !== runToken) { return; }
-            var missed = liveRun ? liveRun.count() === 0 : true;
-            if (liveRun) { liveRun.settleAll(); liveRun.stop(); liveRun = null; }
+            var missed = !sessionStream || sessionStream.count() === seenBefore;
             if (missed) {
               // The stream never delivered a frame; the record is the fallback
               // so the reader still sees what happened.
@@ -952,7 +956,6 @@
         .catch(function (error) {
           if (error && error.unauthorized) { return; }
           if (token !== runToken) { return; }
-          if (liveRun) { liveRun.stop(); liveRun = null; }
           setBusy(false, "\u53d1\u9001\u5931\u8d25\uff1a" + error.message);
         });
     }
@@ -966,7 +969,6 @@
     function stop() {
       if (!busy) { return; }
       runToken += 1;
-      if (liveRun) { liveRun.settleAll(); liveRun.stop(); liveRun = null; }
       setBusy(false, "\u6b63\u5728\u8bf7\u6c42\u505c\u6b62\u2026");
       apiFetch("/api/cancel?session_id=" + encodeURIComponent(sessionID), { method: "POST" })
         .then(function (response) {
@@ -1264,6 +1266,86 @@
     };
 
     return view;
+  }
+
+  /* The transcript follows the session while the page is open.
+   *
+   * Subscribing only for the duration of one POST covers the turn the reader
+   * sent and nothing else: a dispatched team comes back minutes later, and a
+   * scheduled wake-up has no request behind it at all, so those turns landed in
+   * the log with the page showing nothing new until a reload. */
+  var sessionStream = null;
+
+  function stopSessionStream() {
+    if (sessionStream) { sessionStream.stop(); sessionStream = null; }
+  }
+
+  function attachSessionStream(body) {
+    stopSessionStream();
+    if (!body || !currentRecord || !currentRecord.session) { return; }
+    var sessionID = currentRecord.session.id;
+    var container = body.querySelector(".chat");
+    if (!sessionID || !container) { return; }
+
+    var known = {};   // flow turns already rendered from the record
+    groupByTurn(currentRecord.events || []).forEach(function (turn) { known[turn.id] = true; });
+    var turns = {};
+    var lastSeq = lastSeqOf(currentRecord);
+    var seen = 0;
+    var stopped = false;
+    var stopFn = null;
+    var retry = 1000;
+
+    function turnFor(id) {
+      if (!turns[id]) {
+        turns[id] = createLiveTurn(id);
+        container.appendChild(turns[id].box);
+      }
+      return turns[id];
+    }
+
+    function onEvent(event) {
+      if (!event || !event.type) { return; }
+      seen++;
+      retry = 1000;
+      if (typeof event.seq === "number" && event.seq > lastSeq) { lastSeq = event.seq; }
+      /* Keep the loaded record in step: switching mode re-renders from it, and
+       * resuming the stream uses its last seq. */
+      if (currentRecord) { (currentRecord.events = currentRecord.events || []).push(event); }
+
+      var id = event.flow_turn_id || "flow";
+      if (known[id]) {
+        // This turn is already on screen as history. Drawing its later events
+        // would duplicate it; the record is what the page renders from.
+        return;
+      }
+      var view = turnFor(id);
+      view.push(event);
+      if (event.type === "flow_turn.waiting_input" || event.type === "flow_turn.completed") {
+        view.finish(event);
+        return;
+      }
+      applyRunEvent(event);
+      refreshRunView();
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    function connect() {
+      stopFn = subscribeLive(sessionID, lastSeq, onEvent, function () {
+        if (stopped) { return; }
+        setTimeout(function () {
+          if (stopped) { return; }
+          retry = Math.min(retry * 2, 15000);
+          connect();
+        }, retry);
+      });
+    }
+    connect();
+
+    sessionStream = {
+      stop: function () { stopped = true; if (stopFn) { stopFn(); } },
+      count: function () { return seen; }
+    };
   }
 
   function startLiveRun(sessionID, container, record) {
