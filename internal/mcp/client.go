@@ -8,7 +8,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -42,6 +44,13 @@ type Client struct {
 	name      string
 	transport Transport
 
+	// reconnect rebuilds the transport when the server died, and
+	// reconnectAttempts bounds how many times Connect is retried. Nil / zero
+	// keeps the previous behaviour: report the failure and stay down.
+	reconnect         func(ctx context.Context) (Transport, error)
+	reconnectAttempts int
+	reconnectMu       sync.Mutex
+
 	nextID  atomic.Int64
 	mu      sync.RWMutex
 	tools   []ToolDefinition
@@ -60,6 +69,22 @@ type ServerInfo struct {
 // not here, so a caller that fails to connect never owns a running child.
 func NewClient(name string, transport Transport) *Client {
 	return &Client{name: name, transport: transport}
+}
+
+// EnableReconnect lets the client rebuild its transport when the server dies.
+//
+// A stdio MCP server is a child process: it can crash, be OOM-killed, or exit
+// after a config reload. Without this the adapter still believes the connection
+// is up and every later call fails with "server exited" until the whole engine
+// restarts — from the user's side a tool silently disappears mid-session.
+//
+// attempts <= 0 keeps the previous behaviour (no reconnection).
+func (c *Client) EnableReconnect(factory func(ctx context.Context) (Transport, error), attempts int) {
+	if c == nil || factory == nil || attempts <= 0 {
+		return
+	}
+	c.reconnect = factory
+	c.reconnectAttempts = attempts
 }
 
 // Connect starts the transport and completes the handshake: initialize,
@@ -203,7 +228,15 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	if args == nil {
 		args = map[string]any{}
 	}
-	res, err := c.call(ctx, "tools/call", map[string]any{"name": name, "arguments": args})
+	transport := c.currentTransport()
+	res, err := c.send(ctx, transport, "tools/call", map[string]any{"name": name, "arguments": args})
+	if err != nil && c.canReconnect() && isTransportGone(err) {
+		if recErr := c.reconnectServer(ctx, transport); recErr != nil {
+			return nil, fmt.Errorf("mcp server %q: %w (reconnect failed: %v)", c.name, err, recErr)
+		}
+		transport = c.currentTransport()
+		res, err = c.send(ctx, transport, "tools/call", map[string]any{"name": name, "arguments": args})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -223,17 +256,106 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) call(ctx context.Context, method string, params any) (*Response, error) {
+	return c.send(ctx, c.currentTransport(), method, params)
+}
+
+func (c *Client) send(ctx context.Context, transport Transport, method string, params any) (*Response, error) {
+	if transport == nil {
+		return nil, errors.New("mcp client: not connected")
+	}
 	raw, err := encodeParams(params)
 	if err != nil {
 		return nil, err
 	}
 	id := c.nextID.Add(1)
-	return c.transport.Send(ctx, Request{
+	return transport.Send(ctx, Request{
 		JSONRPC: jsonrpcVersion,
 		ID:      id,
 		Method:  method,
 		Params:  raw,
 	})
+}
+
+func (c *Client) currentTransport() Transport {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.transport
+}
+
+func (c *Client) canReconnect() bool {
+	return c != nil && c.reconnect != nil && c.reconnectAttempts > 0
+}
+
+// reconnectServer rebuilds the transport and repeats the handshake, so the tool
+// list reflects whatever the restarted server advertises now.
+//
+// failed is the transport the caller saw fail. If someone else already
+// replaced it, this call has nothing to do: several concurrent tool calls hit
+// the same dead child, and only one may restart it.
+func (c *Client) reconnectServer(ctx context.Context, failed Transport) error {
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+
+	if current := c.currentTransport(); current != failed {
+		return nil
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= c.reconnectAttempts; attempt++ {
+		if attempt > 1 {
+			backoff := time.Duration(attempt-1) * 200 * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+		transport, err := c.reconnect(ctx)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if err := transport.Start(ctx); err != nil {
+			_ = transport.Close()
+			lastErr = err
+			continue
+		}
+		c.mu.Lock()
+		c.transport = transport
+		c.mu.Unlock()
+		if err := c.handshake(ctx); err != nil {
+			_ = transport.Close()
+			lastErr = err
+			continue
+		}
+		logging.Info("mcp server reconnected", map[string]any{
+			"server": c.name, "attempt": attempt,
+		})
+		return nil
+	}
+	return lastErr
+}
+
+// isTransportGone reports whether err means the child process (or the socket)
+// is no longer there. Reconnecting is only right for this class of failure: a
+// tool that returned an error answered fine.
+func isTransportGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"exited",
+		"broken pipe",
+		"connection reset by peer",
+		"use of closed network connection",
+		"eof",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // callToolResult is the result member of a tools/call response.
