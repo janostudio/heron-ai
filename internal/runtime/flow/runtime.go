@@ -1138,12 +1138,18 @@ func (r *Runtime) runTurnWithOrigin(
 			}
 		}
 		if routeFailure != nil {
-			logging.Error("flow route failure", map[string]any{
+			// A cancelled call surfaces here as a route failure whose reason is
+			// text ("call \"x\": llm chat: context canceled"), so the cancel has to
+			// be recognised by text or it is recorded as an incident.
+			logging.ErrorUnlessCancelled(routeFailure, "flow route failure", map[string]any{
 				"flow_session_id": session.ID,
 				"flow_turn_id":    turn.ID,
-				"error":           routeFailure.Error(),
 			})
-			return r.finishTurn(ctx, withDeliveries(result, deliveries), types.SessionFailed, routeFailure)
+			status := types.SessionFailed
+			if logging.IsCancellation(routeFailure) {
+				status = types.SessionCancelled
+			}
+			return r.finishTurn(ctx, withDeliveries(result, deliveries), status, routeFailure)
 		}
 		result.Turn.Next = resolvedRoute
 		if len(queue) == 0 {
@@ -1835,9 +1841,12 @@ func (r *Runtime) finishTurn(
 	// The terminal event is the only record that the turn stopped, so it has to
 	// be written on a context that is still alive.
 	ctx = writeEvenIfCancelled(ctx)
-	if errors.Is(runErr, context.Canceled) {
+	if logging.IsCancellation(runErr) {
 		// Cancellation is not a failure of the work: it is the outcome the user
 		// asked for, and reporting it as "failed" sends them looking for a bug.
+		// The check is text-aware on purpose: a Team reports its reason as a
+		// string, and a string cannot be unwrapped, so errors.Is alone let a
+		// cancelled turn finish as failed.
 		status = types.SessionCancelled
 		runErr = errors.New("turn cancelled")
 	}
@@ -1850,10 +1859,9 @@ func (r *Runtime) finishTurn(
 		result.Error = runErr.Error()
 	}
 	if status == types.SessionFailed {
-		logging.Error("flow turn failed", map[string]any{
+		logging.ErrorUnlessCancelled(errors.New(result.Error), "flow turn failed", map[string]any{
 			"flow_session_id": result.Session.ID,
 			"flow_turn_id":    result.Turn.ID,
-			"error":           result.Error,
 		})
 	}
 	eventType := types.EventFlowTurnCompleted

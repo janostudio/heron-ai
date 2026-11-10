@@ -83,3 +83,58 @@ func TestCancel3CancelLeavesNoUnfinishedExecution(t *testing.T) {
 	writeTrace(t, e, httpTrace{Method: http.MethodPost, Path: "/api/cancel", Status: http.StatusOK},
 		sessionID, map[string]any{"unfinished_after_cancel": len(recovery.Interrupted)})
 }
+
+// TestCancel4CancelIsNotAnIncident covers the log side of cancelling: a cancel is
+// the user withdrawing the request, so it must not land at error level.
+//
+// The failure this catches is operational rather than functional. The cancel
+// works, but the cancelled call surfaces as a route failure whose reason is a
+// string — and a string cannot be unwrapped, so `errors.Is(err, context.Canceled)`
+// missed it and every cancel wrote "flow route failure" / "flow turn failed" at
+// error level. Whoever is on call then learns to ignore the error channel.
+func TestCancel4CancelIsNotAnIncident(t *testing.T) {
+	judge(t, "I-CANCEL-2", "cancel")
+
+	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-CANCEL-2", fixture: "dispatch"})
+	e.Mock.script(
+		step{match: []string{"You are 接待", "慢任务"}, delay: 3 * time.Second, text: "慢答复"},
+		step{match: []string{"You are 接待"}, text: "答复", repeat: true},
+	)
+
+	first := e.runTurnAsync(map[string]any{"input": "慢任务"})
+	waitForModelRequest(t, e, "You are 接待", 20*time.Second)
+	sessionID := latestSessionID(t, e)
+	if sessionID == "" {
+		t.Fatal("no session was created for the first input")
+	}
+	if _, status, err := e.do(http.MethodPost, "/api/cancel?session_id="+sessionID, nil); err != nil || status != http.StatusOK {
+		t.Fatalf("cancel: status=%d err=%v", status, err)
+	}
+	<-first
+	time.Sleep(300 * time.Millisecond)
+
+	var incidents []string
+	cancelledInfo := 0
+	for _, line := range readProcessLog(t, e.Root) {
+		lower := strings.ToLower(line.Raw)
+		if !strings.Contains(lower, "cancel") {
+			continue
+		}
+		if line.Level == "error" {
+			incidents = append(incidents, truncate(line.Raw, 200))
+			continue
+		}
+		if line.Level == "info" && strings.Contains(lower, "(cancelled)") {
+			cancelledInfo++
+		}
+	}
+	if len(incidents) > 0 {
+		t.Fatalf("cancel was recorded as an incident (%d error lines): %v", len(incidents), incidents)
+	}
+	if cancelledInfo == 0 {
+		t.Fatal("nothing recorded the cancellation at info level: the turn's outcome is invisible in the log")
+	}
+
+	writeTrace(t, e, httpTrace{Method: http.MethodPost, Path: "/api/cancel", Status: http.StatusOK},
+		sessionID, map[string]any{"error_lines": len(incidents), "cancelled_info_lines": cancelledInfo})
+}
