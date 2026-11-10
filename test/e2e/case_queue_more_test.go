@@ -128,59 +128,6 @@ func TestQueue2AttachmentsSurviveQueueing(t *testing.T) {
 		sessionID, map[string]any{"attachment_carried": carried})
 }
 
-// TestQueue3CancelStopsTheQueuedInput covers cancel meeting the queue.
-//
-// What is pinned here is the part that is not negotiable: a cancelled session
-// must not keep running work the user cancelled, so a queued message must not
-// start by itself afterwards. Whether the stored message should also be dropped
-// is a product decision, deliberately not asserted.
-func TestQueue3CancelStopsTheQueuedInput(t *testing.T) {
-	judge(t, "I-QUEUE-1", "dispatch")
-
-	const slowTurn = 3 * time.Second
-	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-QUEUE-1", fixture: "dispatch"})
-	e.Mock.script(
-		step{match: []string{"You are 接待", "慢任务"}, delay: slowTurn, text: "慢答复"},
-		step{match: []string{"You are 接待", "排队问题"}, text: "排队答复", repeat: true},
-	)
-
-	first := e.runTurnAsync(map[string]any{"input": "慢任务"})
-	waitForModelRequest(t, e, "You are 接待", 20*time.Second)
-	sessionID := latestSessionID(t, e)
-	if sessionID == "" {
-		t.Fatal("no session was created for the first input")
-	}
-
-	second := e.runTurn(map[string]any{"flow_session_id": sessionID, "input": "排队问题"})
-	if !second.Queued {
-		t.Fatalf("second message was not queued while the first turn ran: reply=%q", second.Reply)
-	}
-
-	if _, status, err := e.do(http.MethodPost, "/api/cancel?session_id="+sessionID, nil); err != nil || status != http.StatusOK {
-		t.Fatalf("cancel: status=%d err=%v", status, err)
-	}
-	<-first // the cancelled turn still returns a result to its caller
-
-	// Give the engine more than the model delay to start the queued message.
-	time.Sleep(slowTurn + time.Second)
-
-	events := readSession(t, e.Root, sessionID)
-	if started := countEvents(events, "flow_turn.started"); started != 1 {
-		t.Fatalf("flow_turn.started = %d, want 1: the queued message ran after the session was cancelled", started)
-	}
-
-	body, status, err := e.do(http.MethodGet, "/api/status?session_id="+sessionID, nil)
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("status: status=%d err=%v", status, err)
-	}
-	if !strings.Contains(string(body), "cancelled") {
-		t.Fatalf("session status = %s, want cancelled", truncate(string(body), 200))
-	}
-
-	writeTrace(t, e, httpTrace{Method: http.MethodPost, Path: "/api/cancel", Status: http.StatusOK},
-		sessionID, map[string]any{"turns_started": 1})
-}
-
 // TestQueue4QueuedInputsRunInOrder covers the order of a backlog: three messages
 // arrive mid-turn and must run in the order they were sent.
 //

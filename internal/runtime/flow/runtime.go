@@ -1609,6 +1609,12 @@ func (r *Runtime) executeTeamTurn(
 		}
 	}
 
+	// Same reason as finishTurn: a cancelled execution still has to record that
+	// the TeamTurn ended. The recovery check pairs started/completed events, so a
+	// TeamTurn with only a start makes the session "have unfinished execution",
+	// and a session in that state refuses new input until it is recovered.
+	ctx = writeEvenIfCancelled(ctx)
+
 	eventType := types.EventTeamTurnCompleted
 	if waitingApproval && teamResult.Error == "" {
 		eventType = types.EventTeamTurnWaitingApproval
@@ -1828,9 +1834,7 @@ func (r *Runtime) finishTurn(
 	// A cancelled turn reaches here through the very context Cancel cancelled.
 	// The terminal event is the only record that the turn stopped, so it has to
 	// be written on a context that is still alive.
-	if ctx != nil && ctx.Err() != nil {
-		ctx = context.Background()
-	}
+	ctx = writeEvenIfCancelled(ctx)
 	if errors.Is(runErr, context.Canceled) {
 		// Cancellation is not a failure of the work: it is the outcome the user
 		// asked for, and reporting it as "failed" sends them looking for a bug.
@@ -2979,4 +2983,18 @@ func topActivationPairs(counts map[string]int) []string {
 		out = append(out, fmt.Sprintf("%s ×%d", p.name, p.n))
 	}
 	return out
+}
+
+// writeEvenIfCancelled returns a context still usable for writing when the
+// caller's context has already been cancelled.
+//
+// Terminal events are the ledger: they are how the recovery check learns that a
+// turn, team turn or call ended. Skipping them on cancellation makes an ordinary
+// cancel indistinguishable from a crash, and the session then refuses new input
+// until someone runs recovery.
+func writeEvenIfCancelled(ctx context.Context) context.Context {
+	if ctx == nil || ctx.Err() == nil {
+		return ctx
+	}
+	return context.Background()
 }
