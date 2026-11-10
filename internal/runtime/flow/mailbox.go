@@ -299,6 +299,7 @@ func (r *Runtime) replayFlowEvents(ctx context.Context, sessionID string) ([]sto
 	if r.sessions == nil {
 		return nil, errors.New("session writer is nil")
 	}
+	started := time.Now()
 	replay, err := r.sessions.Replay(ctx, sessionID)
 	if errors.Is(err, storage.ErrNotFound) {
 		return nil, nil
@@ -306,6 +307,17 @@ func (r *Runtime) replayFlowEvents(ctx context.Context, sessionID string) ([]sto
 	if err != nil {
 		return nil, err
 	}
+	// Folding the whole event file is the hot path this engine accepted on
+	// purpose: sessions here stay in the low hundreds of events, where a full
+	// replay costs under a millisecond. Reading incrementally needs a store that
+	// can read from an offset, and that trade is only worth making with evidence.
+	// This line is the evidence: if it starts reporting thousands of events or
+	// tens of milliseconds, that is the signal to change the store.
+	logging.Debug("session events replayed", map[string]any{
+		"flow_session_id": sessionID,
+		"events":          len(replay.Events),
+		"duration_ms":     time.Since(started).Milliseconds(),
+	})
 	events := make([]storage.SessionEvent, len(replay.Events))
 	copy(events, replay.Events)
 	sort.SliceStable(events, func(i, j int) bool {
