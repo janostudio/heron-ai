@@ -34,6 +34,29 @@ const files = {
   stream: await readFile(path.join(fixtures, "stream.txt"), "utf8"),
 };
 
+/* emptyRecord is what GET /record answers for a session opened from the UI and
+ * never typed into: the created event is the whole history. */
+function emptyRecord(id) {
+  const at = "2026-11-10T00:00:00.000Z";
+  return {
+    after_seq: 0,
+    events: [{
+      seq: 1,
+      type: "flow_session.created",
+      created_at: at,
+      payload: { session: { id, status: "created", created_at: at } },
+    }],
+    facts: {
+      turns: 0, team_turns: 0, calls: 0, tool_calls: 0, tool_failures: 0,
+      compactions: 0, mailbox_messages: 0, input_tokens: 0, output_tokens: 0,
+    },
+    latest_seq: 1,
+    nodes: [],
+    session: id,
+    truncated: 0,
+  };
+}
+
 /* ---------- static server: the same three routes HandleWebStatic answers ---------- */
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -121,7 +144,7 @@ function speakerOf(text) {
  * deliberately not mocked here: it is served by the local HTTP server above so
  * that frames arrive over time. */
 function apiRouter(options = {}) {
-  const state = { sent: null, created: null, createdUrl: "" };
+  const state = { sent: null, created: null, createdUrl: "", createdCount: 0 };
   const handler = async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -132,12 +155,27 @@ function apiRouter(options = {}) {
       return route.fulfill({ status: 401, body: "unauthorized" });
     }
     if (url.pathname === "/api/sessions" && request.method() === "GET") {
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(files.sessions) });
+      // A session created from the UI is in the real index the moment it is
+      // created; the fixture list has to grow the same way, or the sidebar
+      // assertions would be checking a list the server would never return.
+      const sessions = [...files.sessions.sessions];
+      if (state.createdCount > 0) {
+        sessions.unshift({
+          id: "fs_created_from_ui",
+          title: "新会话",
+          turns: 0,
+          tokens: 0,
+          active: true,
+          updated_at: "2026-11-10T00:00:00Z",
+        });
+      }
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sessions }) });
     }
     if (url.pathname === "/api/sessions" && request.method() === "POST") {
       const body = request.postData();
       state.createdUrl = request.url();
       state.created = body ? JSON.parse(body) : null;
+      state.createdCount += 1;
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -146,7 +184,11 @@ function apiRouter(options = {}) {
     }
     if (url.pathname.startsWith("/api/sessions/") && url.pathname.endsWith("/record")) {
       const id = url.pathname.split("/")[3];
-      const record = id === "fs_multi_agent" ? files.multi : files.single;
+      // A session created from the UI has nothing in it yet: one created event,
+      // zero counters. That is the shape the page has to announce.
+      const record = id === "fs_multi_agent" ? files.multi
+        : id === "fs_created_from_ui" ? emptyRecord(id)
+        : files.single;
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(record) });
     }
     if (url.pathname === "/api/sessions/turn") {
@@ -246,21 +288,31 @@ await run("new session", async () => {
   await page.waitForSelector(".rows", { timeout: 5000 });
 
   checkEqual("列表页有新建入口", await page.locator(".new-toggle").count(), 1);
-  check("表单默认收起", await page.locator(".new-form").isHidden());
 
   await page.click(".new-toggle");
-  check("点开后出现输入框", await page.locator(".new-input").isVisible());
-
-  await page.fill(".new-input", "新建会话的第一句");
-  await page.click(".new-submit");
 
   await page.waitForURL(/\/s\/fs_created_from_ui$/, { timeout: 5000 });
-  check("提交后跳到新会话", page.url().endsWith("/s/fs_created_from_ui"));
+  check("一次点击就进入新会话", page.url().endsWith("/s/fs_created_from_ui"));
   check("请求发到 /api/sessions", state.createdUrl.endsWith("/api/sessions"));
-  checkEqual("请求体 input", state.created && state.created.input, "新建会话的第一句");
+  checkEqual("不带第一句：先开会话再输入", JSON.stringify(state.created), "{}");
 
-  await page.waitForSelector(".chat .turn", { timeout: 5000 });
-  check("详情页渲染出该会话", await page.locator(".turn").count() >= 1);
+  // 右侧必须真的换成了聊天界面，而不是停在空白的列表页：空会话没有消息，
+  // 只靠"页面上多了一行字"是看不出来的。
+  await page.waitForSelector(".chat", { timeout: 5000 });
+  check("右侧渲染出对话区", await page.locator(".chat").count() === 1);
+  check("输入框就位", await page.locator(".composer-input").isVisible());
+  check("光标已在输入框里", await page.evaluate(() =>
+    document.activeElement && document.activeElement.classList.contains("composer-input")));
+  checkEqual("新会话有标识", await page.locator(".badge-new").innerText(), "新会话");
+  checkEqual("侧栏把新会话标为当前", await page.locator(".row.active").count(), 1);
+  checkEqual("侧栏列出新会话", await page.locator('.row[href="/s/fs_created_from_ui"]').count(), 1);
+
+  // 已经在空会话里再点新建：复用当前页，不再造一个空会话。
+  await page.click(".new-toggle");
+  await page.waitForTimeout(300);
+  checkEqual("重复点新建不再创建", state.createdCount, 1);
+  check("提示已在空会话里", await page.locator(".new-notice").isVisible());
+
   check("无 console error", errors.length === 0, errors.join(" | "));
   await context.close();
 });
