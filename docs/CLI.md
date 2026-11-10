@@ -178,13 +178,13 @@ Endpoints (registered in `cmd/server/main.go`):
 | POST | `/api/sessions/turn` | Send another input to an existing session (`?session_id=`) |
 | GET | `/api/sessions/{id}/record` | Paged session records (`?after_seq=`, `?limit=`) — the Web UI reads this |
 | GET | `/api/status` | Session status (`?session_id=`) |
-| GET | `/api/stream` | SSE stream of session events (`?session_id=`) |
+| GET | `/api/stream` | SSE stream of session events (`?session_id=`, `?follow=1` keeps it open across turns, `Last-Event-ID` resumes after a sequence) |
 | GET | `/api/recovery/status` | Recovery status (`?session_id=`) |
 | POST | `/api/recovery` | Trigger recovery (`?session_id=`, body = `RecoveryRequest`) |
 | POST | `/api/resume` | Resume a waiting session (`?session_id=`) |
 | POST | `/api/approvals` | Answer a pending approval (`?session_id=`, body needs `approval_id`) |
 | GET | `/api/result` | Durable current session state (`?session_id=`) |
-| POST | `/api/cancel` | Cancel a session (`?session_id=`) |
+| POST | `/api/cancel` | Cancel a session (`?session_id=`). Also stops the Teams this process dispatched for it, and keeps the cancelled status from being overwritten by the turn that was in flight |
 | GET | `/api/tasks` | Async Tool task state (`?task_id=`) |
 | POST | `/api/tasks/cancel` | Cancel an async Tool task (`?task_id=`) |
 | GET | `/api/tasks/stream` | SSE stream for one Tool task (`?task_id=`) |

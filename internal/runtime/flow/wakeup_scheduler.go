@@ -129,6 +129,11 @@ func (r *Runtime) RunWakeupScheduler(ctx context.Context) {
 }
 
 // nextWakeupDeadline is the earliest scheduled FireAt not already being fired.
+//
+// A held record contributes its hold expiry rather than its FireAt. The hold
+// exists because a FireAt can sit in the past with no way to advance it (the
+// reschedule could not be written); returning that past value would make the
+// loop fire again on the next iteration, forever.
 func (r *Runtime) nextWakeupDeadline() (time.Time, bool) {
 	r.wakeupMu.Lock()
 	defer r.wakeupMu.Unlock()
@@ -144,13 +149,42 @@ func (r *Runtime) nextWakeupDeadline() (time.Time, bool) {
 			if r.wakeupInflight[record.ID] {
 				continue
 			}
-			if !found || record.FireAt.Before(earliest) {
-				earliest = record.FireAt
+			deadline := record.FireAt
+			if hold, held := r.wakeupHold[record.ID]; held && hold.After(deadline) {
+				deadline = hold
+			}
+			if !found || deadline.Before(earliest) {
+				earliest = deadline
 				found = true
 			}
 		}
 	}
 	return earliest, found
+}
+
+// holdWakeup pins a record until now+delay. It is the in-memory backstop for
+// a reschedule that could not be persisted.
+func (r *Runtime) holdWakeup(wakeupID string, delay time.Duration) {
+	r.wakeupMu.Lock()
+	defer r.wakeupMu.Unlock()
+	if r.wakeupHold == nil {
+		r.wakeupHold = make(map[string]time.Time)
+	}
+	r.wakeupHold[wakeupID] = time.Now().UTC().Add(delay)
+}
+
+func (r *Runtime) clearWakeupHold(wakeupID string) {
+	r.wakeupMu.Lock()
+	defer r.wakeupMu.Unlock()
+	delete(r.wakeupHold, wakeupID)
+}
+
+// wakeupHeld reports whether a record is still pinned.
+func (r *Runtime) wakeupHeld(wakeupID string, now time.Time) bool {
+	r.wakeupMu.Lock()
+	defer r.wakeupMu.Unlock()
+	hold, held := r.wakeupHold[wakeupID]
+	return held && hold.After(now)
 }
 
 // fireDueWakeups starts every wake-up whose time has come. Each runs in its own
@@ -159,6 +193,9 @@ func (r *Runtime) nextWakeupDeadline() (time.Time, bool) {
 func (r *Runtime) fireDueWakeups(ctx context.Context) {
 	now := time.Now().UTC()
 	for _, record := range r.pendingWakeups() {
+		if r.wakeupHeld(record.ID, now) {
+			continue
+		}
 		if record.FireAt.After(now) {
 			continue
 		}
@@ -204,24 +241,7 @@ func (r *Runtime) fireWakeup(ctx context.Context, record types.WakeupRecord) {
 	case err == nil:
 		return
 	case errors.Is(err, errWakeupDeferred):
-		retry := record
-		retry.FireAt = time.Now().UTC().Add(wakeupSkipRetry)
-		if markErr := r.markWakeup(ctx, retry, types.EventWakeupSkipped, map[string]any{
-			"reason": wakeupDeferralReason(err),
-		}); markErr != nil {
-			logging.Error("record deferred wake-up", map[string]any{
-				"flow_session_id": record.FlowSessionID,
-				"wakeup_id":       record.ID,
-				"error":           markErr.Error(),
-			})
-		}
-		logging.Info("wake-up deferred", map[string]any{
-			"flow_session_id": record.FlowSessionID,
-			"wakeup_id":       record.ID,
-			"reason":          wakeupDeferralReason(err),
-			"retry_at":        retry.FireAt.Format(time.RFC3339),
-		})
-		r.signalWakeupScheduler()
+		r.rescheduleWakeup(ctx, record, wakeupDeferralReason(err), "wake-up deferred")
 	case errors.Is(err, errWakeupTerminal):
 		dropped := record
 		dropped.Status = types.WakeupExpired
@@ -235,10 +255,45 @@ func (r *Runtime) fireWakeup(ctx context.Context, record types.WakeupRecord) {
 			})
 		}
 	default:
-		logging.Error("wake-up failed", map[string]any{
+		// A failure is not a reason to give up — the cause is often transient
+		// (an unreadable session, a write that lost a race) — but the record
+		// must still leave the past. Leaving it there is what turns one
+		// failure into a loop that fires the same record forever.
+		r.rescheduleWakeup(ctx, record, "wake-up failed: "+err.Error(), "wake-up failed")
+	}
+}
+
+// rescheduleWakeup moves a record that did not fire out of the past.
+//
+// Both a deferral and a failure need this: the scheduler loop takes the
+// earliest scheduled FireAt, so a record left at a FireAt that already passed
+// is picked up on the very next iteration. The retry is deliberately paced
+// rather than counted down — the causes this covers clear in minutes, and a
+// record that keeps failing is visible in the event stream.
+func (r *Runtime) rescheduleWakeup(ctx context.Context, record types.WakeupRecord, reason, message string) {
+	retry := record
+	retry.FireAt = time.Now().UTC().Add(wakeupSkipRetry)
+	if markErr := r.markWakeup(ctx, retry, types.EventWakeupSkipped, map[string]any{
+		"reason": reason,
+	}); markErr != nil {
+		// The reschedule lives in the event stream. When that write fails the
+		// record is still at its past FireAt, so pin it in memory until the
+		// next attempt is allowed.
+		r.holdWakeup(record.ID, wakeupSkipRetry)
+		logging.Error(message+": cannot reschedule", map[string]any{
 			"flow_session_id": record.FlowSessionID,
 			"wakeup_id":       record.ID,
-			"error":           err.Error(),
+			"reason":          reason,
+			"error":           markErr.Error(),
 		})
+		return
 	}
+	r.clearWakeupHold(record.ID)
+	logging.Info(message, map[string]any{
+		"flow_session_id": record.FlowSessionID,
+		"wakeup_id":       record.ID,
+		"reason":          reason,
+		"retry_at":        retry.FireAt.Format(time.RFC3339),
+	})
+	r.signalWakeupScheduler()
 }

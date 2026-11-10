@@ -73,7 +73,10 @@ func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, ta
 		msg = claimed
 	}
 	go func() {
-		ctx := context.Background()
+		// Detached from the dispatching turn (which has already returned), but
+		// still owned by the session: this is the context Cancel stops.
+		ctx, release := r.registerSessionWork(session.ID)
+		defer release()
 		defer func() {
 			if rec := recover(); rec != nil {
 				logging.Error("async dispatch panicked", map[string]any{
@@ -82,7 +85,7 @@ func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, ta
 					"team_id":         targetTeam,
 					"panic":           fmt.Sprint(rec),
 				})
-				if _, err := r.markMessageDead(ctx, session, msg, fmt.Sprintf("panic: %v", rec)); err != nil {
+				if _, err := r.markMessageDead(context.Background(), session, msg, fmt.Sprintf("panic: %v", rec)); err != nil {
 					logging.Error("mark dispatched message dead", map[string]any{
 						"flow_session_id": session.ID,
 						"message_id":      msg.MessageID,
@@ -91,9 +94,15 @@ func (r *Runtime) launchAsyncDispatch(session types.FlowSession, causeTurnID, ta
 				}
 			}
 			// Free the slot before draining, so the drain can take the next
-			// message for this Team.
+			// message for this Team. Freeing it is unconditional even on
+			// cancel: a leaked busy mark would make the Team unreachable for
+			// the rest of the process.
 			r.clearTeamBusy(session.ID, targetTeam)
-			r.drainTeamInbox(ctx, session, targetTeam)
+			// A cancelled round must not start the next message: the cancel
+			// means "stop", and draining would hand the Team more work.
+			if ctx.Err() == nil {
+				r.drainTeamInbox(context.Background(), session, targetTeam)
+			}
 		}()
 
 		r.dispatchWork(ctx, session, causeTurnID, targetTeam, msg)

@@ -35,11 +35,32 @@ type AgentBudgetUsage struct {
 }
 
 // AgentPendingInput describes why an AgentTurn is waiting for user input.
+//
+// Two shapes coexist. A single question with Options is the conversational
+// form ("which port?"); Fields is the form form, where one request asks for
+// several values at once and the answer is a map rather than a choice. Keeping
+// both on one struct means a caller reads one field set regardless of shape,
+// and an older checkpoint that only knows Question/Options still decodes.
 type AgentPendingInput struct {
-	Question    string   `json:"question,omitempty"`
+	Question    string              `json:"question,omitempty"`
+	Options     []string            `json:"options,omitempty"`
+	Header      string              `json:"header,omitempty"`
+	MultiSelect bool                `json:"multi_select,omitempty"`
+	Fields      []PendingInputField `json:"fields,omitempty"`
+}
+
+// PendingInputField is one value a structured request is asking for.
+//
+// Type is deliberately a small closed set: the engine validates it, and the
+// renderer only has to know how to draw these. An empty Type means "string",
+// which is what a model writes when it omits the field.
+type PendingInputField struct {
+	Name        string   `json:"name"`
+	Type        string   `json:"type,omitempty"`
+	Description string   `json:"description,omitempty"`
 	Options     []string `json:"options,omitempty"`
-	Header      string   `json:"header,omitempty"`
-	MultiSelect bool     `json:"multi_select,omitempty"`
+	Required    bool     `json:"required,omitempty"`
+	Default     string   `json:"default,omitempty"`
 }
 
 type AgentPendingApproval struct {
