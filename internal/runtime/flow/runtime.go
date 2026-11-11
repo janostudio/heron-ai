@@ -1663,6 +1663,20 @@ func (r *Runtime) executeTeamTurn(
 			return execution, err
 		}
 	}
+	// The caller's outstanding tasks ride along as an injected block: it is
+	// rebuilt every turn and sits in the part of the context compaction
+	// protects, so a conversation that has been summarised away still knows
+	// which tasks are outstanding and which owe a summary.
+	//
+	// A fresh slice, not append: blocks belongs to the enclosing turn and must
+	// not grow a ledger entry for every Team it reaches.
+	teamBlocks := blocks
+	if ledger := r.TaskLedger(ctx, session.ID, teamSession.ID); ledger != "" {
+		teamBlocks = append(append([]types.ContextBlock(nil), blocks...), types.ContextBlock{
+			Kind: types.ContextBlockTaskLedger, Text: ledger, Source: "harness",
+			Stability: "dynamic", Priority: 70, Compressible: false,
+		})
+	}
 	teamResult, runErr := r.teams.Run(ctx, types.TeamTurnRequest{
 		FlowSession:        session,
 		FlowTurn:           flowTurn,
@@ -1671,7 +1685,7 @@ func (r *Runtime) executeTeamTurn(
 		Binding:            binding,
 		Team:               team,
 		Input:              teamInput(input, binding.Inputs),
-		ContextBlocks:      blocks,
+		ContextBlocks:      teamBlocks,
 		Records:            teamRecords,
 		Limits:             r.limits,
 		ResumeCallID:       current.resumeCallID,

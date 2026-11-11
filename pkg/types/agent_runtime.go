@@ -184,10 +184,19 @@ type ToolTask struct {
 	Result        *ToolResult    `json:"result,omitempty"`
 	Error         string         `json:"error,omitempty"`
 	RestartSafe   bool           `json:"restart_safe,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	StartedAt     *time.Time     `json:"started_at,omitempty"`
-	FinishedAt    *time.Time     `json:"finished_at,omitempty"`
-	UpdatedAt     time.Time      `json:"updated_at"`
+	// Acknowledged records that the caller has summarised this task's result.
+	// It is written by the runtime after the summary turn finishes, not by the
+	// model: a finished task that is never retired keeps reappearing in the
+	// caller's task ledger, and gets summarised a second time.
+	//
+	// It lives on the task rather than on the Team instance because "the result
+	// has been consumed" is a fact about the result, and one Team instance can
+	// serve several dispatches over its life.
+	Acknowledged bool       `json:"acknowledged,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // AgentTranscript is the running conversation of one Agent inside one Flow
