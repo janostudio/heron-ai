@@ -208,6 +208,16 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	if runErr != nil {
 		return fmt.Errorf("run turn for tool result: %w", runErr)
 	}
+	// The result has been delivered and summarised, so it leaves the caller's
+	// task ledger. Written after the turn, not before: a turn that failed has
+	// summarised nothing, and the task has to stay listed for another attempt.
+	if ackErr := r.acknowledgeTask(ctx, signal.TaskID); ackErr != nil {
+		logging.Info("acknowledge task failed", map[string]any{
+			"flow_session_id": sessionID,
+			"task_id":         signal.TaskID,
+			"error":           ackErr.Error(),
+		})
+	}
 	return nil
 }
 

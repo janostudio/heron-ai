@@ -317,3 +317,32 @@ func TestStateManagementPolicyRequiresTool(t *testing.T) {
 	require.Contains(t, withTool, "## State Management")
 	require.NotContains(t, withoutTool, "## State Management")
 }
+
+// 任务台账必须作为注入消息进入上下文：注入消息会被压缩保护，普通消息不会。
+// 这正是"压缩掉派发对话后仍然知道手上有哪些活"的实现方式。
+func TestRenderInjectsTaskLedger(t *testing.T) {
+	r := NewPromptRenderer(nil)
+	ledger := "[任务台账] 你派出、还没收尾的任务\n- dev  done  「修 heron-ai#61」  handle=tt-b"
+
+	messages, err := r.Render(types.AgentConfig{}, types.AgentRequest{}, RenderContext{
+		ContextBlocks: []types.ContextBlock{{
+			Kind: types.ContextBlockTaskLedger, Text: ledger, Source: "harness", Priority: 70,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	var found bool
+	for _, message := range messages {
+		if strings.Contains(message.Content, "[任务台账]") {
+			found = true
+			if !message.Injected {
+				t.Fatalf("任务台账必须是注入消息，否则压缩会把它折叠掉: %+v", message)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("任务台账没有进入上下文:\n%+v", messages)
+	}
+}

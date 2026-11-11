@@ -98,6 +98,19 @@ func (p *PromptRenderer) Render(agent types.AgentConfig, req types.AgentRequest,
 		})
 	}
 
+	// The caller's task ledger goes after the stable context and before the
+	// user's task: it describes what is outstanding, and the thing the model is
+	// being asked to do this turn has to come last or it answers the ledger
+	// instead. Injected, so compaction leaves it alone.
+	for _, block := range rctx.ContextBlocks {
+		if block.Kind != types.ContextBlockTaskLedger || strings.TrimSpace(block.Text) == "" {
+			continue
+		}
+		messages = append(messages, types.Message{
+			Role: "user", Content: wrapSystemReminder(block.Text), Injected: true,
+		})
+	}
+
 	for _, block := range rctx.ContextBlocks {
 		if !isMemoryKind(block.Kind) || strings.TrimSpace(block.Text) == "" {
 			continue

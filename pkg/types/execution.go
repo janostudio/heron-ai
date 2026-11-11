@@ -81,6 +81,11 @@ type AgentResult struct {
 
 // ContextBlock is a structured, bounded input unit before PromptRenderer
 // converts it into model messages.
+// ContextBlockTaskLedger is the block kind that carries a caller's outstanding
+// tasks. Shared so the producer (the flow) and the renderer (the prompt) cannot
+// drift on the spelling.
+const ContextBlockTaskLedger = "task_ledger"
+
 type ContextBlock struct {
 	ID           string        `yaml:"id,omitempty" json:"id,omitempty"`
 	Kind         string        `yaml:"kind" json:"kind"`
