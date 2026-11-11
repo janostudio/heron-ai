@@ -30,6 +30,7 @@
 | [architecture.md](./architecture.md)（EN） | 三层编排模型、包结构、信号路由、Agent 能力全景 |
 | [context-management.md](./context-management.md)（中） | 单个 AgentTurn 的上下文组成、压缩锚定、与 State/Knowledge 的边界 |
 | [context-caching-design.md](./context-caching-design.md)（中） | 对标 Claude Code 的上下文优化全景（缓存、裁剪、注入策略） |
+| [TASK-RESULT-CONTEXT.md](./TASK-RESULT-CONTEXT.md)（中） | 子任务结果要不要进上下文：现状成本、业界做法、按体量分档 + 引用化方案 |
 | [skill-progressive-disclosure.md](./skill-progressive-disclosure.md)（EN） | Skill / Knowledge 的渐进式披露：先给目录，再按需读正文 |
 | [PROMPT-SCHEME.zh-CN.md](./PROMPT-SCHEME.zh-CN.md)（中） | 提示词分几层、每层现有哪些内容、知识如何进入上下文 |
 | [generic-engine/26-state-redesign.md](./generic-engine/26-state-redesign.md)（中） | State 的当前实现：会话内工作状态如何落盘与注入 |
