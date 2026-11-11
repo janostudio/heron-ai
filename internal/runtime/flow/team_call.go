@@ -108,10 +108,10 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 			}
 		}
 	}
-	if !r.tryMarkTeamBusySeq(session.ID, spec.TeamID, seq) {
+	if err := r.acquireTeamSlot(ctx, session.ID, spec.TeamID, seq); err != nil {
 		return types.TeamCallOutcome{
 			Status: "failed",
-			Error:  fmt.Sprintf("team %q is already running in this session", spec.TeamID),
+			Error:  err.Error(),
 		}, nil
 	}
 	defer r.clearTeamBusySeq(session.ID, spec.TeamID, seq)
@@ -315,6 +315,51 @@ func teamResponsibility(team types.Team) string {
 // teamSettleLimit bounds how long a call waits for its callee to conclude after
 // the callee has itself handed work further down.
 const teamSettleLimit = 5 * time.Minute
+
+// teamSlotWaitLimit bounds how long a dispatch waits for the instance it
+// targets. A resident Team runs one round at a time, so a second dispatch is
+// queued work rather than a conflict — but a wedged round must not park the
+// caller forever, so the wait is bounded.
+const teamSlotWaitLimit = 30 * time.Minute
+
+// teamSlotPollInterval is how often a waiting dispatch re-checks the slot. The
+// holder clears it in a defer, so the wait ends within one interval of the
+// previous round finishing.
+const teamSlotPollInterval = 200 * time.Millisecond
+
+// acquireTeamSlot takes the Team instance's execution slot, waiting for it when
+// it is held.
+//
+// Refusing the second dispatch was the wrong shape for every path that reaches
+// here: the work was real, it just had to happen after the round in flight. The
+// caller saw "team X is already running in this session" and reported the task
+// as failed, while the previous round went on to finish and the retry succeeded
+// — one turn marked failed for work that was done. Waiting is what a queue looks
+// like from the caller's side, and the caller is already asynchronous (a durable
+// task or a mailbox wake-up), so nothing is held up by it.
+func (r *Runtime) acquireTeamSlot(ctx context.Context, sessionID, teamID string, seq int) error {
+	if r.tryMarkTeamBusySeq(sessionID, teamID, seq) {
+		return nil
+	}
+	waiting := time.NewTimer(teamSlotWaitLimit)
+	defer waiting.Stop()
+	poll := time.NewTicker(teamSlotPollInterval)
+	defer poll.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-waiting.C:
+			return fmt.Errorf(
+				"team %q has been running for over %s; cancel it or wait for it to finish before dispatching",
+				teamID, teamSlotWaitLimit)
+		case <-poll.C:
+			if r.tryMarkTeamBusySeq(sessionID, teamID, seq) {
+				return nil
+			}
+		}
+	}
+}
 
 // awaitTeamSettlement waits until the callee stops dispatching and returns what
 // it finally concluded.

@@ -276,7 +276,12 @@ type AsyncToolExecutor struct {
 // slot": a task that is not a Team dispatch runs without serialization.
 //
 // A per_task Team addresses instances by task_key, so two keys are two slots.
-// A resident Team has no key and shares one.
+// A resident Team has no key and shares one — including when the caller set a
+// task_key anyway. The key alone cannot say which case it is: a model that
+// sends task_key to a resident Team is not asking for a second instance, it is
+// asking for the same one. Splitting the slot there let two dispatches both
+// start, and the second was then refused by the instance it had just been
+// allowed to run alongside.
 func instanceKeyOf(task types.ToolTask) string {
 	// Only a Team dispatch occupies an instance. Arguments["team_id"] names the
 	// callee and is what the dispatcher wrote; TeamID on the task is the caller,
@@ -291,6 +296,10 @@ func instanceKeyOf(task types.ToolTask) string {
 		return ""
 	}
 	key := task.FlowSessionID + "\x00" + teamID
+	lifecycle, _ := task.Arguments["lifecycle"].(string)
+	if strings.TrimSpace(lifecycle) != string(types.TeamLifecyclePerTask) {
+		return key
+	}
 	if taskKey, _ := task.Arguments["task_key"].(string); strings.TrimSpace(taskKey) != "" {
 		key += "\x00" + strings.TrimSpace(taskKey)
 	}

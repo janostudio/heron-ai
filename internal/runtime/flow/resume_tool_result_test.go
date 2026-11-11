@@ -151,18 +151,65 @@ func TestResumeForToolResultWithoutTranscript(t *testing.T) {
 	require.Empty(t, recorder.recorded())
 }
 
-// 同一个 Team 在同一个会话里不能并发跑两轮：它是单一执行单元。第二个调用要
-// 明确失败，而不是与第一轮交叠。
-func TestRunTeamRefusesConcurrentCall(t *testing.T) {
+// 同一个 Team 在同一个会话里一次只跑一轮：它是单一执行单元。第二个调用不是
+// 冲突，是排队 —— 它等第一轮腾出执行槽再跑，而不是拿着"already running"回去
+// 让调用方以为活没干。
+func TestRunTeamWaitsForBusyInstance(t *testing.T) {
 	recorder := &inputRecordingTeamRuntime{}
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	rt := newTestRuntime(testDefinitions(), recorder, writer, nil)
 	session := seedMailboxSession(t, rt, "fs-busy-team", types.SessionIdle)
 
 	require.True(t, rt.tryMarkTeamBusy(session.ID, "default"))
+
+	type result struct {
+		outcome types.TeamCallOutcome
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		outcome, err := rt.RunTeam(context.Background(), types.TeamCallSpec{
+			FlowSessionID: session.ID,
+			CallerTeam:    "default",
+			TeamID:        "default",
+			Item:          "再跑一次",
+		})
+		done <- result{outcome: outcome, err: err}
+	}()
+
+	// 槽还被占着：派发必须挂住，而不是立刻带着失败返回。
+	select {
+	case got := <-done:
+		t.Fatalf("dispatch returned while the instance was held: %+v", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	rt.clearTeamBusy(session.ID, "default")
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.NotContains(t, got.outcome.Error, "already running",
+			"排队结束后不能再报冲突")
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatch did not proceed after the instance was released")
+	}
+}
+
+// 等待不能无限期：调用方取消时立刻返回，且错误说清是取消而不是冲突。
+func TestRunTeamStopsWaitingWhenContextEnds(t *testing.T) {
+	recorder := &inputRecordingTeamRuntime{}
+	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
+	rt := newTestRuntime(testDefinitions(), recorder, writer, nil)
+	session := seedMailboxSession(t, rt, "fs-busy-cancelled", types.SessionIdle)
+
+	require.True(t, rt.tryMarkTeamBusy(session.ID, "default"))
 	defer rt.clearTeamBusy(session.ID, "default")
 
-	outcome, err := rt.RunTeam(context.Background(), types.TeamCallSpec{
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	outcome, err := rt.RunTeam(ctx, types.TeamCallSpec{
 		FlowSessionID: session.ID,
 		CallerTeam:    "default",
 		TeamID:        "default",
@@ -171,7 +218,9 @@ func TestRunTeamRefusesConcurrentCall(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "failed", outcome.Status)
-	require.Contains(t, outcome.Error, "already running")
+	require.NotContains(t, outcome.Error, "already running",
+		"取消导致的失败不能伪装成并发冲突")
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
 }
 
 // 目录只投影调用方自己的出边：模型看到的是"我在这个位置能派谁"，不是整张图。

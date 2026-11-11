@@ -482,6 +482,10 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// bindings and how to persist a Team turn, so it is the Team tool's
 	// executor. It is built after the tool registry, hence the late wiring.
 	teamTool.SetRunner(flowRuntime)
+	// The Team tool needs the same catalog for a different reason: it stamps the
+	// callee's lifecycle onto the queued task, so the executor can tell "second
+	// instance of a per_task Team" from "second task for a resident one".
+	teamTool.SetCatalog(flowRuntime)
 	listTeamsTool.SetCatalog(flowRuntime)
 	teamSessionTool.SetCatalog(flowRuntime)
 	teamSessionTool.SetCloser(flowRuntime)
