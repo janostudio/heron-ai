@@ -20,9 +20,9 @@ agent 不需要知道如何 spawn 子 agent，也不需要知道如何产出结�
 |---|---|---|
 | `execution-management` | 任务闭环、进度追踪 | 始终 |
 | `tool-usage` | 工具是 ground truth、不要凭记忆断言 | agent 声明了任意 `tools.builtin` |
-| `state-management` | 决策与依据要落进 State | 始终 |
+| `state-management` | 决策与依据要落进 State | agent 的 `tools.builtin` 声明了 `State` |
 | `perspective-isolation` | 多 agent 的知识与视角边界 | 始终 |
-| `output-format` | 输出格式约束 | 始终 |
+| `output-format` | 输出格式约束 | agent 声明了 `structured_output` |
 | `knowledge-query` | 知识使用规范 | **未装配**：`BuildSystemPrompt` 不引用它 |
 
 `knowledge-query` 是历史遗留：它按"知识被注入进上下文"的旧机制写的，而现在的知识走
@@ -34,8 +34,8 @@ agentic search（见 §3），既没有可注入的文本，这条指令也没�
 现在是**指路 + 自取**，不是预索引注入：
 
 ```
-有知识时 → 注入一个 pointer 块（internal/knowledge/pointer.go）
-          内容：知识目录在哪、有哪些条目名、用什么工具读
+配置了知识指针 → 注入一个 pointer 块（internal/knowledge/pointer.go）
+          内容：知识目录在哪、目录清单、用什么工具读（**不列条目名**）
                 ↓
           模型自己用 Read / Grep / Glob 打开需要的条目
 ```
@@ -44,9 +44,11 @@ agentic search（见 §3），既没有可注入的文本，这条指令也没�
 
 - **没有"知识文本"这回事**。旧实现（`internal/knowledge/injector.go`、`formatEntries`、
   `KnowledgeIndex`）已删除，不要在改动里假设它还在。
-- **pointer 块只在有知识时出现**，天然满足"指令与内容同生共灭"——有目录可指才出现指路。
-- **`agent.Knowledge` 是作用域白名单**，不是触发开关：它限制这个 agent 能看到哪些层的
-  知识，检索本身由模型发起。
+- **pointer 块恒出现**：只要配置了指针就注入，`.agents/knowledge/` 对所有人可读，所以
+  空知识库也会有这一块（只是没有条目）。它不随「有没有知识」变化。
+- **`agent.Knowledge` 不是作用域白名单**：运行时没有读取方，字段只在定义校验时检查
+  条目是否存在（`internal/definitions/validate.go`）。真正的可见性由目录路径过滤决定
+  （`internal/tool/path_scope.go`），模型能 `Glob`/`Read` 到的就是它能看到的。
 
 知识条目的产出（`heron knowledge`）见 §4；条目格式与分层见
 [configuration/knowledge.md](configuration/knowledge.md)。

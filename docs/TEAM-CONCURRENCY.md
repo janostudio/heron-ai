@@ -49,17 +49,21 @@ teams:
 
 ## 3. 并行不是靠"类型"，靠 busy 标记的 key
 
-派发前的互斥检查只有一行：
+派发时不再是「检查失败就返回」，而是取执行槽、取不到就等：
 
 ```go
-// internal/runtime/flow/team_call.go:114
-if !r.tryMarkTeamBusySeq(session.ID, spec.TeamID, seq) {
+// internal/runtime/flow/team_call.go:111
+if err := r.acquireTeamSlot(ctx, session.ID, spec.TeamID, seq); err != nil {
     return types.TeamCallOutcome{
         Status: "failed",
-        Error:  fmt.Sprintf("team %q is already running in this session", spec.TeamID),
+        Error:  err.Error(),
     }, nil
 }
 ```
+
+`acquireTeamSlot` 在槽被占时轮询等待（上限 30 分钟），只有 ctx 取消才返回错误。
+`team "..." is already running in this session` 这条直接失败路径已经不存在 ——
+那是撞车修复前的写法，见 §6「撞车改为排队」。
 
 而 `seq` 从哪来，决定了两个 call 会不会撞：
 

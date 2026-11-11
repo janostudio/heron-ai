@@ -36,9 +36,10 @@ layer on top. Heron starts from the orchestration and keeps the loop small:
 - **Everything is a file.** Sessions are append-only JSONL, state is Markdown,
   knowledge is Markdown, Teams are directories. You can read a whole run with `jq`,
   diff it, or replay it without a special tool.
-- **Shareable by construction.** `heron teams` packs a Team with the Agents, Skills,
-  rules and knowledge it references into one artifact with a manifest and a
-  dependency closure — and never packs your `models.json`.
+- **Shareable by construction.** `heron teams` packs a Team with the Agents, Skills
+  and rules it references into one artifact with a manifest and a dependency
+  closure — and never packs your `models.json`, and never packs knowledge
+  (knowledge is where private data accumulates; there is no opt-in).
 
 ## Install
 
@@ -67,8 +68,8 @@ Four files and you have a working agent. The walk-through with copy-paste conten
 mkdir -p my-agent/.agents/{flows,teams,agents/assistant}
 cd my-agent
 
-# 1. .agents/models.json            model registry (the only required file)
-# 2. .agents/flows/default.yml      who runs first
+# 1. .agents/models.json            model registry (required)
+# 2. .agents/flows/default.yml      who runs first (required — without a flow the engine exits)
 # 3. .agents/teams/hello_team.yml   what gets called
 # 4. .agents/agents/assistant/AGENT.md   who does the work
 

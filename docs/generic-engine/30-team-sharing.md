@@ -193,7 +193,7 @@ Agent.Tools.*        ──> 内置工具 / MCP（不打包）
 | `knowledge/**`（全局） | 可能含个人信息，不允许携带分享 | **一律不带，无选项** |
 | `agents/<id>/knowledge/**`（私有） | 同上，且是使用沉淀 | **一律不带，无选项** |
 | `teams/<team>/knowledge/**`（私有） | 同上 | **一律不带，无选项** |
-| `AGENT.md` 的 `knowledge:` 字段 | 字段本身已删除（§9.2.2） | 无需处理 |
+| `AGENT.md` 的 `knowledge:` 字段 | 计划删除但**当前仍在**（§9.2.2 未实施）：字段仍定义在 `AgentConfig`，加载期仍做条目存在性校验，打包时不影响产物 |
 
 ## 5. 命令行
 
@@ -460,9 +460,10 @@ review_team.tar.gz
     ├── teams/review_team.yml
     ├── agents/...
     ├── skills/...
-    ├── knowledge/...
     └── rules/...
 ```
+
+（`knowledge/` 不出现：§4.3 规定一律不带，`teams_export` 会把它们计入 excluded 后跳过。）
 
 打包时自动完成：
 
@@ -590,9 +591,10 @@ heron 的知识目录有三处，**全部不打包**：
 知识是在某个具体 workspace 里、由具体的人和事产生的，作者本人也无法保证
 里面没有别人的名字、内部链接、真实工单号。一旦可选，就一定会有人打开它。
 
-#### 9.2.2 字段删除（与 §11 第一步一起做）
+#### 9.2.2 字段删除（**计划，尚未实施**）
 
-`AgentConfig.Knowledge []string`（`yaml:"knowledge"`）**删除**。
+`AgentConfig.Knowledge []string`（`yaml:"knowledge"`）计划删除；当前字段仍在，
+加载期仍用它做「条目是否存在」的校验，运行时没有任何读取方。
 
 这不是为了给导出让路，而是它本身已经失效。理由链条：
 

@@ -19,14 +19,17 @@ heron --serve --port 8080 --flow .agents/flows/default.yml
 # Resume a waiting FlowSession
 heron --prompt "Continue..." --session <flow_session_id> --flow .agents/flows/default.yml
 
-# Knowledge: learn one session (incremental)
-heron knowledge <flow_session_id> --flow .agents/flows/default.yml
+# Knowledge: learn one session (incremental). Flags must come BEFORE the id:
+# `heron knowledge <id> --flow X` would silently ignore --flow.
+heron knowledge --flow .agents/flows/default.yml <flow_session_id>
 
-# Knowledge: learn all unlearned sessions (incremental)
-heron knowledge --flow .agents/flows/default.yml
+# Knowledge: learn all unlearned sessions (incremental).
+# No flags accepted: it always uses .agents/flows/default.yml from the cwd.
+heron knowledge
 
-# Knowledge: archive expired knowledge (ExpiresAt in the past)
-heron knowledge gc --flow .agents/flows/default.yml
+# Knowledge: archive expired knowledge (ExpiresAt in the past).
+# `gc` takes no flags at all.
+heron knowledge gc
 
 # Teams: list local + installed teams / install / remove / export
 heron teams
@@ -50,7 +53,7 @@ heron --version
 |------|------|---------|---------|
 | `--flow` | string | `.agents/flows/default.yml` | Flow config path. `default.yaml` is also accepted. |
 | `--prompt` | string | empty | Run one FlowTurn and exit (non-interactive). |
-| `--session` | string | empty | Resume an existing FlowSession by id. |
+| `--session` | string | empty | Resume an existing FlowSession by id. **Only honoured together with `--prompt`**; the TUI branch ignores it |
 | `--model` | string | empty | Override the default model from `models.json`. |
 | `--log-level` | string | from `settings.json` | `debug`, `info`, `warn`, `error`. |
 | `--max-rounds` | int | `0` (use config) | Override the per-Agent max rounds. |
@@ -59,8 +62,9 @@ heron --version
 | `--json-rpc` | bool | false | Long-lived JSON-RPC 2.0 over stdin/stdout. |
 | `--serve` | bool | false | Start HTTP server mode. |
 | `--host` | string | `127.0.0.1` | Bind address for `--serve`. |
-| `--port` | string | `8080` | Port for `--serve`. |
+| `--port` | string | `8080` | Port for `--serve`; resolved as flag → `$PORT` → `8080`. |
 | `--auth-token` | string | `$HERON_SERVE_TOKEN` | Bearer token required by `--serve`. |
+| `--exit-with-parent` | bool | false | `--serve` only: exit when the parent process goes away (use it when a supervisor started you). |
 | `--input-format` | string | empty | Machine input format; only `stream-json`. |
 | `--output-format` | string | empty | Machine output format; only `stream-json`. |
 | `--server` | string | empty | HTTP Heron server URL for `stream-json` client mode. |
@@ -119,7 +123,8 @@ Some combinations are refused at startup rather than resolved silently:
 | Up / Down | Recall older / newer input (in a multi-line input, Up first moves the cursor to the top line) |
 | Ctrl+P / Ctrl+N | Aliases for Up / Down |
 | Alt+Up / Alt+Down | Scroll the transcript (plain Up/Down is reserved for history) |
-| Ctrl+L | Clear screen |
+| Ctrl+L | Clear the message list (same as `/clear`; the display is not recoverable) |
+| Home / End | Jump to the top / bottom of the transcript |
 | Ctrl+C | Exit |
 
 ## Non-Interactive Mode
@@ -185,6 +190,7 @@ Endpoints (registered in `cmd/server/main.go`):
 | POST | `/api/resume` | Resume a waiting session (`?session_id=`) |
 | POST | `/api/approvals` | Answer a pending approval (`?session_id=`, body needs `approval_id`) |
 | GET | `/api/result` | Durable current session state (`?session_id=`) |
+| GET | `/api/media` | Serve an attachment/image referenced by a message (`?path=`); the Web UI needs it to render images |
 | POST | `/api/cancel` | Cancel a session (`?session_id=`). Also stops the Teams this process dispatched for it and the durable Tool tasks it still owns, and keeps the cancelled status from being overwritten by the turn that was in flight |
 | GET | `/api/tasks` | Async Tool task state (`?task_id=`) |
 | POST | `/api/tasks/cancel` | Cancel an async Tool task (`?task_id=`) |
@@ -376,22 +382,26 @@ that has no `.agents/` yet. An empty store prints `暂无会话` and exits 0.
 
 ## Knowledge Commands
 
-Knowledge 是"跨会话固化知识"（区别于 state 的"待办"）。生产 = 从 session 事件提炼，消费 = agent 检索注入。配置与语义见 `docs/configuration/knowledge.md`。
+Knowledge 是"跨会话固化知识"（区别于 state 的"待办"）。生产 = 从 session 事件提炼，
+消费 = 模型用 Read/Grep/Glob 自取（agentic search，没有注入器）。配置与语义见
+`docs/configuration/knowledge.md`。
 
 ```bash
-# 学一个会话（增量：只学上次之后的新事件）
-heron knowledge <flow_session_id> --flow .agents/flows/default.yml
+# 学一个会话（增量：只学上次之后的新事件）。flag 必须写在 id 之前
+heron knowledge --flow .agents/flows/default.yml <flow_session_id>
 
-# 学所有未学过的会话（增量，逐个处理）
-heron knowledge --flow .agents/flows/default.yml
+# 学所有未学过的会话（增量，逐个处理）。不接受任何 flag，用 cwd 的默认 flow
+heron knowledge
 
-# 归档过期知识（只按 ExpiresAt 判断：已过期即降级 archived）
-heron knowledge gc --flow .agents/flows/default.yml
+# 归档过期知识（只按 ExpiresAt 判断：已过期即降级 archived）。不接受任何 flag
+heron knowledge gc
 ```
 
 语义：
 
-- **学习**：从 session 事件流提炼 SharedRecord → LLM 总结成知识条目 → 按事件来源层（flow/team/agent）落到 `.agents/knowledge/<层>/<id>.md`。
+- **学习**：从 session 事件流提炼 SharedRecord → LLM 总结成知识条目 → 按归属落盘：
+  flow 级落 `.agents/knowledge/<id>.md`（扁平），team/agent 私有条目落
+  `.agents/{teams,agents}/<owner>/knowledge/<id>.md`。旧的 `<层>/<id>.md` 布局不再写入。
 - **增量**：记录每个 session 学到哪个 seq（`.agents/knowledge/learn-progress.jsonl`），续聊后只学新增部分。
 - **gc**：归档不是删除。知识降级为 `archived`，文件保留。
 
@@ -407,13 +417,18 @@ Each FlowSession produces data in `.agents/data/sessions/<flow_session_id>/`:
 
 ```
 .agents/data/sessions/<flow_session_id>/
-├── flow.jsonl                    # session.* / session.turn.* / session.team_session.* / session.team_turn.* / session.record.*
-├── team.jsonl                    # session.agent_session.* / session.agent_turn.*（token 消耗的事实源）
-├── agent.jsonl                   # session.agent.model_response
+├── flow.jsonl                    # session.* / session.turn.* / session.team_turn.* / session.record.* / mailbox.* / recovery.*
+├── team.jsonl                    # session.agent_turn.* / command_turn / webhook_turn / approval.*（call 层与 token 消耗的事实源）
+├── agent.jsonl                   # session.agent.model_response / session.tool_call.* / session.agent.feedback / session.context.compacted
 ├── teams/<team_id>/state.md      # Team 状态快照
 ├── agents/<team_id>/<call_id>/state.md   # Agent 状态快照
 └── evidence.jsonl                # Flow-scope SharedRecord（有 Flow 级记录时才出现）
 ```
+
+The lists above are representative, not exhaustive: an event is routed by the
+layer that produced it, so anything the Agent layer emits (`tool_call.*`,
+`agent.feedback`, `context.compacted`) lands in `agent.jsonl`, and anything the
+Team layer emits (`approval.*`, command/webhook turns) lands in `team.jsonl`.
 
 The three jsonl files are one append-only log split by producing layer: each
 event goes to the file of the layer that produced it, but sequence numbers come

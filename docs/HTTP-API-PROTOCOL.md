@@ -23,6 +23,12 @@
 代码位置：路由在 `cmd/server/main.go`，处理在 `internal/view/{handler.go,web.go}`，
 事件订阅在 `internal/storage/session.go`。
 
+除上表外，`--serve` 还注册了 `GET /api/health`（就绪探针，返回 `ready`、`version`、
+`commit`、`pending_wakeups`、`sessions_loaded`，免 token）、`GET /api/status`、
+`GET /api/result`、`POST /api/resume`、`POST /api/cancel`、`POST /api/approvals`、
+`GET/POST /api/recovery*`、`GET/POST /api/tasks*` 与 `GET /api/media`。完整清单以
+`cmd/server/main.go` 的注册为准，`docs/CLI.md` 有对照表。
+
 ### 1.2 浏览器实际走的是「常驻跟随 + 同步提交」
 
 页面打开后先取记录、再建立一条**常驻订阅**，之后所有 turn 的事件都从这条流进来
@@ -65,17 +71,15 @@
 另外，非 follow 模式的重连路径用 `streamReplayBoundary` 算了
 「历史结束在哪、是否已 settle」，避免重连时只看到旧 turn 就关流。
 
-### 1.4 端到端缺口：两个已解决，两个仍在
+### 1.4 端到端缺口：都已解决
 
 **已解决（2026-11-10，随 `fix/web-interactivity` 合入）：**
 
 - 刷新后自动跟随：页面常驻订阅，不再只在发送时建流
 - 断线自动重连：指数退避，重连带 `Last-Event-ID`
+- 提交改为 202 受理（§3.3），`record` 的 `session` 改为 `{id, status}` 对象（§3.6）
 
-**仍存在：**
-
-两个都已在 2026-11-10 的改造中解决（§3.3 / §3.6）：提交改为 202 受理，
-`record` 的 `session` 改为 `{id, status}` 对象。
+本文余下章节记录当时的判断与取舍，不再代表待办。
 
 ### 1.5 测试盲区
 
@@ -93,11 +97,11 @@
 | # | 问题 | 影响 | 证据 |
 |---|---|---|---|
 | 1 | 过程与终态来自两条通道 | 客户端解析两套 schema；两路可能不一致，需 `missed` 回退 | `app.js:941-980` |
-| 2 | 提交同步阻塞，期间无数据 | turn 跑十分钟，POST 挂十分钟；最容易被代理/网关杀掉，且客户端无法区分「turn 失败」与「连接失败」 | `handler.go` `HandleRun`/`HandleTurn` |
-| 3 | 收尾靠 `setTimeout(800)` | 最后一帧可能被截断，也可能白等 | `app.js:971` |
-| 4 | 刷新后不重连 | 执行中的 turn 在页面上静止 | `app.js` 仅 `submit()` 建流 |
+| 2 | ~~提交同步阻塞，期间无数据~~ | **已修复**（2026-11-10）：`POST /api/sessions/{id}/events` 202 受理，后台执行 | `handler.go` `HandleSubmit` |
+| 3 | ~~收尾靠 `setTimeout(800)`~~ | **已修复**（2026-11-10）：改为常驻订阅 | `app.js` `sessionStream` |
+| 4 | ~~刷新后不重连~~ | **已修复**（2026-11-10）：页面常驻订阅 + `Last-Event-ID` 续传 | `app.js` `connect()` |
 | 5 | 历史接口无会话状态 | 前端无法判断是否该重连 | `web.go:216-219`、`projectFacts` |
-| 6 | 流断开不重试 | 慢消费者被踢后停在「流断开」 | `app.js:1339-1341` |
+| 6 | ~~流断开不重试~~ | **已修复**（2026-11-10）：指数退避重连 | `app.js` `connect()` |
 | 7 | 重连无测试 | 机制正确性没有证据 | `session_test.go:106` |
 | 8 | ~~字段命名两套风格~~ | **已修复**（2026-11-10）：三个执行结果结构的 tag 统一为 snake_case | §4.1 |
 | 9 | 会话列表无分页 | 会话数增长后接口先失效 | `web.go:51-73` |
@@ -112,7 +116,8 @@
 | **B** 提交/订阅分离 | `POST .../events` → 202 | `GET .../events` 长连接 | 有，需「先注册订阅再写响应头」契约消除 | 2 |
 | **C** 同步阻塞 | `POST` 等整轮 → JSON | 无 | 无，但客户端干等 | 1 |
 
-当前实现是 **B 的一半 + C**：接收侧已经是常驻订阅（B 的形态），提交仍是同步阻塞（C）。
+当前实现是 **B 的一半 + C 的替代**：接收侧是常驻订阅（B 的形态），提交侧已切到
+202 受理（§3.3 已落地），同步阻塞只剩给 CLI / 脚本用的 `/api/sessions/turn`。
 
 ### 3.2 A 不再必要
 
@@ -132,15 +137,18 @@ Content-Type: application/json
 { "input": "...", "attachments": [...] }
 
 → 202 Accepted
-{ "session_id": "fs_abc", "status": "accepted", "queued": false }
+{ "session_id": "fs_abc", "status": "accepted", "queued": true }
 ```
 
 - **不返回 turn_id**：turn 在受理之后才创建，号由常驻流里的 `session.turn.started`
   携带（客户端本来就用事件里的 `flow_turn_id` 分组）。提前发号需要一个占位 turn，
   代价大于收益。
 - **202 只表示受理**，不表示完成，也不保证一定能跑完 —— 结果和失败都在流里。
-- **幂等键是 `(session_id, idempotency_key)`**。首轮没有 session id，所以键由客户端生成；
-  重复提交返回同一个受理结果，不重复执行。
+- `queued` 当前恒为 `true`：`SubmitInput` 一律先入队再排空，所以它只表示
+  「已受理」，不能用来区分「立即执行」与「排队等待」。
+- **幂等（未实现）**：下文提议的 `Idempotency-Key` 与 `(session_id, idempotency_key)`
+  去重目前没有实现，handler 不读该请求头，重复提交会真的再跑一轮。实现前调用方
+  必须自己保证不重试。
 
 现有 `POST /api/sessions/turn` / `POST /api/run` 保留同步语义，给 CLI 和脚本用：
 它们没有常驻流，需要一次调用拿到结果。
@@ -265,11 +273,15 @@ flow / team / agent 哪一层（`strings.HasPrefix(eventType, "flow_")` 之类�
 ### 4.4 增量与完结成对
 
 ```
-现状：  data: {"type":"session.agent.model_response","payload":{"reply":"完整的一段话"}}
+现状：  data: {"type":"session.agent.model_response","payload":{"text":"完整的一段话"}}
 建议：  data: {"type":"output_text.delta","delta":"逐"}
         data: {"type":"output_text.delta","delta":"字"}
         data: {"type":"output_text.done","text":"完整的一段话"}
 ```
+
+> `model_response` 的通用键是 `text`；只有结构化 Agent 才额外带 `reply`
+> （`internal/agent/runtime.go` 的 `emitAgentEvent`）。按 `reply` 取字段会在
+> 非结构化 Agent 上渲染出空文本。
 
 影响不止命名：
 

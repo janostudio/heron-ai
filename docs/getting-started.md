@@ -37,7 +37,7 @@ cd my-agent
 | `.agents/settings.json` | 引擎行为配置（可选，不写就用默认值） |
 | `.agents/flows/default.yml` | Flow 定义，`--flow` 省略时读这个 |
 | `.agents/teams/*.yml` | Team 定义 |
-| `.agents/agents/<id>/AGENT.md` | Agent 定义，目录名要与 `name` 一致 |
+| `.agents/agents/<id>/AGENT.md` | Agent 定义；标识取 frontmatter 的 `name`，目录名只用于定位文件 |
 | `.agents/skills/`、`knowledge/`、`rules/` | 按需添加，用于 skill / 知识 / 规则 |
 
 ## 3. 配置模型
@@ -162,7 +162,8 @@ heron
 heron --prompt "用一句话介绍你自己"
 ```
 
-TUI 里 `/help` 看命令，`/usage` 看本轮的 token 消耗，`Ctrl+C` 退出。
+TUI 里 `/help` 看命令，`/usage` 看**累计** token 消耗（续聊会话会把历史轮次一起累加，
+不是单轮值），`Ctrl+C` 退出。
 非交互模式会把答复打到 stdout。
 
 ## 7. 结果落在哪

@@ -1,5 +1,10 @@
 # Skill / Knowledge 渐进式披露设计
 
+> **状态：Knowledge 侧已落地（§3.4），Skill 侧仍是设计（§3.1–§3.3 未实现）。**
+> 当前 Skill 走的是全量注入：`internal/skill/injector.go` 把每个已声明 skill 的
+> `Body` 全文 append 进 prompt 并返回其 tools，没有 `UseSkill` 工具、没有 listing
+> 层、也没有按需加载。本文后续章节因此混有「现状」与「设想」，阅读时以上述标注为准。
+>
 > 本文定义 heron-ai 的 Skill 与 Knowledge 从「启动时全量驻留内存 + 全量注入
 > 上下文」迁移到「元数据常驻 + 正文按需加载」的设计。依据是 Anthropic Agent
 > Skills 的 Progressive Disclosure 模型与 MCP 的 Lazy Schema Loading 实践。
@@ -307,8 +312,8 @@ agent 目录一起拷贝"的可移植性（见 `docs/configuration/skill.md` 的
 | 点 | 取值 | 理由 |
 |---|---|---|
 | `Stability` | `stable`（原为 `semi_stable`）| 文本只由 agent 身份决定，不再随 query 变；同一 agent 跨轮逐字节相同，可进 prompt cache 前缀 |
-| `Placement` | `system` | 与 skill listing、rules 同类：常驻前缀而非每轮变动内容 |
-| `Compressible` | `false` | 仅约 8 行、固定、且是「去哪找」的前提；被压掉等于静默禁用知识查找 |
+| `Placement` | `user` | 放 `user` 侧而不是 system 前缀：它是「去哪找」的提示，放 system 会被读成指令（`internal/runtime/team/runtime.go` 的注释解释了这一决定） |
+| `Compressible` | `false` | 声明为不可压缩；**注意该字段当前无消费者**，真正让它免于折叠的是 `Injected` 标记（见 `internal/agent/context.go` 的 anchor 规则） |
 | 是否出现 | 该 agent 至少有一个可读目录 | `.agents/knowledge/` 对所有人可读故恒列出；私有目录仅在有可加载条目时列出，否则等于指模型去撞墙 |
 
 **已知能力差异（有意为之）**：删掉 `ReadKnowledge` 后，**只凭 id 不再能直接取正文** ——
@@ -541,8 +546,8 @@ func (t *SkillTool) Execution() types.ToolExecutionSpec {
 
 - 含 13 个 skill 的工作区（13 个 skill，其中一个 agent 声明 2 个）——
   是验证 listing 与激活的最小真实场景；该用例未随仓库分发，可按需自建。
-- `examples/blog-writer` —— 4 个 skill，含 `deep_research`，带 `references/`，
-  可顺带验证第 3 层（模型用 `Read` 读 references）。
+- `examples/blog-writer` —— 4 个 skill（每个目录只有 `SKILL.md`，**没有**
+  `references/`）。要验证第 3 层需要先给示例补一份 references 目录。
 
 验收：改造前先跑一次存下 system prompt 与工具调用序列作为对照，改造后跑同一
 任务对比。

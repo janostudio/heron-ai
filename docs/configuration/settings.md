@@ -137,7 +137,7 @@ An agent only gets these tools when its `AGENT.md` lists them under
 | `search.location` | string | empty | Country code, TinyFish only. |
 | `search.language` | string | empty | Language code, TinyFish only. |
 | `search.timeout_ms` | integer | `30000` | Search timeout. |
-| `fetch.provider` | string | follows `provider` | `tinyfish` or `direct`. `direct` fetches locally without a third-party API. |
+| `fetch.provider` | string | follows `provider` | `tinyfish`、`tavily` 或 `direct`。`direct` 在本地直连抓取，不经第三方 API。 |
 | `fetch.url` | string | provider default | Override the fetch endpoint. |
 | `fetch.format` | string | `markdown` | `markdown`, `html`, `json`. |
 | `fetch.timeout_ms` | integer | `45000` | Fetch timeout. |
@@ -267,9 +267,9 @@ Explicitly configured values win over the process's existing environment.
 
 ## Inert sections
 
-These sections appear in older configurations and in `configs/settings.json`.
-No code path reads them; they are documented here rather than silently
-interpreted.
+These sections appear in older configurations. No code path reads them; they are
+documented here rather than silently interpreted. `configs/settings.json` in this
+repository already contains none of them.
 
 | Section | Status | Why |
 |---------|--------|-----|
@@ -308,7 +308,7 @@ There is currently no configuration for run-data retention.
   "mcp": [],
   "tools": {
     "restricted_bash_phrases": ["prod-deploy"],
-    "script": { "enabled": false }
+    "repl": { "enabled": false }
   },
   "env": {
     "WORKSPACE_ROOT": ".",

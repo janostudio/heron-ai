@@ -99,7 +99,7 @@ scope:
 | `summary` | string | One-line description of when the entry applies. Written into `index.md` and used by the learn path's dedup. Derived from the first prose paragraph when omitted |
 | `keys` | array | Extra keywords, for the human reading the index and for learn-path dedup |
 | `scope` | object | Visibility claim. Must agree with the file's location — see below |
-| `status` | string | `active` (default), `deprecated`, `archived`. Only active entries load |
+| `status` | string | `active` (default), `deprecated`, `archived`. **只有 `archived` 不加载**；`deprecated` 仍会被 Load 到，想让它不可见请标 `archived` |
 | `expires_at` | string | RFC3339 timestamp. The only thing `heron knowledge gc` archives on |
 
 ### scope must match location

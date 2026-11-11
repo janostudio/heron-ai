@@ -36,7 +36,7 @@
 ```
 active 消息列表
 ├── system 层        # 开头连续的 system 消息（系统提示词，不压缩）
-├── anchor 层        # 第一条非 system 消息（通常是最初的 user 输入，不压缩）
+├── anchor 层        # 第一条非 system 消息 + 其后所有连续 Injected 消息（不压缩）
 ├── [已有压缩摘要]    # 之前压缩累积的摘要，以 "## Compacted Agent Context" 标记
 └── groups 层        # 后续对话消息组
     ├── group 1      # 一个消息组 = assistant(tool_calls) + 紧跟着的所有 tool 消息
@@ -60,7 +60,7 @@ active 消息列表
 | `Placement` | `system` 或 `user`，决定拼进哪条消息 |
 | `Stability` | `stable` / `semi_stable` / `dynamic` |
 | `Priority` | 优先级（影响拼接顺序） |
-| `Compressible` | 是否可被压缩 |
+| `Compressible` | 是否可被压缩（**当前无消费者**：压缩按消息组位置切分，真正的保护来自 anchor 与 `Injected` 标记） |
 
 ## 3. 各级处理逻辑（四层压缩 + 一层拼接）
 
@@ -77,7 +77,7 @@ active 消息列表
 `BuildSystemPrompt` 的拼接顺序（固定策略）：
 1. Persona（Role / Goal / Backstory）
 2. Agent Body（额外指令）
-3. ContextBlocks（Placement=system，如 knowledge、rules）
+3. ContextBlocks（`Placement=system`，如 rules；knowledge 恒为 `user` 侧）
 4. Tool usage 指令
 5. State 管理指令（`state-management` 模板，仅当 agent 声明了 `State` 工具）
 6. Execution 管理指令
@@ -194,14 +194,16 @@ type Compactor interface {
 
 ### 5.1 方案 A：当前 anchor 层
 
-**机制**：`splitContextLayers` 把第一条非 system 消息单独抽出，放 `prefix`，
-**完全不参与压缩**（连 `compactor.Compact` 都看不到它）。
+**机制**：`splitContextLayers` 把第一条非 system 消息连同其后所有连续的 `Injected`
+消息抽出来，放 `prefix`，**完全不参与压缩**（连 `compactor.Compact` 都看不到它们）。
+首轮渲染的 knowledge、task_ledger、memory、collaborator 报告和当轮 user prompt 都带
+`Injected` 标记，所以实际锚定的是一整批消息，不是一条。
 
 **数据流**：
 ```
 active 消息
 ├── system（不压缩）
-├── anchor = 第一条非 system（不压缩）  ← 唯一锚点
+├── anchor = 第一条非 system + 其后连续 Injected 消息（不压缩）
 ├── 摘要（压缩产物，用户消息被 500 字符截断 / LLM 自由提炼）
 └── 最近 N 组（不压缩）
 ```
