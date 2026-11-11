@@ -234,3 +234,85 @@ func TestDispatch7PerTaskInstancesRunConcurrently(t *testing.T) {
 	writeTrace(t, e, httpTrace{Method: "POST", Path: "/api/run", Status: 200},
 		result.Session.ID, map[string]any{"tasks": len(tasks), "worker_calls": len(workerCalls), "overlapping": true})
 }
+
+// TestDispatch8ResidentTeamQueuesDespiteDistinctTaskKeys covers I-DISPATCH-8:
+// two dispatches to one resident Team queue even when each carries its own
+// task_key.
+//
+// The failure this guards is the one that made a finished task look failed. The
+// execution queue keyed its slot on task_key whenever it was present, so two
+// task_keys read as two instances and both dispatches started at once — while
+// only one execution slot existed behind them. The second was refused with
+// "team X is already running in this session", the turn recorded a failure, and
+// the model retried and finished the work anyway. The user saw a failed turn
+// for work that was done.
+//
+// task_key addresses an instance of a per_task Team. For a resident Team there
+// is one instance per session, so the key cannot create a second one.
+func TestDispatch8ResidentTeamQueuesDespiteDistinctTaskKeys(t *testing.T) {
+	judge(t, "I-DISPATCH-8", "dispatch")
+
+	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-DISPATCH-8", fixture: "dispatch"})
+	e.Mock.script(
+		step{match: []string{"You are 接待"}, toolCalls: []mockToolCall{
+			// The key is what the model wrote while the target was resident: it
+			// must not turn into a second instance.
+			{ID: "call_keyed_1", Name: "Team", Args: map[string]any{
+				"subagent_type": "worker", "prompt": "任务一", "description": "任务一",
+				"task_key": "repo-a-1",
+			}},
+			{ID: "call_keyed_2", Name: "Team", Args: map[string]any{
+				"subagent_type": "worker", "prompt": "任务二", "description": "任务二",
+				"task_key": "repo-a-2",
+			}},
+		}},
+		step{match: []string{"You are 接待"}, text: "结论：两件都办完了", repeat: true},
+		step{match: []string{"You are 执行者"}, text: "任务一完成"},
+		step{match: []string{"You are 执行者"}, text: "任务二完成"},
+	)
+
+	result := e.runTurn(map[string]any{"input": "派两个任务给同一个 team"})
+	waitForEvent(t, e.Root, result.Session.ID, 25*time.Second, func(events []event) bool {
+		return terminalCount(events) >= 2
+	})
+	time.Sleep(1200 * time.Millisecond)
+
+	tasks := taskRecords(t, e.Root)
+	if len(tasks) != 2 {
+		t.Fatalf("dispatched two tasks but found %d durable tasks", len(tasks))
+	}
+	for _, task := range tasks {
+		id := fieldString(task, "id")
+		status := fieldString(task, "status")
+		resultField, _ := task["result"].(map[string]any)
+		errText, _ := resultField["error"].(string)
+		if strings.Contains(errText, "already running") {
+			t.Fatalf("%s was refused as a conflict instead of queued: %s", id, errText)
+		}
+		if status != "completed" {
+			t.Fatalf("%s status=%s; a queued task must still finish", id, status)
+		}
+	}
+
+	// Two distinct keys must not buy two executions of one resident instance.
+	workerCalls := requestsOf(e.Mock.requests(), "You are 执行者")
+	if len(workerCalls) != 2 {
+		t.Fatalf("worker ran %d times for 2 tasks; want 2", len(workerCalls))
+	}
+	if overlaps(workerCalls[0], workerCalls[1]) {
+		t.Fatalf("two task_keys started two executions of one resident Team; the key cannot create an instance")
+	}
+
+	queued := 0
+	for _, line := range readProcessLog(t, e.Root) {
+		if line.Msg == "tool task queued behind a running instance" {
+			queued++
+		}
+	}
+	if queued == 0 {
+		t.Fatalf("no log line records the wait; the second dispatch should have queued, not started")
+	}
+
+	writeTrace(t, e, httpTrace{Method: "POST", Path: "/api/run", Status: 200},
+		result.Session.ID, map[string]any{"tasks": len(tasks), "worker_calls": len(workerCalls), "queued_logs": queued})
+}

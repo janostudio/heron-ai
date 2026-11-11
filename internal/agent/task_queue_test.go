@@ -85,7 +85,8 @@ func TestAsyncExecutorSerializesOneTeamInstance(t *testing.T) {
 }
 
 // TestAsyncExecutorRunsPerTaskKeysConcurrently covers the other half: two
-// task_key values are two instances, so they must not wait for each other.
+// task_key values are two instances of a per_task Team, so they must not wait
+// for each other.
 func TestAsyncExecutorRunsPerTaskKeysConcurrently(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	store := NewFileToolTaskStore(files)
@@ -99,7 +100,10 @@ func TestAsyncExecutorRunsPerTaskKeysConcurrently(t *testing.T) {
 			TeamID:        "frontdesk",
 			ToolCallID:    "call-" + id,
 			ToolName:      "TeamRun",
-			Arguments:     map[string]any{"team_id": "probe", "task_key": id, "task_id": id},
+			Arguments: map[string]any{
+				"team_id": "probe", "task_key": id, "task_id": id,
+				"lifecycle": string(types.TeamLifecyclePerTask),
+			},
 		}))
 	}
 
@@ -115,6 +119,49 @@ func TestAsyncExecutorRunsPerTaskKeysConcurrently(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond, "both per_task instances must finish")
 
 	assert.Equal(t, 2, probe.peak(), "distinct task_key values are distinct instances")
+}
+
+// TestAsyncExecutorSerializesResidentTeamWithDistinctTaskKeys covers the
+// regression that made two dispatches collide: a model sent a different
+// task_key to a resident Team, the queue read the two keys as two instances and
+// started both, and the second was then refused by the single execution slot
+// behind them — the caller was told its task failed, when the only thing that
+// happened is that it had to wait.
+//
+// A resident Team has one instance per session no matter what the caller wrote
+// in task_key, so the queue must serialize on the Team alone.
+func TestAsyncExecutorSerializesResidentTeamWithDistinctTaskKeys(t *testing.T) {
+	files := storage.NewFileStore(t.TempDir())
+	store := NewFileToolTaskStore(files)
+	probe := &serialProbe{duration: 60 * time.Millisecond}
+	async := NewAsyncToolExecutor(store, probe)
+
+	for _, id := range []string{"task-x", "task-y"} {
+		require.NoError(t, async.Start(context.Background(), types.ToolTask{
+			ID:            id,
+			FlowSessionID: "fs_resident",
+			TeamID:        "frontdesk",
+			ToolCallID:    "call-" + id,
+			ToolName:      "TeamRun",
+			Arguments: map[string]any{
+				"team_id": "worker", "task_key": id, "task_id": id,
+				"lifecycle": string(types.TeamLifecycleResident),
+			},
+		}))
+	}
+
+	require.Eventually(t, func() bool {
+		done := 0
+		for _, id := range []string{"task-x", "task-y"} {
+			task, err := store.Load(context.Background(), id)
+			if err == nil && task.Status == types.ToolTaskCompleted {
+				done++
+			}
+		}
+		return done == 2
+	}, 5*time.Second, 20*time.Millisecond, "both resident tasks must finish, one after the other")
+
+	assert.Equal(t, 1, probe.peak(), "a resident Team runs one task at a time however the caller keyed it")
 }
 
 // TestAsyncExecutorRunsDifferentTeamsConcurrently guards the boundary: two

@@ -25,12 +25,23 @@ const TeamRunToolName = types.ToolNameTeamRun
 
 // TeamTool exposes Team calls to the model.
 type TeamTool struct {
-	runner types.TeamRunner
-	tasks  *AsyncToolExecutor
+	runner  types.TeamRunner
+	tasks   *AsyncToolExecutor
+	catalog types.TeamCatalog
 }
 
 func NewTeamTool(runner types.TeamRunner) *TeamTool {
 	return &TeamTool{runner: runner}
+}
+
+// SetCatalog wires the Flow graph so a dispatch can record the callee's
+// lifecycle alongside the task. Optional: without it the queue treats every
+// target as resident and serializes, which is slower but never wrong.
+func (t *TeamTool) SetCatalog(catalog types.TeamCatalog) {
+	if t == nil {
+		return
+	}
+	t.catalog = catalog
 }
 
 // SetRunner wires the executor after the flow runtime exists. The Flow runtime
@@ -136,7 +147,7 @@ func (t *TeamTool) Execute(ctx context.Context, params map[string]any) (*types.T
 		CallID:        spec.CallID,
 		AgentTurnID:   spec.AgentTurnID,
 		ToolName:      TeamRunToolName,
-		Arguments:     teamRunArguments(spec),
+		Arguments:     t.teamRunArguments(ctx, spec),
 		// A Team call has side effects; an interrupted execution is failed on
 		// recovery rather than silently re-run.
 		RestartSafe: false,
@@ -263,6 +274,44 @@ func teamCallSpecFromContext(ctx context.Context, teamID string, item any) types
 		}
 	}
 	return spec
+}
+
+// teamRunArguments builds the durable task's arguments.
+//
+// It stamps the callee's lifecycle, because the execution queue needs it to
+// decide what "two tasks for the same Team" means: two instances (per_task,
+// addressed by task_key) or one (resident, so the second task waits). The queue
+// runs in this package and cannot read the Flow configuration itself, and
+// inferring the lifecycle from "is task_key set" is what made two dispatches to
+// one resident Team run at once and collide on the single slot behind them.
+func (t *TeamTool) teamRunArguments(ctx context.Context, spec types.TeamCallSpec) map[string]any {
+	args := teamRunArguments(spec)
+	if lifecycle := t.lifecycleOf(ctx, spec); lifecycle != "" {
+		args["lifecycle"] = lifecycle
+	}
+	return args
+}
+
+// lifecycleOf reads the callee's lifecycle from the caller's view of the Flow.
+// An unknown answer stays empty: the queue then treats the target as resident,
+// which serializes rather than running two tasks that may collide.
+func (t *TeamTool) lifecycleOf(ctx context.Context, spec types.TeamCallSpec) string {
+	if t == nil || t.catalog == nil {
+		return ""
+	}
+	entries, err := t.catalog.ListTeams(ctx, types.TeamCatalogSpec{
+		FlowSessionID: spec.FlowSessionID,
+		CallerTeam:    spec.CallerTeam,
+	})
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.TeamID == spec.TeamID {
+			return entry.Lifecycle
+		}
+	}
+	return ""
 }
 
 func teamRunArguments(spec types.TeamCallSpec) map[string]any {
