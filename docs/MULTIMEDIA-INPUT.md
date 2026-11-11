@@ -17,6 +17,8 @@ layer.
 `POST /api/run`, `/api/sessions/turn`, and `/api/resume` accept either
 provider-neutral content blocks:
 
+（读回附件用 `GET /api/media?path=...`：Web UI 靠它把消息里的图片渲染出来。）
+
 ```json
 {
   "input": "请分析图片",

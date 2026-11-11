@@ -39,7 +39,7 @@ Agent 文件只需要指定模型名称；没有在 Agent 上显式配置的参�
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `model` | string | 默认模型，必须匹配某个模型的 `id` 或 `name` |
+| `model` | string | 默认模型，必须匹配某个模型的 `name`（`id` 不参与匹配；`name` 缺省时由 router 在加载后回填，但默认模型的选择发生在这之前） |
 | `models` | array | 可用模型 profile 列表 |
 
 ### Model Entry
@@ -50,7 +50,7 @@ Agent 文件只需要指定模型名称；没有在 Agent 上显式配置的参�
 | `protocol` | string | `openai_chat` 或 `anthropic_messages` |
 | `base_url` | string | Provider API 基地址 |
 | `api_key` | string | API Key，支持 `${ENV_VAR}` |
-| `maxAllowedSize` | integer | 模型上下文及请求总大小上限 |
+| `maxAllowedSize` | integer | 预留字段，**当前无读取方**；上下文上限实际取 `maxInputTokens` |
 | `maxInputTokens` | integer | 最大输入 token 数 |
 | `maxOutputTokens` | integer | 单次模型调用的默认输出上限 |
 | `temperature` | number | 模型默认 temperature；缺省则不发送 |

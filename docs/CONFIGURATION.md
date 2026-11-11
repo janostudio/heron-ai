@@ -37,12 +37,12 @@ heron
 |------|----------|-------------|
 | [models.json](./configuration/models.md) | Yes | Model registry and API keys |
 | [settings.json](./configuration/settings.md) | No | Engine behavior tuning; inert sections are called out explicitly |
-| [Flow](./configuration/flow.md) | Yes | Stage pipeline with signal routing |
+| [Flow](./configuration/flow.md) | Yes | Entry Team, Team bindings and signal routing (no Stage concept) |
 | [Team](./configuration/team.md) | Yes | Agent scheduling (parallel/sequential, per_task) |
 | [Agent](./configuration/agent.md) | Yes | Persona, tools, loop, hooks |
 | [Skill](./configuration/skill.md) | No | Packaged tool + prompt combinations |
-| [Knowledge](./configuration/knowledge.md) | No | Searchable knowledge base entries |
-| [Rules](./configuration/rules.md) | No | Soft/hard constraints and guardrails |
+| [Knowledge](./configuration/knowledge.md) | No | Markdown knowledge entries (agentic search, no index) |
+| [Rules](./configuration/rules.md) | No | Prompt-level constraints (`type` is a label only; no guardrail config exists) |
 | [Workspace](./configuration/workspace.md) | No | Execution backend (local / remote SSH) |
 
 ## How the pieces load

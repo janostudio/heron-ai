@@ -20,14 +20,17 @@ An Agent directory may also contain:
 
 ```text
 .agents/agents/my_agent/
-├── skills/               # Agent-local skills, when needed
-├── state/               # Optional persistent state files
+├── knowledge/            # Agent-private knowledge entries (loaded)
+├── rules/                # Agent-private rules (loaded)
+├── state/                # Optional persistent state files
 ├── scripts/              # Agent-local helper scripts
 └── extensions/           # Optional Agent-specific extensions
 ```
 
-Only `AGENT.md` is required. Other directories are optional and are loaded by
-the corresponding extension.
+Only `AGENT.md` is required. `knowledge/` and `rules/` are scanned by the
+engine; other directories are not part of the load path — in particular a
+`skills/` directory inside an agent is **not** loaded (skills live under
+`.agents/skills/` or inside an installed Team package).
 
 ### Canonical path
 
@@ -35,9 +38,10 @@ the corresponding extension.
 .agents/agents/<agent-id>/AGENT.md
 ```
 
-The directory name is the Agent's storage identity. The `name` in frontmatter
-must match the directory name. This keeps each Agent's knowledge and rules
-isolated and makes the configuration easy to locate.
+The `name` in frontmatter is the Agent's identity: it is the key other
+definitions reference (`agent: <name>`) and the directory used for its private
+knowledge. The directory name is only used to locate `AGENT.md`; a mismatch is
+not rejected, but then `agent: <dir-name>` refers to nothing.
 
 ### Legacy compatibility
 
@@ -70,7 +74,7 @@ persona:
   goal: "Find relevant information"
   backstory: "Experienced researcher with 10 years of expertise"
 model:
-  model: ${LLM_MODEL:-deepseek-v4-flash}
+  model: deepseek-v4-flash   # 字面模型名，必须能在 models.json 里按 name 命中
   # 可选：未配置时从 models.json 继承
   # temperature: 0.3
   # max_output_tokens: 8192
@@ -125,13 +129,12 @@ hooks:
   - event: on_start
     command: "echo 'Starting...'"
     timeout: 10s
-handoffs:
-  - other_agent
 ---
 
-Agent body text (Markdown). Template variables available:
-{{.Persona.Role}} {{.Persona.Goal}} {{.Persona.Backstory}}
-{{range .Rules}} - {{.Content}} {{end}}
+Agent body text (plain Markdown). It is appended to the system prompt verbatim:
+there is no template rendering, so `{{.Persona.Role}}` or any other placeholder
+would reach the model as literal text. Use the `persona` fields and the `rules`
+list for structured content.
 ```
 
 The content above belongs in:
@@ -154,7 +157,7 @@ The content above belongs in:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `model` | string | Model name. Supports `${VAR:-default}` |
+| `model` | string | Model name, matched literally against `name` in models.json. Environment variables are **not** expanded here |
 | `temperature` | float | 覆盖 models.json 的默认值 |
 | `top_p` | float | 覆盖模型默认 top-p |
 | `top_k` | integer | 覆盖模型默认 top-k |
@@ -274,6 +277,11 @@ Behaviour worth knowing:
 | `tool_execution` | string | `sequential` or `parallel_safe` |
 | `max_parallel_tools` | integer | Max concurrent read-only tools |
 | `async_tools` | array | Tool names allowed to create durable async tasks |
+| `max_same_tool_calls` | integer | Stuck detection: retries of an identical tool call before acting |
+| `max_no_progress_rounds` | integer | Stuck detection: model rounds without new tool results |
+| `max_same_model_texts` | integer | Stuck detection: identical model replies in a row |
+| `stuck_action` | string | What to do when stuck: `fail` or `ask_user` |
+| `max_model_retries` | integer | Retries for transient provider failures (context-limit recovery is separate and tried once) |
 | `timeout` | string | Execution timeout |
 
 ### context
@@ -328,6 +336,20 @@ stricter.
 | `type` | string | Output format, usually `json` |
 | `schema` | object | JSON Schema definition |
 
+### completion
+
+Task-level completion evidence. All keys are opt-in, so a plain conversational
+Agent keeps its current behaviour.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `require_tool` | boolean | The turn must call at least one tool |
+| `required_tools` | array | Which tools must be called |
+| `require_tool_success` | boolean | At least one required tool must succeed |
+| `require_workspace_read` | boolean | The workspace must have been read |
+| `require_workspace_change` | boolean | The workspace must have been modified |
+| `require_structured_output` | boolean | `structured_output` must have been produced |
+
 ### hitl
 
 | Field | Type | Description |
@@ -343,9 +365,12 @@ stricter.
 | `command` | string | Shell command to execute |
 | `timeout` | string | Command timeout |
 
-### handoffs
+### ~~handoffs~~ (not a field)
 
-List of agent names this agent can delegate tasks to.
+There is no `handoffs` field: `AgentConfig` does not define one, and a
+`handoffs:` key in frontmatter is silently ignored by the YAML decoder. Cross-agent
+delegation goes through the Flow's `can_activate` bindings plus the `Team` /
+`ListTeams` / `Spawn` tools.
 
 ## State Tool
 

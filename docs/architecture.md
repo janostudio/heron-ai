@@ -43,9 +43,9 @@ heron-ai/
 | `prompt` | Builtin prompt fragments and prompt provenance |
 | `model` | Provider abstraction (`openai_chat`, `anthropic_messages`), profile defaults, fallback router |
 | `tool` | Tool registry, executor, builtin tools, Bash policy, path scope |
-| `skill` | Skill registry, loader, progressive-disclosure injector |
-| `knowledge` | Knowledge index, injector, summarizer |
-| `state` | Short-term session state snapshots (`state.md`) |
+| `skill` | Skill registry, loader, and the injector that appends each declared skill's body and tools to the prompt |
+| `knowledge` | Markdown store, knowledge pointer, learn progress and summarizer (no index and no injector) |
+| `state` | Session state snapshots (`state.md`) plus the cross-session agent state blocks under `.agents/data/agents/<id>/state/` |
 | `storage` | File store and run-state persistence (append-only JSONL) |
 | `logging` | Rotating execution log (one of the fact sources) |
 | `config` | Config loader: flows / teams / agents / skills / rules / settings / models |
@@ -58,7 +58,7 @@ heron-ai/
 | `workspace` | Execution backend: local process or remote SSH, with path restriction |
 | `osenv` | Merges `settings.json` `env` into every subprocess environment |
 | `sessionlist` | Reads `.agents/data/sessions/` for `--list` |
-| `eval` | Correlation IDs and fact derivation (not yet surfaced in CLI/TUI) |
+| `eval` | Correlation IDs and fact derivation; consumed by the Web record view (`/api/sessions/{id}/record`), not surfaced in CLI/TUI |
 | `extension` | Extension registry (registration only; no script runtime is bundled) |
 
 Two of these are easy to misread:
@@ -76,7 +76,7 @@ Two of these are easy to misread:
 | Configuration | `.agents/` | Resolved relative to the process cwd, never upward |
 | Session events | `.agents/data/sessions/<fs_id>/{flow,team,agent}.jsonl` | One append-only log split by producing layer |
 | Flow-scope records | `.agents/data/sessions/<fs_id>/evidence.jsonl` | Appears once a Flow-scope record is published |
-| State snapshots | `.agents/data/sessions/<fs_id>/teams/…/state.md` | Human-readable, injected next turn |
+| State snapshots | `.agents/data/sessions/<fs_id>/teams/…/state.md` | Human-readable, **never injected**: only a stable pointer reaches the prompt and the `State` tool reads the snapshot on demand |
 | Execution log | `.agents/data/logs/YYYY-MM-DD.log` | JSON lines; `debug` adds request usage |
 | Installed Team packages | `.agents/_teams/<scope>/` | Scanned in addition to `.agents/` |
 
@@ -89,16 +89,22 @@ Agent Calls produce signals that control Flow execution:
 | Signal | Effect |
 |--------|--------|
 | `continue` | Proceed with the next orchestration step |
-| `wait_input` | End the turn; the session stays `idle` and can be continued |
-| `goal_achieved` | End the turn; the session stays `idle` and can be continued |
+| `wait_input` | Same as `continue`. The marker no longer selects a route: a finished turn always leaves the session `idle`, so "wait for the user" is the end of the turn, not a separate signal (`internal/agent/signal.go:23-28`) |
+| `goal_achieved` | Same as `continue` (same code path) |
 | `goal_failed` | End the turn as failed; the session stays continuable |
 | `goal_impossible` | End the turn as failed; the session stays continuable |
+
+The runtime's own route set is wider than what the model can emit: `proceed` /
+`return` / `coordinate` / `activate` / `fail` / `wait_tool` / `wait_approval`
+(`pkg/types/turn.go`). The last two are set by the runtime for an async Tool
+task and for a HITL gate; the model cannot produce them.
 
 Session lifecycle is a runtime decision: every turn, including a failed one,
 leaves the FlowSession continuable, and Flow configuration (`on_proceed`)
 may only choose orchestration actions (`proceed` / `return` / `coordinate` /
-`activate` / `fail`). A failure is reported on that turn's result (status
-`failed` plus `error`) and never turns the conversation into a dead session.
+`activate` / `fail`). A failure is reported on that turn's result (its `error`,
+plus the turn's own failed status); the session itself goes back to `idle`, so a
+failed turn never turns the conversation into a dead session.
 
 ## Agent Capabilities
 
@@ -120,13 +126,20 @@ Each agent can be configured with:
   (keyless, search only); `tinyfish`, `brave` and `tavily` need an `api_key`
   and fail closed without one, while `direct` fetches locally. See
   `docs/configuration/settings.md` and `docs/configuration/agent.md`.
-- **Skills**: Packaged tool + prompt combinations
-- **Knowledge**: Searchable knowledge base
-- **Rules**: Soft/hard constraints
-- **Guardrails**: Input/output validation
+- **Skills**: Packaged tool + prompt combinations. The injector appends each
+  declared skill's body in full — there is no listing layer or on-demand load.
+- **Knowledge**: Markdown entries reached by agentic search (the model uses
+  `Read` / `Grep` / `Glob`; a pointer block names the directories). There is no
+  engine-side index or injector.
+- **Rules**: Prompt-level constraints injected under `## rules`. `type` is only
+  a label in the heading; `priority` is not read.
+- **Guardrails**: The checker exists in `internal/agent/guardrail.go`, but no
+  Agent configuration reaches it — there is no `guardrails:` field to set.
 - **Hooks**: Lifecycle event handlers
 - **Structured Output**: JSON schema enforcement
-- **Handoff**: Cross-agent task delegation
+- **Delegation**: an Agent reaches other Teams through the `Team` / `ListTeams` /
+  `Spawn` tools and the Flow's `can_activate` bindings. There is no separate
+  `handoffs` field — configuring one is silently ignored.
 - **HITL**: Human-in-the-loop approval gates
 - **MCP**: Tools discovered from configured MCP servers, listed per agent under
   `tools.mcp`

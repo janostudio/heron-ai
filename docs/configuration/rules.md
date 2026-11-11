@@ -1,6 +1,9 @@
 # Rules Configuration
 
-Rules are constraints that agents must follow. Two types: soft (guidelines) and hard (requirements).
+Rules are prompt-level constraints that agents are told to follow. `type` is a
+label only: both `soft` and `hard` are injected the same way, and neither is
+enforced or blocking. `priority` is currently **not read** — it does not change
+ordering or strength.
 
 ## Structure
 
@@ -19,9 +22,11 @@ Never include API keys or passwords in responses.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | string | `soft` (guideline) or `hard` (requirement) |
+| `id` | string | 引用键（`rules:` 里写的就是它）；缺省取文件名 |
+| `type` | string | `soft` 或 `hard`，只作为注入标题里的标签，不改变行为 |
 | `scope` | object | Visibility control |
-| `priority` | integer | Priority (higher = more important) |
+| `paths` | array | 可选的 glob 条件：只有当前 path context 命中时才注入这条规则 |
+| `priority` | integer | 预留字段，**当前无读取方** |
 
 ### scope
 
@@ -49,10 +54,13 @@ Never include API keys or passwords in responses.
 
 ## Usage
 
-Rules are injected into agent system prompts:
+Rules are injected into the prompt as a `## rules` section, one `###` block per
+referenced rule, titled `<id> (<type>)`:
 
 ```
-## Rules
-- Never include API keys or passwords in responses. (hard)
-- Be objective and cite sources. (soft)
+## rules
+### api-keys (hard)
+Never include API keys or passwords in responses.
+### objectivity (soft)
+Be objective and cite sources.
 ```

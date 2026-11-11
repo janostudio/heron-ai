@@ -99,7 +99,21 @@ command:
 | `${records.<Name>.RecordID}` / `.Name` | 记录 ID / 名称 |
 
 `<Name>` 必须是该 call 在 `inputs` 里声明为输入的记录（`flow_records` /
-`team_records` / `records`）。示例——把上游记录里的目标值传给 shell 脚本：
+`team_records` / `records`）。
+
+三种写法不是同义词，选错会静默拿不到数据：
+
+| 写法 | 匹配范围 | 什么时候用 |
+|---|---|---|
+| `user_message: true` | 用户本轮原始输入 | 需要用户输入的 call |
+| `flow_records: [X]` | **Flow 级**记录集合 | 引用其他 Team 的产出，或已被提升到 Flow 的记录 |
+| `records: [{from, record}]` | 指定 call 的产出（含同 Team 内的前序 call） | 同 Team 内的顺序依赖 |
+
+`flow_records` 与 `team_records` 都只在 **Flow 级**集合里按名字匹配（`internal/runtime/team`
+的 `selectCallRecords`）；同一 Team 里"前一个 call 刚产出、后一个 call 要引用"必须用
+`records` + `from`，写 `flow_records` 会报 `record "X" not found among call inputs`。
+
+示例——把上游记录里的目标值传给 shell 脚本：
 
 ```yaml
 build_target:

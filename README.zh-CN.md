@@ -33,8 +33,9 @@
   Call 是执行项而不是第四层，而且只有 Agent 的回合循环会调模型。
 - **一切都是文件。** 会话是 append-only JSONL，状态是 Markdown，知识是 Markdown，
   Team 是目录。一次运行可以用 `jq` 读完、可以直接 diff、可以重放。
-- **天生可分享。** `heron teams` 把一个 Team 连同它引用的 Agent、Skill、规则、知识
-  打成一份带 manifest 和依赖闭包的包 —— 且永远不会打包你的 `models.json`。
+- **天生可分享。** `heron teams` 把一个 Team 连同它引用的 Agent、Skill、规则打成一份
+  带 manifest 和依赖闭包的包 —— 永远不打包你的 `models.json`，也永远不打包知识
+  （知识是私有沉淀最容易积聚的地方，没有开关可开）。
 
 ## 安装
 
@@ -63,8 +64,8 @@ go build -o bin/heron ./cmd/server/
 mkdir -p my-agent/.agents/{flows,teams,agents/assistant}
 cd my-agent
 
-# 1. .agents/models.json                模型注册表（唯一必需文件）
-# 2. .agents/flows/default.yml          谁先跑
+# 1. .agents/models.json                模型注册表（必需）
+# 2. .agents/flows/default.yml          谁先跑（必需——没有 flow 引擎直接退出）
 # 3. .agents/teams/hello_team.yml       调用哪些执行项
 # 4. .agents/agents/assistant/AGENT.md  谁干活
 
@@ -82,7 +83,7 @@ heron --prompt "你好"    # 跑一轮就退出
 | 能力 | 实现方式 |
 |---|---|
 | **编排** | `Flow → Team → Call → AgentTurn`，信号路由（`continue` / `wait_input` / `goal_achieved` / `goal_failed` / `goal_impossible`），层间用带类型的 record 传递数据 |
-| **Agent** | Persona、按 agent 授权的工具、Skill、Knowledge、Rules、Guardrail、Hooks、结构化输出、Handoff、HITL 审批 |
+| **Agent** | Persona、按 agent 授权的工具、Skill、Knowledge、Rules、Hooks、结构化输出、HITL 审批；跨 agent 委派走 `Team` / `ListTeams` / `Spawn` 工具与 Flow 的 `can_activate`（没有 `handoffs` 字段） |
 | **工具** | 20 个内置（`Read`、`Write`、`Bash`、`Grep`、`Glob`、`WebSearch`、`WebFetch`、`CodeNav`、`TodoWrite`、`Spawn`、`Team`、`State`、`Define` 等），另支持自定义工具与 MCP server；`REPL` 是第 21 个，需在 `settings.json` 显式开启 |
 | **运行方式** | TUI · `--prompt` 单轮 · stdin/stdout 常驻 JSON-RPC · 带 SSE 与内置 Web UI 的 HTTP server · `stream-json` 客户端 |
 | **Team 包** | `heron teams` 安装 / 卸载 / 导出，带 manifest、依赖闭包与脚本复核 |

@@ -51,7 +51,7 @@ teams:
 | `team` | string | Team definition under `.agents/teams/` |
 | `can_activate` | []string | Teams this binding may activate. Any Team may declare it; a Team that declares nothing cannot activate |
 | `depends_on` | []string | Teams that must finish first |
-| `lifecycle` | string | `resident` (default: one shared session per FlowSession) or `per_task` (one instance per task). A `per_task` binding must take `inputs.user_message: true`; `--check-config` rejects it otherwise |
+| `lifecycle` | string | `resident` (default: one shared session per FlowSession) or `per_task` (one instance per task). `--check-config` 会拒绝两种非法组合：`per_task` 未声明 `inputs.user_message: true`，以及**入口 Team**（`entry`）声明 `per_task` |
 | `inputs` | object/list | User message and SharedRecord inputs |
 | `on_proceed` | list or object | Fixed routing when the Team ends with `proceed` |
 

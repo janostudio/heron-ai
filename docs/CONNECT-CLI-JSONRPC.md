@@ -9,8 +9,8 @@
 > - `stream-json` 客户端模式另有独立协议（`--input-format/--output-format`，
 >   见 CLI.md），与本文的 JSON-RPC 是两条通道，不要混用。
 >
-> 第 11 章的"不做实时流"仍是现状：JSON-RPC 通道是一问一答，需要进度推送请用
-> `--serve` 的 SSE。
+> 第 11 章的进度通知已经实现：`turn` 执行期间会在同一条 stdout 上追加无 `id` 的
+> `method:"progress"` 通知。调用方按「有 id 是响应、无 id 是通知」分流即可。
 
 ## 1. 目标
 
@@ -38,8 +38,8 @@ stdin/stdout + JSON-RPC 2.0 + 一行一个 JSON 对象
 - 复用当前 Flow / Team / Agent / Command / Webhook 编排；
 - 让 `heron-connect` 通过 CLI 子进程接入 Heron；
 - 保留当前 `--prompt` 的人工使用方式；
-- 第一期只解决一问一答，以及处于可继续状态的 FlowSession；
-- 后续可以在不破坏第一期协议的情况下增加进度通知。
+- 第一期只解决一请求一响应（进度以无 `id` 的 `progress` 通知旁路推送，见 §11），以及处于可继续状态的 FlowSession；
+- 进度通知已在不破坏第一期协议的情况下加上（无 `id` 的 `progress` 通知，见 §11）；
 
 本方案不试图把 Heron 内部的编排概念暴露给 `heron-connect`。
 
@@ -110,7 +110,9 @@ SessionEvent over {flow,team,agent}.jsonl
 
 这样做的原因是通信需要稳定的请求 ID、响应匹配和标准错误结构；内部存储需要完整的执行事件、顺序号和恢复信息。两者职责不同，因此使用两套 Schema。
 
-未来如果需要直接兼容 Claude Code 的 `stream-json`，可以新增独立的 Transport Adapter，不修改当前 Session 存储格式，也不修改 JSON-RPC 的 `turn` 方法。
+如果需要直接兼容 Claude Code 的 `stream-json`，引擎已提供独立通道
+（`--input-format stream-json` / `--output-format stream-json` / `--server`，
+见 `streamjson.go`）；它与本文的 JSON-RPC 是两条通道，不共用 `turn` 方法。
 
 ## 2. 为什么不直接使用当前 `--prompt`
 
@@ -337,11 +339,12 @@ approve   # 响应中途审批门禁（waiting_approval）
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `jsonrpc` | string | 是 | 固定为 `"2.0"` |
-| `id` | string/number | 是 | 请求和响应的关联 ID |
-| `method` | string | 是 | 第一版固定为 `"turn"` |
+| `id` | string/number | 是 | 请求和响应的关联 ID；**缺省 `id` 按 JSON-RPC 通知处理，不会返回任何响应** |
+| `method` | string | 是 | `"turn"` 或 `"approve"` |
 | `params` | object | 是 | 请求参数 |
-| `params.session_id` | string | 否 | 为空表示创建新的 FlowSession |
-| `params.input` | string | 是 | 本轮用户输入 |
+| `params.session_id` | string | 否 | 为空表示创建新的 FlowSession（别名 `flow_session_id`） |
+| `params.input` | string | 是 | 本轮用户输入（别名 `message`；两者至少给一个） |
+| `params.follow_async` | bool | 否 | 为 true 时保持订阅到派发出去的后台轮次结束（最长 15 分钟） |
 
 ### 6.1 新建 FlowSession
 
@@ -406,6 +409,7 @@ bundle.Flow.Resume(ctx, sessionID, input)
 | `cancelled` | 上一轮被取消 | 继续同一个 FlowSession |
 | `interrupted` | 存在未完成的执行 | 需要先执行 Recovery，不能直接发送普通 `turn` |
 | `completed` | 仅出现在旧数据回放中 | 新引擎不再产生该状态；旧 `completed` 会话也可以继续同一个 FlowSession |
+| `closed` | `per_task` Team 实例的软关闭：实例不再接活，会话本身仍可继续 | 继续同一个 FlowSession；新的派发会另开实例 |
 
 会话生命周期由运行时决定：轮次正常结束一律可续，`on_proceed` 不再提供
 `complete` / `wait_input` 之类的生命周期动作。因此 `heron-connect` 可以把
@@ -459,7 +463,7 @@ bundle.Flow.Resume(ctx, sessionID, input)
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `params.session_id` | string | 是 | 停在 `waiting_approval` 的 FlowSession |
-| `params.approval_id` | string | 是 | 待响应审批的 request_id（别名 `request_id`）；必须等于当前待审批项，否则返回 `-32002` |
+| `params.approval_id` | string | 是 | 待响应审批的 request_id（别名 `request_id`）；必须等于当前待审批项，否则返回 `-32001`，message 为 `approval "..." is not pending in this session` |
 | `params.approved` | bool | 是 | true 批准、false 拒绝。必须显式给出：审批是安全门禁，缺省值既不能当批准也不能当拒绝 |
 | `params.reason` | string | 否 | 批准/拒绝的理由，写入审批记录 |
 | `params.approver` / `params.approver_id` | string | 否 | 审批人标识，用于审计 |
@@ -509,9 +513,13 @@ bundle.Flow.ResumeApprovalWithResponse(ctx, sessionID, types.HITLResponse{
 |---|---|---|
 | `session_id` | string | FlowSession ID |
 | `flow_turn_id` | string | 本次 FlowTurn ID |
-| `status` | string | 完整枚举（`pkg/types/session.go`）：`created`、`running`、`idle`、`waiting_tool`、`waiting_approval`、`interrupted`、`completed`、`failed`、`cancelled`。各状态下 `turn` 的行为见 §6.2 表格；`completed` 仅存在于旧数据回放 |
-| `reply` | string | 用户可见的最终回复 |
+| `status` | string | 完整枚举（`pkg/types/session.go`）：`created`、`running`、`idle`、`waiting_tool`、`waiting_approval`、`interrupted`、`completed`、`failed`、`cancelled`、`closed`（`per_task` 实例软关闭）。各状态下 `turn` 的行为见 §6.2 表格；`completed` 仅存在于旧数据回放 |
+| `reply` | string | 用户可见的最终回复；`intermediate=true` 时该字段缺失属正常 |
+| `intermediate` | bool | 这一轮只是过程（结论在派发出去的后台轮次里），调用方不应把它当最终答复 |
+| `team` | string | 产生这条回复的 Team，多 Team 轮次用它做归属 |
 | `records` | array | 可选的记录摘要 |
+| `usage` | object | 本轮 token 用量；恒存在，全 0 表示未统计 |
+| `pending_approvals` | array | 停在 `waiting_approval` 时的待审批项（含 `approval_id`），见 §6.3 |
 | `error` | string | 可选的业务错误信息 |
 
 ### 7.1 Session ID 约定
@@ -612,10 +620,11 @@ approve(session_id, approval_id, approved, reason?) -> turn result
 }
 ```
 
-`data` 由 `turnErrorData`（`cmd/server/jsonrpc.go`）填充，只可能含四个字段：
-`session_id`、`flow_turn_id`、`status`、`approval_id`，且每个字段仅在有值时出现。
-**`retryable` 当前不返回**，不要依赖它；是否可重试请从 `code` 和 `status` 判断
-（例如 `-32002` + `waiting_approval` 表示应先处理审批再重试）。
+`turn` / `approve` 业务错误的 `data` 由 `turnErrorData`（`cmd/server/jsonrpc.go`）填充，
+可能含 `session_id`、`flow_turn_id`、`status`、`approval_id`，每个字段仅在有值时出现；
+`-32601` 的 `data` 是 `{"method": <请求的 method>}`，`-32700` / `-32600` / `-32602` 的
+`data` 为空。**`retryable` 当前不返回**，不要依赖它；是否可重试请从 `code` 和 `status`
+判断（例如 `-32002` + `waiting_approval` 表示应先处理审批再重试）。
 
 建议错误码：
 
@@ -627,7 +636,7 @@ approve(session_id, approval_id, approved, reason?) -> turn result
 | `-32602` | 参数错误 |
 | `-32001` | FlowTurn 执行失败 |
 | `-32002` | Session 不存在或状态不允许 |
-| `-32003` | Runtime 配置或初始化失败 |
+| `-32003` | 本次构建不支持审批恢复（`approve` 时 Runtime 未实现审批接口） |
 | `-32004` | 请求被取消 |
 
 当前实现中的触发条件：
@@ -635,12 +644,12 @@ approve(session_id, approval_id, approved, reason?) -> turn result
 | 错误码 | 触发场景 |
 |---|---|
 | `-32700` | 单行输入不是合法 JSON |
-| `-32600` | `jsonrpc` 不是 `2.0`、`id` 为空或非法、method 为空 |
-| `-32601` | method 不是 `turn` 或 `approve` |
+| `-32600` | `jsonrpc` 不是 `2.0`、`id` 显式为 `null` 或非法、method 为空。**缺省 `id` 不算错误**：按 JSON-RPC 通知处理且不返回响应 |
+| `-32601` | method 不是 `turn` 或 `approve`；`data` 里带回 `method` |
 | `-32602` | `params` 缺失、不是对象；`turn` 的 `input` 为空；`approve` 的 `session_id` / `approval_id` 为空或 `approved` 未给出 |
-| `-32001` | FlowTurn 执行失败（默认） |
+| `-32001` | FlowTurn 执行失败（默认码，含 `approval_id` 不匹配待审批项） |
 | `-32002` | Session 不存在，或状态不允许本次操作：`turn` 撞上 `waiting_approval` / `waiting_tool`，或 `approve` 时会话不在 `waiting_approval` |
-| `-32003` | Runtime 配置或初始化失败；`approve` 时 Runtime 未实现审批接口 |
+| `-32003` | 本次构建不支持审批恢复（`approve` 时 Runtime 未实现审批接口）。启动期配置/初始化失败不会发帧，而是 `os.Exit(1)`，调用方看到的是管道 EOF |
 | `-32004` | FlowTurn 被取消（错误链中包含 `context.Canceled`） |
 
 `waiting_approval` 状态下发送普通 `turn` 会被拒绝并返回 `-32002`，错误信息的
@@ -836,18 +845,15 @@ core.Event{
 
 第一期不需要把二进制内容直接塞进 JSON-RPC 请求。
 
-## 11. 第一版不做实时流，但保留扩展点
+## 11. 进度通知（已实现）
 
-第一期：
+`turn` 执行期间，引擎在同一条 stdout 上追加 JSON-RPC Notification：`method` 为
+`progress`，**没有 `id`**，与响应共用同一把写锁，因此不会出现半行响应。
+调用方按「有 `id` 的是响应、无 `id` 的是通知」分流；不需要进度的客户端忽略即可，
+`turn` 的最终响应不变。投影实现在 `cmd/server/progress.go`。
 
-```text
-一个 turn 请求
-一个 turn 响应
-```
-
-不发送中间进度。
-
-后续可以增加 JSON-RPC Notification：
+一条通知的 `params` 是**扁平字段**（没有嵌套的 message/block 容器），基础字段恒有
+`session_id`、`flow_turn_id`、`seq`、`event_id`、`type`：
 
 ```json
 {
@@ -856,39 +862,33 @@ core.Event{
   "params": {
     "session_id": "fs_123456",
     "flow_turn_id": "ft_123456",
-    "type": "text",
-    "content": "正在检查 .gitignore..."
+    "seq": 42,
+    "event_id": "ev_123456",
+    "type": "assistant",
+    "round": 3,
+    "content": [{"type": "text", "text": "正在检查 .gitignore..."}],
+    "model": "gpt-4o-mini"
   }
 }
 ```
 
-Team 进度：
+`type` 的完整取值（`cmd/server/progress.go:19-32`）：
 
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "progress",
-  "params": {
-    "session_id": "fs_123456",
-    "flow_turn_id": "ft_123456",
-    "type": "team",
-    "team_id": "diagnose",
-    "status": "started"
-  }
-}
-```
+| type | 何时发出 | 主要字段 |
+|------|----------|----------|
+| `flow_turn_started` / `flow_turn_completed` | 一轮开始 / 结束 | `status`、`error`；结束时还带 `reply`、`team`、`origin`（唤醒来源，如 `mailbox`）、`intermediate`、`deliveries` |
+| `team_turn_started` / `team_turn_completed` | Team 轮次开始 / 结束 | `status`、`usage` |
+| `call_started` / `call_completed` | 一次 Call（agent / command / webhook）开始 / 结束 | `call_type`、`call_id`、`agent_id`；完成时还有 `status`、`error`、`tool_calls`、`usage` |
+| `assistant` | 模型回复 | `content[]`（块 `type` 为 `text` 或 `tool_use`）、`model` |
+| `tool_use` / `tool_result` | 工具调用与结果 | `tool_use_id`、`name`；调用带 `input`，结果带 `content` 与 `is_error`（失败时 `status:"failed"`，Bash 另有 `exit_code`） |
+| `record_published` / `record_consumed` | SharedRecord 产出 / 被消费 | `name`、`summary` |
+| `status` | 进入 `idle` / `waiting_tool` / `waiting_approval` | `status`、`reply`、`intermediate` |
 
-后续通知类型可以包括：
+单条通知有显示预算（`progress.go:36-43`）：输入 8 KiB、结果与文本各 32 KiB、
+整条通知 64 KiB，超出以 `…[truncated]` / `[truncated]` 截断。这是给聊天卡片渲染的
+预算，不是传输上限。
 
-```text
-progress
-tool_started
-tool_completed
-record_published
-idle
-```
-
-这些是 Heron 自定义扩展，不属于第一期必须协议。
+`intermediate: true` 表示这一轮只是过程（结论在下游），调用方不应把它转成用户可见结论。
 
 建议扩展原则：
 
@@ -926,9 +926,10 @@ heron-connect 保存 session_id
   → Heron 从 flow.jsonl / team.jsonl / agent.jsonl 恢复 FlowSession
   → 继续处理新输入
 
-轮次正常结束的会话（idle）可以一直复用同一个 session_id 继续对话。
-只有上一次响应的状态是 `failed` 或 `cancelled` 时，才不要把该 ID 当作
-永久聊天线程 ID；下一次新任务应省略 `session_id`。
+轮次正常结束的会话（`idle`）可以一直复用同一个 `session_id` 继续对话。
+`failed` / `cancelled` / `completed` 描述的是**某一轮**的结果，不是会话作废：
+除 `waiting_approval` / `waiting_tool` 需要先处理门禁外，任何状态都可以继续用同一个
+`session_id` 发下一轮（`internal/runtime/flow/runtime.go` 的 `checkNewTurnAllowed`）。
 ```
 
 ### 12.1 传输 Schema

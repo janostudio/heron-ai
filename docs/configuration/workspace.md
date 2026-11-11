@@ -2,7 +2,7 @@
 
 Workspace 决定 agent 操作"项目文件/命令"的执行后端。默认本地（local），可配置远程 SSH 执行。
 
-核心边界（见 `docs/generic-engine/28-remote-workspace.md`）：
+核心边界（远程 workspace 的完整设计尚未单独成文，边界以代码为准）：
 
 - **仅"执行"远程化**：Read/Write/Bash/Grep/Glob 等 workspace 工具操作远程；引擎自身状态（`.agents/data/sessions/<id>/{flow,team,agent}.jsonl`、evidence、knowledge、state、logging）始终在本地。
 - **工具分两类**：workspace 工具（操作项目，可远程）vs 引擎工具（Todo/State/Spawn/Ask/Web，操作 agent 自身，始终本地）。
@@ -10,6 +10,9 @@ Workspace 决定 agent 操作"项目文件/命令"的执行后端。默认本地
 ## 三级继承
 
 workspace 配置可挂在 **flow / team / agent** 任意一级，继承优先级 **agent > team > flow**，都不配置则默认 `local`。
+
+同一级出现多处声明时必须**完全一致**（host / port / user / root / key_path 任一不同），
+否则整份配置加载失败并报 `conflicting <level>-level workspaces`——不会「高优先级赢」。
 
 ## 配置格式
 
