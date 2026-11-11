@@ -41,7 +41,8 @@ teams:
 ```
 
 - `resident`（默认）：一个共享会话。**串行** —— 同一时刻只跑一轮。
-- `per_task`：每个任务一个独立实例。**可并行**，受 `max_active_team_sessions`（默认 8）限制。
+- `per_task`：每个任务一个独立实例。**可并行**，受 `max_active_team_sessions` 限制
+  （默认 8；本仓库设为 32，见 §6）。
 
 `entry` 不能用 `per_task`：它没有派发者，没人能给它建实例。引擎在加载配置时就拒绝
 （`pkg/types/domain.go:296-303`）。
@@ -81,6 +82,10 @@ busy 标记的 key 是 `{sessionID, teamID, seq}`（`dispatch.go:168`）。于�
 
 ## 4. 一次真实的撞车
 
+下面是改配置之前的现场（协调团队当时是 resident）。按 §6 把协调团队也改成 `per_task`
+之后，这个场景不再发生 —— 保留它是因为撞车时的**后果**（回合判失败、任务却做完了）
+仍然成立，而那条路径没有随配置消失。
+
 假设入口团队已经把两个任务都交给同一个协调团队，后者是 resident：
 
 ```
@@ -106,6 +111,9 @@ t+164s  turn-2 仍然以 failed 收尾
 
 协调团队的职责说明常常写着"可以并行派发给多个执行团队"。但执行团队里只有显式配了
 `per_task` 的才真的能并行。**并行派同一个 resident team 两次，第二次必然被拒。**
+
+本仓库原先只有 `dev` 一个 `per_task`，其余 8 个执行团队和协调团队都是 resident ——
+职责说明承诺的并行能力只兑现了 1/9。现已按 §6 改为除入口外全部 `per_task`。
 
 ### ② 同一件事有两条路径、两种策略
 
@@ -149,12 +157,27 @@ if reasons, noneSucceeded := failedTeamCalls(result.TeamResults); noneSucceeded 
 
 ### 配置层
 
-执行型团队按"是否会被同时派多个任务"决定 lifecycle：
-
-- 会被并行派发 → `per_task`，同时要求调用方带 `task_key`
-- 只在会话级协调 → 保持 `resident`
-
 判定依据不是"它属于哪类角色"，而是"同一个 Flow session 里会不会同时有两个它的任务"。
+
+本仓库的实际选择是**除入口外全部 `per_task`**：
+
+| team | lifecycle | 理由 |
+|---|---|---|
+| frontdesk | resident | 入口，引擎强制；且它是唯一用户出口，必须单实例 |
+| dev-lead 及其余 9 个 | per_task | 用户可能连续发多个任务，任何一个 team 成为串行点都会把后面的任务堵住 |
+
+两个前提必须同时满足，否则引擎拒绝加载：
+
+- 入口不能 `per_task` —— 没有派发者，没人给它建实例
+- 每个 `per_task` team 必须 `inputs.user_message: true` —— 否则派发的任务文本会被丢掉
+
+`per_task` 的实例不会自动关闭，未关闭的实例计入 `runtime.max_active_team_sessions`。
+默认值是 8，而本配置有 10 个 `per_task` team，一次完整任务链路就可能超限
+（`session already has 8 active task instances`）。因此 `.agents/settings.json` 把它设为 32。
+
+代价要说清：协调团队也 `per_task` 之后，**两个任务各有一个协调实例，进度不再汇入同一处**。
+并发度因此下移到了 frontdesk —— 它仍是 resident，两个协调实例的结果都要回到它。
+它是新的串行点，只是它只做转述，不参与编排，所以堵住的时长远小于协调团队。
 
 ### 引擎层
 
@@ -169,12 +192,17 @@ if reasons, noneSucceeded := failedTeamCalls(result.TeamResults); noneSucceeded 
 把 drain 的触发条件从"上一个 turn 结束"改成"目标 team 空闲"，或者让 drain 在撞车时把
 消息退回队列。前者需要引擎知道 team 级空闲；后者改动更小：撞车时不留失败，留 pending。
 
-## 7. 不该改的部分
+## 7. 已经改掉的与仍然要改的
 
-**入口团队保持 resident**。它承载会话级的协调状态，分裂实例会丢上下文。
+**已经改掉：除入口外全部 `per_task`**（见 §6 配置层）。这是唯一能不碰引擎就让"第二个任务
+不失败"的办法 —— 它不改变撞车时的策略，只是让撞车不再发生。
 
-**协调团队串行处理用户任务是合理的**。它的 state 与 records 是会话级的，同一时刻只应该
-有一个"当前进度"。真正需要并行的是它派下去的执行团队，不是它自己。
+**入口团队必须保持 resident**。引擎在加载配置时就拒绝入口用 `per_task`，理由是它没有派发者。
 
-所以正确的期待是：**用户发两个任务 → 第二个排队等待第一个真正做完**，而不是"两个协调
-团队实例同时跑"。这需要的是排队语义的修正，不是让协调团队并发。
+**仍然要改的是引擎的两个策略问题**，它们与 lifecycle 无关，改配置消不掉：
+
+1. **撞车策略不一致**：`activate` 路由撞车排队，`Team` 工具撞车直接失败。即使全部
+   `per_task`，`max_active_team_sessions` 超限时走的仍是"报错回"这条路径。
+2. **一次失败判死整轮**：`pendingFailure` 分支缺少"本回合有成功派发就不算失败"的保护。
+
+所以 §6 引擎层的两条建议仍然有效，只是优先级下降：它们是兜底，不是主路径。
