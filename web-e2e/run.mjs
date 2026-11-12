@@ -482,6 +482,14 @@ await run("record: multiple agents", async () => {
   await page.waitForSelector(".wf-row", { timeout: 3000 });
   check("时序视图列出 team 与 call", await page.locator(".wf-row").count() >= 5,
     await page.locator(".wf-row").count());
+
+  // The completed event carries its result under team_result.turn. Reading only
+  // team_turn left every finished Team row with no end time, so it rendered as
+  // 运行中 forever.
+  const wfTimes = await page.locator(".wf-row:not(.missing) .wf-time").allInnerTexts();
+  check("时序的 team 行有真实时长", wfTimes.every((t) => t !== "运行中"), wfTimes.join(" | "));
+  check("时序至少一行带时长", wfTimes.some((t) => /\d/.test(t)), wfTimes.join(" | "));
+
   check("时序区分 team 条与 call 条",
     (await page.locator(".wf-team").count()) >= 4 && (await page.locator(".wf-call").count()) >= 1);
   check("时序条带宽度", await page.locator(".wf-track i").first().evaluate((node) => node.style.width) !== "");
@@ -626,6 +634,15 @@ await run("run board: configured graph", async () => {
   const fix = await box('.run-node[data-team="fixer"]');
   check("入口在最左", desk.left < plan.left, JSON.stringify({ desk: desk.left, planner: plan.left }));
   check("被派发的 team 在右侧一列", plan.left < fix.left, JSON.stringify({ planner: plan.left, fixer: fix.left }));
+  await page.click('.seg button[data-mode="waterfall"]');
+  await page.waitForSelector(".wf-row.missing", { timeout: 3000 });
+  const missingLabels = await page.locator(".wf-row.missing .wf-label").allInnerTexts();
+  check("未参与行用 call 名而不是 agent 名",
+    missingLabels.includes("fixer / patch") && !missingLabels.includes("fixer / fixer"),
+    missingLabels.join(" | "));
+  await page.click('.seg button[data-mode="run"]');
+  await page.waitForSelector(".run-canvas", { timeout: 3000 });
+
   const canvas = await page.locator(".run-canvas").evaluate((node) => ({
     width: node.getBoundingClientRect().width,
     height: node.getBoundingClientRect().height,

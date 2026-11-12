@@ -269,11 +269,13 @@
       "team_id": "default",
       "created_at": "2026-11-03T02:10:04.000Z",
       "payload": {
-        "team_turn": {
-          "id": "tt_a",
-          "team_id": "default",
-          "status": "completed",
-          "started_at": "2026-11-03T02:10:00.500Z"
+        "team_result": {
+          "turn": {
+            "id": "tt_a",
+            "team_id": "default",
+            "status": "completed",
+            "started_at": "2026-11-03T02:10:00.500Z"
+          }
         }
       }
     },
@@ -353,11 +355,13 @@
       "team_id": "probe",
       "created_at": "2026-11-03T02:10:32.000Z",
       "payload": {
-        "team_turn": {
-          "id": "tt_b",
-          "team_id": "probe",
-          "status": "completed",
-          "started_at": "2026-11-03T02:10:05.000Z"
+        "team_result": {
+          "turn": {
+            "id": "tt_b",
+            "team_id": "probe",
+            "status": "completed",
+            "started_at": "2026-11-03T02:10:05.000Z"
+          }
         }
       }
     },
@@ -400,11 +404,13 @@
       "team_id": "facts",
       "created_at": "2026-11-03T02:10:41.000Z",
       "payload": {
-        "team_turn": {
-          "id": "tt_c",
-          "team_id": "facts",
-          "status": "completed",
-          "started_at": "2026-11-03T02:10:33.000Z"
+        "team_result": {
+          "turn": {
+            "id": "tt_c",
+            "team_id": "facts",
+            "status": "completed",
+            "started_at": "2026-11-03T02:10:33.000Z"
+          }
         }
       }
     },
@@ -447,11 +453,13 @@
       "team_id": "repo-info",
       "created_at": "2026-11-03T02:10:51.000Z",
       "payload": {
-        "team_turn": {
-          "id": "tt_d",
-          "team_id": "repo-info",
-          "status": "completed",
-          "started_at": "2026-11-03T02:10:42.000Z"
+        "team_result": {
+          "turn": {
+            "id": "tt_d",
+            "team_id": "repo-info",
+            "status": "completed",
+            "started_at": "2026-11-03T02:10:42.000Z"
+          }
         }
       }
     },
@@ -494,11 +502,13 @@
       "team_id": "analyze",
       "created_at": "2026-11-03T02:10:54.000Z",
       "payload": {
-        "team_turn": {
-          "id": "tt_e",
-          "team_id": "analyze",
-          "status": "completed",
-          "started_at": "2026-11-03T02:10:52.000Z"
+        "team_result": {
+          "turn": {
+            "id": "tt_e",
+            "team_id": "analyze",
+            "status": "completed",
+            "started_at": "2026-11-03T02:10:52.000Z"
+          }
         }
       }
     },

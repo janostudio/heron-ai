@@ -73,8 +73,8 @@
     return el("a", { href: href, "data-link": "1" }, label);
   }
 
-  function tag(label, kind) {
-    return el("span", { class: "tag" + (kind ? " " + kind : "") }, label);
+  function tag(label, kind, title) {
+    return el("span", { class: "tag" + (kind ? " " + kind : ""), title: title || "" }, label);
   }
 
   /* ---------- formatting ---------- */
@@ -832,7 +832,7 @@
       ["Team \u8f6e\u6b21", facts.team_turns || 0],
       ["Call", facts.calls || 0],
       ["\u5de5\u5177\u8c03\u7528", (facts.tool_calls || 0) + (facts.tool_failures ? " \u00b7 " + facts.tool_failures + " \u5931\u8d25" : "")],
-      ["Token", tokenCount(facts.input_tokens) + " / " + tokenCount(facts.output_tokens)],
+      ["Token \u5165 / \u51fa", tokenCount(facts.input_tokens) + " / " + tokenCount(facts.output_tokens)],
       ["\u6a21\u578b", (facts.models || []).join(", ") || "\u2014", "v-model"]
     ];
     var strip = el("div", { class: "kpi" });
@@ -1780,7 +1780,11 @@
     var head = el("div", { class: "turn-head" },
       el("span", { class: "t", title: turn.id }, userTurn ? "回合" : "执行轮"));
     if (turn.origin === "wakeup") { head.appendChild(tag("定时检查", "warn")); }
-    if (turn.intermediate) { head.appendChild(tag("\u4e2d\u95f4\u56de\u5408")); }
+    // "中间回合" is engine vocabulary for "this reply is a step, not the answer".
+    // What the reader needs to know is that the work was handed on.
+    if (turn.intermediate) {
+      head.appendChild(tag("已派发", null, "这一轮只是把活派下去，结果稍后回到这里"));
+    }
     if (turn.error && String(turn.error).toLowerCase().indexOf("cancel") >= 0) {
       head.appendChild(tag("\u5df2\u4e2d\u65ad", "warn"));
     }
@@ -2334,13 +2338,19 @@
     events.forEach(function (event) {
       var payload = event.payload || {};
       if (event.type === "session.team_turn.started" || event.type === "session.team_turn.completed") {
-        var teamTurn = payload.team_turn || {};
+        // The completed event carries its result under team_result.turn, the
+        // started one under team_turn. Reading only the latter left every Team
+        // row with no end time, so a finished turn rendered as 运行中.
+        var teamTurn = payload.team_turn || (payload.team_result || {}).turn || {};
         var teamID = teamTurn.id || "";
         if (!teamID) { return; }
         var team = teamTurn.team_id || event.team_id || "";
         var teamSlot = slot(teamID, "team " + (team || "?"));
-        if (event.type === "session.team_turn.started") { teamSlot.start = event.created_at || teamSlot.start; }
-        else { teamSlot.end = event.created_at || teamSlot.end; }
+        if (event.type === "session.team_turn.started") {
+          teamSlot.start = event.created_at || teamSlot.start;
+        } else {
+          teamSlot.end = teamTurn.finished_at || event.created_at || teamSlot.end;
+        }
         return;
       }
       if (event.type === "session.agent_turn.started" || event.type === "session.agent_turn.completed") {
@@ -2382,7 +2392,14 @@
       if (seenTeams[team.name]) { return; }
       rows.push({ label: "team " + team.name, team: team.name });
       (team.calls || []).forEach(function (call) {
-        rows.push({ label: team.name + " / " + (call.agent || call.name), team: team.name });
+        // The row names the Call, the same word the Run view and the tree use.
+        // The agent it would run is the tooltip: "check / test-runner" reads
+        // like a Call named test-runner, which it is not.
+        rows.push({
+          label: team.name + " / " + call.name,
+          title: call.agent ? call.name + " 由 " + call.agent + " 执行" : call.name,
+          team: team.name
+        });
       });
     });
     return rows;
@@ -2416,7 +2433,7 @@
         var left = isNaN(start) ? 0 : ((start - origin) / total) * 100;
         var width = (isNaN(start) || isNaN(end)) ? 1.5 : Math.max(1.5, ((end - start) / total) * 100);
         var isTeam = span.id.indexOf(":") < 0;
-        wrap.appendChild(el("div", { class: "wf-row" },
+        wrap.appendChild(el("div", { class: "wf-row" + (isTeam ? "" : " wf-child") },
           el("span", { class: "wf-label", title: span.id }, span.label),
           el("span", { class: "wf-track" },
             el("i", {
@@ -2434,7 +2451,7 @@
     }
     missing.forEach(function (row) {
       wrap.appendChild(el("div", { class: "wf-row missing" },
-        el("span", { class: "wf-label", title: row.label }, row.label),
+        el("span", { class: "wf-label", title: row.title || row.label }, row.label),
         el("span", { class: "wf-track missing" }),
         el("span", { class: "wf-time" }, "\u672a\u53c2\u4e0e")));
     });
@@ -2467,6 +2484,31 @@
     var detail = el("div", { class: "detail", id: "node-detail" },
       el("span", { class: "muted" }, "\u70b9\u4e00\u4e2a\u8282\u70b9\u770b\u8be6\u60c5\u3002"));
 
+    /* Child flow turns are not entry turns: they emit no session.turn.started,
+     * so the graph has no timestamps for them and their duration column stayed
+     * empty. The events underneath them do have times, so the span is taken from
+     * the node's own seq range. */
+    var eventTimes = {};
+    (record.events || []).forEach(function (event) {
+      if (!event.created_at) { return; }
+      var at = new Date(event.created_at).getTime();
+      if (isNaN(at)) { return; }
+      [event.flow_turn_id, event.team_turn_id, event.call_turn_id].forEach(function (id) {
+        if (!id) { return; }
+        var span = eventTimes[id] || (eventTimes[id] = { start: at, end: at });
+        if (at < span.start) { span.start = at; }
+        if (at > span.end) { span.end = at; }
+      });
+    });
+
+    function nodeDuration(node) {
+      var span = eventTimes[node.id];
+      if (span && span.end > span.start) {
+        return elapsed(new Date(span.start).toISOString(), new Date(span.end).toISOString()) || "";
+      }
+      return duration(node);
+    }
+
     function addNode(node, depth, branch) {
       var children = childrenOf[node.id] || [];
       var row = el("div", {
@@ -2478,11 +2520,13 @@
         el("span", { class: "branch" }, branch),
         el("span", { class: "tw" + (children.length ? "" : " leaf") }),
         el("span", null,
-          el("span", { class: "kind" }, node.kind),
+          // "team_turn dev-lead" says the same thing twice: the label already
+          // names the Team. The kind chip stays where it adds information.
+          node.kind === "team_turn" || node.kind === "call_turn"
+            ? null : el("span", { class: "kind" }, node.kind),
           labelForNode(node),
           el("span", { class: "id" }, shortId(node.id))),
-        el("span", { class: "time" }, duration(node)),
-        el("span", { class: "tok" }, ""),
+        el("span", { class: "time" }, nodeDuration(node)),
         statusDot(node.status));
       tree.appendChild(row);
 
@@ -2519,7 +2563,7 @@
         el("div", { class: "muted" }, "\u914d\u7f6e\u4e2d\u5b58\u5728\u3001\u672c\u6b21\u4f1a\u8bdd\u672a\u53c2\u4e0e\uff1a"));
       var list = el("div", { class: "tree-missing-list" });
       missing.forEach(function (row) {
-        list.appendChild(el("span", { class: "tree-missing-item" }, row.label));
+        list.appendChild(el("span", { class: "tree-missing-item", title: row.title || row.label }, row.label));
       });
       block.appendChild(list);
       wrap.appendChild(block);
