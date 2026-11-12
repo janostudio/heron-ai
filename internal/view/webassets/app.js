@@ -12,6 +12,21 @@
   "use strict";
 
   var app = document.getElementById("app");
+
+  /* The session page pins its header, tab strip and composer; only the record
+   * pane scrolls. Every "jump to the newest" therefore moves that pane, never
+   * the window. */
+  function recordPane() { return document.getElementById("record-body"); }
+
+  function scrollRecordToBottom() {
+    var pane = recordPane();
+    if (pane) { pane.scrollTop = pane.scrollHeight; return; }
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  function setRecordView(inRecord) {
+    app.className = inRecord ? "app record-view" : "app";
+  }
   var sidebar = document.getElementById("sidebar");
   var currentRecord = null;
   var currentMode = "chat";
@@ -405,6 +420,7 @@
   function renderLogin(message) {
     if (sidebar) { sidebar.classList.add("hidden"); }
     clear(app);
+    setRecordView(false);
     var input = el("input", {
       type: "password",
       class: "token-input",
@@ -463,6 +479,7 @@
 
   function fail(message) {
     clear(app);
+    setRecordView(false);
     app.appendChild(el("div", { class: "error-box" }, message));
     app.appendChild(el("p", null, link("/", "\u2190 \u8fd4\u56de\u4f1a\u8bdd\u5217\u8868")));
   }
@@ -660,6 +677,7 @@
 
   function renderWelcome() {
     clear(app);
+    setRecordView(false);
     app.appendChild(el("div", { class: "welcome" },
       el("h1", null, "heron-ai"),
       el("p", { class: "muted" }, "\u4ece\u5de6\u4fa7\u9009\u4e00\u4e2a\u4f1a\u8bdd\uff0c\u6216\u65b0\u5efa\u4e00\u4e2a\u3002")));
@@ -679,21 +697,32 @@
         if (!response.ok) { throw new Error("HTTP " + response.status); }
         return response.json();
       })
-      .then(function (record) { paintRecord(sessionID, record); })
+      .then(function (record) {
+        /* The topology request is optional: an older server answers 404/501 and
+         * the board falls back to the event-derived view it used before. */
+        return apiFetch("/api/topology?session_id=" + encodeURIComponent(sessionID))
+          .then(function (response) {
+            return response.ok ? response.json() : null;
+          })
+          .catch(function () { return null; })
+          .then(function (topology) { paintRecord(sessionID, record, topology); });
+      })
       .catch(function (error) {
         if (error && error.unauthorized) { return; }
         fail("\u8bfb\u53d6\u4f1a\u8bdd\u8bb0\u5f55\u5931\u8d25\uff1a" + error.message);
       });
   }
 
-  function paintRecord(sessionID, record) {
+  function paintRecord(sessionID, record, topology) {
     currentRecord = record;
+    topologyState = topology || null;
     resetRunState(record);
     // A conversation with nothing in it renders the same chrome as one with
     // history: same header, same counters at zero, no messages. Saying "新会话"
     // and putting the caret in the box is what makes the arrival visible.
     var empty = isEmptyRecord(record);
     clear(app);
+    setRecordView(true);
     var top = el("div", { class: "top" },
       el("h1", null, "heron-ai"),
       el("span", { class: "crumb" }, link("/", "\u2190 \u4f1a\u8bdd\u5217\u8868")),
@@ -706,12 +735,12 @@
         "\u8fd8\u6709 " + record.truncated + " \u6761\u4e8b\u4ef6\u672a\u52a0\u8f7d\uff08\u5355\u6b21\u4e0a\u9650\uff09\u3002\u53ef\u52a0 ?limit= \u63d0\u9ad8\u3002"));
     }
 
-    app.appendChild(kpiStrip(record.facts));
     app.appendChild(timeline(record.events));
 
     app.appendChild(el("div", { class: "modes" },
       el("div", { class: "seg", role: "group" },
         modeButton("chat", "\u5bf9\u8bdd", true),
+        modeButton("overview", "概览", false),
         modeButton("run", "\u8fd0\u884c", false),
         modeButton("waterfall", "\u65f6\u5e8f", false),
         modeButton("tree", "\u7ed3\u6784", false),
@@ -723,10 +752,13 @@
     showMode(body, "chat");
 
     app.appendChild(renderComposer(sessionID));
+    // The stream subscribed while the transcript rendered: paint the running
+    // state onto the composer that only exists now.
+    syncTurnChrome();
     if (empty) { focusComposer(); }
     if (scrollToBottom) {
       scrollToBottom = false;
-      window.scrollTo(0, document.body.scrollHeight);
+      scrollRecordToBottom();
     }
   }
 
@@ -741,6 +773,10 @@
         other.setAttribute("aria-pressed", other === button ? "true" : "false");
       });
       showMode(document.getElementById("record-body"), mode);
+      // Switching views must show the view's beginning: keeping the previous
+      // scroll offset lands the new view half-way through (or past its end).
+      var pane = recordPane();
+      if (pane) { pane.scrollTop = 0; }
     });
     return button;
   }
@@ -752,9 +788,14 @@
     stopSessionStream();
     clear(body);
     var hint = document.getElementById("mode-hint");
+    if (mode === "overview") {
+      body.appendChild(kpiStrip(currentRecord.facts));
+      if (hint) { hint.textContent = "概览：本会话的回合、执行量与 token 消耗，全部由下面的事件算出。"; }
+      return;
+    }
     if (mode === "run") {
       body.appendChild(renderRunners());
-      if (hint) { hint.textContent = "\u8fd0\u884c\uff1a\u5f53\u524d\u54ea\u4e9b team / agent \u5728\u8dd1\u3002"; }
+      if (hint) { hint.textContent = "\u8fd0\u884c\uff1aFlow \u914d\u7f6e\u7684 team / agent\uff0c\u4ee5\u53ca\u672c\u6b21\u4f1a\u8bdd\u54ea\u4e9b\u5728\u8dd1\u3002"; }
       return;
     }
     if (mode === "waterfall") {
@@ -764,12 +805,12 @@
     }
     if (mode === "tree") {
       body.appendChild(renderTree(currentRecord));
-      if (hint) { hint.textContent = "\u7ed3\u6784\uff1a\u56de\u5408 \u2192 Team \u2192 Call \u2192 Agent\uff0c\u70b9\u8282\u70b9\u770b\u5b83\u540d\u4e0b\u7684\u4e8b\u4ef6\u3002"; }
+      if (hint) { hint.textContent = "结构：回合 → 执行轮 → Team → Call → Agent；执行轮是这次提问派生出来的执行，点节点看它名下的事件。"; }
       return;
     }
     if (mode === "raw") {
       body.appendChild(renderRaw(currentRecord));
-      if (hint) { hint.textContent = "\u539f\u59cb\uff1a\u5408\u5e76\u4e09\u5c42\u540e\u7684\u5b8c\u6574\u4e8b\u4ef6\u5217\u8868\uff0c\u70b9\u5f00\u770b payload\u3002"; }
+      if (hint) { hint.textContent = "\u539f\u59cb\uff1a\u5408\u5e76\u4e09\u5c42\u540e\u7684\u5b8c\u6574\u4e8b\u4ef6\u5217\u8868\uff08\u53ea\u542b\u5df2\u53d1\u751f\u7684\u4e8b\u4ef6\uff09\uff0c\u70b9\u5f00\u770b payload\u3002"; }
       return;
     }
     body.appendChild(renderChat(currentRecord));
@@ -781,18 +822,27 @@
   function kpiStrip(facts) {
     facts = facts || {};
     var items = [
-      ["\u56de\u5408", facts.turns || 0],
+      // 用户回合，不是 flow turn 的总数：一次用户消息会让引擎再跑出内部回合
+      // （派给下游 team 的那一轮、工具结果回来后的续跑），把它们算进“回合”会让
+      // 一句提问看起来像四句。
+      ["回合", facts.turns || 0, "", facts.internal_turns || 0],
+      // 回合下面挂的是执行轮：派给下游 team 的那一轮，以及工具结果回来后的续跑
       ["Team \u8f6e\u6b21", facts.team_turns || 0],
       ["Call", facts.calls || 0],
       ["\u5de5\u5177\u8c03\u7528", (facts.tool_calls || 0) + (facts.tool_failures ? " \u00b7 " + facts.tool_failures + " \u5931\u8d25" : "")],
       ["Token", tokenCount(facts.input_tokens) + " / " + tokenCount(facts.output_tokens)],
-      ["\u6a21\u578b", (facts.models || []).join(", ") || "\u2014"]
+      ["\u6a21\u578b", (facts.models || []).join(", ") || "\u2014", "v-model"]
     ];
     var strip = el("div", { class: "kpi" });
     items.forEach(function (item) {
       strip.appendChild(el("div", null,
         el("div", { class: "k" }, item[0]),
-        el("div", { class: "v" }, String(item[1]))));
+        el("div", { class: "v" + (item[2] ? " " + item[2] : "") },
+          String(item[1]),
+          item[3] ? el("span", {
+            class: "v-note",
+            title: "本次会话的内部回合：派给下游 team 的那一轮，以及工具结果回来后的续跑"
+          }, " +" + item[3] + " 执行轮") : null)));
     });
     return strip;
   }
@@ -975,7 +1025,7 @@
       pending = [];
       refreshChips();
       setBusy(true, "\u5df2\u53d1\u9001\uff0c\u6b63\u5728\u6267\u884c\u2026\u8fc7\u7a0b\u4f1a\u5b9e\u65f6\u51fa\u73b0\u5728\u5bf9\u8bdd\u91cc\u3002");
-      window.scrollTo(0, document.body.scrollHeight);
+      scrollRecordToBottom();
 
       /* 202 means accepted, not done: the turn's events arrive on the session
        * stream like any other turn. The composer is therefore free as soon as
@@ -1327,8 +1377,43 @@
   /* The stop button and the running hint follow the turn, not the composer's
    * sending state: an accepted message frees the composer at once, while the
    * turn it started may run for minutes. */
+  /* Turn events that end a turn. session.turn.idle is "waiting for the next
+   * message", which is the end of the turn as far as this page is concerned. */
+  function isTurnEndType(type) {
+    return type === "session.turn.idle" || type === "session.turn.completed" ||
+      type === "session.turn.waiting_tool" || type === "session.turn.waiting_approval";
+  }
+
+  /* Does the record still hold a turn open?
+   *
+   * The events decide, not the session status: status is written when a turn
+   * starts and rewritten when it ends, so a process killed mid-turn leaves it
+   * "running" for good — and with the status as the source, the stop button then
+   * never goes away. The events are what the runtime folds anyway: a turn is
+   * active from its started event until its terminal one. */
+  function turnsOpenIn(events) {
+    var open = {};
+    (events || []).forEach(function (event) {
+      if (!event || !event.type) { return; }
+      var id = event.flow_turn_id || "flow";
+      if (event.type === "session.turn.started") { open[id] = true; return; }
+      if (isTurnEndType(event.type)) { delete open[id]; }
+    });
+    return Object.keys(open).length > 0;
+  }
+
   function markTurnActive(delta) {
     activeTurns = Math.max(0, activeTurns + delta);
+    syncTurnChrome();
+  }
+
+  /* Paints the running state onto the chrome.
+   *
+   * Split out from markTurnActive because of the render order: the record view
+   * renders the transcript (and subscribes the stream) before the composer
+   * exists, so the first markTurnActive has no status line to write to. The
+   * composer render calls this again. */
+  function syncTurnChrome() {
     var active = activeTurns > 0;
     document.body.classList.toggle("turn-active", active);
     // The hint shares the status line with attachment and send errors, so only
@@ -1370,9 +1455,13 @@
     activeTurns = 0;
     document.body.classList.remove("turn-active");
     // A turn that was already running when the page loaded will not emit
-    // another started event — its started is in the record — so the counter has
-    // to be primed from the session status, not from the stream.
-    if (sessionStatus === "running") { markTurnActive(1); }
+    // another started event — its started is in the record — so the counter is
+    // primed from the record. A terminal session status still wins in the other
+    // direction: it means the session is over, whatever the fold holds open
+    // (Cancel, for one, returns before the terminal event is written).
+    var sessionOver = sessionStatus === "completed" || sessionStatus === "failed" ||
+      sessionStatus === "cancelled";
+    if (!sessionOver && turnsOpenIn(currentRecord.events || [])) { markTurnActive(1); }
     var turns = {};
     var lastSeq = lastSeqOf(currentRecord);
     var stopped = false;
@@ -1380,10 +1469,7 @@
     var retry = 1000;
 
     var settled = {};
-    function isTerminalTurn(type) {
-      return type === "session.turn.idle" || type === "session.turn.completed" ||
-        type === "session.turn.waiting_tool" || type === "session.turn.waiting_approval";
-    }
+    function isTerminalTurn(type) { return isTurnEndType(type); }
     function settleTurn(id) {
       if (settled[id]) { return; }
       settled[id] = true;
@@ -1424,7 +1510,7 @@
       }
       applyRunEvent(event);
       refreshRunView();
-      window.scrollTo(0, document.body.scrollHeight);
+      scrollRecordToBottom();
     }
 
     function connect() {
@@ -1655,7 +1741,15 @@
   }
 
   function renderTurn(turn) {
+    // A dispatch or resume turn has no words of the user in it: labelling it
+    // with its id made one question read as four 回合. The id stays in the
+    // tooltip, and the block is indented because it belongs to the turn above.
+    // A dispatch turn never emits session.turn.started (it is not the entry
+    // turn), so its startedAt is empty; that plus the origin tells the two
+    // apart without trusting one field alone.
+    var userTurn = Boolean(turn.startedAt) && (turn.origin === "user" || turn.origin === "");
     var cls = "turn";
+    if (!userTurn) { cls += " exec"; }
     if (turn.origin === "wakeup") { cls += " wakeup"; }
     if (turn.error) { cls += " failed"; }
     var box = el("div", { class: cls });
@@ -1681,12 +1775,9 @@
       }
     });
 
-    var head = el("div", { class: "turn-head" }, el("span", { class: "t" }, shortId(turn.id)));
-    if (turn.origin) {
-      head.appendChild(tag(
-        turn.origin === "wakeup" ? "\u5b9a\u65f6\u68c0\u67e5" : turn.origin,
-        turn.origin === "wakeup" ? "warn" : null));
-    }
+    var head = el("div", { class: "turn-head" },
+      el("span", { class: "t", title: turn.id }, userTurn ? "回合" : "执行轮"));
+    if (turn.origin === "wakeup") { head.appendChild(tag("定时检查", "warn")); }
     if (turn.intermediate) { head.appendChild(tag("\u4e2d\u95f4\u56de\u5408")); }
     if (turn.error && String(turn.error).toLowerCase().indexOf("cancel") >= 0) {
       head.appendChild(tag("\u5df2\u4e2d\u65ad", "warn"));
@@ -1824,6 +1915,11 @@
    * each step took) already has a view; this one is the status board. */
   var runState = { teams: [], agents: [] };
 
+  /* The configured graph for the session being viewed, or null when the server
+   * does not expose /api/topology. Events alone can only describe what ran; the
+   * graph is what lets the board show the Teams that have not started yet. */
+  var topologyState = null;
+
   function resetRunState(record) {
     runState = { teams: [], agents: [] };
     ((record && record.events) || []).forEach(applyRunEvent);
@@ -1876,6 +1972,7 @@
       var agentEntry = upsertRunEntry("agents", agentKey,
         agentSession.agent_id || agentSession.call_id || "?", parts[parts.length - 1] || "");
       agentEntry.teamSessionKey = agentSession.team_session_id || "";
+      agentEntry.call = agentSession.call_id || agentEntry.call || "";
       if (type === "session.agent_session.created") {
         agentEntry.startedAt = agentSession.created_at || "";
       }
@@ -2027,107 +2124,159 @@
       (name || "?").charAt(0).toUpperCase());
   }
 
+  /* Two sources, on purpose: /api/topology says which Teams and Calls exist
+   * (the shape, whether or not anything ran), the event fold says which of them
+   * is executing right now. An older server without the endpoint degrades to
+   * the event view, which shows only what has already run. */
+  function runnerItems() {
+    var liveTeams = {};
+    runState.teams.forEach(function (team) { liveTeams[team.name] = team; });
+    var liveCalls = {};
+    runState.agents.forEach(function (agent) {
+      if (!agent.team || !agent.call) { return; }
+      liveCalls[agent.team + "\u0000" + agent.call] = agent;
+    });
+
+    if (!topologyState || !(topologyState.teams || []).length) {
+      return { configured: false, teams: runState.teams, agents: runState.agents };
+    }
+
+    var teams = [];
+    var agents = [];
+    (topologyState.teams || []).forEach(function (team) {
+      var live = liveTeams[team.name];
+      var status = team.status || "never";
+      if (live && live.status === "running") { status = "running"; }
+      teams.push({
+        key: "cfg:" + team.name,
+        name: team.name,
+        team: "",
+        status: status,
+        lifecycle: team.lifecycle || "",
+        canActivate: team.can_activate || [],
+        entry: !!team.entry
+      });
+      (team.calls || []).forEach(function (call) {
+        var liveCall = liveCalls[team.name + "\u0000" + call.name];
+        var callStatus = (team.call_status && team.call_status[call.name]) || "never";
+        if (liveCall && liveCall.status === "running") { callStatus = "running"; }
+        agents.push({
+          key: "cfg:" + team.name + ":" + call.name,
+          // The Call is the row; the agent it runs is a secondary label, shown
+          // only when it differs.
+          name: call.agent || call.name,
+          call: call.name,
+          callType: call.type,
+          teamSessionKey: "cfg:" + team.name,
+          status: callStatus
+        });
+      });
+    });
+    return { configured: true, teams: teams, agents: agents };
+  }
+
+  /* This view answers "what is running now", not "what has run". Anything that
+   * is not executing right now gets no label: a word like 空闲 or 未参与 reads as
+   * a status of its own and turns a live board into a history list. */
+  function runStatusLabel(status) {
+    if (status === "running") { return "运行中"; }
+    if (status === "failed") { return "失败"; }
+    return "";
+  }
+
+  function runDot(status) {
+    return el("span", { class: "run-dot " + status });
+  }
+
+  /* One box per Team, with its Calls as rows inside it.
+   *
+   * The box is the Team, the rows are what it runs: that containment is exactly
+   * what the config says, so it is drawn with a border and a rail instead of
+   * connector lines between free-floating cards. */
   function renderRunners() {
     stopRunLinks();
     var wrap = el("div", { class: "runboard" });
-    var canvas = el("canvas", { class: "run-links" });
-    wrap.appendChild(canvas);
+    var items = runnerItems();
 
-    var running = runState.teams.concat(runState.agents).filter(function (item) {
+    var running = items.teams.concat(items.agents).filter(function (item) {
       return item.status === "running";
     }).length;
-
     wrap.appendChild(el("div", { class: "run-summary" },
-      running > 0
-        ? el("span", { class: "run-live" }, "\u8fd0\u884c\u4e2d " + running + " \u4e2a")
-        : el("span", { class: "muted" }, "\u5f53\u524d\u6ca1\u6709\u5728\u8dd1\u7684 team \u6216 agent\u3002")));
+      items.configured
+        ? el("span", { class: running > 0 ? "run-live" : "muted" },
+            "配置 " + items.teams.length + " 个 team / " + items.agents.length +
+            " 个 agent · 当前 " + running + " 个在跑")
+        : el("span", { class: running > 0 ? "run-live" : "muted" },
+            running > 0 ? "运行中 " + running + " 个" : "当前没有在跑的 team 或 agent。")));
 
-    var cards = {};
-
-    /* Stagger the entry so a freshly opened board settles like a team assembling
-     * rather than a wall of cards popping at once. */
-    var enterIndex = 0;
-
-    function card(item) {
-      var label = item.status === "running" ? "\u8fd0\u884c\u4e2d"
-        : item.status === "failed" ? "\u5931\u8d25" : "\u7a7a\u95f2";
-      var delay = "animation-delay:" + (enterIndex++ * 70) + "ms";
-      var node = el("div", { class: "run-card " + item.status, "data-run-key": item.key, title: item.key },
-        avatar(item.name, delay),
-        el("span", { class: "run-name" },
-          item.team ? el("span", { class: "run-team" }, item.team + " / ") : null,
-          item.name,
-          item.parent ? el("span", { class: "run-parent", title: "\u6d3e\u53d1\u6765\u6e90" },
-            " \u2190 " + item.parent) : null),
-        el("span", { class: "run-state" }, label));
-      node.setAttribute("style", delay);
-      return node;
-    }
-
-    // Each team sits directly above its own agents: the dispatch link is then a
-    // short hop instead of a curve across the whole board, and it never runs
-    // behind the sticky composer.
-    var grouped = {};
-    runState.agents.forEach(function (agent) {
-      var teamKey = agent.teamSessionKey || "";
-      if (!grouped[teamKey]) { grouped[teamKey] = []; }
-      grouped[teamKey].push(agent);
-    });
-
-    runState.teams.forEach(function (team) {
-      var block = el("div", { class: "run-block" });
-      var teamCard = card(team);
-      cards[team.key] = teamCard;
-      block.appendChild(teamCard);
-      var children = grouped[team.key] || [];
-      if (children.length) {
-        var childWrap = el("div", { class: "run-children" });
-        children.forEach(function (agent) {
-          var node = card(agent);
-          cards[agent.key] = node;
-          childWrap.appendChild(node);
-        });
-        block.appendChild(childWrap);
-        delete grouped[team.key];
-      }
-      wrap.appendChild(block);
-    });
-
-    // Agents whose team card is not in this session (older or partial events)
-    // still deserve to be listed rather than silently dropped.
-    Object.keys(grouped).forEach(function (teamKey) {
-      var childWrap = el("div", { class: "run-grid" });
-      grouped[teamKey].forEach(function (agent) {
-        var node = card(agent);
-        cards[agent.key] = node;
-        childWrap.appendChild(node);
-      });
-      wrap.appendChild(childWrap);
-    });
-
-    if (!runState.teams.length && !runState.agents.length) {
-      wrap.appendChild(el("div", { class: "empty" }, "\u8fd9\u4e2a\u4f1a\u8bdd\u8fd8\u6ca1\u6709 team / agent \u8fd0\u884c\u8fc7\u3002"));
+    if (!items.teams.length) {
+      wrap.appendChild(el("div", { class: "empty" },
+        items.configured ? "本次 Flow 没有配置 team。" : "这个会话还没有 team / agent 运行过。"));
       return wrap;
     }
 
-    // One link per agent: its team card -> the agent card.
-    var pairs = [];
-    runState.agents.forEach(function (agent) {
-      var teamKey = agent.teamSessionKey || "";
-      var fromCard = cards[teamKey];
-      var toCard = cards[agent.key];
-      if (!fromCard || !toCard) { return; }
-      pairs.push({ from: fromCard, to: toCard, running: agent.status === "running" });
+    // The running Team may sit far down the list; naming it here means the
+    // board answers "what is running" without scrolling to find the highlight.
+    var runningTeams = items.teams.filter(function (team) {
+      return team.status === "running";
+    }).map(function (team) { return team.name; });
+    if (runningTeams.length) {
+      wrap.appendChild(el("div", { class: "run-active" },
+        "正在运行：" + runningTeams.join("、")));
+    }
+
+    var callsByTeam = {};
+    items.agents.forEach(function (agent) {
+      var key = agent.teamSessionKey || "";
+      if (!callsByTeam[key]) { callsByTeam[key] = []; }
+      callsByTeam[key].push(agent);
     });
 
-    if (pairs.length) {
-      requestAnimationFrame(function () {
-        requestAnimationFrame(function () {
-          if (!wrap.isConnected) { return; }
-          animateRunLinks(wrap, canvas, pairs);
+    var enterIndex = 0;
+    items.teams.forEach(function (team) {
+      var calls = callsByTeam[team.key] || [];
+      var card = el("div", {
+        class: "run-team " + team.status,
+        "data-run-key": team.key,
+        style: "animation-delay:" + Math.min(enterIndex++ * 25, 200) + "ms"
+      },
+        el("div", { class: "run-head" },
+          runDot(team.status),
+          el("span", { class: "run-name" }, team.name),
+          team.entry ? el("span", { class: "run-badge" }, "entry") : null,
+          el("span", { class: "run-badge" }, team.lifecycle || "resident"),
+          runStatusLabel(team.status)
+            ? el("span", { class: "run-state" }, runStatusLabel(team.status)) : null));
+
+      if (calls.length) {
+        var list = el("div", { class: "run-calls" });
+        calls.forEach(function (agent) {
+          // The row's status dot already carries idle / never; repeating the
+          // word on every row turned the board into a column of identical
+          // labels. Only a running row spells it out.
+          list.appendChild(el("div", {
+              class: "run-call " + agent.status,
+              "data-run-key": agent.key,
+              title: runStatusLabel(agent.status) || "待命"
+            },
+            runDot(agent.status),
+            el("span", { class: "run-call-name" }, agent.call || agent.name),
+            agent.name && agent.name !== agent.call
+              ? el("span", { class: "run-call-agent" }, agent.name) : null,
+            el("span", { class: "run-call-kind" }, agent.callType || "agent"),
+            agent.status === "running"
+              ? el("span", { class: "run-state" }, runStatusLabel(agent.status)) : null));
         });
-      });
-    }
+        card.appendChild(list);
+      }
+
+      if (team.canActivate && team.canActivate.length) {
+        card.appendChild(el("div", { class: "run-edges" },
+          "可派 → " + team.canActivate.join(" · ")));
+      }
+
+      wrap.appendChild(card);
+    });
 
     return wrap;
   }
@@ -2183,10 +2332,42 @@
     return order;
   }
 
+  /* Which configured Teams and Calls this session never reached.
+   *
+   * The timeline and the tree are built from events, so anything that has not
+   * run is simply absent — the reader then cannot tell "not configured" from
+   * "not reached". These rows make the difference visible. */
+  function spanTeamName(span) {
+    var label = span.label || "";
+    if (label.indexOf("team ") === 0) { return label.slice(5).trim(); }
+    var index = label.indexOf(" / ");
+    return index > 0 ? label.slice(0, index) : "";
+  }
+
+  function missingTopologyRows() {
+    if (!topologyState || !(topologyState.teams || []).length) { return []; }
+    var spans = collectSpans((currentRecord && currentRecord.events) || []);
+    var seenTeams = {};
+    spans.forEach(function (span) {
+      var name = spanTeamName(span);
+      if (name) { seenTeams[name] = true; }
+    });
+    var rows = [];
+    topologyState.teams.forEach(function (team) {
+      if (seenTeams[team.name]) { return; }
+      rows.push({ label: "team " + team.name, team: team.name });
+      (team.calls || []).forEach(function (call) {
+        rows.push({ label: team.name + " / " + (call.agent || call.name), team: team.name });
+      });
+    });
+    return rows;
+  }
+
   function renderWaterfall(record) {
     var wrap = el("div", { class: "waterfall" });
     var spans = collectSpans((record && record.events) || []);
-    if (spans.length === 0) {
+    var missing = missingTopologyRows();
+    if (spans.length === 0 && missing.length === 0) {
       wrap.appendChild(el("div", { class: "empty" }, "\u8fd9\u4e2a\u4f1a\u8bdd\u6ca1\u6709 team / call \u65f6\u5e8f\u3002"));
       return wrap;
     }
@@ -2203,20 +2384,34 @@
     var finish = ends.length ? Math.max.apply(null, ends) : origin;
     var total = Math.max(1, finish - origin);
 
-    spans.forEach(function (span) {
-      var start = new Date(span.start).getTime();
-      var end = new Date(span.end).getTime();
-      var left = isNaN(start) ? 0 : ((start - origin) / total) * 100;
-      var width = (isNaN(start) || isNaN(end)) ? 1.5 : Math.max(1.5, ((end - start) / total) * 100);
-      var isTeam = span.id.indexOf(":") < 0;
-      wrap.appendChild(el("div", { class: "wf-row" },
-        el("span", { class: "wf-label", title: span.id }, span.label),
-        el("span", { class: "wf-track" },
-          el("i", {
-            class: isTeam ? "wf-team" : "wf-call",
-            style: "left:" + left.toFixed(2) + "%;width:" + width.toFixed(2) + "%"
-          })),
-        el("span", { class: "wf-time" }, elapsed(span.start, span.end) || "\u8fd0\u884c\u4e2d")));
+    if (spans.length) {
+      spans.forEach(function (span) {
+        var start = new Date(span.start).getTime();
+        var end = new Date(span.end).getTime();
+        var left = isNaN(start) ? 0 : ((start - origin) / total) * 100;
+        var width = (isNaN(start) || isNaN(end)) ? 1.5 : Math.max(1.5, ((end - start) / total) * 100);
+        var isTeam = span.id.indexOf(":") < 0;
+        wrap.appendChild(el("div", { class: "wf-row" },
+          el("span", { class: "wf-label", title: span.id }, span.label),
+          el("span", { class: "wf-track" },
+            el("i", {
+              class: isTeam ? "wf-team" : "wf-call",
+              style: "left:" + left.toFixed(2) + "%;width:" + width.toFixed(2) + "%"
+            })),
+          el("span", { class: "wf-time" }, elapsed(span.start, span.end) || "\u8fd0\u884c\u4e2d")));
+      });
+    }
+
+    // Configured but never reached: a dashed track and no duration, so it reads
+    // as "part of the Flow, idle in this session" rather than as history.
+    if (missing.length) {
+      wrap.appendChild(el("div", { class: "wf-group" }, "\u914d\u7f6e\u4e2d\u5b58\u5728\u3001\u672c\u6b21\u4f1a\u8bdd\u672a\u53c2\u4e0e\uff1a"));
+    }
+    missing.forEach(function (row) {
+      wrap.appendChild(el("div", { class: "wf-row missing" },
+        el("span", { class: "wf-label", title: row.label }, row.label),
+        el("span", { class: "wf-track missing" }),
+        el("span", { class: "wf-time" }, "\u672a\u53c2\u4e0e")));
     });
 
     return wrap;
@@ -2237,7 +2432,8 @@
     });
 
     var roots = childrenOf[""] || [];
-    if (roots.length === 0) {
+    var missing = missingTopologyRows();
+    if (roots.length === 0 && missing.length === 0) {
       wrap.appendChild(el("div", { class: "empty" }, "\u6ca1\u6709\u6267\u884c\u6811\u3002"));
       return wrap;
     }
@@ -2292,13 +2488,27 @@
     });
 
     wrap.appendChild(tree);
+
+    if (missing.length) {
+      var block = el("div", { class: "tree-missing" },
+        el("div", { class: "muted" }, "\u914d\u7f6e\u4e2d\u5b58\u5728\u3001\u672c\u6b21\u4f1a\u8bdd\u672a\u53c2\u4e0e\uff1a"));
+      var list = el("div", { class: "tree-missing-list" });
+      missing.forEach(function (row) {
+        list.appendChild(el("span", { class: "tree-missing-item" }, row.label));
+      });
+      block.appendChild(list);
+      wrap.appendChild(block);
+    }
+
     wrap.appendChild(detail);
     return wrap;
   }
 
   function labelForNode(node) {
     if (node.kind === "flow_session") { return "\u4f1a\u8bdd"; }
-    if (node.kind === "flow_turn") { return ""; }
+    // A dispatched Team runs as its own flow turn. Calling both "回合" is what
+    // made one question look like four; the second level is an execution turn.
+    if (node.kind === "flow_turn") { return node.user_turn ? "回合" : "执行轮"; }
     if (node.kind === "team_turn") { return (node.team_id || "team"); }
     if (node.kind === "call_turn") { return (node.call_id || "call") + (node.call_type ? " \u00b7 " + node.call_type : ""); }
     if (node.kind === "agent_session") { return node.agent_id || ""; }

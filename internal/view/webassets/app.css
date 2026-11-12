@@ -51,8 +51,12 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .faint { color: var(--faint); }
 /* Two panes: the session list stays visible while a transcript is open, so
    switching sessions no longer means going back to a list page. */
-.shell { display: flex; align-items: flex-start; min-height: 100vh; }
-.sidebar { position: sticky; top: 0; flex: 0 0 288px; width: 288px; height: 100vh;
+html, body { height: 100%; }
+/* The window itself never scrolls: the transcript does. A scrolling window is
+ * what dragged the header and the composer around with the content. */
+body { overflow: hidden; }
+.shell { display: flex; align-items: stretch; height: 100vh; }
+.sidebar { flex: 0 0 288px; width: 288px; height: 100vh;
   overflow-y: auto; padding: 14px 12px; border-right: 1px solid var(--border);
   background: var(--bg-subtle); }
 .sidebar.hidden { display: none; }
@@ -63,7 +67,16 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .side-rows .row { padding: 6px 8px; border-radius: 6px; }
 .side-rows .row.active { background: var(--accent-soft); }
 .row-main { min-width: 0; }
-.app { flex: 1; min-width: 0; max-width: 1180px; margin: 0 auto; padding: 24px 20px 200px; }
+/* List pages scroll as a whole; the session page pins its header, tab strip and
+ * composer and scrolls only #record-body (see .record-view below). */
+.app { flex: 1; min-width: 0; max-width: 1180px; margin: 0 auto; padding: 24px 20px 200px;
+  height: 100vh; overflow-y: auto; display: flex; flex-direction: column; }
+.app.record-view { overflow: hidden; padding-bottom: 14px; }
+.app.record-view > .top,
+.app.record-view > .timeline,
+.app.record-view > .modes,
+.app.record-view > .error-box { flex: 0 0 auto; }
+#record-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
 .welcome { padding: 18vh 0 0; text-align: center; }
 .welcome h1 { font-size: 20px; margin: 0 0 6px; }
 .turn-usage { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
@@ -71,55 +84,48 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
   border: 1px dashed var(--border-strong); border-radius: 8px;
   font: inherit; font-size: 12px; color: var(--muted); background: var(--bg-subtle); }
 
-/* Run board: a status wall — each team a base, its agents the desks under it,
- * dispatch links drawn on the canvas behind. Idle reads calm, running glows. */
-.runboard { position: relative; margin-bottom: 16px; padding: 20px;
-  border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
-  background:
-    radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0) 0 0 / 24px 24px,
-    linear-gradient(180deg, var(--bg-subtle), var(--bg)); }
-.run-links { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
-.run-summary, .run-grid, .run-block { position: relative; z-index: 1; }
+/* Run board: one box per Team, its Calls listed inside the box. Containment is
+ * the structure the config actually expresses, so no connector lines are drawn:
+ * a row is inside a box because it belongs to that Team. */
+.runboard { margin-bottom: 16px; }
 .run-summary { margin-bottom: 12px; font-size: 12px; color: var(--muted); }
 .run-live { color: var(--accent); font-weight: 600; }
-.run-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
-.run-block { margin-bottom: 16px; }
-.run-children { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px; margin: 10px 0 0 30px; }
+.run-active { margin: -4px 0 10px; font-size: 12px; color: var(--accent); }
 
-.run-card { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
-  border: 1px solid var(--border); border-radius: 12px;
-  background: linear-gradient(180deg, var(--bg), var(--bg-subtle));
-  box-shadow: 0 1px 3px rgba(16, 24, 40, .08);
-  font-size: 13px; transition: transform .15s ease, box-shadow .15s ease;
-  animation: run-in .4s ease both; }
-.run-card:hover { transform: translateY(-2px); }
-/* Idle cards sit back; running ones glow. */
-.run-card.completed, .run-card.pending { opacity: .82; }
-.run-card.running { border-color: var(--accent); opacity: 1;
-  animation: run-in .4s ease both, run-glow 2.2s ease-in-out infinite; }
-.run-card.failed { border-color: var(--danger); }
-@keyframes run-in { from { opacity: 0; transform: translateY(8px) scale(.97); }
-  to { opacity: 1; transform: none; } }
-@keyframes run-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(76, 141, 255, 0); }
-  50% { box-shadow: 0 0 20px 3px rgba(76, 141, 255, .35); } }
+.run-team { border: 1px solid var(--border); border-radius: 12px;
+  background: var(--bg-subtle); margin-bottom: 10px; padding: 10px 12px;
+  animation: run-in .35s ease both; }
+.run-team.running { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(76, 141, 255, .22); }
+.run-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.run-head .run-name { font-weight: 600; }
+.run-badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
+.run-head .run-state { margin-left: auto; }
 
-.run-avatar { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 50%;
-  display: inline-flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 14px; font-weight: 600;
-  box-shadow: inset 0 -2px 4px rgba(0, 0, 0, .18); }
-.run-card.running .run-avatar { animation: run-pulse 1.4s ease-in-out infinite; }
-@keyframes run-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(.88); } }
+/* The rail is what makes containment readable at a glance: every Call row hangs
+ * off the Team box's own spine. */
+.run-calls { margin: 8px 0 0 5px; padding-left: 12px; border-left: 2px solid var(--border); }
+.run-call { display: flex; align-items: center; gap: 8px; padding: 4px 6px;
+  border-radius: 8px; font-size: 12.5px; }
+.run-call:hover { background: var(--bg-sunken); }
+.run-call-name { font-family: var(--mono); font-size: 12px; }
+.run-call-agent { color: var(--muted); }
+.run-call-kind { font-size: 10px; color: var(--faint); }
+.run-call .run-state { margin-left: auto; }
+.run-edges { margin: 8px 0 0 5px; padding-left: 12px; font-size: 11px; color: var(--faint); }
 
-.run-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-team { color: var(--faint); }
-.run-parent { color: var(--faint); }
+.run-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--border-strong); }
+.run-dot.running { background: var(--accent); box-shadow: 0 0 0 3px rgba(76, 141, 255, .18); }
+.run-dot.idle { background: var(--ok); }
+.run-dot.never { background: transparent; border: 1px solid var(--border-strong); }
+
 .run-state { flex: 0 0 auto; padding: 2px 9px; border-radius: 999px; font-size: 11px;
   background: var(--bg-sunken); color: var(--faint); }
-.run-card.running .run-state { background: rgba(76, 141, 255, .16); color: var(--accent); }
-.run-card.completed .run-state, .run-card.pending .run-state { background: rgba(63, 185, 80, .14); color: var(--ok); }
-.run-card.failed .run-state { background: rgba(248, 81, 73, .16); color: var(--danger); }
-.run-dot { display: none; }
+.run-team.running .run-state, .run-call.running .run-state {
+  background: rgba(76, 141, 255, .16); color: var(--accent); }
+
+@keyframes run-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* Waterfall: every team and call on one axis, so overlapping work is visible. */
 .waterfall { margin-bottom: 16px; }
@@ -133,10 +139,24 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .wf-call { background: var(--ok); opacity: .7; }
 .wf-time { font-size: 11px; color: var(--faint); text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 900px) {
-  .shell { flex-direction: column; }
-  .sidebar { position: static; flex: none; width: auto; height: auto; max-height: 42vh;
+  /* Column shell: the sidebar takes its share, the app takes the rest, and the
+   * record pane scrolls inside whatever is left. flex-basis 0 (not auto) is what
+   * stops a long transcript from pushing the composer below the viewport. */
+  .shell { flex-direction: column; height: 100dvh; overflow-x: hidden; }
+  .sidebar { flex: 0 0 auto; width: auto; height: auto; max-height: 42vh;
     border-right: 0; border-bottom: 1px solid var(--border); }
-  .app { padding-bottom: 120px; }
+  /* width/max-width: a 1180px max-width with auto margins still reserved the full
+   * column here, so the shell measured 1180 wide inside a 430px viewport. */
+  .app { width: 100%; max-width: 100%; height: auto; flex: 1 1 0; min-height: 0;
+    padding: 12px 12px 90px; }
+  /* Same split shell as wide screens, with the fixed bands squeezed: a shorter
+   * sidebar, no timeline strip, two KPI columns. The transcript keeps whatever
+   * height is left and is the only thing that scrolls. */
+  .sidebar { max-height: 30vh; }
+  .app { padding: 10px 12px; }
+  .app.record-view { padding-bottom: 8px; }
+  .app.record-view > .timeline { display: none; }
+  .app.record-view > .top { padding-bottom: 2px; }
 }
 
 /* header */
@@ -165,9 +185,19 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
   background: var(--border); border: 1px solid var(--border); border-radius: var(--radius);
   overflow: hidden; margin-bottom: 16px; }
 @media (max-width: 900px) { .kpi { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+@media (max-width: 560px) {
+  .kpi { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .app.record-view > .top h1 { display: none; }
+}
 .kpi div { background: var(--bg); padding: 8px 12px; }
 .kpi .k { font-size: 11px; color: var(--faint); }
 .kpi .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+/* The secondary count beside a value: it belongs to 回合 but is not part of the
+ * number the reader asked about, so it stays smaller, greyer and unprefixed. */
+.kpi .v-note { margin-left: 4px; color: var(--faint); font-size: 11px; font-weight: 400; }
+/* A model list is text, not a number: it needs its own size so the column does
+ * not turn "deepseek-v4.1-flash, hy4std" into three stacked lines. */
+.kpi .v-model { font-size: 12px; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
 
 /* timeline */
 .timeline { margin-bottom: 16px; }
@@ -192,6 +222,10 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 
 /* messages */
 .turn { border-left: 2px solid var(--border); padding-left: 14px; margin-bottom: 20px; }
+/* An execution turn hangs inside the 回合 that caused it, so it is indented and
+ * its rail is lighter than the turn's own. */
+.turn.exec { margin-left: 12px; }
+.turn.exec .turn-head .t { color: var(--muted); }
 .turn.wakeup { border-left-color: var(--warn-line); }
 .turn.failed { border-left-color: var(--danger); }
 .turn-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
@@ -288,13 +322,11 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .login button:hover { filter: brightness(1.06); }
 .login-hint { min-height: 1em; margin: 0; font-size: 12px; color: var(--danger); }
 
-/* Composer. Sticky at the bottom of the flow so the input is never scrolled
-   away from the transcript it belongs to. */
-/* Part of the flow, not pinned to the viewport: the composer scrolls with the
-   transcript, so reading a long conversation does not leave a floating box over
-   the last messages. */
-.composer { position: static; margin-top: 20px; padding: 10px 12px;
-  background: var(--bg); border: 1px solid var(--border-strong); border-radius: 12px; }
+/* Composer. A flex item at the end of the column, never scrolled: the transcript
+ * above it is the only scrolling region on this page. */
+.composer { position: static; flex: 0 0 auto; margin-top: 12px; padding: 10px 12px;
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: 12px;
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, .18); }
 .composer.dragging { border-color: var(--accent); background: var(--accent-soft); }
 .composer-input { width: 100%; max-height: 180px; padding: 2px 0; border: 0; outline: 0;
   resize: none; overflow-y: auto; background: transparent; color: var(--text);
@@ -396,9 +428,23 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
   border: 1px solid var(--border); background: var(--bg-sunken); display: block; }
 audio.msg-media { width: min(360px, 100%); height: 40px; }
 .tool-body { border-top: 1px solid var(--border); }
-.tool pre.args { margin: 0; padding: 8px 10px; border: 0; background: var(--bg-sunken); color: var(--muted); }
-.composer-stop { margin-left: auto; padding: 5px 12px; border: 1px solid var(--danger);
+.tool pre.args { margin: 0; padding: 8px 10px; border: 0; background: var(--bg-sunken); color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Next to 发送, not on its own at the far edge: both had margin-left:auto, which
+ * pushed 发送 into the middle and 停止 to the corner. */
+.composer-stop { margin-left: 8px; padding: 5px 12px; border: 1px solid var(--danger);
   border-radius: 6px; font: inherit; font-size: 12px; color: #fff; background: var(--danger); cursor: pointer; }
 /* The stream owns this: a turn is active from its started event to its terminal
    one, which is longer than the composer's sending state. */
 body:not(.turn-active) .composer-stop { display: none; }
+
+/* Configured but not run in this session: shown so the view still describes the
+ * Flow, with the missing part visibly inactive instead of absent. */
+.wf-group { margin: 14px 0 6px; font-size: 11px; color: var(--muted); }
+.wf-row.missing .wf-label { color: var(--faint); }
+.wf-track.missing { opacity: .55; background: repeating-linear-gradient(90deg,
+  var(--bg-sunken), var(--bg-sunken) 6px, transparent 6px, transparent 12px); }
+.tree-missing { margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.tree-missing-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.tree-missing-item { padding: 3px 9px; border: 1px dashed var(--border-strong); border-radius: 999px;
+  font-size: 11px; color: var(--muted); }
