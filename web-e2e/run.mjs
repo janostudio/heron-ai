@@ -724,9 +724,10 @@ await run("overview: kpi lives in its own tab", async () => {
   await page.goto(`${base}/s/fs_single_agent`);
   await page.waitForSelector(".composer", { timeout: 5000 });
 
-  // The strip used to sit above every view; six counters floating over the
-  // transcript, the timeline and the tree alike.
+  // Both used to sit above every view: six counters and a clickable timeline
+  // strip floating over the transcript and the tree alike.
   checkEqual("对话视图不显示 KPI", await page.locator(".kpi").count(), 0);
+  checkEqual("对话视图不显示时间条", await page.locator(".timeline").count(), 0);
 
   await page.click('.seg button[data-mode="overview"]');
   await page.waitForSelector(".kpi", { timeout: 3000 });
@@ -736,6 +737,14 @@ await run("overview: kpi lives in its own tab", async () => {
   check("回合只数用户回合", turnsCell.startsWith("回合\n1"), turnsCell.replace(/\n/g, " "));
   check("执行轮作为副标注", turnsCell.includes("+2 执行轮"), turnsCell.replace(/\n/g, " "));
   check("概览仍列出 token 与模型", text.includes("Token") && text.includes("demo-model"));
+
+  // The strip indexes the session's events and stays clickable from here.
+  checkEqual("概览里有一根时间条", await page.locator(".timeline").count(), 1);
+  const legend = await page.locator(".timeline .legend").innerText();
+  check("时间条带图例", legend.includes("用户") && legend.includes("工具"), legend.replace(/\n/g, " "));
+  await page.locator(".timeline .bar i").first().click();
+  await page.waitForSelector("#ev-1", { timeout: 3000 });
+  check("点时间条跳到原始事件", await page.locator("#ev-1").count() === 1);
 
   await page.click('.seg button[data-mode="tree"]');
   await page.waitForTimeout(250);

@@ -73,7 +73,6 @@ body { overflow: hidden; }
   height: 100vh; overflow-y: auto; display: flex; flex-direction: column; }
 .app.record-view { overflow: hidden; padding-bottom: 14px; }
 .app.record-view > .top,
-.app.record-view > .timeline,
 .app.record-view > .modes,
 .app.record-view > .error-box { flex: 0 0 auto; }
 #record-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
@@ -150,12 +149,11 @@ body { overflow: hidden; }
   .app { width: 100%; max-width: 100%; height: auto; flex: 1 1 0; min-height: 0;
     padding: 12px 12px 90px; }
   /* Same split shell as wide screens, with the fixed bands squeezed: a shorter
-   * sidebar, no timeline strip, two KPI columns. The transcript keeps whatever
+   * sidebar and two KPI columns. The transcript keeps whatever
    * height is left and is the only thing that scrolls. */
   .sidebar { max-height: 30vh; }
   .app { padding: 10px 12px; }
   .app.record-view { padding-bottom: 8px; }
-  .app.record-view > .timeline { display: none; }
   .app.record-view > .top { padding-bottom: 2px; }
 }
 

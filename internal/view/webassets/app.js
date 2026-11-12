@@ -735,7 +735,6 @@
         "\u8fd8\u6709 " + record.truncated + " \u6761\u4e8b\u4ef6\u672a\u52a0\u8f7d\uff08\u5355\u6b21\u4e0a\u9650\uff09\u3002\u53ef\u52a0 ?limit= \u63d0\u9ad8\u3002"));
     }
 
-    app.appendChild(timeline(record.events));
 
     app.appendChild(el("div", { class: "modes" },
       el("div", { class: "seg", role: "group" },
@@ -789,8 +788,12 @@
     clear(body);
     var hint = document.getElementById("mode-hint");
     if (mode === "overview") {
+      // The strip is navigation, not a statistic, but it is about the session as
+      // a whole: it sat above every view before, taking height from the
+      // transcript on all of them. Here it sits next to the numbers it indexes.
+      body.appendChild(timeline(currentRecord.events));
       body.appendChild(kpiStrip(currentRecord.facts));
-      if (hint) { hint.textContent = "概览：本会话的回合、执行量与 token 消耗，全部由下面的事件算出。"; }
+      if (hint) { hint.textContent = "概览：事件时间条（点一段跳到原始事件）+ 本会话的回合、执行量与 token 消耗。"; }
       return;
     }
     if (mode === "run") {
