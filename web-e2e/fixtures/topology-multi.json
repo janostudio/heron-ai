@@ -1,0 +1,97 @@
+{
+  "flow_id": "demo_flow",
+  "entry": "default",
+  "teams": [
+    {
+      "name": "default",
+      "team_id": "default",
+      "goal": "answer the user and dispatch the work",
+      "entry": true,
+      "lifecycle": "resident",
+      "can_activate": [
+        "probe",
+        "facts"
+      ],
+      "calls": [
+        {
+          "name": "coordinator",
+          "type": "agent",
+          "agent": "coordinator"
+        }
+      ],
+      "status": "idle",
+      "call_status": {
+        "coordinator": "idle"
+      }
+    },
+    {
+      "name": "probe",
+      "team_id": "probe",
+      "goal": "gather evidence",
+      "entry": false,
+      "lifecycle": "per_task",
+      "can_activate": [
+        "analyze"
+      ],
+      "calls": [
+        {
+          "name": "terrain",
+          "type": "agent",
+          "agent": "terrain"
+        }
+      ],
+      "status": "running",
+      "call_status": {
+        "terrain": "running"
+      }
+    },
+    {
+      "name": "facts",
+      "team_id": "facts",
+      "goal": "answer repository questions",
+      "entry": false,
+      "lifecycle": "per_task",
+      "calls": [
+        {
+          "name": "inspect",
+          "type": "agent",
+          "agent": "inspect"
+        }
+      ],
+      "status": "never"
+    },
+    {
+      "name": "repo-info",
+      "team_id": "repo-info",
+      "goal": "answer repository questions",
+      "entry": false,
+      "lifecycle": "per_task",
+      "calls": [
+        {
+          "name": "inspect",
+          "type": "agent",
+          "agent": "inspect"
+        }
+      ],
+      "status": "never"
+    },
+    {
+      "name": "analyze",
+      "team_id": "analyze",
+      "goal": "turn evidence into a conclusion",
+      "entry": false,
+      "lifecycle": "per_task",
+      "calls": [
+        {
+          "name": "analyze",
+          "type": "agent",
+          "agent": "analyst"
+        }
+      ],
+      "status": "idle",
+      "call_status": {
+        "analyze": "idle"
+      }
+    }
+  ]
+}

@@ -712,7 +712,42 @@
       }
     }
   ],
-  "nodes": [],
+  "nodes": [
+    {
+      "id": "fs_multi_agent",
+      "kind": "flow_session",
+      "first_seq": 1,
+      "last_seq": 42,
+      "status": "idle"
+    },
+    {
+      "id": "ft_user",
+      "kind": "flow_turn",
+      "parent": "fs_multi_agent",
+      "user_turn": true,
+      "first_seq": 2,
+      "last_seq": 10,
+      "status": "waiting_input"
+    },
+    {
+      "id": "ft_exec",
+      "kind": "flow_turn",
+      "parent": "ft_user",
+      "origin": "tool",
+      "first_seq": 11,
+      "last_seq": 20,
+      "status": "completed"
+    },
+    {
+      "id": "tt_probe",
+      "kind": "team_turn",
+      "parent": "ft_exec",
+      "team_id": "probe",
+      "first_seq": 12,
+      "last_seq": 19,
+      "status": "completed"
+    }
+  ],
   "facts": {
     "turns": 1,
     "team_turns": 4,

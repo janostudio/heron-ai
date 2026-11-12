@@ -30,7 +30,11 @@ const TOKEN = "e2e-token";
 const files = {
   sessions: JSON.parse(await readFile(path.join(fixtures, "sessions.json"), "utf8")),
   single: JSON.parse(await readFile(path.join(fixtures, "record-single.json"), "utf8")),
+  staleStatus: JSON.parse(await readFile(path.join(fixtures, "record-stale-status.json"), "utf8")),
+  liveTurn: JSON.parse(await readFile(path.join(fixtures, "record-live-turn.json"), "utf8")),
   multi: JSON.parse(await readFile(path.join(fixtures, "record-multi.json"), "utf8")),
+  topology: JSON.parse(await readFile(path.join(fixtures, "topology.json"), "utf8")),
+  topologyMulti: JSON.parse(await readFile(path.join(fixtures, "topology-multi.json"), "utf8")),
   stream: await readFile(path.join(fixtures, "stream.txt"), "utf8"),
 };
 
@@ -72,7 +76,8 @@ let streamServed = false;
 /* Served frames are a property of the case, not of the page: a conversation
  * subscribes on open, so a stream that always pushes would append a phantom
  * turn to every record assertion. Cases that assert live rendering turn it on. */
-let streamEnabled = false;
+/* Streaming is per-page, not global: a test that enables the stream must not
+ * leave later cases reading frames meant for the live conversation. */
 const STREAM_FRAME_DELAY_MS = 120;
 
 const server = createServer(async (req, res) => {
@@ -186,12 +191,28 @@ function apiRouter(options = {}) {
         body: JSON.stringify({ session: { id: "fs_created_from_ui" } }),
       });
     }
+    // Configured graph plus execution state. Synthetic like every other fixture:
+    // the names, ids and statuses are made up, not taken from a real session.
+    if (url.pathname === "/api/topology") {
+      // The graph has to describe the same Flow as the record being viewed, so
+      // the multi-agent session gets its own fixture.
+      const graph = url.searchParams.get("session_id") === "fs_multi_agent"
+        ? files.topologyMulti
+        : files.topology;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(graph),
+      });
+    }
     if (url.pathname.startsWith("/api/sessions/") && url.pathname.endsWith("/record")) {
       const id = url.pathname.split("/")[3];
       // A session created from the UI has nothing in it yet: one created event,
       // zero counters. That is the shape the page has to announce.
       const record = id === "fs_multi_agent" ? files.multi
         : id === "fs_created_from_ui" ? emptyRecord(id)
+        : id === "fs_stale_status" ? files.staleStatus
+        : id === "fs_live_turn" ? files.liveTurn
         : files.single;
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(record) });
     }
@@ -230,7 +251,7 @@ function apiRouter(options = {}) {
       return route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
     }
     if (url.pathname === "/api/stream") {
-      if (!streamEnabled) {
+      if (!options.stream) {
         // An idle conversation: the endpoint stays open with nothing to send.
         return route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream" }, body: "" });
       }
@@ -431,18 +452,23 @@ await run("record: multiple agents", async () => {
   check("team 与 agent 同名时不重复", who.includes("analyze") && !who.includes("analyze / analyze"));
   checkEqual("每条消息都有时间戳", await page.locator(".msg .when").count(), 7);
   await page.click('.seg button[data-mode="run"]');
-  await page.waitForSelector(".run-card", { timeout: 3000 });
-  check("运行看板列出 team 与 agent", await page.locator(".run-card").count() >= 2,
-    await page.locator(".run-card").count());
-  checkEqual("每个 team 与其 agent 成块", await page.locator(".run-block").count() >= 1 ? 1 : 0, 1);
-  check("agent 挂在块内", await page.locator(".run-block .run-children .run-card").count() >= 1);
-  check("非运行中的实体显示空闲而非历史耗时",
-    (await page.locator(".run-card.completed").first().innerText()).includes("空闲"));
-  check("team 卡片标注派发来源",
-    (await page.locator(".run-card .run-parent").first().innerText()).includes("default"),
-    await page.locator(".run-card .run-parent").first().innerText());
-  check("画布已铺开用于连线",
-    await page.locator(".run-links").evaluate((node) => node.width > 0 && node.height > 0));
+  await page.waitForSelector(".run-team", { timeout: 3000 });
+  check("运行看板按 team 分组成框", await page.locator(".run-team").count() >= 1,
+    await page.locator(".run-team").count());
+  check("call 作为行出现在 team 框内", await page.locator(".run-team .run-calls .run-call").count() >= 1,
+    await page.locator(".run-team .run-calls .run-call").count());
+  // A live board labels what is running and nothing else: 空闲 / 未参与 made it
+  // read as a history list.
+  check("只有运行中的 team 带状态标签",
+    await page.locator('.run-team:not(.running) .run-head .run-state').count() === 0,
+    await page.locator('.run-team:not(.running) .run-head .run-state').count());
+  check("运行中的 team 带运行中标签",
+    (await page.locator(".run-team.running .run-head .run-state").first().innerText()).includes("运行中"));
+  check("配置的委派目的地在卡片上",
+    (await page.locator(".run-edges").first().innerText()).includes("probe"),
+    await page.locator(".run-edges").first().innerText());
+  check("team 框标注生命周期", await page.locator(".run-team .run-badge").count() >= 1,
+    await page.locator(".run-team .run-badge").count());
 
   await page.click('.seg button[data-mode="waterfall"]');
   await page.waitForSelector(".wf-row", { timeout: 3000 });
@@ -498,11 +524,10 @@ await run("composer", async () => {
 /* ---------- 8. live stream: the turn grows while it runs ---------- */
 await run("live stream", async () => {
   streamServed = false;
-  streamEnabled = true;
   // The conversation subscribes as soon as it is opened: the turn's events are
   // not a reply to the POST, they arrive on the session stream whether or not
   // this page sent anything.
-  const { context, page, errors } = await newPage(browser, {});
+  const { context, page, errors } = await newPage(browser, { stream: true });
   await page.goto(`${base}/s/fs_single_agent`);
   await page.waitForSelector(".composer-input", { timeout: 5000 });
 
@@ -552,6 +577,197 @@ await run("live stream", async () => {
   await page.waitForTimeout(1500);
   const whoTexts = (await page.locator(".msg.from-user .body").allTextContents()).join("|");
   checkEqual("第二次发送不重放历史", (whoTexts.match(/实时用例/g) || []).length, 1);
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- run board: configured graph, not just history ---------- */
+await run("run board: configured graph", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_single_agent`);
+  await page.waitForSelector(".composer", { timeout: 5000 });
+
+  await page.click('.seg button[data-mode="run"]');
+  await page.waitForSelector(".runboard", { timeout: 5000 });
+
+  const summary = await page.locator(".run-summary").innerText();
+  check("summary 报出配置规模", summary.includes("配置 3 个 team"), summary);
+  check("summary 报出在跑数量", summary.includes("当前 2 个在跑"), summary);
+
+  // The whole point of the graph: a Team that never ran is still on the board.
+  check("未跑过的 team 也在板上", await page.locator('.run-team[data-run-key="cfg:fixer"]').count() === 1);
+
+  const planner = await page.locator('[data-run-key="cfg:planner"]').innerText();
+  check("在跑的 team 标运行中", planner.includes("运行中"), planner);
+
+  const fixer = await page.locator('.run-team[data-run-key="cfg:fixer"]').innerText();
+  check("未运行的 team 不带状态词", !fixer.includes("未参与") && !fixer.includes("空闲"), fixer);
+
+  const edges = await page.locator(".run-edges").first().innerText();
+  check("委派边按配置渲染", edges.includes("planner"), edges);
+
+  check("配置里的 command call 也列出", await page.locator('[data-run-key="cfg:fixer:slot"]').count() === 1);
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- layout regressions ---------- */
+await run("layout: transcript scrolls, chrome stays", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await page.goto(`${base}/s/fs_single_agent`);
+  await page.waitForSelector(".composer", { timeout: 5000 });
+
+  const before = await page.evaluate(() => {
+    const box = (selector) => {
+      const rect = document.querySelector(selector).getBoundingClientRect();
+      return { top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
+    };
+    return { header: box(".top"), composer: box(".composer"), pageScroll: Math.round(window.scrollY) };
+  });
+
+  await page.evaluate(() => {
+    const pane = document.getElementById("record-body");
+    pane.scrollTop = pane.scrollHeight;
+  });
+  await page.waitForTimeout(250);
+
+  const after = await page.evaluate(() => {
+    const box = (selector) => {
+      const rect = document.querySelector(selector).getBoundingClientRect();
+      return { top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
+    };
+    const pane = document.getElementById("record-body");
+    return {
+      header: box(".top"),
+      composer: box(".composer"),
+      pageScroll: Math.round(window.scrollY),
+      paneScroll: Math.round(pane.scrollTop),
+      paneScrollable: pane.scrollHeight > pane.clientHeight,
+    };
+  });
+
+  check("会话记录区可滚动", after.paneScrollable);
+  check("记录区确实滚动了", after.paneScroll > 0, String(after.paneScroll));
+  check("窗口本身不滚动", after.pageScroll === 0, String(after.pageScroll));
+  check("顶部栏不随内容滚动", after.header.top === before.header.top, before.header.top + " -> " + after.header.top);
+  check("输入框不随内容滚动", after.composer.top === before.composer.top, before.composer.top + " -> " + after.composer.top);
+  check("输入框贴在视口底部", after.composer.bottom <= 500 && after.composer.bottom > 380, String(after.composer.bottom));
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+await run("layout: switching views lands at the view start", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await page.goto(`${base}/s/fs_multi_agent`);
+  await page.waitForSelector(".chat .turn", { timeout: 5000 });
+
+  await page.evaluate(() => {
+    const pane = document.getElementById("record-body");
+    pane.scrollTop = pane.scrollHeight;
+  });
+  await page.waitForTimeout(200);
+  const scrolled = await page.evaluate(() => Math.round(document.getElementById("record-body").scrollTop));
+
+  await page.click('.seg button[data-mode="run"]');
+  await page.waitForSelector(".runboard", { timeout: 5000 });
+  await page.waitForTimeout(200);
+  const state = await page.evaluate(() => {
+    const pane = document.getElementById("record-body");
+    const board = document.querySelector(".runboard").getBoundingClientRect();
+    return { paneScroll: Math.round(pane.scrollTop), boardTop: Math.round(board.top) };
+  });
+
+  check("切换前记录区已滚离顶部", scrolled > 0, String(scrolled));
+  check("切换后记录区回到顶部", state.paneScroll === 0, String(state.paneScroll));
+  check("新视图开头在视口内", state.boardTop >= 0 && state.boardTop < 500, JSON.stringify(state));
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- stop button follows the turn, not the status field ---------- */
+await run("composer: stop button only while a turn runs", async () => {
+  // A session whose status field still says "running" long after its last turn
+  // ended: the process was killed mid-turn, so nothing rewrote the field. The
+  // stop button used to stay on forever because it trusted that field.
+  const stale = await newPage(browser, {});
+  await stale.page.goto(`${base}/s/fs_stale_status`);
+  await stale.page.waitForSelector(".composer", { timeout: 5000 });
+  await stale.page.waitForTimeout(300);
+  check("状态字段陈旧时不显示停止按钮",
+    await stale.page.locator(".composer-stop").isVisible() === false,
+    await stale.page.evaluate(() => document.body.className));
+  check("陈旧状态下不出现执行中提示",
+    !(await stale.page.locator(".composer-status").innerText()).includes("正在执行"));
+  check("陈旧状态无 console error", stale.errors.length === 0, stale.errors.join(" | "));
+  await stale.context.close();
+
+  // The same status, but this turn really is still open: no terminal event after
+  // its started one.
+  const live = await newPage(browser, {});
+  await live.page.goto(`${base}/s/fs_live_turn`);
+  await live.page.waitForSelector(".composer", { timeout: 5000 });
+  await live.page.waitForTimeout(300);
+  check("回合未结束时显示停止按钮",
+    await live.page.locator(".composer-stop").isVisible(),
+    await live.page.evaluate(() => document.body.className));
+  check("回合未结束时给出执行中提示",
+    (await live.page.locator(".composer-status").innerText()).includes("正在执行"));
+  check("运行态无 console error", live.errors.length === 0, live.errors.join(" | "));
+  await live.context.close();
+});
+
+/* ---------- overview: the counters have their own tab ---------- */
+await run("overview: kpi lives in its own tab", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_single_agent`);
+  await page.waitForSelector(".composer", { timeout: 5000 });
+
+  // The strip used to sit above every view; six counters floating over the
+  // transcript, the timeline and the tree alike.
+  checkEqual("对话视图不显示 KPI", await page.locator(".kpi").count(), 0);
+
+  await page.click('.seg button[data-mode="overview"]');
+  await page.waitForSelector(".kpi", { timeout: 3000 });
+  const text = await page.locator(".kpi").innerText();
+  check("概览列出回合", text.includes("回合"), text.replace(/\n/g, " "));
+  const turnsCell = await page.locator(".kpi div").first().innerText();
+  check("回合只数用户回合", turnsCell.startsWith("回合\n1"), turnsCell.replace(/\n/g, " "));
+  check("执行轮作为副标注", turnsCell.includes("+2 执行轮"), turnsCell.replace(/\n/g, " "));
+  check("概览仍列出 token 与模型", text.includes("Token") && text.includes("demo-model"));
+
+  await page.click('.seg button[data-mode="tree"]');
+  await page.waitForTimeout(250);
+  checkEqual("切到结构视图后 KPI 不在", await page.locator(".kpi").count(), 0);
+
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- tree: one user turn, its execution turns underneath ---------- */
+await run("tree: execution turns nest under the user turn", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_multi_agent`);
+  await page.waitForSelector(".composer", { timeout: 5000 });
+
+  await page.click('.seg button[data-mode="tree"]');
+  await page.waitForSelector('.tnode[data-node="ft_user"]', { timeout: 3000 });
+
+  const userRow = await page.locator('.tnode[data-node="ft_user"]').innerText();
+  check("用户轮标为回合", userRow.includes("回合"), userRow.replace(/\n/g, " "));
+
+  const execRow = await page.locator('.tnode[data-node="ft_exec"]');
+  const execText = await execRow.innerText();
+  check("派发轮标为执行轮", execText.includes("执行轮"), execText.replace(/\n/g, " "));
+  checkEqual("执行轮挂在用户回合下", await execRow.getAttribute("data-parent"), "ft_user");
+
+  const indent = async (selector) => page.locator(selector)
+    .evaluate((node) => parseFloat(getComputedStyle(node).paddingLeft) || 0);
+  const userPad = await indent('.tnode[data-node="ft_user"]');
+  const execPad = await indent('.tnode[data-node="ft_exec"]');
+  check("执行轮缩进更深", execPad > userPad, userPad + " -> " + execPad);
+
   check("无 console error", errors.length === 0, errors.join(" | "));
   await context.close();
 });

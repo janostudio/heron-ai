@@ -176,6 +176,7 @@
     "output_tokens": 400,
     "models": [
       "demo-model"
-    ]
+    ],
+    "internal_turns": 2
   }
 }
