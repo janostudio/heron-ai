@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/heron-ai/heron-engine/internal/eval"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -63,6 +64,54 @@ func newWebFixture(t *testing.T) (*Handler, string) {
 	handler := NewRuntimeHandlerWithSessionsAndTasks(nil, writer, nil, nil)
 	handler.SetFileStore(files)
 	return handler, sessionID
+}
+
+// One user message leaves more than one FlowTurn behind: the dispatch to a
+// downstream Team, then the continuation after the tool result. The KPI counts
+// what the user asked for, and reports the rest separately — a single question
+// used to read as four turns.
+func TestFactsCountUserTurnsSeparatelyFromInternalOnes(t *testing.T) {
+	facts := &eval.SessionFacts{FlowTurns: []eval.FlowTurnFact{
+		{FlowTurnID: "ft_user", Origin: "user", Input: "查一下主分支"},
+		{FlowTurnID: "ft_tool", Origin: "tool"},
+		{FlowTurnID: "ft_dispatch"}, // 下游 Team 的派发轮，没有 turn.started
+		{FlowTurnID: "ft_legacy", Input: "旧记录没有 origin"},
+	}}
+
+	view := projectFacts(facts)
+	require.Equal(t, 2, view.Turns, "user turns: the origin=user one and the legacy one")
+	require.Equal(t, 2, view.InternalTurns, "tool continuation and the dispatch turn")
+}
+
+// The tree has to show one user question with the execution turns it started;
+// a dispatch turn belongs under the turn that called the Team tool, not beside
+// it as another 回合.
+func TestRecordNestsExecutionTurnsUnderTheirUserTurn(t *testing.T) {
+	events := []storage.SessionEvent{
+		{EventHeader: types.EventHeader{Type: types.EventFlowTurnStarted, FlowSessionID: "fs_x", FlowTurnID: "ft_user"}},
+		{EventHeader: types.EventHeader{Type: types.EventTeamTurnStarted, FlowSessionID: "fs_x",
+			FlowTurnID: "ft_exec", TeamTurnID: "tt_1", TeamID: "dev-lead"}},
+	}
+	facts := &eval.SessionFacts{
+		FlowSessionID: "fs_x",
+		Events:        events,
+		Graph:         eval.NewGraph(events),
+		FlowTurns: []eval.FlowTurnFact{
+			{FlowTurnID: "ft_user", Origin: "user", Input: "查分支"},
+			{FlowTurnID: "ft_exec", Origin: "tool", CausedBy: "ft_user"},
+		},
+	}
+
+	nodes := buildRecordResponse(facts, 0, 0)["nodes"].([]nodeView)
+	byID := make(map[string]nodeView, len(nodes))
+	for _, node := range nodes {
+		byID[node.ID] = node
+	}
+	require.True(t, byID["ft_user"].UserTurn)
+	require.Equal(t, "fs_x", byID["ft_user"].Parent, "a user turn hangs off the session")
+	require.Equal(t, "ft_user", byID["ft_exec"].Parent)
+	require.False(t, byID["ft_exec"].UserTurn)
+	require.Equal(t, "tool", byID["ft_exec"].Origin)
 }
 
 func TestSessionListReturnsIndex(t *testing.T) {

@@ -101,7 +101,19 @@ func readSession(fs storage.FileStore, id, dir string) (Session, bool) {
 				sessionUpdatedAt = wrapper.Session.UpdatedAt
 			}
 		case types.EventFlowTurnStarted:
-			session.Turns++
+			// The row shows how many times the user spoke. A dispatch to a
+			// downstream Team and the continuation after a tool result are also
+			// FlowTurns, but they are the engine's own steps.
+			var started struct {
+				Turn types.FlowTurn `json:"turn"`
+			}
+			origin := ""
+			if decode(event.Payload, &started) == nil {
+				origin = started.Turn.Origin
+			}
+			if origin == "" || origin == "user" {
+				session.Turns++
+			}
 			if !titleSet {
 				if input, _ := event.Payload["input"].(string); strings.TrimSpace(input) != "" {
 					session.Title = truncateTitle(input)

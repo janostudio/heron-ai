@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"strings"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/storage"
@@ -34,8 +35,18 @@ type SessionFacts struct {
 type FlowTurnFact struct {
 	FlowTurnID string
 	Input      string
-	Status     types.TurnStatus
-	Next       *types.Route
+	// Origin is who started the turn: "user", "mailbox" or a tool / approval
+	// resume. One user message can leave several FlowTurns behind (a dispatch to
+	// a downstream Team, the continuation after a tool result), so a count of
+	// turns has to say which kind it is counting.
+	Origin string
+	// CausedBy is the FlowTurn whose action started this one when the events say
+	// so: a dispatch turn points at the turn that called the Team tool, a resume
+	// turn at the turn it continues. Empty for a user turn and whenever the
+	// cause is not recorded.
+	CausedBy string
+	Status   types.TurnStatus
+	Next     *types.Route
 	// Teams are the Team ids activated during this turn, in execution order.
 	Teams     []string
 	TeamTurns []TeamTurnFact
@@ -216,6 +227,7 @@ func deriveFlowTurns(graph *Graph, events []storage.SessionEvent) []FlowTurnFact
 		if turn, ok := index.flowTurns[node.ID]; ok {
 			fact.Input = turn.Input
 			fact.Next = turn.Next
+			fact.Origin = turn.Origin
 		}
 
 		seenTeams := make(map[string]bool)
@@ -231,7 +243,93 @@ func deriveFlowTurns(graph *Graph, events []storage.SessionEvent) []FlowTurnFact
 		}
 		facts = append(facts, fact)
 	}
+	linkTurnCauses(facts, events)
 	return facts
+}
+
+// linkTurnCauses records, for each execution turn, the turn that started it.
+//
+// A dispatched Team runs as its own FlowTurn (flow.RunTeam): the dispatching
+// turn has usually ended by then — the dispatch is asynchronous, so the caller
+// is not held open for the callee — and nesting the two in events would mean
+// writing team events into a turn that already emitted its terminal event. The
+// link survives elsewhere: the callee's TeamSession names the AgentTurn that
+// created it, and that call turn belongs to the caller's turn. Reading it back
+// is what lets a viewer show one user question with the turns it started,
+// instead of four turns at the same level.
+func linkTurnCauses(facts []FlowTurnFact, events []storage.SessionEvent) {
+	flowOfTeamTurn := make(map[string]string)
+	cause := make(map[string]string)
+	for _, event := range events {
+		switch event.Type {
+		case types.EventTeamTurnStarted, types.EventTeamTurnCompleted,
+			types.EventTeamTurnWaitingInput, types.EventTeamTurnWaitingTool,
+			types.EventTeamTurnWaitingApproval:
+			if event.TeamTurnID != "" && event.FlowTurnID != "" {
+				flowOfTeamTurn[event.TeamTurnID] = event.FlowTurnID
+			}
+		}
+	}
+	for _, event := range events {
+		switch event.Type {
+		case types.EventTeamSessionCreated, types.EventTeamSessionUpdated:
+			session, ok := payloadAs[types.TeamSession](event.Payload, "team_session")
+			if !ok || session.DispatchedBy == nil || event.FlowTurnID == "" {
+				continue
+			}
+			// The caller's call turn reads "<team turn id>:<call id>"; its team
+			// turn names the turn the dispatch came from.
+			callTurn := session.DispatchedBy.AgentTurnID
+			cut := strings.LastIndex(callTurn, ":")
+			if cut <= 0 {
+				continue
+			}
+			parent := flowOfTeamTurn[callTurn[:cut]]
+			if parent == "" || parent == event.FlowTurnID {
+				continue
+			}
+			cause[event.FlowTurnID] = parent
+		}
+	}
+
+	// Facts arrive in first-event order, so a single pass finds the question a
+	// turn belongs to. The explicit cause is preferred; the fallback covers the
+	// resume turn, which the runtime starts without re-stating its dispatcher:
+	// it is still running for the last question that was asked.
+	lastUserTurn := ""
+	for i := range facts {
+		if facts[i].Origin == "user" {
+			lastUserTurn = facts[i].FlowTurnID
+			continue
+		}
+		facts[i].CausedBy = cause[facts[i].FlowTurnID]
+		if facts[i].CausedBy == "" && lastUserTurn != "" {
+			facts[i].CausedBy = lastUserTurn
+		}
+	}
+
+	// A cause chain that loops back would make the tree unrenderable; drop the
+	// link rather than trust it.
+	byID := make(map[string]int, len(facts))
+	for i := range facts {
+		byID[facts[i].FlowTurnID] = i
+	}
+	for i := range facts {
+		seen := map[string]bool{facts[i].FlowTurnID: true}
+		id := facts[i].CausedBy
+		for id != "" {
+			if seen[id] {
+				facts[i].CausedBy = ""
+				break
+			}
+			seen[id] = true
+			next, ok := byID[id]
+			if !ok {
+				break
+			}
+			id = facts[next].CausedBy
+		}
+	}
 }
 
 // childrenOfKind indexes the children of every node of parentKind by their
