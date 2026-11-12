@@ -108,21 +108,30 @@ type nodeView struct {
 	AgentID       string         `json:"agent_id,omitempty"`
 	TeamID        string         `json:"team_id,omitempty"`
 	FlowSessionID string         `json:"flow_session_id,omitempty"`
+	// Origin and UserTurn describe a flow_turn node: a dispatch or resume turn is
+	// an execution turn, not something the user asked for, and the tree labels
+	// the two differently.
+	Origin   string `json:"origin,omitempty"`
+	UserTurn bool   `json:"user_turn,omitempty"`
 }
 
 // factsView is the KPI strip. Every number is derived, never stored, so it
 // always agrees with the events below it.
 type factsView struct {
-	Turns        int      `json:"turns"`
-	TeamTurns    int      `json:"team_turns"`
-	Calls        int      `json:"calls"`
-	ToolCalls    int      `json:"tool_calls"`
-	ToolFailure  int      `json:"tool_failures"`
-	Compactions  int      `json:"compactions"`
-	Mailbox      int      `json:"mailbox_messages"`
-	Models       []string `json:"models,omitempty"`
-	InputTokens  int      `json:"input_tokens"`
-	OutputTokens int      `json:"output_tokens"`
+	// Turns counts user turns only: one user message can leave several FlowTurns
+	// behind (the dispatch to a downstream Team, the continuation after a tool
+	// result), and those are reported separately as internal turns.
+	Turns         int      `json:"turns"`
+	InternalTurns int      `json:"internal_turns"`
+	TeamTurns     int      `json:"team_turns"`
+	Calls         int      `json:"calls"`
+	ToolCalls     int      `json:"tool_calls"`
+	ToolFailure   int      `json:"tool_failures"`
+	Compactions   int      `json:"compactions"`
+	Mailbox       int      `json:"mailbox_messages"`
+	Models        []string `json:"models,omitempty"`
+	InputTokens   int      `json:"input_tokens"`
+	OutputTokens  int      `json:"output_tokens"`
 }
 
 // maxPayloadBytes keeps one runaway tool output from turning the whole record
@@ -191,13 +200,32 @@ func buildRecordResponse(facts *eval.SessionFacts, afterSeq int64, limit int) ma
 		events = append(events, projectEvent(event))
 	}
 
+	// A dispatched Team runs as its own FlowTurn, so the tree would otherwise
+	// show one user question as several sibling turns. CausedBy reattaches them.
+	causes := make(map[string]string, len(facts.FlowTurns))
+	userTurns := make(map[string]bool, len(facts.FlowTurns))
+	origins := make(map[string]string, len(facts.FlowTurns))
+	for _, turn := range facts.FlowTurns {
+		if turn.CausedBy != "" {
+			causes[turn.FlowTurnID] = turn.CausedBy
+		}
+		userTurns[turn.FlowTurnID] = isUserTurn(turn)
+		origins[turn.FlowTurnID] = turn.Origin
+	}
+
 	nodes := make([]nodeView, 0, 32)
 	if facts.Graph != nil {
 		for _, node := range facts.Graph.NodesOfKind(eval.NodeFlowSession) {
 			nodes = append(nodes, projectNode(node))
 		}
 		for _, node := range facts.Graph.NodesOfKind(eval.NodeFlowTurn) {
-			nodes = append(nodes, projectNode(node))
+			view := projectNode(node)
+			view.UserTurn = userTurns[node.ID]
+			view.Origin = origins[node.ID]
+			if cause, ok := causes[node.ID]; ok {
+				view.Parent = cause
+			}
+			nodes = append(nodes, view)
 		}
 		for _, node := range facts.Graph.NodesOfKind(eval.NodeTeamTurn) {
 			nodes = append(nodes, projectNode(node))
@@ -305,14 +333,36 @@ func projectNode(node *eval.Node) nodeView {
 	return view
 }
 
+// isUserTurn reports whether a FlowTurn started from a user message.
+//
+// Origin is the direct answer. Records written before Origin existed carry the
+// user's text as Input and nothing else, so a non-empty Input stands in for
+// them; a turn with neither is a Team dispatch the engine numbered as a Flow
+// turn, and counting it would make one question look like four.
+func isUserTurn(turn eval.FlowTurnFact) bool {
+	switch turn.Origin {
+	case "user":
+		return true
+	case "":
+		return strings.TrimSpace(turn.Input) != ""
+	default:
+		return false
+	}
+}
+
 func projectFacts(facts *eval.SessionFacts) factsView {
-	view := factsView{Turns: len(facts.FlowTurns)}
+	view := factsView{}
 	usage := facts.Usage()
 	view.InputTokens = usage.PromptTokens
 	view.OutputTokens = usage.CompletionTokens
 
 	models := make(map[string]bool)
 	for _, turn := range facts.FlowTurns {
+		if isUserTurn(turn) {
+			view.Turns++
+		} else {
+			view.InternalTurns++
+		}
 		view.TeamTurns += len(turn.TeamTurns)
 		for _, teamTurn := range turn.TeamTurns {
 			view.Calls += len(teamTurn.Calls)

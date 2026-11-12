@@ -202,6 +202,10 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 	mux.HandleFunc("/api/sessions", handler.HandleRun)
 	mux.HandleFunc("/api/sessions/turn", handler.HandleTurn)
 	mux.HandleFunc("/api/status", handler.HandleStatus)
+	// Configuration graph plus per-session execution state. The event stream
+	// can only show what already ran; this is what lets a board show the Teams
+	// that have not started yet.
+	mux.HandleFunc("/api/topology", handler.HandleTopology)
 	// Readiness for an embedding client: it starts sending work only after the
 	// engine reports it has a runtime, and the counts tell an operator whether
 	// the timers survived a restart.

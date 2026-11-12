@@ -112,10 +112,10 @@ func TestLoadAgentSessionsIgnoresMalformedPayload(t *testing.T) {
 	require.Equal(t, types.SessionRunning, sessions[session.ID+":writer"].Status)
 }
 
-// TestLoadTeamSessionsFoldsLatestPerTeam verifies the read path a
-// state-driven scheduler needs: the last status written for a Team wins, so
-// "is this Team executing?" is answerable from the event stream alone.
-func TestLoadTeamSessionsFoldsLatestPerTeam(t *testing.T) {
+// TestLoadTeamInstancesFoldsLatestPerInstance verifies the read path a
+// state-driven scheduler needs: the last status written for an instance wins,
+// and a per_task Team keeps one entry per instance rather than one per Team.
+func TestLoadTeamInstancesFoldsLatestPerInstance(t *testing.T) {
 	rt, _ := newMailboxTestRuntime(t)
 	ctx := context.Background()
 	session, _ := mailboxTestSession(t)
@@ -125,11 +125,11 @@ func TestLoadTeamSessionsFoldsLatestPerTeam(t *testing.T) {
 	appendTeamSessionEvent(t, rt, session.ID, "worktree", types.SessionCompleted)
 	appendTeamSessionEvent(t, rt, session.ID, "owner", types.SessionIdle)
 
-	sessions, err := rt.loadTeamSessions(ctx, session.ID)
+	instances, err := rt.loadTeamInstances(ctx, session.ID)
 	require.NoError(t, err)
-	require.Len(t, sessions, 2)
-	require.Equal(t, types.SessionIdle, sessions["owner"].Status)
-	require.Equal(t, types.SessionCompleted, sessions["worktree"].Status)
+	require.Len(t, instances, 2)
+	require.Equal(t, types.SessionIdle, instances["owner"][0].Status)
+	require.Equal(t, types.SessionCompleted, instances["worktree"][0].Status)
 }
 
 // TestTeamIdleIsTheSchedulingRule pins the one rule the model adds: a Team that
@@ -142,26 +142,26 @@ func TestTeamIdleIsTheSchedulingRule(t *testing.T) {
 	appendTeamSessionEvent(t, rt, session.ID, "owner", types.SessionRunning)
 	appendTeamSessionEvent(t, rt, session.ID, "worktree", types.SessionCompleted)
 
-	sessions, err := rt.loadTeamSessions(ctx, session.ID)
+	instances, err := rt.loadTeamInstances(ctx, session.ID)
 	require.NoError(t, err)
 
-	require.False(t, teamIdle(sessions, "owner"), "a running team is busy")
-	require.True(t, teamIdle(sessions, "worktree"), "a completed team is free")
-	require.True(t, teamIdle(sessions, "never-seen"), "a team that never ran is free")
+	require.False(t, teamIdle(instances, "owner"), "a running team is busy")
+	require.True(t, teamIdle(instances, "worktree"), "a completed team is free")
+	require.True(t, teamIdle(instances, "never-seen"), "a team that never ran is free")
 }
 
 // TestLoadTeamSessionsEmptySessionIsNotAnError keeps the read path usable on a
 // fresh session: an empty stream folds to no sessions rather than failing.
-func TestLoadTeamSessionsEmptySessionIsNotAnError(t *testing.T) {
+func TestLoadTeamInstancesEmptySessionIsNotAnError(t *testing.T) {
 	rt, _ := newMailboxTestRuntime(t)
-	sessions, err := rt.loadTeamSessions(context.Background(), "fs_never_written")
+	instances, err := rt.loadTeamInstances(context.Background(), "fs_never_written")
 	require.NoError(t, err)
-	require.Empty(t, sessions)
+	require.Empty(t, instances)
 }
 
 // TestLoadTeamSessionsIgnoresMalformedPayload guards the fold against one bad
 // event hiding every other Team's state.
-func TestLoadTeamSessionsIgnoresMalformedPayload(t *testing.T) {
+func TestLoadTeamInstancesIgnoresMalformedPayload(t *testing.T) {
 	rt, _ := newMailboxTestRuntime(t)
 	ctx := context.Background()
 	session, _ := mailboxTestSession(t)
@@ -175,8 +175,8 @@ func TestLoadTeamSessionsIgnoresMalformedPayload(t *testing.T) {
 		Payload: map[string]any{teamSessionPayloadKey: "not-a-session"},
 	}))
 
-	sessions, err := rt.loadTeamSessions(ctx, session.ID)
+	instances, err := rt.loadTeamInstances(ctx, session.ID)
 	require.NoError(t, err)
-	require.Len(t, sessions, 1)
-	require.Equal(t, types.SessionRunning, sessions["owner"].Status)
+	require.Len(t, instances, 1)
+	require.Equal(t, types.SessionRunning, instances["owner"][0].Status)
 }

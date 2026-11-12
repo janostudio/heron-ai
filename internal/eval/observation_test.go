@@ -291,3 +291,67 @@ func TestObserveRequiresSessionID(t *testing.T) {
 		t.Fatal("expected an error for a blank flow session id")
 	}
 }
+
+// A dispatched Team runs as its own FlowTurn, and that turn carries no
+// session.turn.started of its own: the caller's turn was still open when the
+// dispatch left, and it closes before the callee finishes. The link back to the
+// cause is in the callee's TeamSession, and reading it is what lets a viewer
+// show one user question instead of four sibling turns.
+func TestObserveLinksDispatchTurnToItsCause(t *testing.T) {
+	f := newFixture(t)
+	f.append(storage.LayerFlow,
+		types.EventHeader{Type: types.EventFlowSessionCreated, FlowSessionID: fixtureSession},
+		map[string]any{"session": map[string]any{"id": fixtureSession, "flow_id": "eval_fixture"}})
+
+	const userTurn, dispatchTurn = "ft_user", "ft_dispatch"
+	f.append(storage.LayerFlow,
+		types.EventHeader{Type: types.EventFlowTurnStarted, FlowSessionID: fixtureSession, FlowTurnID: userTurn},
+		map[string]any{"input": "查主分支", "turn": types.FlowTurn{
+			ID: userTurn, FlowSessionID: fixtureSession, Input: "查主分支",
+			Status: types.TurnRunning, Origin: "user",
+		}})
+	f.append(storage.LayerFlow,
+		types.EventHeader{Type: types.EventTeamTurnStarted, FlowSessionID: fixtureSession,
+			FlowTurnID: userTurn, TeamTurnID: "tt_caller", TeamID: "frontdesk"},
+		map[string]any{"team_turn": types.TeamTurn{ID: "tt_caller", TeamID: "frontdesk", Status: types.TurnRunning}})
+
+	// The callee's session names the call turn that created it, and that call
+	// turn belongs to the caller's turn.
+	f.append(storage.LayerFlow,
+		types.EventHeader{Type: types.EventTeamSessionCreated, FlowSessionID: fixtureSession, FlowTurnID: dispatchTurn},
+		map[string]any{"team_session": types.TeamSession{
+			ID: fixtureSession + ":dev-lead", FlowSessionID: fixtureSession, TeamID: "dev-lead",
+			Status: types.SessionRunning,
+			DispatchedBy: &types.TeamSessionRef{
+				TeamSessionID: fixtureSession + ":frontdesk",
+				CallID:        "receptionist",
+				AgentTurnID:   "tt_caller:receptionist",
+			},
+		}})
+	f.append(storage.LayerFlow,
+		types.EventHeader{Type: types.EventTeamTurnStarted, FlowSessionID: fixtureSession,
+			FlowTurnID: dispatchTurn, TeamTurnID: "tt_callee", TeamID: "dev-lead"},
+		map[string]any{"team_turn": types.TeamTurn{ID: "tt_callee", TeamID: "dev-lead", Status: types.TurnRunning}})
+
+	// The resume turn continues the same question but re-states no dispatcher:
+	// the runtime starts it when the pending Team call returns.
+	const resumeTurn = "ft_resume"
+	f.append(storage.LayerFlow,
+		types.EventHeader{Type: types.EventFlowTurnStarted, FlowSessionID: fixtureSession, FlowTurnID: resumeTurn},
+		map[string]any{"turn": types.FlowTurn{ID: resumeTurn, FlowSessionID: fixtureSession, Status: types.TurnRunning, Origin: "tool"}})
+
+	facts := f.observe()
+	causes := make(map[string]string)
+	for _, turn := range facts.FlowTurns {
+		causes[turn.FlowTurnID] = turn.CausedBy
+	}
+	if got := causes[dispatchTurn]; got != userTurn {
+		t.Fatalf("dispatch turn cause = %q, want %q", got, userTurn)
+	}
+	if got := causes[resumeTurn]; got != userTurn {
+		t.Fatalf("resume turn cause = %q, want %q (the question it continues)", got, userTurn)
+	}
+	if got := causes[userTurn]; got != "" {
+		t.Fatalf("user turn must have no cause, got %q", got)
+	}
+}

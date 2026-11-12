@@ -1,0 +1,72 @@
+{
+  "flow_id": "demo_flow",
+  "entry": "desk",
+  "teams": [
+    {
+      "name": "desk",
+      "team_id": "desk",
+      "goal": "answer the user and route the work",
+      "entry": true,
+      "lifecycle": "resident",
+      "can_activate": [
+        "planner"
+      ],
+      "calls": [
+        {
+          "name": "reception",
+          "type": "agent",
+          "agent": "receptionist"
+        }
+      ],
+      "status": "idle",
+      "call_status": {
+        "reception": "idle"
+      },
+      "instances": 1
+    },
+    {
+      "name": "planner",
+      "team_id": "planner",
+      "goal": "turn the request into a plan",
+      "entry": false,
+      "lifecycle": "per_task",
+      "can_activate": [
+        "fixer",
+        "checker"
+      ],
+      "calls": [
+        {
+          "name": "plan",
+          "type": "agent",
+          "agent": "planner"
+        }
+      ],
+      "status": "running",
+      "call_status": {
+        "plan": "running"
+      },
+      "instances": 1,
+      "running_instances": 1
+    },
+    {
+      "name": "fixer",
+      "team_id": "fixer",
+      "goal": "apply the smallest change",
+      "entry": false,
+      "lifecycle": "per_task",
+      "calls": [
+        {
+          "name": "patch",
+          "type": "agent",
+          "agent": "fixer"
+        },
+        {
+          "name": "slot",
+          "type": "command"
+        }
+      ],
+      "status": "never",
+      "instances": 0
+    }
+  ]
+}

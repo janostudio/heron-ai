@@ -142,11 +142,13 @@
       "team_id": "default",
       "created_at": "2026-11-03T02:00:21.000Z",
       "payload": {
-        "team_turn": {
-          "id": "tt_single",
-          "team_id": "default",
-          "status": "completed",
-          "started_at": "2026-11-03T02:00:00.500Z"
+        "team_result": {
+          "turn": {
+            "id": "tt_single",
+            "team_id": "default",
+            "status": "completed",
+            "started_at": "2026-11-03T02:00:00.500Z"
+          }
         }
       }
     },
@@ -176,6 +178,7 @@
     "output_tokens": 400,
     "models": [
       "demo-model"
-    ]
+    ],
+    "internal_turns": 2
   }
 }

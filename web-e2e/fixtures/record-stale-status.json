@@ -1,0 +1,186 @@
+{
+  "session": {
+    "id": "fs_stale_status",
+    "status": "running"
+  },
+  "events": [
+    {
+      "seq": 1,
+      "type": "session.turn.started",
+      "flow_turn_id": "ft_single",
+      "team_turn_id": "",
+      "call_turn_id": "",
+      "team_id": "",
+      "created_at": "2026-11-03T02:00:00.000Z",
+      "payload": {
+        "input": "看看当前目录",
+        "turn": {
+          "id": "ft_single",
+          "flow_session_id": "fs_single_agent",
+          "attempt": 1,
+          "input": "看看当前目录",
+          "status": "waiting_input",
+          "started_at": "2026-11-03T02:00:00.000Z",
+          "context_blocks": [
+            {
+              "kind": "input",
+              "text": "看看当前目录",
+              "source": "http",
+              "parts": [
+                {
+                  "type": "file",
+                  "media": {
+                    "name": "note.txt",
+                    "mime_type": "text/plain",
+                    "kind": "file",
+                    "size_bytes": 16,
+                    "source_type": "base64"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "seq": 2,
+      "type": "session.team_turn.started",
+      "flow_turn_id": "ft_single",
+      "team_turn_id": "tt_single",
+      "call_turn_id": "",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:00:00.500Z",
+      "payload": {
+        "input": "看看当前目录",
+        "team_turn": {
+          "id": "tt_single",
+          "team_id": "default",
+          "status": "running"
+        }
+      }
+    },
+    {
+      "seq": 3,
+      "type": "session.agent_turn.started",
+      "flow_turn_id": "ft_single",
+      "team_turn_id": "tt_single",
+      "call_turn_id": "tt_single:coordinator",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:00:01.000Z",
+      "payload": {
+        "call": "coordinator"
+      }
+    },
+    {
+      "seq": 4,
+      "type": "session.tool_call.started",
+      "flow_turn_id": "ft_single",
+      "team_turn_id": "tt_single",
+      "call_turn_id": "tt_single:coordinator",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:00:02.000Z",
+      "payload": {
+        "tool_call_id": "c1",
+        "tool_name": "Bash",
+        "arguments": {
+          "command": "ls -la"
+        }
+      }
+    },
+    {
+      "seq": 5,
+      "type": "session.tool_call.completed",
+      "flow_turn_id": "ft_single",
+      "team_turn_id": "tt_single",
+      "call_turn_id": "tt_single:coordinator",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:00:03.000Z",
+      "payload": {
+        "tool_call_id": "c1",
+        "tool_name": "Bash",
+        "content": "total 8\ndrwxr-xr-x 4 root root 4096 .agents"
+      }
+    },
+    {
+      "seq": 6,
+      "type": "session.agent.model_response",
+      "flow_turn_id": "ft_single",
+      "team_turn_id": "tt_single",
+      "call_turn_id": "tt_single:coordinator",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:00:19.000Z",
+      "payload": {
+        "finish_reason": "stop",
+        "model": "demo-model",
+        "round": 0,
+        "structured": true,
+        "reply": "当前目录下有一个 `.agents` 目录。\n\n**要点**\n\n- 只有一个目录\n- 没有其它文件\n\n```bash\nls -la\n```\n\n| 项 | 值 |\n|---|---|\n| 目录 | 1 |\n",
+        "text": "{\"reply\": \"当前目录下有一个 `.agents` 目录。\\n\\n**要点**\\n\\n- 只有一个目录\\n- 没有其它文件\\n\\n```bash\\nls -la\\n```\\n\\n| 项 | 值 |\\n|---|---|\\n| 目录 | 1 |\\n\", \"intent_hint\": \"看目录内容\", \"next\": {\"action\": \"proceed\"}}",
+        "usage": {
+          "prompt_tokens": 12114,
+          "completion_tokens": 244,
+          "total_tokens": 12358
+        }
+      }
+    },
+    {
+      "seq": 7,
+      "type": "session.agent_turn.completed",
+      "flow_turn_id": "ft_single",
+      "team_turn_id": "tt_single",
+      "call_turn_id": "tt_single:coordinator",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:00:20.000Z",
+      "payload": {
+        "call_result": {}
+      }
+    },
+    {
+      "seq": 8,
+      "type": "session.team_turn.completed",
+      "flow_turn_id": "ft_single",
+      "team_turn_id": "tt_single",
+      "call_turn_id": "",
+      "team_id": "default",
+      "created_at": "2026-11-03T02:00:21.000Z",
+      "payload": {
+        "team_result": {
+          "turn": {
+            "id": "tt_single",
+            "team_id": "default",
+            "status": "completed",
+            "started_at": "2026-11-03T02:00:00.500Z"
+          }
+        }
+      }
+    },
+    {
+      "seq": 9,
+      "type": "session.turn.idle",
+      "flow_turn_id": "ft_single",
+      "team_turn_id": "",
+      "call_turn_id": "",
+      "team_id": "",
+      "created_at": "2026-11-03T02:00:23.000Z",
+      "payload": {
+        "reply": "当前目录下有一个 `.agents` 目录。\n\n**要点**\n\n- 只有一个目录\n- 没有其它文件\n\n```bash\nls -la\n```\n\n| 项 | 值 |\n|---|---|\n| 目录 | 1 |\n",
+        "origin": "user",
+        "intermediate": false
+      }
+    }
+  ],
+  "nodes": [],
+  "facts": {
+    "turns": 1,
+    "team_turns": 1,
+    "calls": 1,
+    "tool_calls": 1,
+    "tool_failures": 0,
+    "input_tokens": 800,
+    "output_tokens": 400,
+    "models": [
+      "demo-model"
+    ]
+  }
+}

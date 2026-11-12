@@ -326,6 +326,27 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "FlowRuntime is not configured", http.StatusServiceUnavailable)
 }
 
+// HandleTopology returns the Flow's configured Teams and, when session_id is
+// given, their execution state in that session.
+//
+// It answers a different question from the event stream: the stream only knows
+// what ran, so a status board built from it cannot show Teams that have not
+// started. This endpoint carries the graph itself, which makes "nothing is
+// running now" readable without losing the shape of the Flow.
+func (h *Handler) HandleTopology(w http.ResponseWriter, r *http.Request) {
+	runtime, ok := h.runtime.(types.TopologyRuntime)
+	if !ok {
+		http.Error(w, "topology is not supported by this runtime", http.StatusNotImplemented)
+		return
+	}
+	topology, err := runtime.Topology(r.Context(), r.URL.Query().Get("session_id"))
+	if err != nil {
+		writeReadError(w, about("topology", r.URL.Query().Get("session_id"), err), "flow topology")
+		return
+	}
+	writeJSON(w, topology)
+}
+
 // HandleResult returns the durable current FlowSession state. It is a small
 // polling endpoint used by machine transports after a waiting Tool/approval
 // wake-up; the full turn result is returned by /api/run or /api/approvals.

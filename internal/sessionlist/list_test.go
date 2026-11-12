@@ -70,6 +70,24 @@ func TestListSummarizesSession(t *testing.T) {
 	assert.Equal(t, time.Date(2026, 10, 9, 9, 2, 0, 0, time.UTC), s.UpdatedAt.UTC())
 }
 
+// A tool-resume turn is a FlowTurn too, but the row counts what the user sent.
+func TestListCountsUserTurnsOnly(t *testing.T) {
+	root := t.TempDir()
+	writeSession(t, root, "fs_turns", []string{
+		`{"seq":1,"type":"session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_turns","flow_id":"default","status":"idle","updated_at":"2026-10-09T09:00:00Z"}}}`,
+		`{"seq":2,"type":"session.turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"查主分支","turn":{"id":"ft_1","origin":"user","input":"查主分支"}}}`,
+		`{"seq":3,"type":"session.turn.idle","created_at":"2026-10-09T09:00:02Z","payload":{"origin":"user","intermediate":true}}`,
+		`{"seq":4,"type":"session.turn.started","created_at":"2026-10-09T09:00:03Z","payload":{"turn":{"id":"ft_2","origin":"tool"}}}`,
+		`{"seq":5,"type":"session.turn.idle","created_at":"2026-10-09T09:00:04Z","payload":{"origin":"tool"}}`,
+	}, nil)
+
+	sessions, err := List(storage.NewFileStore(root), SessionsDir)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, 1, sessions[0].Turns)
+	assert.Equal(t, "查主分支", sessions[0].Title)
+}
+
 func TestListMarksRunningSessionActive(t *testing.T) {
 	root := t.TempDir()
 	// A turn in flight: session.turn.started with no terminal/waiting event after.
