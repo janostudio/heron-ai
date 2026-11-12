@@ -452,23 +452,19 @@ await run("record: multiple agents", async () => {
   check("team 与 agent 同名时不重复", who.includes("analyze") && !who.includes("analyze / analyze"));
   checkEqual("每条消息都有时间戳", await page.locator(".msg .when").count(), 7);
   await page.click('.seg button[data-mode="run"]');
-  await page.waitForSelector(".run-team", { timeout: 3000 });
-  check("运行看板按 team 分组成框", await page.locator(".run-team").count() >= 1,
-    await page.locator(".run-team").count());
-  check("call 作为行出现在 team 框内", await page.locator(".run-team .run-calls .run-call").count() >= 1,
-    await page.locator(".run-team .run-calls .run-call").count());
-  // A live board labels what is running and nothing else: 空闲 / 未参与 made it
+  await page.waitForSelector(".run-node", { timeout: 3000 });
+  check("运行看板每个 team 一个节点", await page.locator(".run-node").count() === 5,
+    await page.locator(".run-node").count());
+  // default -> probe, default -> facts, probe -> analyze.
+  checkEqual("按 can_activate 画连线", await page.locator(".run-edge").count(), 3);
+  // A live board marks what is running and nothing else: 空闲 / 未参与 made it
   // read as a history list.
-  check("只有运行中的 team 带状态标签",
-    await page.locator('.run-team:not(.running) .run-head .run-state').count() === 0,
-    await page.locator('.run-team:not(.running) .run-head .run-state').count());
-  check("运行中的 team 带运行中标签",
-    (await page.locator(".run-team.running .run-head .run-state").first().innerText()).includes("运行中"));
-  check("配置的委派目的地在卡片上",
-    (await page.locator(".run-edges").first().innerText()).includes("probe"),
-    await page.locator(".run-edges").first().innerText());
-  check("team 框标注生命周期", await page.locator(".run-team .run-badge").count() >= 1,
-    await page.locator(".run-team .run-badge").count());
+  const quiet = await page.locator(".run-node:not(.running) .run-node-calls").allInnerTexts();
+  check("非运行节点不带运行中字样", quiet.every((t) => !t.includes("运行中")), quiet.join(" | "));
+  check("运行中的 team 标出在跑的 call",
+    (await page.locator(".run-node.running .run-node-calls").first().innerText()).includes("运行中"));
+  check("team 节点标注生命周期", await page.locator(".run-node .run-badge").count() >= 1,
+    await page.locator(".run-node .run-badge").count());
 
   await page.click('.seg button[data-mode="waterfall"]');
   await page.waitForSelector(".wf-row", { timeout: 3000 });
@@ -591,22 +587,39 @@ await run("run board: configured graph", async () => {
   await page.waitForSelector(".runboard", { timeout: 5000 });
 
   const summary = await page.locator(".run-summary").innerText();
-  check("summary 报出配置规模", summary.includes("配置 3 个 team"), summary);
-  check("summary 报出在跑数量", summary.includes("当前 2 个在跑"), summary);
+  check("summary 报出配置规模", summary.includes("配置 3 个 team / 4 个 agent"), summary);
+  check("summary 报出在跑数量", summary.includes("当前 1 个 team / 1 个 agent 在跑"), summary);
 
   // The whole point of the graph: a Team that never ran is still on the board.
-  check("未跑过的 team 也在板上", await page.locator('.run-team[data-run-key="cfg:fixer"]').count() === 1);
+  checkEqual("每个 team 一个节点", await page.locator(".run-node").count(), 3);
+  check("未跑过的 team 也在板上", await page.locator('.run-node[data-run-key="cfg:fixer"]').count() === 1);
 
-  const planner = await page.locator('[data-run-key="cfg:planner"]').innerText();
+  const planner = await page.locator('.run-node[data-team="planner"]').innerText();
   check("在跑的 team 标运行中", planner.includes("运行中"), planner);
+  const idleTexts = await page.locator(".run-node:not(.running) .run-node-calls").allInnerTexts();
+  check("非运行节点不带运行中字样", idleTexts.every((t) => !t.includes("运行中")),
+    idleTexts.join(" | "));
 
-  const fixer = await page.locator('.run-team[data-run-key="cfg:fixer"]').innerText();
-  check("未运行的 team 不带状态词", !fixer.includes("未参与") && !fixer.includes("空闲"), fixer);
+  // desk -> planner -> {fixer, checker}: the checker is not bound in this Flow,
+  // so only two edges can be drawn.
+  checkEqual("按 can_activate 画连线", await page.locator(".run-edge").count(), 2);
+  check("在跑的 team 连入的边高亮", await page.locator(".run-edge.active").count() >= 1);
 
-  const edges = await page.locator(".run-edges").first().innerText();
-  check("委派边按配置渲染", edges.includes("planner"), edges);
-
-  check("配置里的 command call 也列出", await page.locator('[data-run-key="cfg:fixer:slot"]').count() === 1);
+  const box = async (selector) => page.locator(selector).evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return { left: Math.round(rect.left), top: Math.round(rect.top) };
+  });
+  const desk = await box('.run-node[data-team="desk"]');
+  const plan = await box('.run-node[data-team="planner"]');
+  const fix = await box('.run-node[data-team="fixer"]');
+  check("入口在最左", desk.left < plan.left, JSON.stringify({ desk: desk.left, planner: plan.left }));
+  check("被派发的 team 在右侧一列", plan.left < fix.left, JSON.stringify({ planner: plan.left, fixer: fix.left }));
+  const canvas = await page.locator(".run-canvas").evaluate((node) => ({
+    width: node.getBoundingClientRect().width,
+    height: node.getBoundingClientRect().height,
+  }));
+  check("画布有确定的宽高（连线按同一套坐标画）", canvas.width > 300 && canvas.height > 60,
+    JSON.stringify(canvas));
   check("无 console error", errors.length === 0, errors.join(" | "));
   await context.close();
 });

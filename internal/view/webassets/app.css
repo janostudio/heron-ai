@@ -83,46 +83,59 @@ body { overflow: hidden; }
   border: 1px dashed var(--border-strong); border-radius: 8px;
   font: inherit; font-size: 12px; color: var(--muted); background: var(--bg-subtle); }
 
-/* Run board: one box per Team, its Calls listed inside the box. Containment is
- * the structure the config actually expresses, so no connector lines are drawn:
- * a row is inside a box because it belongs to that Team. */
+/* Run board: the Flow's own shape. Teams are nodes, `can_activate` is an edge,
+ * and the executing ones are lit. Nothing here describes the past, so a node
+ * has exactly two appearances: running and not. */
 .runboard { margin-bottom: 16px; }
 .run-summary { margin-bottom: 12px; font-size: 12px; color: var(--muted); }
 .run-live { color: var(--accent); font-weight: 600; }
-.run-active { margin: -4px 0 10px; font-size: 12px; color: var(--accent); }
 
-.run-team { border: 1px solid var(--border); border-radius: 12px;
-  background: var(--bg-subtle); margin-bottom: 10px; padding: 10px 12px;
-  animation: run-in .35s ease both; }
-.run-team.running { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(76, 141, 255, .22); }
-.run-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.run-head .run-name { font-weight: 600; }
+/* The canvas is sized from the layout the script computed, so nodes can be
+ * placed absolutely and the edges can be drawn to the same coordinates. */
+.run-scroll { overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; }
+.run-canvas { position: relative; margin: 2px 0 4px; }
+.run-links { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.run-edge { fill: none; stroke: var(--border-strong); stroke-width: 1.4; }
+.run-edge.active { stroke: var(--accent); stroke-width: 2; }
+
+.run-node { position: absolute; display: flex; flex-direction: column; gap: 4px;
+  justify-content: center; padding: 9px 12px; box-sizing: border-box;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-subtle);
+  animation: run-in .3s ease both; }
+.run-node.headless { padding-top: 9px; }
+.run-node.running { border-color: var(--accent); background: rgba(76, 141, 255, .08);
+  box-shadow: 0 0 0 1px rgba(76, 141, 255, .28), 0 4px 16px rgba(76, 141, 255, .14); }
+/* The entry Team is the left rail of the picture; a thicker edge marks it
+ * without spending a word of the name row. */
+.run-node.entry { border-left: 3px solid var(--text); }
+
+.run-node-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.run-node-head .run-name { font-weight: 600; font-size: 13px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
 .run-badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border);
   border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
-.run-head .run-state { margin-left: auto; }
 
-/* The rail is what makes containment readable at a glance: every Call row hangs
- * off the Team box's own spine. */
-.run-calls { margin: 8px 0 0 5px; padding-left: 12px; border-left: 2px solid var(--border); }
-.run-call { display: flex; align-items: center; gap: 8px; padding: 4px 6px;
-  border-radius: 8px; font-size: 12.5px; }
-.run-call:hover { background: var(--bg-sunken); }
-.run-call-name { font-family: var(--mono); font-size: 12px; }
-.run-call-agent { color: var(--muted); }
-.run-call-kind { font-size: 10px; color: var(--faint); }
-.run-call .run-state { margin-left: auto; }
-.run-edges { margin: 8px 0 0 5px; padding-left: 12px; font-size: 11px; color: var(--faint); }
+/* Second line: what the Team runs. It reads as a subtitle, so it never competes
+ * with the name — and when the Team is executing it says which Call is. */
+.run-node-calls { font-size: 11px; color: var(--faint); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.run-node.running .run-node-calls { color: var(--accent); }
 
+/* One dot colour for "not running": a green dot for a Team that ran before and
+ * a hollow one for a Team that never did are both history, which this view does
+ * not report. */
 .run-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%;
   background: var(--border-strong); }
 .run-dot.running { background: var(--accent); box-shadow: 0 0 0 3px rgba(76, 141, 255, .18); }
-.run-dot.idle { background: var(--ok); }
-.run-dot.never { background: transparent; border: 1px solid var(--border-strong); }
 
-.run-state { flex: 0 0 auto; padding: 2px 9px; border-radius: 999px; font-size: 11px;
-  background: var(--bg-sunken); color: var(--faint); }
-.run-team.running .run-state, .run-call.running .run-state {
-  background: rgba(76, 141, 255, .16); color: var(--accent); }
+/* The running Team is marked by the whole node, not by a corner pill: an accent
+ * border, a lit dot and the Call that is executing. A pill in the corner
+ * collided with the lifecycle badge and truncated the name. */
+.run-node.running .run-dot { animation: run-pulse 1.6s ease-in-out infinite; }
+@keyframes run-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(76, 141, 255, .18); }
+  50% { box-shadow: 0 0 0 6px rgba(76, 141, 255, .10); }
+}
 
 @keyframes run-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 

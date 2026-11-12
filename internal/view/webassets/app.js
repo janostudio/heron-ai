@@ -783,7 +783,6 @@
   function showMode(body, mode) {
     if (!body || !currentRecord) { return; }
     currentMode = mode;
-    stopRunLinks();
     stopSessionStream();
     clear(body);
     var hint = document.getElementById("mode-hint");
@@ -2020,95 +2019,6 @@
     });
   }
 
-  /* Draws the dispatch links between a team card and its agent cards.
-   *
-   * Canvas rather than SVG: the running links carry a moving dot, and that is a
-   * per-frame redraw — canvas handles it without touching the DOM tree sixty
-   * times a second. Cards stay real DOM elements so they keep their text
-   * selection, hover and semantics; only the lines live on the canvas. */
-  var runLinkFrame = 0;
-
-  function stopRunLinks() {
-    if (runLinkFrame) {
-      cancelAnimationFrame(runLinkFrame);
-      runLinkFrame = 0;
-    }
-  }
-
-  function floatPoint(p0, p1, p2, p3, t) {
-    var u = 1 - t;
-    return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
-  }
-
-  function drawRunLinks(wrap, canvas, pairs, phase) {
-    var box = wrap.getBoundingClientRect();
-    if (!box.width || !box.height) { return false; }
-    var ratio = window.devicePixelRatio || 1;
-    canvas.width = Math.round(box.width * ratio);
-    canvas.height = Math.round(box.height * ratio);
-    canvas.style.width = box.width + "px";
-    canvas.style.height = box.height + "px";
-
-    var context = canvas.getContext("2d");
-    if (!context) { return false; }
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.clearRect(0, 0, box.width, box.height);
-
-    var running = false;
-    pairs.forEach(function (pair) {
-      var from = pair.from.getBoundingClientRect();
-      var to = pair.to.getBoundingClientRect();
-      // Both ends anchor near the left edge: a full-width team card would send
-      // the curve across the whole board. A short left-rail hop reads as a tree.
-      var x1 = from.left - box.left + 24;
-      var y1 = from.bottom - box.top;
-      var x2 = to.left - box.left + 24;
-      var y2 = to.top - box.top + to.height / 2;
-      var c1y = y1 + Math.max(14, (y2 - y1) / 2);
-      var c2x = x2;
-
-      context.beginPath();
-      context.moveTo(x1, y1);
-      context.bezierCurveTo(x1, c1y, c2x, y2, x2, y2);
-      context.lineWidth = pair.running ? 1.8 : 1;
-      context.strokeStyle = pair.running ? "rgba(36,86,230,.65)" : "rgba(120,130,145,.28)";
-      context.stroke();
-
-      if (!pair.running) { return; }
-      running = true;
-      // Two dots per link, offset so a busy dispatch looks like flow rather
-      // than a single metronome.
-      [0, 0.5].forEach(function (offset) {
-        var t = (phase + offset) % 1;
-        var x = floatPoint(x1, x1, c2x, x2, t);
-        var y = floatPoint(y1, c1y, y2, y2, t);
-        context.beginPath();
-        context.arc(x, y, 2.6, 0, Math.PI * 2);
-        context.fillStyle = "rgba(36,86,230,.95)";
-        context.fill();
-      });
-    });
-
-    return running;
-  }
-
-  function animateRunLinks(wrap, canvas, pairs) {
-    var start = 0;
-    function frame(now) {
-      var phase = ((now - start) / 1800) % 1;
-      var running = drawRunLinks(wrap, canvas, pairs, phase);
-      if (!running) {
-        runLinkFrame = 0;
-        drawRunLinks(wrap, canvas, pairs, 0);
-        return;
-      }
-      runLinkFrame = requestAnimationFrame(frame);
-    }
-    runLinkFrame = requestAnimationFrame(function (now) {
-      start = now;
-      runLinkFrame = requestAnimationFrame(frame);
-    });
-  }
 
   /* A stable color per name, so the same team/agent keeps the same badge
    * across refreshes instead of reshuffling the palette. */
@@ -2157,7 +2067,11 @@
         status: status,
         lifecycle: team.lifecycle || "",
         canActivate: team.can_activate || [],
-        entry: !!team.entry
+        entry: !!team.entry,
+        calls: (team.calls || []).map(function (call) { return call.name; }),
+        runningCalls: (team.calls || []).filter(function (call) {
+          return (team.call_status && team.call_status[call.name]) === "running";
+        }).map(function (call) { return call.name; })
       });
       (team.calls || []).forEach(function (call) {
         var liveCall = liveCalls[team.name + "\u0000" + call.name];
@@ -2196,21 +2110,133 @@
    * The box is the Team, the rows are what it runs: that containment is exactly
    * what the config says, so it is drawn with a border and a rail instead of
    * connector lines between free-floating cards. */
+  /* The Run view is a picture of the Flow's own shape: Teams as nodes, a
+   * `can_activate` edge between them, and the executing ones lit up.
+   *
+   * It deliberately says nothing about the past. A node is either running now
+   * or it is not; there is no 已参与 / 未参与, because a board that answers
+   * "what happened" cannot also answer "what is happening" at a glance. */
+  function runGraphLayout(teams) {
+    var byName = {};
+    teams.forEach(function (team) { byName[team.name] = team; });
+
+    var edges = [];
+    var incoming = {};
+    teams.forEach(function (team) { incoming[team.name] = 0; });
+    teams.forEach(function (team) {
+      (team.canActivate || []).forEach(function (target) {
+        // A can_activate target that is not bound in this Flow cannot be drawn.
+        if (!byName[target]) { return; }
+        edges.push({ from: team.name, to: target });
+        incoming[target] += 1;
+      });
+    });
+
+    // Depth = longest path from a root, so a Team always sits to the right of
+    // everything that can activate it. Roots are the entry Team and Teams
+    // nobody activates. The pass count is bounded by the Team count, which
+    // keeps a misconfigured cycle from looping forever.
+    var depth = {};
+    teams.forEach(function (team) {
+      if (team.entry || incoming[team.name] === 0) { depth[team.name] = 0; }
+    });
+    for (var pass = 0; pass <= teams.length; pass++) {
+      var changed = false;
+      edges.forEach(function (edge) {
+        var from = depth[edge.from] === undefined ? 0 : depth[edge.from];
+        var candidate = Math.min(from + 1, teams.length);
+        if (depth[edge.to] === undefined || depth[edge.to] < candidate) {
+          depth[edge.to] = candidate;
+          changed = true;
+        }
+      });
+      if (!changed) { break; }
+    }
+    teams.forEach(function (team) {
+      if (depth[team.name] === undefined) { depth[team.name] = 0; }
+    });
+
+    var columns = [];
+    teams.forEach(function (team) {
+      var column = depth[team.name];
+      if (!columns[column]) { columns[column] = []; }
+      columns[column].push(team);
+    });
+
+    var NODE_W = 196;
+    var NODE_H = 68;
+    var GAP_X = 88;
+    var GAP_Y = 14;
+    var tallest = 0;
+    columns.forEach(function (column) { tallest = Math.max(tallest, column.length); });
+    var height = Math.max(1, tallest) * NODE_H + Math.max(0, tallest - 1) * GAP_Y;
+    var width = columns.length * NODE_W + Math.max(0, columns.length - 1) * GAP_X;
+
+    var position = {};
+    columns.forEach(function (column, index) {
+      var columnHeight = column.length * NODE_H + Math.max(0, column.length - 1) * GAP_Y;
+      var top = (height - columnHeight) / 2;
+      column.forEach(function (team, row) {
+        position[team.name] = {
+          x: index * (NODE_W + GAP_X),
+          y: top + row * (NODE_H + GAP_Y)
+        };
+      });
+    });
+
+    return {
+      edges: edges, width: width, height: height, position: position,
+      nodeW: NODE_W, nodeH: NODE_H
+    };
+  }
+
+  function renderRunEdges(layout) {
+    var NS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("class", "run-links");
+    svg.setAttribute("width", String(layout.width));
+    svg.setAttribute("height", String(layout.height));
+    svg.setAttribute("viewBox", "0 0 " + layout.width + " " + layout.height);
+
+    layout.edges.forEach(function (edge) {
+      var from = layout.position[edge.from];
+      var to = layout.position[edge.to];
+      if (!from || !to) { return; }
+      var x1 = from.x + layout.nodeW;
+      var y1 = from.y + layout.nodeH / 2;
+      var x2 = to.x;
+      var y2 = to.y + layout.nodeH / 2;
+      var reach = Math.max(28, (x2 - x1) / 2);
+      var path = document.createElementNS(NS, "path");
+      path.setAttribute("d", "M" + x1 + " " + y1 +
+        " C" + (x1 + reach) + " " + y1 + " " + (x2 - reach) + " " + y2 + " " + x2 + " " + y2);
+      path.setAttribute("class", edge.active ? "run-edge active" : "run-edge");
+      svg.appendChild(path);
+    });
+    return svg;
+  }
+
   function renderRunners() {
-    stopRunLinks();
     var wrap = el("div", { class: "runboard" });
     var items = runnerItems();
-
-    var running = items.teams.concat(items.agents).filter(function (item) {
-      return item.status === "running";
+    var runningTeams = items.teams.filter(function (team) {
+      return team.status === "running";
+    });
+    var runningCalls = items.agents.filter(function (agent) {
+      return agent.status === "running";
     }).length;
+
     wrap.appendChild(el("div", { class: "run-summary" },
       items.configured
-        ? el("span", { class: running > 0 ? "run-live" : "muted" },
-            "配置 " + items.teams.length + " 个 team / " + items.agents.length +
-            " 个 agent · 当前 " + running + " 个在跑")
-        : el("span", { class: running > 0 ? "run-live" : "muted" },
-            running > 0 ? "运行中 " + running + " 个" : "当前没有在跑的 team 或 agent。")));
+        ? el("span", { class: runningTeams.length ? "run-live" : "muted" },
+            "配置 " + items.teams.length + " 个 team / " + items.agents.length + " 个 agent · " +
+            (runningTeams.length
+              ? "当前 " + runningTeams.length + " 个 team / " + runningCalls + " 个 agent 在跑"
+              : "当前没有在跑的 team 或 agent"))
+        : el("span", { class: runningTeams.length ? "run-live" : "muted" },
+            runningTeams.length
+              ? "运行中 " + runningTeams.length + " 个 team"
+              : "当前没有在跑的 team 或 agent。")));
 
     if (!items.teams.length) {
       wrap.appendChild(el("div", { class: "empty" },
@@ -2218,69 +2244,53 @@
       return wrap;
     }
 
-    // The running Team may sit far down the list; naming it here means the
-    // board answers "what is running" without scrolling to find the highlight.
-    var runningTeams = items.teams.filter(function (team) {
-      return team.status === "running";
-    }).map(function (team) { return team.name; });
-    if (runningTeams.length) {
-      wrap.appendChild(el("div", { class: "run-active" },
-        "正在运行：" + runningTeams.join("、")));
-    }
-
-    var callsByTeam = {};
-    items.agents.forEach(function (agent) {
-      var key = agent.teamSessionKey || "";
-      if (!callsByTeam[key]) { callsByTeam[key] = []; }
-      callsByTeam[key].push(agent);
+    var layout = runGraphLayout(items.teams);
+    // An edge is live when the Team it points at is executing: that is the
+    // dispatch currently in flight.
+    var runningNames = {};
+    runningTeams.forEach(function (team) { runningNames[team.name] = true; });
+    layout.edges.forEach(function (edge) {
+      if (runningNames[edge.to]) { edge.active = true; }
     });
+
+    var canvas = el("div", { class: "run-canvas", style: "width:" + layout.width + "px;height:" + layout.height + "px" });
+    canvas.appendChild(renderRunEdges(layout));
 
     var enterIndex = 0;
     items.teams.forEach(function (team) {
-      var calls = callsByTeam[team.key] || [];
-      var card = el("div", {
-        class: "run-team " + team.status,
-        "data-run-key": team.key,
-        style: "animation-delay:" + Math.min(enterIndex++ * 25, 200) + "ms"
+      var spot = layout.position[team.name];
+      var calls = (team.calls || []).join(" · ");
+      var running = team.status === "running";
+      // The name is the label that matters; entry is drawn as a thicker rail on
+      // the left of the node instead of eating the row's width.
+      var meta = team.lifecycle ? [team.lifecycle] : [];
+
+      var node = el("div", {
+        class: "run-node " + team.status + (team.entry ? " entry" : ""),
+        "data-run-key": "cfg:" + team.name,
+        "data-team": team.name,
+        "data-entry": team.entry ? "1" : "0",
+        title: team.name + (team.entry ? "（入口）" : "") + (calls ? "：" + calls : ""),
+        style: "left:" + spot.x + "px;top:" + spot.y + "px;width:" + layout.nodeW +
+          "px;height:" + layout.nodeH + "px;animation-delay:" +
+          Math.min(enterIndex++ * 25, 200) + "ms"
       },
-        el("div", { class: "run-head" },
+        el("div", { class: "run-node-head" },
           runDot(team.status),
           el("span", { class: "run-name" }, team.name),
-          team.entry ? el("span", { class: "run-badge" }, "entry") : null,
-          el("span", { class: "run-badge" }, team.lifecycle || "resident"),
-          runStatusLabel(team.status)
-            ? el("span", { class: "run-state" }, runStatusLabel(team.status)) : null));
+          meta.length ? el("span", { class: "run-badge" }, meta.join(" · ")) : null),
+        el("div", { class: "run-node-calls" },
+          running && team.runningCalls && team.runningCalls.length
+            ? "运行中：" + team.runningCalls.join(" · ")
+            : (calls || "无 call")));
 
-      if (calls.length) {
-        var list = el("div", { class: "run-calls" });
-        calls.forEach(function (agent) {
-          // The row's status dot already carries idle / never; repeating the
-          // word on every row turned the board into a column of identical
-          // labels. Only a running row spells it out.
-          list.appendChild(el("div", {
-              class: "run-call " + agent.status,
-              "data-run-key": agent.key,
-              title: runStatusLabel(agent.status) || "待命"
-            },
-            runDot(agent.status),
-            el("span", { class: "run-call-name" }, agent.call || agent.name),
-            agent.name && agent.name !== agent.call
-              ? el("span", { class: "run-call-agent" }, agent.name) : null,
-            el("span", { class: "run-call-kind" }, agent.callType || "agent"),
-            agent.status === "running"
-              ? el("span", { class: "run-state" }, runStatusLabel(agent.status)) : null));
-        });
-        card.appendChild(list);
-      }
-
-      if (team.canActivate && team.canActivate.length) {
-        card.appendChild(el("div", { class: "run-edges" },
-          "可派 → " + team.canActivate.join(" · ")));
-      }
-
-      wrap.appendChild(card);
+      canvas.appendChild(node);
     });
 
+    // A wide Flow scrolls sideways inside its own frame: the summary line above
+    // it stays put, and the page itself never gets a horizontal scrollbar.
+    var frame = el("div", { class: "run-scroll" }, canvas);
+    wrap.appendChild(frame);
     return wrap;
   }
 
