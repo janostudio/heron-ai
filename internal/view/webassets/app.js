@@ -163,6 +163,25 @@
     return value >= 1000 ? (value / 1000).toFixed(1) + "k" : String(value);
   }
 
+  // cacheRate 把命中量换成一个百分比。分母优先用 miss（网关亲口说"这部分
+  // 是现读的"），没有 miss 时退回输入总量；两个都没有就返回空，让调用方
+  // 显示 "—"，不要用 0% 冒充"没命中"。
+  function cacheRate(hit, miss, input) {
+    hit = hit || 0;
+    var total = (miss || 0) > 0 ? hit + miss : (input || 0);
+    if (!hit && !total) { return ""; }
+    if (!total) { return ""; }
+    return (hit / total * 100).toFixed(1) + "%";
+  }
+
+  // cacheKpi 是 KPI 里那一格：命中率 + 命中量。百分比是判断"前缀有没有被复用"
+  // 的唯一直接信号，命中量说明这个百分比有没有分量（1 token 的 100% 没意义）。
+  function cacheKpi(facts) {
+    var rate = cacheRate(facts.cache_hit_tokens, facts.cache_miss_tokens, facts.input_tokens);
+    if (!rate) { return "\u2014"; }
+    return rate + " \u00b7 " + tokenCount(facts.cache_hit_tokens);
+  }
+
   function statusDot(status) {
     var kind = "dot";
     if (status === "completed") { kind += " ok"; }
@@ -852,8 +871,9 @@
       ["Team \u8f6e\u6b21", facts.team_turns || 0],
       ["Call", facts.calls || 0],
       ["\u5de5\u5177\u8c03\u7528", (facts.tool_calls || 0) + (facts.tool_failures ? " \u00b7 " + facts.tool_failures + " \u5931\u8d25" : "")],
-      ["Token \u5165 / \u51fa", tokenCount(facts.input_tokens) + " / " + tokenCount(facts.output_tokens)],
-      ["\u6a21\u578b", (facts.models || []).join(", ") || "\u2014", "v-model"]
+      ["Token 入 / 出", tokenCount(facts.input_tokens) + " / " + tokenCount(facts.output_tokens)],
+      ["缓存命中", cacheKpi(facts)],
+      ["模型", (facts.models || []).join(", ") || "\u2014", "v-model"]
     ];
     var strip = el("div", { class: "kpi" });
     items.forEach(function (item) {
@@ -1596,7 +1616,8 @@
         map[key] = {
           id: key, events: [], input: "", origin: "", reply: "",
           error: "", intermediate: false, limit: null, startedAt: "", endedAt: "",
-          models: [], promptTokens: 0, completionTokens: 0, attachments: []
+          models: [], promptTokens: 0, completionTokens: 0,
+          cacheHitTokens: 0, cacheMissTokens: 0, attachments: []
         };
         order.push(map[key]);
       }
@@ -1608,6 +1629,11 @@
         if (payload.model && turn.models.indexOf(payload.model) < 0) { turn.models.push(payload.model); }
         turn.promptTokens += usage.prompt_tokens || 0;
         turn.completionTokens += usage.completion_tokens || 0;
+        // 同一件事有两种字段名（OpenAI 兼容 prompt_cache_hit_tokens / Anthropic 兼容
+        // cache_read_input_tokens），而且有网关一次请求两个都发。取较大值，不相加，
+        // 否则命中率会翻倍。
+        turn.cacheHitTokens += Math.max(usage.prompt_cache_hit_tokens || 0, usage.cache_read_input_tokens || 0);
+        turn.cacheMissTokens += usage.prompt_cache_miss_tokens || 0;
       }
       if (event.type === "session.turn.started") {
         if (payload.input) { turn.input = payload.input; }
@@ -1812,9 +1838,15 @@
     var turnSpan = elapsed(turn.startedAt, turn.endedAt);
     if (turnSpan) { head.appendChild(el("span", { class: "turn-span" }, turnSpan)); }
     if (turn.promptTokens || turn.completionTokens) {
-      head.appendChild(el("span", { class: "turn-usage", title: "\u8f93\u5165 / \u8f93\u51fa token" },
-        (turn.models.length ? turn.models.join(", ") + " \u00b7 " : "") +
-        tokenCount(turn.promptTokens) + " / " + tokenCount(turn.completionTokens) + " tok"));
+      var usageTitle = "\u8f93\u5165 / \u8f93\u51fa token";
+      var usageText = (turn.models.length ? turn.models.join(", ") + " \u00b7 " : "") +
+        tokenCount(turn.promptTokens) + " / " + tokenCount(turn.completionTokens) + " tok";
+      var turnRate = cacheRate(turn.cacheHitTokens, turn.cacheMissTokens, turn.promptTokens);
+      if (turnRate) {
+        usageTitle += "\uff0c\u5176\u4e2d\u7f13\u5b58\u547d\u4e2d " + tokenCount(turn.cacheHitTokens) + " token";
+        usageText += " \u00b7 \u7f13\u5b58 " + turnRate;
+      }
+      head.appendChild(el("span", { class: "turn-usage", title: usageTitle }, usageText));
     }
     box.appendChild(head);
 

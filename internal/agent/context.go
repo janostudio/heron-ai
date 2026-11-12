@@ -78,6 +78,29 @@ func NewContextManagerWithCompactor(config types.ContextConfig, estimator Contex
 	}
 }
 
+// ReplaceToolResult rewrites the body of an earlier tool result, keeping its
+// call id so the assistant/tool pairing stays valid.
+//
+// It exists for repeats: a read-only call issued twice with the same arguments
+// returns the same bytes, and keeping both copies makes every following request
+// pay for them again. The caller replaces the older one with a pointer to the
+// newer one.
+func (m *MessageContextManager) ReplaceToolResult(toolCallID, content string) bool {
+	if m == nil || strings.TrimSpace(toolCallID) == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for index := range m.active {
+		if m.active[index].Role != "tool" || m.active[index].ToolCallID != toolCallID {
+			continue
+		}
+		m.active[index].Content = content
+		return true
+	}
+	return false
+}
+
 // AddMessage appends one message and compacts when the threshold is crossed.
 // It is AddMessageContext without a cancellation scope; callers inside a turn
 // pass the turn's context instead, so a compaction cannot outlive the turn.
@@ -303,6 +326,18 @@ func (m *MessageContextManager) controllableTokensLocked() int {
 	return m.estimator.EstimateMessages(controllable) + m.estimator.EstimateTools(m.tools)
 }
 
+// minCompactionSavingLocked is the smallest saving worth a summarisation call:
+// five percent of the input window. Expressed as a share rather than a constant
+// so it scales with the model; a window that is mostly harness-injected context
+// (which compaction must not fold) simply never reaches it, and the turn relies
+// on the hard-limit trims instead of compacting in a loop.
+func (m *MessageContextManager) minCompactionSavingLocked() int {
+	if m.config.MaxInputTokens <= 0 {
+		return 0
+	}
+	return m.config.MaxInputTokens / 20
+}
+
 func (m *MessageContextManager) targetLimitTokens() int {
 	return m.effectiveRatioLimit(m.config.TargetRatio)
 }
@@ -407,6 +442,27 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	}
 	if len(dropped) == 0 && len(selected) == 0 {
 		dropped = groups
+	}
+	if len(dropped) == 0 && strings.TrimSpace(existingSummary) == "" && !m.exceedsHardLimitLocked() {
+		// Nothing falls outside the budget and there is no summary to shrink, so
+		// there is no conversation to summarise. Compact anyway and the manager
+		// would pay for a summary call whose only effect is to rewrite the same
+		// context. Above the hard limit the trims below are what rescue the
+		// request, so that case falls through.
+		return "", 0, nil
+	}
+
+	// Refuse a compaction that would drop almost nothing. It costs a
+	// summarisation call over everything dropped plus a prefix-cache reset, and
+	// in exchange the model loses detail it will re-read.
+	//
+	// A context already past the hard limit still compacts: the trims below are
+	// what rescue it, and skipping them would fail the turn.
+	if !forced && !m.exceedsHardLimitLocked() {
+		droppedTokens := m.estimateMessagesLocked() - prefixTokens - selectedTokens
+		if droppedTokens < m.minCompactionSavingLocked() {
+			return "", 0, nil
+		}
 	}
 
 	candidate := cloneMessages(prefix)
@@ -782,7 +838,7 @@ func fitCompactionSummary(
 		mid := low + (high-low)/2
 		message := types.Message{
 			Role:    "user",
-			Content: appendCompactionSummary("", string(runes[:mid])),
+			Content: appendCompactionSummary("", truncateContextMiddle(summary, mid)),
 		}
 		candidate := append(cloneMessages(base), message)
 		if estimator.EstimateMessages(candidate) <= maxTokens {
@@ -821,6 +877,17 @@ func appendCompactionSummary(base, summary string) string {
 	return base + "\n\n" + prefixed
 }
 
+// compactionSummaryMergeBudget is how much text the merged summary may carry
+// before the fit step trims it. It is characters, not tokens, so it is a
+// sanity bound rather than the real budget.
+const compactionSummaryMergeBudget = 16000
+
+// mergeCompactionSummary folds a new summary into the one already in the
+// conversation. The newest summary stays intact and the older one is cut first:
+// it describes work that is already finished, while "Current Work" and
+// "Optional Next Step" live at the tail of the new one. Trimming from the tail
+// used to delete exactly those sections, so a session compacted three times
+// remembered its original goal and forgot what it was doing.
 func mergeCompactionSummary(existing, next string) string {
 	existing = strings.TrimSpace(existing)
 	next = strings.TrimSpace(next)
@@ -829,9 +896,19 @@ func mergeCompactionSummary(existing, next string) string {
 		return next
 	case next == "":
 		return existing
-	default:
-		return truncateContextText(existing+"\n"+next, 16000)
 	}
+	nextRunes := len([]rune(next))
+	carryLimit := compactionSummaryMergeBudget - nextRunes
+	if carryLimit <= 0 {
+		// The new summary alone fills the budget; the old one has nothing left
+		// to contribute.
+		return next
+	}
+	carry := truncateContextText(existing, carryLimit)
+	if carry == "" {
+		return next
+	}
+	return carry + "\n\n" + next
 }
 
 type defaultContextTokenEstimator struct{}
@@ -887,6 +964,31 @@ func estimateContextText(text string) int {
 		other++
 	}
 	return (ascii+3)/4 + other
+}
+
+// truncateContextMiddle keeps the beginning and the end of a text and drops the
+// middle.
+//
+// Compaction summaries are ordered: the goal and the file list sit at the top,
+// the current work and the next step at the bottom. Cutting only the tail kept
+// the stale half and discarded the half the next turn acts on — the failure mode
+// was a session that remembered its original goal and forgot what it was doing.
+func truncateContextMiddle(text string, maxChars int) string {
+	if maxChars <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxChars {
+		return text
+	}
+	const marker = "\n...[middle omitted]...\n"
+	keep := maxChars - len([]rune(marker))
+	if keep <= 0 {
+		return truncateContextText(text, maxChars)
+	}
+	head := keep * 2 / 5
+	tail := keep - head
+	return string(runes[:head]) + marker + string(runes[len(runes)-tail:])
 }
 
 func truncateContextText(text string, maxChars int) string {

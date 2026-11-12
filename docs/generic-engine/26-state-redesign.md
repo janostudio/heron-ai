@@ -28,7 +28,7 @@
 - 向量检索或语义召回；
 - 自动摘要、自动抽取"值得记住的事实"；
 - TTL 与自动归档；
-- 用 state 代替任务台账或 session 记录。
+- 用 state 代替任务记录或 session 记录。
 
 ## 3. 三层模型
 
@@ -44,7 +44,7 @@
 - 会话内**跑到哪一步** → Team/per-call state（仅供审计与恢复）。
 - 跨会话**还没做什么、做过哪些判断** → Agent state（需要时自己读）。
 
-任务台账（配置工程里的 `tasks/<task_id>.json`）是另一层：它是"用户要什么、当前 phase"的事实源，面向进度查询，不属于引擎的 State。
+任务记录（配置工程里的 `tasks/<task_id>.json`）是另一层：它是"用户要什么、当前 phase"的事实源，面向进度查询，不属于引擎的 State。
 
 ## 4. 数据模型
 
@@ -189,7 +189,7 @@ block is. Load one block (field=<name>) only when you need its entries.
 
 ## 11. 已知缺口
 
-1. **无外部查询入口**：没有 CLI 子命令列 state，定时任务只能直接读 `state/index.md`。若要做"定时查询任务完成情况"，应扫任务台账（`phase != done`）而不是 state。
+1. **无外部查询入口**：没有 CLI 子命令列 state，定时任务只能直接读 `state/index.md`。若要做"定时查询任务完成情况"，应扫任务记录（`phase != done`）而不是 state。
 2. **无 TTL / 归档**：`completed` 条目只能靠 Agent 主动 `remove`；长期不清理会触发 40 条上限。截断会优先丢 `completed`，但仍是静默的。
 3. **会话级 state 无读取方**：per-call/team 快照只写不读。当前明确**不处理**：保留写入，不做工具，也不注入。
 4. **与 compaction 无联动**：state 不参与上下文压缩决策，也不在压缩前被提醒"把关键结论写进 state"（Anthropic memory tool 与 context editing 是配套设计的）。

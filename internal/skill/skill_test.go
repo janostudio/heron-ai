@@ -219,3 +219,38 @@ func TestSkillInjector_Inject_EmptyBody(t *testing.T) {
 	assert.Empty(t, prompts)
 	assert.Equal(t, []string{"t1"}, tools)
 }
+
+// 有路径的技能只进索引：正文按需读，不再每次调用都为它付费。
+func TestSkillInjector_IndexesSkillWithPath(t *testing.T) {
+	reg := NewSkillRegistry()
+	_ = reg.Register(types.Skill{
+		Name:        "task-ledger",
+		Description: "记录与查询派出的任务",
+		Body:        "很长的操作说明……",
+		Path:        ".agents/skills/task-ledger/SKILL.md",
+		Tools:       []string{"t1"},
+	})
+
+	injector := NewSkillInjector(reg)
+	prompts, tools := injector.Inject([]string{"task-ledger"})
+
+	require.Len(t, prompts, 1)
+	index := prompts[0]
+	assert.Contains(t, index, "task-ledger — 记录与查询派出的任务")
+	assert.Contains(t, index, "read: .agents/skills/task-ledger/SKILL.md")
+	assert.NotContains(t, index, "很长的操作说明", "正文不进提示词，按需读文件")
+	assert.Contains(t, index, "Read a Skill's file when the task matches it")
+	assert.Equal(t, []string{"t1"}, tools)
+}
+
+// 没有路径的技能只能内联：没地方可读，丢掉正文等于静默删掉这个能力。
+func TestSkillInjector_InlinesSkillWithoutPath(t *testing.T) {
+	reg := NewSkillRegistry()
+	_ = reg.Register(types.Skill{Name: "legacy", Body: "正文仍然内联"})
+
+	injector := NewSkillInjector(reg)
+	prompts, _ := injector.Inject([]string{"legacy"})
+
+	require.Len(t, prompts, 1)
+	assert.Equal(t, "正文仍然内联", prompts[0])
+}

@@ -50,11 +50,22 @@ TurnLoop（一个 agent，绑定 AgentConfig.Model.Provider）
 
 以下是对标 Claude Code 的缓存优化。每项标注当前状态；标"未落地"的才是还缺的。
 
-### 2.1 缓存命中统计（已落地）
+### 2.1 缓存命中统计（已落地，三处可见）
 
 `TokenUsage` 统计 `CacheReadInputTokens` / `CacheCreationInputTokens` /
-`PromptCacheHitTokens`，并在 `internal/agent/runtime.go` 写入执行日志字段，可直接用来算
-命中率。要看得更细，把 `logging.level` 调到 `debug`。
+`PromptCacheHitTokens`，并在 `internal/agent/runtime.go` 写入执行日志字段
+（`model request usage`，info 级）。同一份数字现在有三处出口，不必再 grep 日志：
+
+| 出口 | 位置 | 形态 |
+|---|---|---|
+| 执行日志 | `model request usage` 行 | 每次请求的 hit / miss 原值 |
+| CLI 摘要 | `heron --prompt` 结束行 | `Cache: 10112 of 10317 prompt tokens (98.0%)` |
+| Web 页面 | `/s/<session>` 的 KPI 与每回合用量行 | `缓存命中 98.0% · 10.1k`，回合行 `… · 缓存 98.0%` |
+
+口径注意：**命中量取 `PromptCacheHitTokens` 与 `CacheReadInputTokens` 的较大值，不能相加**。
+两者是同一件事的两种字段名（OpenAI 兼容 / Anthropic 兼容），而实测有网关一次请求两个都发
+（`prompt_cache_hit_tokens=10112` 与 `cache_read_input_tokens=10112`），相加会把命中率算成
+两倍（10,317 的 prompt 报出 20,224 命中）。统一走 `TokenUsage.CacheHitTokens()`。
 
 ### 2.2 ContextManager 感知 provider（部分落地）
 
@@ -91,8 +102,11 @@ type CacheProfile struct {
 
 ### 2.5 缓存命中率监控
 
-- **现状**：无缓存监控。
+- **现状**：命中率已可在日志、CLI 摘要与 Web 页面看到（见 §2.1），但没有阈值告警。
 - **优化**：缓存命中率 < 70% 告警（对齐业内 canary metric）。
+- **可用信号**：改 Agent 定义、给规则加 `paths`、压缩触发，都会让命中率掉一截——三者
+  都已经有自己的可观测点（`agent transcript kept under new system prompt`、
+  `rule uses paths`、`context_compacted`），可以据此区分"缓存坏了"和"刚改过东西"。
 
 ## 3. 收益优先级排序
 

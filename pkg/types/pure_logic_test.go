@@ -18,9 +18,9 @@ func TestContextConfigWithDefaults(t *testing.T) {
 			name: "all zero falls back to defaults",
 			in:   ContextConfig{},
 			want: ContextConfig{
-				TargetRatio:                0.70,
-				CompactionThreshold:        0.80,
-				HardLimitRatio:             0.90,
+				TargetRatio:                0.45,
+				CompactionThreshold:        0.90,
+				HardLimitRatio:             0.95,
 				OutputReserveRatio:         0,
 				ToolOutputRatio:            0.10,
 				MaxToolOutputChars:         0,
@@ -40,9 +40,9 @@ func TestContextConfigWithDefaults(t *testing.T) {
 				MicrocompactMaxChars: 100000,
 			},
 			want: ContextConfig{
-				TargetRatio:                0.70,
-				CompactionThreshold:        0.80,
-				HardLimitRatio:             0.90,
+				TargetRatio:                0.45,
+				CompactionThreshold:        0.90,
+				HardLimitRatio:             0.95,
 				OutputReserveRatio:         0.15,
 				ToolOutputRatio:            0.10,
 				MicrocompactThresholdChars: 8192,
@@ -60,9 +60,9 @@ func TestContextConfigWithDefaults(t *testing.T) {
 				ToolOutputRatio:     0,
 			},
 			want: ContextConfig{
-				TargetRatio:                0.70,
-				CompactionThreshold:        0.80,
-				HardLimitRatio:             0.90,
+				TargetRatio:                0.45,
+				CompactionThreshold:        0.90,
+				HardLimitRatio:             0.95,
 				OutputReserveRatio:         0,
 				ToolOutputRatio:            0.10,
 				MicrocompactThresholdChars: 8192,
@@ -80,8 +80,8 @@ func TestContextConfigWithDefaults(t *testing.T) {
 				ToolOutputRatio:     1,
 			},
 			want: ContextConfig{
-				TargetRatio:                0.70,
-				CompactionThreshold:        0.80,
+				TargetRatio:                0.45,
+				CompactionThreshold:        0.90,
 				HardLimitRatio:             1,
 				OutputReserveRatio:         0.15,
 				ToolOutputRatio:            0.10,
@@ -134,9 +134,9 @@ func TestContextConfigWithDefaults(t *testing.T) {
 				MaxToolOutputChars: -5,
 			},
 			want: ContextConfig{
-				TargetRatio:                0.70,
-				CompactionThreshold:        0.80,
-				HardLimitRatio:             0.90,
+				TargetRatio:                0.45,
+				CompactionThreshold:        0.90,
+				HardLimitRatio:             0.95,
 				OutputReserveRatio:         0,
 				ToolOutputRatio:            0.10,
 				MaxToolOutputChars:         0,
@@ -152,9 +152,9 @@ func TestContextConfigWithDefaults(t *testing.T) {
 				MicrocompactMaxChars:       2000,
 			},
 			want: ContextConfig{
-				TargetRatio:                0.70,
-				CompactionThreshold:        0.80,
-				HardLimitRatio:             0.90,
+				TargetRatio:                0.45,
+				CompactionThreshold:        0.90,
+				HardLimitRatio:             0.95,
 				OutputReserveRatio:         0,
 				ToolOutputRatio:            0.10,
 				MicrocompactThresholdChars: 1000,
@@ -541,4 +541,19 @@ func TestCallValidateAcceptsValidReplayPolicies(t *testing.T) {
 			require.NoError(t, tt.call.Validate())
 		})
 	}
+}
+
+// 命中量不能把两个字段相加：有网关一次请求同时报 prompt_cache_hit_tokens 与
+// cache_read_input_tokens，相加会让命中率翻倍（实测 10317 的 prompt 报出 20224）。
+func TestTokenUsageCacheHitTokensTakesTheLargerField(t *testing.T) {
+	both := TokenUsage{PromptCacheHitTokens: 10112, CacheReadInputTokens: 10112}
+	require.Equal(t, 10112, both.CacheHitTokens(), "同一件事报了两遍，不能算两遍")
+
+	openAI := TokenUsage{PromptCacheHitTokens: 800}
+	require.Equal(t, 800, openAI.CacheHitTokens())
+
+	anthropic := TokenUsage{CacheReadInputTokens: 900}
+	require.Equal(t, 900, anthropic.CacheHitTokens())
+
+	require.Zero(t, TokenUsage{PromptTokens: 100}.CacheHitTokens())
 }

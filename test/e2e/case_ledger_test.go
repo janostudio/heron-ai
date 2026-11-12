@@ -48,7 +48,7 @@ func TestLedger1SummaryTurnSeesDispatchedTask(t *testing.T) {
 	}
 	summary := requestText(rounds[len(rounds)-1])
 
-	if !strings.Contains(summary, "[任务台账]") {
+	if !strings.Contains(summary, "[任务清单]") {
 		t.Fatalf("summary turn has no task ledger; the caller cannot tell which task reported back:\n%s", summary)
 	}
 	if !strings.Contains(summary, "查 heron-ai 的主分支并回报") {

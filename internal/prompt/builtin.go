@@ -76,12 +76,18 @@ func (p *PromptRenderer) Render(agent types.AgentConfig, req types.AgentRequest,
 		Role: "system", Content: systemPrompt, Parts: systemParts,
 	}}
 
-	for _, block := range rctx.ContextBlocks {
-		if block.Kind != "knowledge" || strings.TrimSpace(block.Text) == "" {
-			continue
-		}
+	// Everything the harness knows about this turn travels as one reminder
+	// message: why the turn exists, where to look things up, and which tasks
+	// are still outstanding. One message, rebuilt every turn.
+	//
+	// It used to be several separate user messages — knowledge, the task list,
+	// and a second copy of that list produced by BuildUserPrompt. Providers
+	// merge consecutive user messages, so the boundaries were lost anyway, and
+	// with no origin the model could not tell a wake-up turn from a user turn.
+	if reminder := harnessReminder(rctx.ContextBlocks); reminder != "" {
 		messages = append(messages, types.Message{
-			Role: "user", Content: wrapSystemReminder(block.Text), Injected: true,
+			Role: "user", Content: wrapSystemReminder(reminder),
+			Injected: true, BlockType: types.BlockTypeHarnessReminder,
 		})
 	}
 
@@ -95,19 +101,6 @@ func (p *PromptRenderer) Render(agent types.AgentConfig, req types.AgentRequest,
 		}
 		messages = append(messages, types.Message{
 			Role: "user", Content: strings.TrimSpace(block.Text), Injected: true,
-		})
-	}
-
-	// The caller's task ledger goes after the stable context and before the
-	// user's task: it describes what is outstanding, and the thing the model is
-	// being asked to do this turn has to come last or it answers the ledger
-	// instead. Injected, so compaction leaves it alone.
-	for _, block := range rctx.ContextBlocks {
-		if block.Kind != types.ContextBlockTaskLedger || strings.TrimSpace(block.Text) == "" {
-			continue
-		}
-		messages = append(messages, types.Message{
-			Role: "user", Content: wrapSystemReminder(block.Text), Injected: true,
 		})
 	}
 
@@ -227,6 +220,24 @@ func (p *PromptRenderer) BuildSystemPrompt(agent types.AgentConfig, rctx RenderC
 	return strings.Join(parts, "\n\n")
 }
 
+// harnessReminder renders the per-turn blocks that belong together, ordered by
+// how the model reads them: why this turn exists, then where to look, then what
+// is still outstanding. The result travels as one message so a turn costs one
+// reminder rather than three consecutive user messages.
+func harnessReminder(blocks []types.ContextBlock) string {
+	kinds := []string{types.ContextBlockTurnOrigin, "knowledge", types.ContextBlockTaskLedger}
+	parts := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		for _, block := range blocks {
+			if block.Kind != kind || strings.TrimSpace(block.Text) == "" {
+				continue
+			}
+			parts = append(parts, renderContextBlock(block))
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 // BuildUserPrompt builds the trailing user turn: the task itself plus any
 // context that has no speaker (the item this Agent owns).
 func (p *PromptRenderer) BuildUserPrompt(_ types.AgentConfig, req types.AgentRequest, rctx RenderContext) string {
@@ -238,8 +249,13 @@ func (p *PromptRenderer) BuildUserPrompt(_ types.AgentConfig, req types.AgentReq
 			}
 			// Provenance-bearing blocks become their own messages; repeating
 			// them here would duplicate content and lose the role that carries
-			// the source.
+			// the source. The per-turn blocks already travelled in the reminder
+			// message, so repeating them would also put them in the trailing
+			// turn — where the model answers them instead of the task.
 			if isCollaboratorKind(block.Kind) || isMemoryKind(block.Kind) || block.Kind == "knowledge" {
+				continue
+			}
+			if block.Kind == types.ContextBlockTaskLedger || block.Kind == types.ContextBlockTurnOrigin {
 				continue
 			}
 			// The continued task statement is a message of its own, placed
@@ -316,6 +332,11 @@ func renderContextBlock(block types.ContextBlock) string {
 		return "## Responsibility\n" + block.Text
 	case "knowledge":
 		return block.Text
+	case types.ContextBlockTaskLedger:
+		// The block carries its own heading; wrapping it would nest two titles.
+		return strings.TrimSpace(block.Text)
+	case types.ContextBlockTurnOrigin:
+		return "## Turn Origin\n" + strings.TrimSpace(block.Text)
 	case "input":
 		return "## Input\n" + block.Text
 	case "team_state":

@@ -18,6 +18,11 @@ const taskLedgerLimit = 12
 // recognise the task, short enough that a dozen rows cost little.
 const taskLedgerGoalRunes = 80
 
+// taskLedgerConclusionRunes is how much of a finished task's answer a row
+// shows. It exists so the caller can report "what came back" without opening
+// the task record; the full text stays available through Collect.
+const taskLedgerConclusionRunes = 80
+
 // TaskLedger renders the tasks one caller instance still has to care about.
 //
 // The problem it solves is not "too many results in context". It is that
@@ -46,12 +51,13 @@ func (r *Runtime) TaskLedger(ctx context.Context, sessionID, callerSessionID str
 	}
 
 	type row struct {
-		team    string
-		state   string
-		age     string
-		goal    string
-		handle  string
-		pending bool
+		team       string
+		state      string
+		age        string
+		goal       string
+		conclusion string
+		handle     string
+		pending    bool
 	}
 	rows := make([]row, 0, len(tasks))
 	for _, task := range tasks {
@@ -72,13 +78,21 @@ func (r *Runtime) TaskLedger(ctx context.Context, sessionID, callerSessionID str
 		if strings.TrimSpace(goal) == "" {
 			goal, _ = task.Arguments["task_key"].(string)
 		}
+		// The answer travels with the row. Without it "how did that task go?"
+		// is only answerable by reading the task files, which the model then
+		// does — one round trip per file, per task.
+		conclusion := ""
+		if task.Result != nil {
+			conclusion = truncateLedgerText(firstLine(task.Result.Content), taskLedgerConclusionRunes)
+		}
 		rows = append(rows, row{
-			team:    team,
-			state:   ledgerStateOf(task.Status),
-			age:     ledgerAgeOf(task.CreatedAt),
-			goal:    truncateLedgerText(firstLine(goal), taskLedgerGoalRunes),
-			handle:  task.ID,
-			pending: task.Status != types.ToolTaskQueued && task.Status != types.ToolTaskRunning,
+			team:       team,
+			state:      ledgerStateOf(task.Status),
+			age:        ledgerAgeOf(task.CreatedAt),
+			goal:       truncateLedgerText(firstLine(goal), taskLedgerGoalRunes),
+			conclusion: conclusion,
+			handle:     task.ID,
+			pending:    task.Status != types.ToolTaskQueued && task.Status != types.ToolTaskRunning,
 		})
 	}
 	if len(rows) == 0 {
@@ -93,16 +107,20 @@ func (r *Runtime) TaskLedger(ctx context.Context, sessionID, callerSessionID str
 	})
 
 	var b strings.Builder
-	b.WriteString("[任务台账] 你派出、还没收尾的任务（已完成待总结的排在前面）")
+	b.WriteString("[任务清单] 你派出、还没收尾的任务（已完成待总结的排在前面）")
 	for index, item := range rows {
 		if index >= taskLedgerLimit {
 			fmt.Fprintf(&b, "\n- 另有 %d 条未列出", len(rows)-taskLedgerLimit)
 			break
 		}
-		fmt.Fprintf(&b, "\n- %s  %s  %s  「%s」  handle=%s",
-			item.team, item.state, item.age, item.goal, item.handle)
+		fmt.Fprintf(&b, "\n- %s  %s  %s  「%s」",
+			item.team, item.state, item.age, item.goal)
+		if item.conclusion != "" {
+			fmt.Fprintf(&b, "  结果：%s", item.conclusion)
+		}
+		fmt.Fprintf(&b, "  handle=%s", item.handle)
 	}
-	b.WriteString("\n结论用 Collect(handles=[handle]) 读取；总结过的任务会自动移出本表。")
+	b.WriteString("\n用 Collect(handles=[handle]) 读取完整结果；总结过的任务会自动移出本表。")
 	return b.String()
 }
 

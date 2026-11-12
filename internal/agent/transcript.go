@@ -130,14 +130,16 @@ func (t *TurnLoop) SetTranscriptStore(store types.AgentTranscriptStore) {
 // continueTranscript returns the conversation to run this turn on.
 //
 // The rendered prompt is not the conversation: it is this turn's own input
-// (system, knowledge, collaborator messages, the trailing request). When a
+// (system, reminder block, collaborator messages, the trailing request). When a
 // transcript exists for the same Agent in this session, the rendered messages
 // are appended to it — deduplicated by content, so a record that is handed over
-// again on every turn is not repeated in history.
+// again on every turn is not repeated in history. A definition change replaces
+// the system prompt and keeps the history; the messages are what happened, and
+// a model that loses them repeats finished work.
 //
 // The second return value is nil when there is nothing to continue (first turn,
-// changed Agent definition, unreadable store); the caller then falls back to its
-// previous reconstruction path.
+// unusable store with nothing to rebuild from); the caller then falls back to
+// its previous reconstruction path.
 func (t *TurnLoop) continueTranscript(ctx context.Context, req types.AgentRequest, rendered []types.Message) ([]types.Message, *types.AgentTranscript) {
 	if t.transcripts == nil {
 		return rendered, nil
@@ -148,35 +150,73 @@ func (t *TurnLoop) continueTranscript(ctx context.Context, req types.AgentReques
 	}
 	previous, err := t.transcripts.Load(ctx, id)
 	if err != nil || previous == nil {
-		return rendered, nil
+		// The transcript store is a cache, not the record. When there is nothing
+		// usable on disk, the session event log still knows the conversation:
+		// rebuild instead of starting over.
+		//
+		// Rebuilding is only safe when the file is genuinely absent or from an
+		// older version. A transient read error says nothing about the content,
+		// and rebuilding from the log throws away the dedup table — a duplicate
+		// record block costs more than waiting for the file to be readable.
+		if err == nil || errors.Is(err, ErrTranscriptNotFound) {
+			previous = t.rebuildTranscript(ctx, req, id)
+		}
+		if previous == nil {
+			return rendered, nil
+		}
 	}
 	hash := systemHashOf(rendered)
-	if previous.SystemHash != "" && hash != "" && previous.SystemHash != hash {
-		// The Agent definition changed under this conversation. The messages
-		// above were produced under rules that no longer apply; start over
-		// rather than hand the model a history it will misread.
-		logging.Info("agent transcript discarded: system prompt changed", map[string]any{
+	// The Agent definition changed under this conversation. Only the prompt
+	// changed: the messages above are still what happened, and dropping them
+	// costs the task itself — a model that starts from an empty history
+	// re-dispatches work it already finished. Swap the prompt, keep the record.
+	systemChanged := previous.SystemHash != "" && hash != "" && previous.SystemHash != hash
+	if systemChanged {
+		logging.Info("agent transcript kept under new system prompt", map[string]any{
 			"transcript_id": id,
 			"team_id":       req.TeamID,
+			"messages":      len(previous.Messages),
 		})
-		return rendered, nil
 	}
 	if len(previous.Messages) == 0 {
 		// An empty recording carries no conversation; rendering is safer than
 		// handing the model a message list without a system prompt.
 		return rendered, nil
 	}
+
+	out := cloneMessages(previous.Messages)
+	if systemChanged {
+		out = replaceSystemPrompt(out, rendered)
+	}
 	if previous.LastTurnID != "" && previous.LastTurnID == req.AgentTurnID {
 		// A retry of the turn that last wrote this transcript: its input is
 		// already in history.
-		return cloneMessages(previous.Messages), previous
+		return out, previous
 	}
 
 	appended := make(map[string]bool, len(previous.Appended)+len(rendered))
 	for key := range previous.Appended {
 		appended[key] = true
 	}
-	out := cloneMessages(previous.Messages)
+	// Only replace when this turn renders a reminder of its own. A turn that
+	// carries none must not delete the one already in the conversation: that
+	// copy is the only pointer the model has to knowledge and outstanding work.
+	//
+	// The dropped message's dedup key goes with it. The reminder text can repeat
+	// word for word (the task list shows ages in whole minutes), and a surviving
+	// key would make the append below skip the new copy — leaving the
+	// conversation with no reminder at all.
+	if hasRebuiltBlock(rendered) {
+		kept := make([]types.Message, 0, len(out))
+		for _, message := range out {
+			if isRebuiltBlock(message) {
+				delete(appended, messageKey(message))
+				continue
+			}
+			kept = append(kept, message)
+		}
+		out = kept
+	}
 	// A conversation that ends on a tool result is waiting for the model to act
 	// on it. The renderer always closes with a user turn so the model answers;
 	// appending that placeholder here would replace the tool result as the last
@@ -263,4 +303,106 @@ func systemHashOf(messages []types.Message) string {
 func messageKey(msg types.Message) string {
 	sum := sha1.Sum([]byte(msg.Role + "\x00" + msg.TeamID + "\x00" + msg.Content))
 	return msg.Role + ":" + hex.EncodeToString(sum[:8])
+}
+
+// isRebuiltBlock reports whether the renderer owns this message, i.e. it is
+// regenerated from records every turn and the previous copy is obsolete.
+func isRebuiltBlock(message types.Message) bool {
+	return message.BlockType == types.BlockTypeHarnessReminder
+}
+
+// hasRebuiltBlock reports whether this turn's render contains a block the
+// renderer rebuilds.
+func hasRebuiltBlock(messages []types.Message) bool {
+	for _, message := range messages {
+		if isRebuiltBlock(message) {
+			return true
+		}
+	}
+	return false
+}
+
+// replaceSystemPrompt puts this turn's system prompt at the head of a recorded
+// conversation, leaving the rest of it alone.
+//
+// history is the conversation as recorded under the previous Agent definition.
+// The definition is what changed, so the prompt is the only part that is
+// stale; the messages below it are what this Agent actually did, and a
+// continuation that forgets them makes the model repeat finished work.
+func replaceSystemPrompt(history []types.Message, rendered []types.Message) []types.Message {
+	var system types.Message
+	for _, message := range rendered {
+		if message.Role == "system" {
+			system = message
+			break
+		}
+	}
+	if system.Role == "" {
+		// Nothing to swap in: keep the recorded prompt rather than leave the
+		// conversation without one.
+		return history
+	}
+	for index, message := range history {
+		if message.Role == "system" {
+			history[index] = system
+			return history
+		}
+	}
+	return append([]types.Message{system}, history...)
+}
+
+// rebuildTranscript reconstructs one agent's conversation from the session
+// event log.
+//
+// The log is append-only and holds every message the agent exchanged, so a lost
+// or stale transcript is a cache miss, not a lost conversation. Rebuilding is
+// deterministic: ReplayConversation folds the same events into the same
+// messages, applying each compaction boundary it finds.
+//
+// Returns nil when there is nothing to rebuild from: no writer, no session id,
+// or a log with no agent events yet.
+func (t *TurnLoop) rebuildTranscript(ctx context.Context, req types.AgentRequest, id string) *types.AgentTranscript {
+	if t.sessionWriter == nil || req.FlowSessionID == "" || req.CallTurnID == "" {
+		return nil
+	}
+	replay, err := t.sessionWriter.Replay(ctx, req.FlowSessionID)
+	if err != nil || replay == nil || len(replay.Events) == 0 {
+		return nil
+	}
+	// The current turn already reaches the model through the rendered prompt.
+	// Replaying its events on top would hand the model the same user message
+	// twice, so the rebuild stops at the turn boundary.
+	events := make([]storage.SessionEvent, 0, len(replay.Events))
+	for _, event := range replay.Events {
+		if req.FlowTurnID != "" && event.FlowTurnID == req.FlowTurnID {
+			continue
+		}
+		events = append(events, event)
+	}
+	conversation := ReplayConversation(events, req.CallTurnID)
+	if len(conversation.Messages) == 0 {
+		return nil
+	}
+	logging.Info("agent transcript rebuilt from session events", map[string]any{
+		"transcript_id": id,
+		"messages":      len(conversation.Messages),
+		"compactions":   len(conversation.Compactions),
+	})
+	// Seed the dedup table from what was replayed. Without it the next turn
+	// re-appends context that is already in the conversation: the same record
+	// block handed over again looks new because the table starts empty.
+	appended := make(map[string]bool, len(conversation.Messages))
+	for _, message := range conversation.Messages {
+		appended[messageKey(message)] = true
+	}
+	return &types.AgentTranscript{
+		ID:            id,
+		FlowSessionID: req.FlowSessionID,
+		TeamID:        req.TeamID,
+		CallID:        req.CallID,
+		AgentID:       req.AgentID,
+		AgentTurnID:   req.AgentTurnID,
+		Messages:      conversation.Messages,
+		Appended:      appended,
+	}
 }

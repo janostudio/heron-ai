@@ -449,6 +449,7 @@ func (l *ConfigLoader) loadSkill(path string) (*types.Skill, error) {
 		return nil, err
 	}
 	skill.Body = strings.TrimSpace(string(body))
+	skill.Path = filepath.ToSlash(path)
 	return &skill, nil
 }
 

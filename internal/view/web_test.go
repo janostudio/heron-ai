@@ -275,3 +275,39 @@ func TestRunDispatchesGetToList(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.True(t, strings.Contains(recorder.Body.String(), sessionID))
 }
+
+// 缓存命中要在页面上看得见：它是"前缀有没有被复用"的唯一直接信号，
+// 埋在日志里等于让人去 grep。
+func TestProjectFactsReportsCacheHits(t *testing.T) {
+	// 同一件事有两种字段名，读的人不该关心走的是哪一个协议。
+	facts := &eval.SessionFacts{
+		FlowTurns: []eval.FlowTurnFact{{
+			Usage: types.TokenUsage{
+				PromptTokens:          20000,
+				CompletionTokens:      500,
+				PromptCacheHitTokens:  3000,
+				PromptCacheMissTokens: 2000,
+				CacheReadInputTokens:  14000,
+			},
+		}},
+	}
+
+	view := projectFacts(facts)
+
+	require.Equal(t, 20000, view.InputTokens)
+	require.Equal(t, 14000, view.CacheHitTokens, "两个字段说的是同一件事，取较大值")
+	require.Equal(t, 2000, view.CacheMissTokens)
+}
+
+// 页面拿到的是原始数字，百分比由前端算；所以没有缓存数据时必须是 0，不是编出来的。
+func TestProjectFactsWithoutCacheUsageReportsZero(t *testing.T) {
+	facts := &eval.SessionFacts{FlowTurns: []eval.FlowTurnFact{{
+		Usage: types.TokenUsage{PromptTokens: 1200, CompletionTokens: 30},
+	}}}
+
+	view := projectFacts(facts)
+
+	require.Zero(t, view.CacheHitTokens)
+	require.Zero(t, view.CacheMissTokens)
+	require.Equal(t, 1200, view.InputTokens)
+}

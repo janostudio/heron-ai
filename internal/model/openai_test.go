@@ -3,6 +3,9 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -22,40 +25,13 @@ func TestConvertOpenAIResponse_EmptyChoices(t *testing.T) {
 }
 
 func TestConvertOpenAIResponse_UsageAndContent(t *testing.T) {
-	resp := openAIResponse{
-		Choices: []struct {
-			Message struct {
-				Content          string           `json:"content"`
-				ReasoningContent string           `json:"reasoning_content"`
-				ToolCalls        []openAIToolCall `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
-		}{
-			{
-				Message: struct {
-					Content          string           `json:"content"`
-					ReasoningContent string           `json:"reasoning_content"`
-					ToolCalls        []openAIToolCall `json:"tool_calls"`
-				}{Content: "hi", ReasoningContent: "think"},
-				FinishReason: "stop",
-			},
-		},
-		Usage: struct {
-			PromptTokens             int `json:"prompt_tokens"`
-			CompletionTokens         int `json:"completion_tokens"`
-			TotalTokens              int `json:"total_tokens"`
-			PromptCacheHitTokens     int `json:"prompt_cache_hit_tokens"`
-			PromptCacheMissTokens    int `json:"prompt_cache_miss_tokens"`
-			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-			PromptTokensDetails      *struct {
-				CachedTokens int `json:"cached_tokens"`
-			} `json:"prompt_tokens_details"`
-			CompletionTokensDetails *struct {
-				ReasoningTokens int `json:"reasoning_tokens"`
-			} `json:"completion_tokens_details"`
-		}{PromptTokens: 20, CompletionTokens: 8, TotalTokens: 28, PromptCacheHitTokens: 4, PromptCacheMissTokens: 1},
-	}
+	var resp openAIResponse
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"choices":[{"message":{"content":"hi","reasoning_content":"think"},"finish_reason":"stop"}],
+		"usage":{"prompt_tokens":20,"completion_tokens":8,"total_tokens":28,
+		         "prompt_cache_hit_tokens":4,"prompt_cache_miss_tokens":1}
+	}`), &resp))
+
 	out := convertOpenAIResponse(resp)
 	assert.Equal(t, "hi", out.Text)
 	assert.Equal(t, "think", out.Reasoning)
@@ -68,19 +44,15 @@ func TestConvertOpenAIResponse_UsageAndContent(t *testing.T) {
 }
 
 func TestConvertOpenAIResponse_PromptTokensDetailsFallback(t *testing.T) {
-	resp := openAIResponse{}
-	resp.Usage.PromptTokensDetails = &struct {
-		CachedTokens int `json:"cached_tokens"`
-	}{CachedTokens: 7}
+	var resp openAIResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"usage":{"prompt_tokens_details":{"cached_tokens":7}}}`), &resp))
 	out := convertOpenAIResponse(resp)
 	assert.Equal(t, 7, out.Usage.CacheReadInputTokens)
 }
 
 func TestConvertOpenAIResponse_ReasoningTokens(t *testing.T) {
-	resp := openAIResponse{}
-	resp.Usage.CompletionTokensDetails = &struct {
-		ReasoningTokens int `json:"reasoning_tokens"`
-	}{ReasoningTokens: 3}
+	var resp openAIResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"usage":{"completion_tokens_details":{"reasoning_tokens":3}}}`), &resp))
 	out := convertOpenAIResponse(resp)
 	assert.Equal(t, 3, out.Usage.ReasoningTokens)
 }
@@ -197,4 +169,29 @@ func TestOpenAIMessagesCarryParticipantName(t *testing.T) {
 	if strings.Contains(string(encoded), `"name"`) {
 		t.Fatalf("an empty name must be omitted, not sent blank: %s", encoded)
 	}
+}
+
+// 流式路径是这个引擎唯一的调用方式，usage 里的缓存字段必须一起搬进来。
+// 之前只搬了 prompt/completion/total 三个，于是所有请求的缓存命中都记成 0，
+// 看上去像"网关不支持缓存"，其实是没读。
+func TestChatStreamCarriesCacheUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"\"}]}\n\n")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3000,\"completion_tokens\":5,\"total_tokens\":3005,\"prompt_cache_hit_tokens\":2816,\"prompt_cache_miss_tokens\":184}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	provider := NewOpenAIProviderWithProfile("key", server.URL, "test-model", types.ModelProfile{
+		Name: "test-model", Stream: true,
+	})
+	response, err := provider.Chat(context.Background(),
+		[]types.Message{{Role: "user", Content: "hi"}}, nil,
+		types.ModelConfig{Model: "test-model"})
+	require.NoError(t, err)
+
+	assert.Equal(t, 3000, response.Usage.PromptTokens)
+	assert.Equal(t, 2816, response.Usage.PromptCacheHitTokens)
+	assert.Equal(t, 184, response.Usage.PromptCacheMissTokens)
 }

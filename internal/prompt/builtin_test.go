@@ -318,31 +318,42 @@ func TestStateManagementPolicyRequiresTool(t *testing.T) {
 	require.NotContains(t, withoutTool, "## State Management")
 }
 
-// 任务台账必须作为注入消息进入上下文：注入消息会被压缩保护，普通消息不会。
+// 任务清单必须作为注入消息进入上下文：注入消息会被压缩保护，普通消息不会。
 // 这正是"压缩掉派发对话后仍然知道手上有哪些活"的实现方式。
-func TestRenderInjectsTaskLedger(t *testing.T) {
+//
+// 同时只能有一份：清单曾经既走专用注入、又被 BuildUserPrompt 拼进尾部 user
+// 消息，于是每一轮都发两遍，第二份还顶替了"本轮任务必须最后"的位置。
+func TestRenderInjectsTaskListExactlyOnce(t *testing.T) {
 	r := NewPromptRenderer(nil)
-	ledger := "[任务台账] 你派出、还没收尾的任务\n- dev  done  「修 heron-ai#61」  handle=tt-b"
+	list := "[任务清单] 你派出、还没收尾的任务\n- dev  done  「修 heron-ai#61」  handle=tt-b"
 
 	messages, err := r.Render(types.AgentConfig{}, types.AgentRequest{}, RenderContext{
-		ContextBlocks: []types.ContextBlock{{
-			Kind: types.ContextBlockTaskLedger, Text: ledger, Source: "harness", Priority: 70,
-		}},
+		ContextBlocks: []types.ContextBlock{
+			{Kind: types.ContextBlockTurnOrigin, Text: "user — the message below is the user's own request.", Source: "harness"},
+			{Kind: "knowledge", Text: "## Knowledge Base\n知识按需检索。"},
+			{Kind: types.ContextBlockTaskLedger, Text: list, Source: "harness", Priority: 70},
+		},
 	})
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
+	require.NoError(t, err)
 
-	var found bool
+	var carriers []types.Message
+	occurrences := 0
 	for _, message := range messages {
-		if strings.Contains(message.Content, "[任务台账]") {
-			found = true
-			if !message.Injected {
-				t.Fatalf("任务台账必须是注入消息，否则压缩会把它折叠掉: %+v", message)
-			}
+		if !strings.Contains(message.Content, "[任务清单]") {
+			continue
 		}
+		carriers = append(carriers, message)
+		occurrences += strings.Count(message.Content, "[任务清单]")
 	}
-	if !found {
-		t.Fatalf("任务台账没有进入上下文:\n%+v", messages)
-	}
+	require.Len(t, carriers, 1, "清单只能由一条消息承载，重复投递会让它每轮出现两遍")
+	require.Equal(t, 1, occurrences, "清单在同一份上下文里只能出现一次")
+	require.True(t, carriers[0].Injected, "清单必须是注入消息，否则压缩会把它折叠掉")
+	require.Equal(t, types.BlockTypeHarnessReminder, carriers[0].BlockType,
+		"清单消息要带持久化标记，下一轮才能替换掉旧的那份")
+
+	// 本回合来源、知识库指针、任务清单合成一条消息：它们都是"本轮的背景"，
+	// 拆成多条会让唤醒回合读起来像用户又发了一次消息。
+	require.Contains(t, carriers[0].Content, "## Turn Origin")
+	require.Contains(t, carriers[0].Content, "## Knowledge Base")
+	require.Contains(t, carriers[0].Content, list)
 }

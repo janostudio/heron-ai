@@ -86,6 +86,13 @@ type AgentResult struct {
 // drift on the spelling.
 const ContextBlockTaskLedger = "task_ledger"
 
+// ContextBlockTurnOrigin is the block kind that tells the model why this turn
+// exists: the caller spoke, a dispatched team reported back, a paused tool
+// resumed, or the session woke itself. A session runs several turns per user
+// message, and the input text alone cannot distinguish them — every wake-up
+// carries the same user sentence again.
+const ContextBlockTurnOrigin = "turn_origin"
+
 type ContextBlock struct {
 	ID           string        `yaml:"id,omitempty" json:"id,omitempty"`
 	Kind         string        `yaml:"kind" json:"kind"`

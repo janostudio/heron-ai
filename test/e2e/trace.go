@@ -35,7 +35,7 @@ var intentText = map[string]string{
 	"I-DISPATCH-6":   "不同 team 可并行",
 	"I-DISPATCH-7":   "声明 per_task 的 team 一任务一实例：多个派发并发执行，互不占用",
 	"I-DISPATCH-8":   "resident 的 team 只有一个实例：模型给它写不同 task_key 也只是排队，不能并发",
-	"I-LEDGER-1":     "调用方每轮都能看到自己派出、还没收尾的任务（台账作为注入消息，压缩不折叠）",
+	"I-LEDGER-1":     "调用方每轮都能看到自己派出、还没收尾的任务（任务清单作为注入消息，压缩不折叠）",
 	"I-TASK-1":       "派发创建的任务可按 id 查询状态",
 	"I-TASK-2":       "取消作用到执行本体，且不再产出结论",
 	"I-TASKSTREAM-1": "任务流在终态收尾并关闭",

@@ -110,20 +110,24 @@ tool 消息，若超过 `MicrocompactThresholdChars`（默认 8192 字符），�
 ### 第 3 层：compaction（压缩，超阈值触发）
 
 `compactLocked` 触发条件：`estimateMessagesLocked() > CompactionThreshold`
-（默认 0.80 × 输入容量）。
+（默认 0.90 × 输入容量）。触发点刻意贴近容量上限：压缩一次要付一次摘要调用、
+一次前缀缓存重置和一次回合中断，早触发只会把次数翻倍。
 
 流程：
 1. `splitContextLayers` 分层
-2. 从**尾部往前**选消息组，保留最近的消息，超出 `target`（TargetRatio 0.70 × 输入容量）的组丢进 `dropped`
+2. 从**尾部往前**选消息组，保留最近的消息，超出 `target`（TargetRatio 0.45 × 输入容量）的组丢进 `dropped`
 3. `compactor.Compact(ctx, dropped)` 把被丢弃的组压成摘要
-4. 摘要合并进 `existingSummary`，以 `## Compacted Agent Context` marker 塞回上下文（作为一条 user 消息）
+4. 摘要合并进 `existingSummary`，以 `## Compacted Agent Context` marker 塞回上下文（作为一条 user 消息）；合并时**新摘要完整保留、旧摘要从尾部先截**，超预算再保留头尾丢中间——摘要结尾是 `Current Work` / `Next Step`，正是下一回合要照着做的
 5. 多层兜底：trim tool 消息 → trim 摘要 → 实在不行删摘要
+
+**不压的情形**：一次压缩若丢弃量不足窗口的 5%，直接跳过（已超硬限时除外），
+不付这次摘要调用。空压缩只花钱、只脏上下文，不释放空间。
 
 **强制压缩**：`CompactForce` 在 provider 报"请求太大"（本地估算没超阈值）时强制压缩一次。
 
 ### 第 4 层：hard limit（硬限制，报错）
 
-`exceedsHardLimitLocked`：`HardLimitRatio`（默认 0.90）是硬上限。
+`exceedsHardLimitLocked`：`HardLimitRatio`（默认 0.95）是硬上限。
 若压缩后仍超硬限，返回 `ErrContextLimit` 错误（不静默丢弃，让上层决定）。
 
 ### ratio 计算规则
@@ -136,9 +140,9 @@ effectiveRatioLimit(ratio) = MaxInputTokens × min(ratio, 1 - OutputReserveRatio
 
 | 配置 | 默认值 | 含义 |
 |---|---|---|
-| `TargetRatio` | 0.70 | 压缩后目标大小 |
-| `CompactionThreshold` | 0.80 | 触发压缩的阈值 |
-| `HardLimitRatio` | 0.90 | 硬上限 |
+| `TargetRatio` | 0.45 | 压缩后目标大小（一次腾出约一半窗口） |
+| `CompactionThreshold` | 0.90 | 触发压缩的阈值 |
+| `HardLimitRatio` | 0.95 | 硬上限 |
 | `OutputReserveRatio` | 0.15 | 预留输出空间 |
 
 ## 4. Compactor（压缩器）
@@ -196,8 +200,9 @@ type Compactor interface {
 
 **机制**：`splitContextLayers` 把第一条非 system 消息连同其后所有连续的 `Injected`
 消息抽出来，放 `prefix`，**完全不参与压缩**（连 `compactor.Compact` 都看不到它们）。
-首轮渲染的 knowledge、task_ledger、memory、collaborator 报告和当轮 user prompt 都带
-`Injected` 标记，所以实际锚定的是一整批消息，不是一条。
+首轮渲染的提醒块（知识库指针 + 本回合来源 + 任务清单，三者合成一条）、memory、
+collaborator 报告和当轮 user prompt 都带 `Injected` 标记，所以实际锚定的是一整批消息，
+不是一条。提醒块每回合重建、旧副本在追加前删掉，因此它在上下文里始终只有一份。
 
 **数据流**：
 ```
@@ -309,6 +314,13 @@ agent.jsonl 记录 agent 内部行为（增量事件，非完整 prompt 快照�
 
 **回放恢复**（`internal/agent/replay.go`）：场景 A（TurnCompleted 续聊）时，agent
 回放 agent.jsonl，从后往前重建 active 上下文，实现"执行完再执行，context 持续"。
+
+**对话记录快照是缓存，不是事实源**：`agent-transcripts/<session>:<team>:<call>.json`
+存的是模型当前看到的对话（每回合整份重写）。文件缺失时不再从空白开始，而是用
+`ReplayConversation`（`internal/agent/convlog.go`）从 agent.jsonl 重建：一次折叠产出
+两个视图——全量历史与"应用压缩边界后的上下文"；重建会跳过当前回合的事件，因为本轮
+输入由渲染提供，重放会让同一条用户消息出现两次。Agent 定义变更时只替换 system 消息、
+保留历史：变的是规则，不是已经发生过的事。
 
 ### 6.3 checkpoint 与回放的分工
 

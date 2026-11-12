@@ -885,6 +885,26 @@ const (
 	turnOriginWakeup = "wakeup"
 )
 
+// turnOriginText phrases one turn's origin for the model. The input text alone
+// cannot carry this: every wake-up replays the sentence the user originally
+// typed, so a turn that exists because a dispatched Team reported back reads
+// exactly like a fresh request. Answering it as a fresh request dispatches the
+// same work a second time.
+func turnOriginText(origin string) string {
+	switch origin {
+	case turnOriginUser:
+		return "user — the message below is the user's own request."
+	case turnOriginMailbox:
+		return "mailbox — a dispatched team reported back; the user did not send a new message."
+	case turnOriginResume:
+		return "resume — this turn continues a paused tool call or approval."
+	case turnOriginWakeup:
+		return "wakeup — the session scheduled this turn for itself; there is no new user message."
+	default:
+		return ""
+	}
+}
+
 // runTurnWithOrigin is runTurnWithActivationsAndContext with an explicit
 // origin: caller input, a mailbox wake-up, or a resumed Tool call/approval.
 // Only a mailbox wake-up can be an intermediate turn; a resume is the caller
@@ -1668,11 +1688,22 @@ func (r *Runtime) executeTeamTurn(
 	// protects, so a conversation that has been summarised away still knows
 	// which tasks are outstanding and which owe a summary.
 	//
+	// The turn's origin travels with it. A session runs several turns per user
+	// message, and every wake-up carries the same input text, so without this
+	// the model has to infer "did the user speak again?" from whether someone
+	// reported back. A wrong guess re-dispatches work already in flight.
+	//
 	// A fresh slice, not append: blocks belongs to the enclosing turn and must
-	// not grow a ledger entry for every Team it reaches.
-	teamBlocks := blocks
+	// not grow a block for every Team it reaches.
+	teamBlocks := append([]types.ContextBlock(nil), blocks...)
+	if origin := turnOriginText(flowTurn.Origin); origin != "" {
+		teamBlocks = append(teamBlocks, types.ContextBlock{
+			Kind: types.ContextBlockTurnOrigin, Text: origin, Source: "harness",
+			Stability: "dynamic", Priority: 60, Compressible: false,
+		})
+	}
 	if ledger := r.TaskLedger(ctx, session.ID, teamSession.ID); ledger != "" {
-		teamBlocks = append(append([]types.ContextBlock(nil), blocks...), types.ContextBlock{
+		teamBlocks = append(teamBlocks, types.ContextBlock{
 			Kind: types.ContextBlockTaskLedger, Text: ledger, Source: "harness",
 			Stability: "dynamic", Priority: 70, Compressible: false,
 		})
@@ -1781,7 +1812,7 @@ func (r *Runtime) executeTeamTurn(
 	// has not concluded anything: the reply is a progress line ("handed it on,
 	// waiting for the answer"). Publishing that as an active record is what let
 	// "正在取证" travel as the current state two minutes after the work behind it
-	// died (fs_2864455499636f2b). The record is marked pending so no consumer
+	// died (fs_xxx). The record is marked pending so no consumer
 	// reads it as an answer, and resumeToolResult settles the same record when
 	// the call behind it returns.
 	//
@@ -2996,7 +3027,7 @@ func selectFlowRecordsInContext(records []types.SharedRecord, spec types.InputSp
 		// A Team does not read its own words from an earlier turn as input. It
 		// wrote them, and feeding a progress line back is how the entry Team
 		// answered the user with its own sentence from five minutes earlier
-		// (fs_2864455499636f2b). Within one turn the record stays readable: that
+		// (fs_xxx). Within one turn the record stays readable: that
 		// is a Team continuing its own work, and examples/novel-rp relies on a
 		// Team reading the record it produced (lobby declares ScenePlan as both
 		// output and input).
