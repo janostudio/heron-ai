@@ -635,7 +635,13 @@ await run("run board: configured graph", async () => {
   check("入口在最左", desk.left < plan.left, JSON.stringify({ desk: desk.left, planner: plan.left }));
   check("被派发的 team 在右侧一列", plan.left < fix.left, JSON.stringify({ planner: plan.left, fixer: fix.left }));
   await page.click('.seg button[data-mode="waterfall"]');
-  await page.waitForSelector(".wf-row.missing", { timeout: 3000 });
+  await page.waitForSelector(".wf-missing", { timeout: 3000 });
+  // Folded by default: the execution timeline is what this view is for.
+  checkEqual("未参与分组默认收起",
+    await page.locator(".wf-missing").evaluate((node) => node.open), false);
+  check("未参与分组标出数量",
+    (await page.locator(".wf-missing > summary").innerText()).includes("（"));
+  await page.click(".wf-missing > summary");
   const missingLabels = await page.locator(".wf-row.missing .wf-label").allInnerTexts();
   check("未参与行用 call 名而不是 agent 名",
     missingLabels.includes("fixer / patch") && !missingLabels.includes("fixer / fixer"),
@@ -818,6 +824,62 @@ await run("tree: execution turns nest under the user turn", async () => {
   const userPad = await indent('.tnode[data-node="ft_user"]');
   const execPad = await indent('.tnode[data-node="ft_exec"]');
   check("执行轮缩进更深", execPad > userPad, userPad + " -> " + execPad);
+
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- raw: find the event, copy it ---------- */
+await run("raw: filter by type and copy a payload", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_single_agent`);
+  await page.waitForSelector(".composer", { timeout: 5000 });
+
+  await page.click('.seg button[data-mode="raw"]');
+  await page.waitForSelector(".raw-view tbody tr", { timeout: 3000 });
+  const total = await page.locator(".raw-view tbody tr").count();
+  check("原始视图列出全部事件", total >= 9, String(total));
+  check("默认显示全部计数",
+    (await page.locator(".raw-count").innerText()).startsWith(String(total)),
+    await page.locator(".raw-count").innerText());
+
+  await page.fill(".raw-filter", "tool_call");
+  await page.waitForTimeout(150);
+  const filtered = await page.locator(".raw-view tbody tr:not(.hidden)").count();
+  check("按 type 过滤后只剩工具事件", filtered === 2, String(filtered));
+  check("过滤后计数同步更新",
+    (await page.locator(".raw-count").innerText()) === `${filtered} / ${total} 条`,
+    await page.locator(".raw-count").innerText());
+
+  await page.fill(".raw-filter", "no-such-type");
+  await page.waitForTimeout(150);
+  checkEqual("无匹配时没有行", await page.locator(".raw-view tbody tr:not(.hidden)").count(), 0);
+
+  await page.fill(".raw-filter", "");
+  await page.waitForTimeout(150);
+  checkEqual("清空过滤后恢复全部", await page.locator(".raw-view tbody tr:not(.hidden)").count(), total);
+  checkEqual("每行都有复制按钮", await page.locator(".raw-view .copy-payload").count(), total);
+
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- node detail: cost and output, not just event names ---------- */
+await run("tree: node detail aggregates the node", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_multi_agent`);
+  await page.waitForSelector(".composer", { timeout: 5000 });
+
+  await page.click('.seg button[data-mode="tree"]');
+  await page.waitForSelector('.tnode[data-node="tt_probe"]', { timeout: 3000 });
+  await page.click('.tnode[data-node="tt_probe"]');
+  await page.waitForSelector("#node-detail .node-metrics", { timeout: 3000 });
+
+  const metrics = await page.locator("#node-detail .node-metrics").innerText();
+  check("详情给出模型", metrics.includes("模型"), metrics.replace(/\n/g, " "));
+  check("详情给出事件条数", metrics.includes("事件"), metrics.replace(/\n/g, " "));
+  check("详情仍列出节点事件",
+    (await page.locator("#node-detail table.raw tbody tr").count()) >= 1);
 
   check("无 console error", errors.length === 0, errors.join(" | "));
   await context.close();

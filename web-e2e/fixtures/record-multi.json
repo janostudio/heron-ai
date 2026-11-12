@@ -247,7 +247,13 @@
       "payload": {
         "structured": true,
         "reply": "我把这件事派给 probe 团队去探。",
-        "text": "{\"reply\":\"我把这件事派给 probe 团队去探。\",\"next\":{\"action\":\"dispatch\"}}"
+        "text": "{\"reply\":\"我把这件事派给 probe 团队去探。\",\"next\":{\"action\":\"dispatch\"}}",
+        "model": "demo-model",
+        "usage": {
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150
+        }
       }
     },
     {
@@ -333,7 +339,13 @@
       "payload": {
         "structured": true,
         "reply": "地形取证完成：仓库是纯 Go，没有前端构建。",
-        "text": "{\"reply\":\"地形取证完成：仓库是纯 Go，没有前端构建。\"}"
+        "text": "{\"reply\":\"地形取证完成：仓库是纯 Go，没有前端构建。\"}",
+        "model": "demo-model",
+        "usage": {
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150
+        }
       }
     },
     {
@@ -392,7 +404,13 @@
       "payload": {
         "structured": true,
         "reply": "facts 团队的 inspect 看完了配置。",
-        "text": "{\"reply\":\"facts 团队的 inspect 看完了配置。\"}"
+        "text": "{\"reply\":\"facts 团队的 inspect 看完了配置。\"}",
+        "model": "demo-model",
+        "usage": {
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150
+        }
       }
     },
     {
@@ -441,7 +459,13 @@
       "payload": {
         "structured": true,
         "reply": "repo-info 团队的 inspect 也看完了，和 facts 的不是同一个。",
-        "text": "{\"reply\":\"repo-info 团队的 inspect 也看完了，和 facts 的不是同一个。\"}"
+        "text": "{\"reply\":\"repo-info 团队的 inspect 也看完了，和 facts 的不是同一个。\"}",
+        "model": "demo-model",
+        "usage": {
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150
+        }
       }
     },
     {
@@ -490,7 +514,13 @@
       "payload": {
         "structured": true,
         "reply": "analyze 团队的 analyze 说了最后一句。",
-        "text": "{\"reply\":\"analyze 团队的 analyze 说了最后一句。\"}"
+        "text": "{\"reply\":\"analyze 团队的 analyze 说了最后一句。\"}",
+        "model": "demo-model",
+        "usage": {
+          "prompt_tokens": 120,
+          "completion_tokens": 30,
+          "total_tokens": 150
+        }
       }
     },
     {

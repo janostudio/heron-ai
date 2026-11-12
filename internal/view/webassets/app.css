@@ -221,6 +221,25 @@ body { overflow: hidden; }
  * not turn "deepseek-v4.1-flash, hy4std" into three stacked lines. */
 .kpi .v-model { font-size: 12px; font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
 
+/* raw view: the type filter is the difference between reading 136 rows and
+ * finding the two that matter. */
+.raw-view { margin-bottom: 16px; }
+.raw-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.raw-filter { flex: 1 1 auto; min-width: 0; padding: 5px 10px; font: inherit; font-size: 12px;
+  color: var(--text); background: var(--bg-sunken);
+  border: 1px solid var(--border); border-radius: 6px; }
+.raw-count { flex: 0 0 auto; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.copy-payload { margin-left: 8px; padding: 1px 7px; border: 1px solid var(--border-strong);
+  border-radius: 4px; font: inherit; font-size: 10px; color: var(--muted);
+  background: var(--bg); cursor: pointer; vertical-align: 1px; }
+.copy-payload:hover { color: var(--text); border-color: var(--text); }
+tr.hidden { display: none; }
+
+/* Node details: the numbers a reader opens this panel for, above the raw list. */
+.node-metrics { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 10px; }
+.node-metrics .k { font-size: 10px; color: var(--faint); margin-right: 6px; }
+.node-metrics .v { font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; }
+
 /* timeline */
 .timeline { margin-bottom: 16px; }
 .timeline .bar { display: flex; height: 22px; border-radius: 4px; overflow: hidden;
@@ -461,8 +480,14 @@ audio.msg-media { width: min(360px, 100%); height: 40px; }
 body:not(.turn-active) .composer-stop { display: none; }
 
 /* Configured but not run in this session: shown so the view still describes the
- * Flow, with the missing part visibly inactive instead of absent. */
-.wf-group { margin: 14px 0 6px; font-size: 11px; color: var(--muted); }
+ * Flow, with the missing part visibly inactive instead of absent. Folded by
+ * default — the execution timeline is the point of this view. */
+.wf-missing { margin-top: 14px; }
+.wf-missing > summary { cursor: pointer; font-size: 11px; color: var(--muted);
+  list-style: none; padding: 2px 0; }
+.wf-missing > summary::before { content: "\25B8 "; }
+.wf-missing[open] > summary::before { content: "\25BE "; }
+.wf-missing[open] > summary { margin-bottom: 6px; }
 /* A Call runs inside its Team's span: indenting the row says so without a
  * second axis or a connector. */
 .wf-row.wf-child .wf-label { padding-left: 14px; }

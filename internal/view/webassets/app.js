@@ -138,6 +138,26 @@
     return Math.round(ms / 60000) + "m";
   }
 
+  /* A turn that never emitted session.turn.started (a dispatched Team runs as
+   * its own flow turn) has no timestamps on its node; the events it owns do, so
+   * the span is taken from them. */
+  function nodeSpanDuration(node, record) {
+    if (node.started_at) { return duration(node); }
+    var start = 0;
+    var end = 0;
+    (record.events || []).forEach(function (event) {
+      if (!event.created_at) { return; }
+      if (event.flow_turn_id !== node.id && event.team_turn_id !== node.id &&
+          event.call_turn_id !== node.id) { return; }
+      var at = new Date(event.created_at).getTime();
+      if (isNaN(at)) { return; }
+      if (!start || at < start) { start = at; }
+      if (!end || at > end) { end = at; }
+    });
+    if (!start || !end || end <= start) { return duration(node); }
+    return elapsed(new Date(start).toISOString(), new Date(end).toISOString()) || "";
+  }
+
   function tokenCount(value) {
     if (!value) { return "0"; }
     return value >= 1000 ? (value / 1000).toFixed(1) + "k" : String(value);
@@ -2446,15 +2466,20 @@
 
     // Configured but never reached: a dashed track and no duration, so it reads
     // as "part of the Flow, idle in this session" rather than as history.
-    if (missing.length) {
-      wrap.appendChild(el("div", { class: "wf-group" }, "\u914d\u7f6e\u4e2d\u5b58\u5728\u3001\u672c\u6b21\u4f1a\u8bdd\u672a\u53c2\u4e0e\uff1a"));
-    }
+    // Configured but never reached: a dashed track and no duration, so it reads
+    // as "part of the Flow, idle in this session" rather than as history. It is
+    // folded away by default: thirteen dashed rows out of twenty take more room
+    // than the execution this view is actually about.
+    var folded = el("details", { class: "wf-missing" },
+      el("summary", null, "\u914d\u7f6e\u4e2d\u5b58\u5728\u3001\u672c\u6b21\u4f1a\u8bdd\u672a\u53c2\u4e0e\uff08" +
+        missing.length + " \u9879\uff09"));
     missing.forEach(function (row) {
-      wrap.appendChild(el("div", { class: "wf-row missing" },
+      folded.appendChild(el("div", { class: "wf-row missing" },
         el("span", { class: "wf-label", title: row.title || row.label }, row.label),
         el("span", { class: "wf-track missing" }),
         el("span", { class: "wf-time" }, "\u672a\u53c2\u4e0e")));
     });
+    wrap.appendChild(folded);
 
     return wrap;
   }
@@ -2484,31 +2509,6 @@
     var detail = el("div", { class: "detail", id: "node-detail" },
       el("span", { class: "muted" }, "\u70b9\u4e00\u4e2a\u8282\u70b9\u770b\u8be6\u60c5\u3002"));
 
-    /* Child flow turns are not entry turns: they emit no session.turn.started,
-     * so the graph has no timestamps for them and their duration column stayed
-     * empty. The events underneath them do have times, so the span is taken from
-     * the node's own seq range. */
-    var eventTimes = {};
-    (record.events || []).forEach(function (event) {
-      if (!event.created_at) { return; }
-      var at = new Date(event.created_at).getTime();
-      if (isNaN(at)) { return; }
-      [event.flow_turn_id, event.team_turn_id, event.call_turn_id].forEach(function (id) {
-        if (!id) { return; }
-        var span = eventTimes[id] || (eventTimes[id] = { start: at, end: at });
-        if (at < span.start) { span.start = at; }
-        if (at > span.end) { span.end = at; }
-      });
-    });
-
-    function nodeDuration(node) {
-      var span = eventTimes[node.id];
-      if (span && span.end > span.start) {
-        return elapsed(new Date(span.start).toISOString(), new Date(span.end).toISOString()) || "";
-      }
-      return duration(node);
-    }
-
     function addNode(node, depth, branch) {
       var children = childrenOf[node.id] || [];
       var row = el("div", {
@@ -2526,7 +2526,7 @@
             ? null : el("span", { class: "kind" }, node.kind),
           labelForNode(node),
           el("span", { class: "id" }, shortId(node.id))),
-        el("span", { class: "time" }, nodeDuration(node)),
+        el("span", { class: "time" }, nodeSpanDuration(node, record)),
         statusDot(node.status));
       tree.appendChild(row);
 
@@ -2598,6 +2598,50 @@
 
   function paintNodeDetail(container, node, record) {
     clear(container);
+    var events = (record.events || []).filter(function (event) {
+      return event.seq >= node.first_seq && event.seq <= node.last_seq;
+    });
+
+    // What this node actually cost and produced. Clicking a Team used to give a
+    // list of event types, which answers "what happened" but not "was it
+    // expensive" — the two questions a reader opens this panel for.
+    var models = {};
+    var usage = { prompt: 0, completion: 0 };
+    var toolCalls = 0;
+    var toolFailures = 0;
+    var records = [];
+    events.forEach(function (event) {
+      var payload = event.payload || {};
+      if (event.type === "session.agent.model_response") {
+        if (payload.model) { models[payload.model] = true; }
+        var used = payload.usage || {};
+        usage.prompt += used.prompt_tokens || 0;
+        usage.completion += used.completion_tokens || 0;
+      }
+      if (event.type === "session.tool_call.started") { toolCalls++; }
+      if (event.type === "session.tool_call.failed") { toolFailures++; }
+      if (event.type === "session.record.published") {
+        var record_ = payload.record || {};
+        if (record_.name) { records.push(record_.name); }
+      }
+    });
+
+    var summary = el("div", { class: "node-metrics" });
+    function metric(key, value) {
+      if (!value) { return; }
+      summary.appendChild(el("div", null,
+        el("span", { class: "k" }, key),
+        el("span", { class: "v" }, String(value))));
+    }
+    metric("模型", Object.keys(models).join(", "));
+    metric("Token 入 / 出", usage.prompt || usage.completion
+      ? tokenCount(usage.prompt) + " / " + tokenCount(usage.completion) : "");
+    metric("工具调用", toolCalls
+      ? toolCalls + (toolFailures ? " · " + toolFailures + " 失败" : "") : "");
+    metric("产出 record", records.join(", "));
+    metric("事件", events.length + " 条");
+    container.appendChild(summary);
+
     var list = el("dl");
 
     function add(key, value) {
@@ -2610,7 +2654,7 @@
     add("id", node.id);
     add("\u72b6\u6001", node.status);
     add("\u4e8b\u4ef6\u533a\u95f4", "seq " + node.first_seq + " \u2013 " + node.last_seq);
-    add("\u8017\u65f6", duration(node));
+    add("\u8017\u65f6", nodeSpanDuration(node, record));
     add("Team", node.team_id);
     add("Call", node.call_id);
     add("Call \u7c7b\u578b", node.call_type);
@@ -2618,11 +2662,12 @@
     add("attempt", node.attempt);
     container.appendChild(list);
 
-    var events = (record.events || []).filter(function (event) {
-      return event.seq >= node.first_seq && event.seq <= node.last_seq;
-    });
+    // The tree can be taller than the pane; reveal the panel the click filled.
+    if (container.scrollIntoView) { container.scrollIntoView({ block: "nearest" }); }
+
+
     container.appendChild(el("div", { class: "faint" },
-      "\u8be5\u8282\u70b9\u4e8b\u4ef6\uff08" + events.length + " \u6761\uff09"));
+      "该节点事件（" + events.length + " 条）"));
 
     var table = el("table", { class: "raw" });
     var tbody = el("tbody");
@@ -2638,27 +2683,66 @@
 
   /* ---------- raw ---------- */
   function renderRaw(record) {
+    var events = record.events || [];
+
+    // 136 events is normal for one question: scanning them for the failed tool
+    // call or the record publish is the actual work here, so the type filter and
+    // a per-event copy sit above the table rather than behind a menu.
+    var filter = el("input", {
+      class: "raw-filter",
+      type: "search",
+      placeholder: "按 type 过滤，例如 tool_call / record / model_response"
+    });
+    var count = el("span", { class: "raw-count" });
+    var bar = el("div", { class: "raw-bar" }, filter, count);
+
     var table = el("table", { class: "raw" },
       el("thead", null, el("tr", null,
         el("th", null, "seq"),
-        el("th", null, "\u65f6\u95f4"),
+        el("th", null, "时间"),
         el("th", null, "type"),
-        el("th", null, "\u6458\u8981"))));
+        el("th", null, "摘要"))));
     var tbody = el("tbody");
-    (record.events || []).forEach(function (event) {
+    var rows = [];
+
+    events.forEach(function (event) {
       var payload = event.payload || {};
-      tbody.appendChild(el("tr", { id: "ev-" + event.seq },
+      var copy = el("button", { type: "button", class: "copy-payload", title: "复制 payload JSON" }, "复制");
+      copy.addEventListener("click", function () { copyText(JSON.stringify(payload, null, 2), copy); });
+      var row = el("tr", { id: "ev-" + event.seq },
         el("td", { class: "seq" }, String(event.seq)),
         el("td", { class: "sum" }, clock(event.created_at)),
         el("td", { class: "type" }, event.type),
         el("td", { class: "sum" },
           eventSummary(event),
+          copy,
           el("details", null,
             el("summary", null, "payload"),
-            el("pre", null, JSON.stringify(payload, null, 2))))));
+            el("pre", null, JSON.stringify(payload, null, 2)))));
+      rows.push({ row: row, type: event.type });
+      tbody.appendChild(row);
     });
     table.appendChild(tbody);
-    return table;
+
+    function applyFilter() {
+      var query = String(filter.value || "").trim().toLowerCase();
+      var shown = 0;
+      rows.forEach(function (entry) {
+        var hit = !query || entry.type.toLowerCase().indexOf(query) >= 0;
+        entry.row.classList.toggle("hidden", !hit);
+        if (hit) { shown++; }
+      });
+      count.textContent = shown + " / " + rows.length + " 条";
+      return shown;
+    }
+    filter.addEventListener("input", applyFilter);
+    applyFilter();
+
+    var wrap = el("div", { class: "raw-view" }, bar, table);
+    if (rows.length === 0) {
+      wrap.appendChild(el("div", { class: "empty" }, "这个会话没有事件。"));
+    }
+    return wrap;
   }
 
   route();
