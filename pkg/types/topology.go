@@ -22,21 +22,28 @@ type TopologyTeam struct {
 	// stream carries in team_session.team_id.
 	Name string `json:"name"`
 	// TeamID is the reusable definition under .agents/teams/.
-	TeamID      string   `json:"team_id"`
-	Goal        string   `json:"goal,omitempty"`
-	Entry       bool     `json:"entry"`
-	Lifecycle   string   `json:"lifecycle"`
-	CanActivate []string `json:"can_activate,omitempty"`
+	TeamID      string         `json:"team_id"`
+	Goal        string         `json:"goal,omitempty"`
+	Entry       bool           `json:"entry"`
+	Lifecycle   string         `json:"lifecycle"`
+	CanActivate []string       `json:"can_activate,omitempty"`
 	Calls       []TopologyCall `json:"calls"`
 
 	// Status is running, idle, or never:
-	//   running — the session is executing a turn right now
-	//   idle    — it has run in this session and is free
+	//   running — at least one instance is executing a turn right now
+	//   idle    — it has run in this session and none is executing
 	//   never   — it has not run in this session
 	Status string `json:"status"`
 	// CallStatus maps a Call name to running or idle for Calls that have run.
 	// A Call absent from the map has never run in this session.
 	CallStatus map[string]string `json:"call_status,omitempty"`
+
+	// Instances is how many Team instances this session has created for the
+	// binding (1 for a resident Team, N for per_task); RunningInstances is how
+	// many of them are executing right now. A per_task Team can run several
+	// tasks at once, and a board that shows only "running" would hide that.
+	Instances        int `json:"instances,omitempty"`
+	RunningInstances int `json:"running_instances,omitempty"`
 }
 
 // TopologyCall is one execution item of a Team.

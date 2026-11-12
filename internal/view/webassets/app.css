@@ -96,7 +96,15 @@ body { overflow: hidden; }
 .run-canvas { position: relative; margin: 2px 0 4px; }
 .run-links { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .run-edge { fill: none; stroke: var(--border-strong); stroke-width: 1.4; }
-.run-edge.active { stroke: var(--accent); stroke-width: 2; }
+/* A live dispatch moves: the dashes travel towards the Team being activated, so
+   the edge says "work is flowing into this node" rather than just "edge". */
+.run-edge.active { stroke: var(--accent); stroke-width: 2;
+  stroke-dasharray: 7 5; animation: run-flow .9s linear infinite; }
+@keyframes run-flow { to { stroke-dashoffset: -12; } }
+@media (prefers-reduced-motion: reduce) {
+  .run-edge.active { animation: none; }
+  .run-node.running .run-dot { animation: none; }
+}
 
 .run-node { position: absolute; display: flex; flex-direction: column; gap: 4px;
   justify-content: center; padding: 9px 12px; box-sizing: border-box;
@@ -114,6 +122,9 @@ body { overflow: hidden; }
   overflow: hidden; text-overflow: ellipsis; }
 .run-badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border);
   border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
+/* Several instances of one per_task Team executing at once. */
+.run-badge.run-parallel { color: var(--accent); border-color: var(--accent);
+  background: rgba(76, 141, 255, .12); font-weight: 600; }
 
 /* Second line: what the Team runs. It reads as a subtitle, so it never competes
  * with the name — and when the Team is executing it says which Call is. */

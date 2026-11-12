@@ -2068,6 +2068,8 @@
         lifecycle: team.lifecycle || "",
         canActivate: team.can_activate || [],
         entry: !!team.entry,
+        instances: team.instances || 0,
+        runningInstances: team.running_instances || 0,
         calls: (team.calls || []).map(function (call) { return call.name; }),
         runningCalls: (team.calls || []).filter(function (call) {
           return (team.call_status && team.call_status[call.name]) === "running";
@@ -2225,13 +2227,19 @@
     var runningCalls = items.agents.filter(function (agent) {
       return agent.status === "running";
     }).length;
+    // A per_task Team can hold several instances at once: "1 个 team 在跑" would
+    // hide that three tasks are executing.
+    var runningInstances = items.teams.reduce(function (sum, team) {
+      return sum + (team.runningInstances || 0);
+    }, 0);
+    if (!runningInstances) { runningInstances = runningTeams.length; }
 
     wrap.appendChild(el("div", { class: "run-summary" },
       items.configured
         ? el("span", { class: runningTeams.length ? "run-live" : "muted" },
             "配置 " + items.teams.length + " 个 team / " + items.agents.length + " 个 agent · " +
             (runningTeams.length
-              ? "当前 " + runningTeams.length + " 个 team / " + runningCalls + " 个 agent 在跑"
+              ? "当前 " + runningTeams.length + " 个 team / " + runningInstances + " 个实例在跑"
               : "当前没有在跑的 team 或 agent"))
         : el("span", { class: runningTeams.length ? "run-live" : "muted" },
             runningTeams.length
@@ -2278,7 +2286,11 @@
         el("div", { class: "run-node-head" },
           runDot(team.status),
           el("span", { class: "run-name" }, team.name),
-          meta.length ? el("span", { class: "run-badge" }, meta.join(" · ")) : null),
+          meta.length ? el("span", { class: "run-badge" }, meta.join(" · ")) : null,
+          running && team.runningInstances > 1
+            ? el("span", { class: "run-badge run-parallel", title: "并发的 per_task 实例数" },
+                "×" + team.runningInstances)
+            : null),
         el("div", { class: "run-node-calls" },
           running && team.runningCalls && team.runningCalls.length
             ? "运行中：" + team.runningCalls.join(" · ")

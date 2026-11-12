@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"sort"
 
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -16,32 +17,45 @@ const teamSessionPayloadKey = "team_session"
 // session.agent_session.created / session.agent_session.updated event.
 const agentSessionPayloadKey = "agent_session"
 
-// loadTeamSessions folds the session's team_session events into the latest
-// TeamSession seen for each Team. It is the read path behind "is this Team
-// executing?": the events were always written, but nothing ever read them
-// back, so a scheduler that dispatches by execution state has no other way to
-// know.
+// loadTeamInstances folds the session's team_session events into every instance
+// seen for each Team, in SessionSeq order.
 //
-// The fold relies on replayFlowEvents returning events sorted by Seq (the
-// session writer allocates Seq under a mutex and Replay sorts by it), so the
-// last write for a Team wins regardless of the order the files were read.
-func (r *Runtime) loadTeamSessions(ctx context.Context, sessionID string) (map[string]types.TeamSession, error) {
+// loadTeamSessions keeps one entry per Team because the scheduler only needs
+// "is this Team free". A board needs the instances: a per_task Team can have
+// several running at once, and collapsing them makes the last event win — a
+// finished instance can hide a running one and report the Team as idle.
+func (r *Runtime) loadTeamInstances(ctx context.Context, sessionID string) (map[string][]types.TeamSession, error) {
 	events, err := r.replayFlowEvents(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	sessions := make(map[string]types.TeamSession)
+	byID := make(map[string]types.TeamSession)
+	order := make([]string, 0, len(events))
 	for _, event := range events {
 		switch event.Type {
 		case types.EventTeamSessionCreated, types.EventTeamSessionUpdated:
 			session, ok := decodeTeamSession(event.Payload)
-			if !ok {
+			if !ok || session.ID == "" {
 				continue
 			}
-			sessions[session.TeamID] = session
+			if _, seen := byID[session.ID]; !seen {
+				order = append(order, session.ID)
+			}
+			byID[session.ID] = session
 		}
 	}
-	return sessions, nil
+
+	instances := make(map[string][]types.TeamSession, len(byID))
+	for _, id := range order {
+		session := byID[id]
+		instances[session.TeamID] = append(instances[session.TeamID], session)
+	}
+	for teamID := range instances {
+		list := instances[teamID]
+		sort.SliceStable(list, func(i, j int) bool { return list[i].SessionSeq < list[j].SessionSeq })
+		instances[teamID] = list
+	}
+	return instances, nil
 }
 
 // nextTeamSessionSeq returns the next per_task instance ordinal for a Team in
@@ -94,14 +108,17 @@ func (r *Runtime) loadAgentSessions(ctx context.Context, sessionID string) (map[
 }
 
 // teamIdle reports whether a Team can take a new message. It encodes the one
-// scheduling rule of the execution-state model: a Team that is not executing is
-// free. A Team never seen in the event stream has never run, so it is idle.
-func teamIdle(sessions map[string]types.TeamSession, teamID string) bool {
-	session, ok := sessions[teamID]
-	if !ok {
-		return true
+// scheduling rule of the execution-state model: a Team with no instance
+// executing is free. A Team never seen in the event stream has never run, so it
+// is idle. per_task Teams can hold several instances, and any one of them
+// running makes the Team busy.
+func teamIdle(instances map[string][]types.TeamSession, teamID string) bool {
+	for _, session := range instances[teamID] {
+		if session.Status == types.SessionRunning {
+			return false
+		}
 	}
-	return session.Status != types.SessionRunning
+	return true
 }
 
 // decodeTeamSession reads a TeamSession from an event payload. The value

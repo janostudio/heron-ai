@@ -22,7 +22,8 @@
       "status": "idle",
       "call_status": {
         "coordinator": "idle"
-      }
+      },
+      "instances": 1
     },
     {
       "name": "probe",
@@ -43,7 +44,9 @@
       "status": "running",
       "call_status": {
         "terrain": "running"
-      }
+      },
+      "instances": 1,
+      "running_instances": 1
     },
     {
       "name": "facts",
@@ -58,7 +61,8 @@
           "agent": "inspect"
         }
       ],
-      "status": "never"
+      "status": "never",
+      "instances": 0
     },
     {
       "name": "repo-info",
@@ -73,7 +77,8 @@
           "agent": "inspect"
         }
       ],
-      "status": "never"
+      "status": "never",
+      "instances": 0
     },
     {
       "name": "analyze",
@@ -88,10 +93,12 @@
           "agent": "analyst"
         }
       ],
-      "status": "idle",
+      "status": "running",
       "call_status": {
-        "analyze": "idle"
-      }
+        "analyze": "running"
+      },
+      "instances": 2,
+      "running_instances": 2
     }
   ]
 }

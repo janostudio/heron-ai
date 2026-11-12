@@ -25,11 +25,11 @@ func (r *Runtime) Topology(ctx context.Context, sessionID string) (types.FlowTop
 		return types.FlowTopology{}, errors.New("definitions are not loaded")
 	}
 
-	teamSessions := map[string]types.TeamSession{}
+	teamInstances := map[string][]types.TeamSession{}
 	agentSessions := map[string]types.AgentSession{}
 	if sessionID != "" {
 		var err error
-		teamSessions, err = r.loadTeamSessions(ctx, sessionID)
+		teamInstances, err = r.loadTeamInstances(ctx, sessionID)
 		if err != nil {
 			return types.FlowTopology{}, err
 		}
@@ -66,14 +66,31 @@ func (r *Runtime) Topology(ctx context.Context, sessionID string) (types.FlowTop
 			CallStatus:  map[string]string{},
 		}
 
-		if session, ok := teamSessions[name]; ok {
-			team.Status = topologyStatusOf(session.Status)
+		// per_task Teams can have several instances at once: the Team is running
+		// when any of them is, and a Call is running when any instance runs it.
+		instances := teamInstances[name]
+		if len(instances) > 0 {
+			team.Instances = len(instances)
+			team.Status = topologyStatusIdle
+		}
+		for _, instance := range instances {
+			if instance.Status != types.SessionRunning {
+				continue
+			}
+			team.RunningInstances++
+			team.Status = topologyStatusRunning
 		}
 		for _, agentSession := range agentSessions {
 			if teamBindingOf(agentSession.TeamSessionID) != name || agentSession.CallID == "" {
 				continue
 			}
-			team.CallStatus[agentSession.CallID] = topologyStatusOf(agentSession.Status)
+			status := topologyStatusOf(agentSession.Status)
+			// running wins over idle: with two instances of the same Call, one
+			// finished and one executing, the Team is still busy.
+			if team.CallStatus[agentSession.CallID] == topologyStatusRunning {
+				continue
+			}
+			team.CallStatus[agentSession.CallID] = status
 		}
 		if len(team.CallStatus) == 0 {
 			team.CallStatus = nil
