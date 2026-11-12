@@ -85,7 +85,7 @@ func dispatchedTeamTask(id, caller, team, goal string, status types.ToolTaskStat
 	}
 }
 
-// 台账要回答的是"手上还有什么活"：在跑的、以及跑完但还没总结的。
+// 任务清单要回答的是"手上还有什么活"：在跑的、以及跑完但还没总结的。
 func TestTaskLedgerListsRunningAndPendingSummary(t *testing.T) {
 	rt, store := newLedgerRuntime(t)
 
@@ -98,10 +98,10 @@ func TestTaskLedgerListsRunningAndPendingSummary(t *testing.T) {
 
 	ledger := rt.TaskLedger(context.Background(), "fs-ledger", "fs-ledger:frontdesk")
 
-	require.Contains(t, ledger, "[任务台账]")
+	require.Contains(t, ledger, "[任务清单]")
 	require.Contains(t, ledger, "查 CLS 最近一个自然日的请求总数与均值 QPS",
-		"目标只取首行：整段任务单不该进台账")
-	require.NotContains(t, ledger, "口径：", "首行之后的内容不进台账")
+		"目标只取首行：整段任务单不该进清单")
+	require.NotContains(t, ledger, "口径：", "首行之后的内容不进清单")
 	require.Contains(t, ledger, "修 heron-ai#61 的并发派发失败")
 	require.Contains(t, ledger, "handle=tt-a")
 	require.Contains(t, ledger, "handle=tt-b")
@@ -123,7 +123,7 @@ func TestTaskLedgerDropsAcknowledgedTasks(t *testing.T) {
 	require.NoError(t, store.Save(context.Background(), task))
 
 	require.Empty(t, rt.TaskLedger(context.Background(), "fs-ledger", "fs-ledger:frontdesk"),
-		"没有未收尾的任务时不注入台账，不占上下文")
+		"没有未收尾的任务时不注入清单，不占上下文")
 }
 
 // 一个实例只看得到自己派出去的活。
@@ -141,7 +141,7 @@ func TestTaskLedgerScopesToTheCaller(t *testing.T) {
 	require.NotContains(t, ledger, "handle=tt-other", "别的实例派出的任务不属于这个调用方")
 }
 
-// 非 Team 派发的异步任务（spawn 子任务等）不属于协作台账。
+// 非 Team 派发的异步任务（spawn 子任务等）不属于协作清单。
 func TestTaskLedgerIgnoresNonTeamTasks(t *testing.T) {
 	rt, store := newLedgerRuntime(t)
 
@@ -152,7 +152,7 @@ func TestTaskLedgerIgnoresNonTeamTasks(t *testing.T) {
 	require.Empty(t, rt.TaskLedger(context.Background(), "fs-ledger", "fs-ledger:frontdesk"))
 }
 
-// 收尾之后任务离开台账，且这一步是幂等的（回调可能重复触发）。
+// 收尾之后任务离开清单，且这一步是幂等的（回调可能重复触发）。
 func TestAcknowledgeTaskRetiresItFromTheLedger(t *testing.T) {
 	rt, store := newLedgerRuntime(t)
 	ctx := context.Background()
@@ -168,4 +168,23 @@ func TestAcknowledgeTaskRetiresItFromTheLedger(t *testing.T) {
 	require.True(t, stored.Acknowledged)
 
 	require.NoError(t, rt.acknowledgeTask(ctx, "tt-b"), "重复标记不应报错")
+}
+
+// 已完成的任务要把结论带在行里：否则"这活干完没有、结果是什么"只能靠读
+// 任务记录文件回答，每个任务一次文件往返。
+func TestTaskLedgerCarriesConclusionForFinishedTask(t *testing.T) {
+	rt, store := newLedgerRuntime(t)
+
+	task := dispatchedTeamTask("tt-c", "fs-ledger:frontdesk", "dev-lead",
+		"查 heron-ai 仓库的主分支", types.ToolTaskCompleted)
+	task.Result = &types.ToolResult{
+		Success: true,
+		Content: "master（依据 origin/HEAD → refs/remotes/origin/master）\n更多细节略",
+	}
+	require.NoError(t, store.Save(context.Background(), task))
+
+	ledger := rt.TaskLedger(context.Background(), "fs-ledger", "fs-ledger:frontdesk")
+
+	require.Contains(t, ledger, "结果：master", "结论进清单，模型不必再翻任务记录")
+	require.NotContains(t, ledger, "更多细节略", "只取结论首行")
 }

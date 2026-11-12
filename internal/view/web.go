@@ -132,6 +132,14 @@ type factsView struct {
 	Models        []string `json:"models,omitempty"`
 	InputTokens   int      `json:"input_tokens"`
 	OutputTokens  int      `json:"output_tokens"`
+	// CacheHitTokens is how much of InputTokens the provider served from its
+	// prompt cache. It is the only direct evidence that the stable prefix is
+	// being reused, so the page shows it rather than leaving it in the log.
+	CacheHitTokens int `json:"cache_hit_tokens"`
+	// CacheMissTokens is the part the provider had to read fresh. Zero when the
+	// provider does not report misses; the page then falls back to InputTokens
+	// as the denominator.
+	CacheMissTokens int `json:"cache_miss_tokens"`
 }
 
 // maxPayloadBytes keeps one runaway tool output from turning the whole record
@@ -355,6 +363,10 @@ func projectFacts(facts *eval.SessionFacts) factsView {
 	usage := facts.Usage()
 	view.InputTokens = usage.PromptTokens
 	view.OutputTokens = usage.CompletionTokens
+	// Two providers, two spellings of one fact, and one gateway that sends both
+	// for the same request — hence the shared accessor rather than a sum here.
+	view.CacheHitTokens = usage.CacheHitTokens()
+	view.CacheMissTokens = usage.PromptCacheMissTokens
 
 	models := make(map[string]bool)
 	for _, turn := range facts.FlowTurns {

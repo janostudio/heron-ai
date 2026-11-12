@@ -327,6 +327,20 @@ func writePromptResult(w io.Writer, flowID, modelName string, result types.FlowT
 	printf("Status: %s\n", result.Session.Status)
 	if usage := aggregateTeamUsage(result.TeamResults); usage.TotalTokens > 0 {
 		printf("Tokens: %d (prompt %d, completion %d)\n", usage.TotalTokens, usage.PromptTokens, usage.CompletionTokens)
+		// How much of the prompt the provider served from its cache. Without it
+		// the numbers below look the same whether the stable prefix was reused
+		// or billed again in full.
+		hit := usage.CacheHitTokens()
+		if hit > 0 {
+			prompted := hit + usage.PromptCacheMissTokens
+			if usage.PromptCacheMissTokens == 0 {
+				prompted = usage.PromptTokens
+			}
+			if prompted > 0 {
+				printf("Cache: %d of %d prompt tokens (%.1f%%)\n",
+					hit, prompted, float64(hit)/float64(prompted)*100)
+			}
+		}
 	}
 	if reply := replyForCaller(result); strings.TrimSpace(reply) != "" {
 		printf("\n%s\n", reply)
@@ -1295,7 +1309,32 @@ func checkConfigOnly(flowPath string) int {
 		fmt.Printf("%-12s team=%-12s lifecycle=%s\n", name, binding.TeamID, lifecycle)
 	}
 	fmt.Printf("flow %s: %d bindings ok (%d per_task)\n", defs.Flow.ID, len(names), perTask)
+	printRulePathWarnings(defs)
 	return 0
+}
+
+// printRulePathWarnings reports rules that gate on paths.
+//
+// Such a rule joins the system prompt only on turns whose text mentions a
+// matching path, so the prompt — which is the prefix prompt caching reuses —
+// becomes a function of what the user typed. The rule loads fine, so nothing
+// else would mention it. Printing here rather than only through the logger is
+// deliberate: configuration is loaded before the execution logger exists, and
+// --check-config never builds one.
+func printRulePathWarnings(defs *types.Definitions) {
+	if defs == nil {
+		return
+	}
+	names := make([]string, 0, len(defs.Rules))
+	for name := range defs.Rules {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if warning := config.RulePathWarning(defs.Rules[name]); warning != "" {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+		}
+	}
 }
 
 func applyMaxRounds(limits *types.RuntimeLimits, maxRounds int) {
@@ -1323,6 +1362,7 @@ func buildProvider(ctx context.Context, flowPath, modelOverride string) (*types.
 	if err != nil {
 		return nil, nil, err
 	}
+	printRulePathWarnings(definitions)
 
 	models, err := loadModelsConfig()
 	if err != nil {

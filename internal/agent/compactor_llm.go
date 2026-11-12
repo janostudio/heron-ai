@@ -41,9 +41,11 @@ What was being worked on right before compaction.
 The next step directly related to recent work.
 
 Rules:
-- Preserve exact identifiers, file names, function names, and values.
-- Do NOT re-state tool-call mechanics (e.g. "assistant called tool X"). Focus on information content.
-- The "All user messages" section must contain every user message verbatim.
+- Preserve exact identifiers, file names, function names, commands, and values. The next turn acts on them without re-reading the conversation.
+- Do NOT re-state tool-call mechanics (e.g. "assistant called tool X"). Keep the information, drop the choreography.
+- The "All user messages" section must contain every user message verbatim; drop exact duplicates, keep the wording.
+- Leave out exploration that led nowhere. This summary is re-sent on every later request, so a dead end is a recurring cost with no payoff.
+- Target roughly 1,200–2,000 tokens. If you must cut, keep "Current Work" and "Optional Next Step": they are what the next turn acts on.
 - Output ONLY the <summary> block. No preamble, no Markdown fences.`
 
 const compactionSummaryUserTemplate = `Summarize the following dropped conversation segments:

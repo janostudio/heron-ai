@@ -133,6 +133,49 @@ type openAIFunctionCall struct {
 	Arguments string `json:"arguments"`
 }
 
+// openAIUsage is the provider's usage report. One type for both paths: the
+// streaming chunk used to carry only prompt/completion/total, so every streamed
+// call — and this engine streams everything — recorded cache hits as zero even
+// when the gateway reported them.
+type openAIUsage struct {
+	PromptTokens             int `json:"prompt_tokens"`
+	CompletionTokens         int `json:"completion_tokens"`
+	TotalTokens              int `json:"total_tokens"`
+	PromptCacheHitTokens     int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens    int `json:"prompt_cache_miss_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	PromptTokensDetails      *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+}
+
+// tokenUsage converts the wire report into the engine's usage type. Providers
+// spell cached tokens three ways; whichever one arrives first wins.
+func (u openAIUsage) tokenUsage() types.TokenUsage {
+	usage := types.TokenUsage{
+		PromptTokens:             u.PromptTokens,
+		CompletionTokens:         u.CompletionTokens,
+		TotalTokens:              u.TotalTokens,
+		PromptCacheHitTokens:     u.PromptCacheHitTokens,
+		PromptCacheMissTokens:    u.PromptCacheMissTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens,
+	}
+	if u.PromptTokensDetails != nil &&
+		u.PromptTokensDetails.CachedTokens > 0 &&
+		usage.CacheReadInputTokens == 0 {
+		usage.CacheReadInputTokens = u.PromptTokensDetails.CachedTokens
+	}
+	if u.CompletionTokensDetails != nil {
+		usage.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	}
+	return usage
+}
+
 type openAIResponse struct {
 	Choices []struct {
 		Message struct {
@@ -142,21 +185,7 @@ type openAIResponse struct {
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage struct {
-		PromptTokens             int `json:"prompt_tokens"`
-		CompletionTokens         int `json:"completion_tokens"`
-		TotalTokens              int `json:"total_tokens"`
-		PromptCacheHitTokens     int `json:"prompt_cache_hit_tokens"`
-		PromptCacheMissTokens    int `json:"prompt_cache_miss_tokens"`
-		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-		PromptTokensDetails      *struct {
-			CachedTokens int `json:"cached_tokens"`
-		} `json:"prompt_tokens_details"`
-		CompletionTokensDetails *struct {
-			ReasoningTokens int `json:"reasoning_tokens"`
-		} `json:"completion_tokens_details"`
-	} `json:"usage"`
+	Usage openAIUsage `json:"usage"`
 }
 
 // errorCodeString renders the provider's error.code, which may be a string or a
@@ -204,11 +233,7 @@ type openAIStreamChunk struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
+	Usage *openAIUsage `json:"usage"`
 }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []types.Message, tools []types.JSONSchema, config types.ModelConfig) (*types.ChatResponse, error) {
@@ -476,9 +501,10 @@ func (p *OpenAIProvider) postStream(ctx context.Context, effective types.ModelCo
 		// Usage arrives in its own final chunk with an empty choices array, so
 		// it has to be read before the choices check skips this chunk.
 		if chunk.Usage != nil {
-			result.Usage.PromptTokens = chunk.Usage.PromptTokens
-			result.Usage.CompletionTokens = chunk.Usage.CompletionTokens
-			result.Usage.TotalTokens = chunk.Usage.TotalTokens
+			// Carry every field, not just the token counts: cache hits are the
+			// only evidence that the stable prefix is being reused, and the
+			// streaming path is the only path this engine uses.
+			result.Usage = *chunk.Usage
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -689,23 +715,7 @@ func convertOpenAITools(tools []types.JSONSchema) []openAITool {
 
 func convertOpenAIResponse(resp openAIResponse) *types.ChatResponse {
 	result := &types.ChatResponse{
-		Usage: types.TokenUsage{
-			PromptTokens:             resp.Usage.PromptTokens,
-			CompletionTokens:         resp.Usage.CompletionTokens,
-			TotalTokens:              resp.Usage.TotalTokens,
-			PromptCacheHitTokens:     resp.Usage.PromptCacheHitTokens,
-			PromptCacheMissTokens:    resp.Usage.PromptCacheMissTokens,
-			CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
-			CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
-		},
-	}
-	if resp.Usage.PromptTokensDetails != nil &&
-		resp.Usage.PromptTokensDetails.CachedTokens > 0 &&
-		result.Usage.CacheReadInputTokens == 0 {
-		result.Usage.CacheReadInputTokens = resp.Usage.PromptTokensDetails.CachedTokens
-	}
-	if resp.Usage.CompletionTokensDetails != nil {
-		result.Usage.ReasoningTokens = resp.Usage.CompletionTokensDetails.ReasoningTokens
+		Usage: resp.Usage.tokenUsage(),
 	}
 	if len(resp.Choices) == 0 {
 		return result

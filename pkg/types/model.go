@@ -291,6 +291,15 @@ type ModelProfile struct {
 // not treat it as new input.
 const ContinuePrompt = "Continue with the task above."
 
+// BlockTypeHarnessReminder stamps the message that carries the per-turn
+// harness context (turn origin, knowledge pointer, outstanding tasks). The
+// marker is persisted, unlike Injected, which is runtime-only: the next turn
+// needs to find the previous copy and replace it instead of appending a second
+// one. Without it a rebuilt block whose text changes per turn — the task list
+// carries how long each task has been running — never matches the content-hash
+// dedup and stacks up in the conversation.
+const BlockTypeHarnessReminder = "harness_reminder"
+
 type Message struct {
 	ID         string        `json:"id,omitempty"`
 	RoundNum   int           `json:"round_num,omitempty"`
@@ -309,6 +318,10 @@ type Message struct {
 	// rebuilt from source every turn, and folding them would erase who said
 	// what. Runtime-only, never persisted.
 	Injected bool `json:"-"`
+	// BlockType names the harness block this message carries, if any. Unlike
+	// Injected it is persisted, which is what lets a later turn recognise and
+	// replace the previous copy of a rebuilt block.
+	BlockType string `json:"block_type,omitempty"`
 }
 
 // ToolCall represents an LLM tool call request
@@ -347,4 +360,20 @@ type TokenUsage struct {
 	PromptCacheMissTokens    int `json:"prompt_cache_miss_tokens,omitempty"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// CacheHitTokens is how much of PromptTokens the provider served from its
+// prompt cache.
+//
+// Providers name the same fact differently: OpenAI-compatible gateways report
+// prompt_cache_hit_tokens, Anthropic-compatible ones cache_read_input_tokens,
+// and at least one gateway in use reports both for a single request. The larger
+// of the two is the only reading that is right in all three cases — summing
+// would double count the gateway that reports both, which is exactly what a
+// "cache hit rate" number must not do.
+func (u TokenUsage) CacheHitTokens() int {
+	if u.CacheReadInputTokens > u.PromptCacheHitTokens {
+		return u.CacheReadInputTokens
+	}
+	return u.PromptCacheHitTokens
 }

@@ -93,7 +93,12 @@ type LoopConfig struct {
 	MaxSameToolCalls    int      `yaml:"max_same_tool_calls,omitempty" json:"max_same_tool_calls,omitempty"`
 	MaxNoProgressRounds int      `yaml:"max_no_progress_rounds,omitempty" json:"max_no_progress_rounds,omitempty"`
 	MaxSameModelTexts   int      `yaml:"max_same_model_texts,omitempty" json:"max_same_model_texts,omitempty"`
-	StuckAction         string   `yaml:"stuck_action,omitempty" json:"stuck_action,omitempty"` // fail | ask_user
+	// MaxRepeatedReads bounds how many times one read-only call may return with
+	// identical arguments before the turn is treated as stuck. Repeats that
+	// follow a workspace write do not count: that is an edit-and-verify loop,
+	// not a stall. Zero uses the built-in default.
+	MaxRepeatedReads int    `yaml:"max_repeated_reads,omitempty" json:"max_repeated_reads,omitempty"`
+	StuckAction      string `yaml:"stuck_action,omitempty" json:"stuck_action,omitempty"` // fail | ask_user
 	// MaxModelRetries bounds retries for transient provider failures. Context
 	// limit recovery is handled separately and is attempted once.
 	MaxModelRetries int    `yaml:"max_model_retries,omitempty" json:"max_model_retries,omitempty"`
@@ -130,14 +135,20 @@ type ContextConfig struct {
 }
 
 func (c ContextConfig) WithDefaults() ContextConfig {
+	// Defaults follow what a coding harness measured in practice: compact late
+	// (90% of the window) and compact hard (down to 45%), rather than compacting
+	// early and often. Each compaction is one summarisation call plus a cache
+	// reset, so the fixed cost per compaction dominates: freeing 10 points at a
+	// time means paying that cost every few tool calls, and each pass loses
+	// detail the model then has to re-read.
 	if c.TargetRatio <= 0 || c.TargetRatio >= 1 {
-		c.TargetRatio = 0.70
+		c.TargetRatio = 0.45
 	}
 	if c.CompactionThreshold <= 0 || c.CompactionThreshold >= 1 {
-		c.CompactionThreshold = 0.80
+		c.CompactionThreshold = 0.90
 	}
 	if c.HardLimitRatio <= 0 || c.HardLimitRatio > 1 {
-		c.HardLimitRatio = 0.90
+		c.HardLimitRatio = 0.95
 	}
 	if c.CompactionThreshold > c.HardLimitRatio {
 		c.CompactionThreshold = c.HardLimitRatio

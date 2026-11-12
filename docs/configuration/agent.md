@@ -102,9 +102,9 @@ loop:
   timeout: 120s
 context:
   # 按当前模型能力比例控制 Active Context
-  target_ratio: 0.70
-  compaction_threshold: 0.80
-  hard_limit_ratio: 0.90
+  target_ratio: 0.45
+  compaction_threshold: 0.90
+  hard_limit_ratio: 0.95
   output_reserve_ratio: 0.15
   tool_output_ratio: 0.10
   max_tool_output_chars: 65536
@@ -280,6 +280,7 @@ Behaviour worth knowing:
 | `max_same_tool_calls` | integer | Stuck detection: retries of an identical tool call before acting |
 | `max_no_progress_rounds` | integer | Stuck detection: model rounds without new tool results |
 | `max_same_model_texts` | integer | Stuck detection: identical model replies in a row |
+| `max_repeated_reads` | integer | Stuck detection: repeats of one read-only call (same tool, same arguments) with no write in between; default 3 |
 | `stuck_action` | string | What to do when stuck: `fail` or `ask_user` |
 | `max_model_retries` | integer | Retries for transient provider failures (context-limit recovery is separate and tried once) |
 | `timeout` | string | Execution timeout |
@@ -304,12 +305,17 @@ If `max_input_tokens` is omitted, the runtime uses the selected model profile's
 `maxInputTokens` when available. Recommended defaults are:
 
 ```yaml
-target_ratio: 0.70
-compaction_threshold: 0.80
-hard_limit_ratio: 0.90
+target_ratio: 0.45
+compaction_threshold: 0.90
+hard_limit_ratio: 0.95
 output_reserve_ratio: 0.15
 tool_output_ratio: 0.10
 ```
+
+Compaction is the expensive path: each run costs one summarisation call over
+everything dropped, resets the cached prompt prefix, and can interrupt a turn
+mid-task. Trigger late and free a lot at once rather than creeping down in small
+steps.
 
 ### budget
 

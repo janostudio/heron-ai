@@ -436,6 +436,18 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 	lastModelText := ""
 	sameModelTexts := 0
 	structuredRetries := 0
+	// Repeats of one read-only call. Identical arguments return identical
+	// bytes, so the newest result replaces the older ones (token cost) and the
+	// count feeds the stuck guard (loop cost). Both are per turn: a resumed
+	// turn rebuilds them from what it reads next.
+	repeatReads := make(map[string]int)
+	repeatAtWriteGen := make(map[string]int)
+	latestReadResult := make(map[string]string)
+	repeatedReads := 0
+	// Generation counter for workspace writes. A read result carries its own
+	// read operation, so counting every operation would reset the streak on the
+	// read itself; only a write means the earlier answer is stale.
+	writeGeneration := 0
 	if req.ResumeCheckpointID != "" {
 		checkpoint, loadErr := t.checkpoints.Load(ctx, req.ResumeCheckpointID)
 		if loadErr != nil {
@@ -1240,9 +1252,31 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				t.emitErrorHook(ctx, agent, req, round, addErr)
 				return nil, addErr
 			}
+			if signature := readCallSignature(call); signature != "" {
+				if repeatAtWriteGen[signature] != writeGeneration {
+					// A write landed since this read last ran: edit-and-verify,
+					// not a stall, so the streak starts over.
+					repeatReads[signature] = 0
+				}
+				repeatReads[signature]++
+				repeatAtWriteGen[signature] = writeGeneration
+				if repeatReads[signature] > repeatedReads {
+					repeatedReads = repeatReads[signature]
+				}
+				if previous, ok := latestReadResult[signature]; ok {
+					// The same answer is already coming back later in this
+					// conversation; keep one copy, not two.
+					contextManager.ReplaceToolResult(previous, repeatedCallPlaceholder(call))
+				}
+				latestReadResult[signature] = call.ID
+			}
 			workspaceOps = append(workspaceOps, toolResult.WorkspaceOps...)
 			budget.usage.ToolOutput += len(content)
-			budget.usage.FileChanges += countFileChanges(toolResult.WorkspaceOps)
+			fileChanges := countFileChanges(toolResult.WorkspaceOps)
+			budget.usage.FileChanges += fileChanges
+			if fileChanges > 0 {
+				writeGeneration++
+			}
 			if budgetErr := budget.checkUsage(); budgetErr != nil {
 				t.emitErrorHook(ctx, agent, req, round, budgetErr)
 				return t.resultWithCheckpoint(ctx, agent, req, contextManager, budget, totalUsage, round+1, resp.Text, workspaceOps, toolCalls, types.TurnFailed, budgetErr, nil), nil
@@ -1295,7 +1329,7 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			}
 			return agentResult, nil
 		}
-		if stuckReason := stuckReason(agent.Loop, sameToolCalls, noProgressRounds, sameModelTexts); stuckReason != "" {
+		if stuckReason := stuckReason(agent.Loop, sameToolCalls, noProgressRounds, sameModelTexts, repeatedReads); stuckReason != "" {
 			if agent.Loop.StuckAction == "ask_user" {
 				waiting := &types.AgentResult{
 					Status: types.TurnWaitingInput,
@@ -2372,7 +2406,7 @@ func toolCallSignature(calls []types.ToolCall) string {
 	return hashJSON(stable)
 }
 
-func stuckReason(loop types.LoopConfig, sameToolCalls, noProgressRounds, sameModelTexts int) string {
+func stuckReason(loop types.LoopConfig, sameToolCalls, noProgressRounds, sameModelTexts, repeatedReads int) string {
 	if loop.MaxSameToolCalls > 0 && sameToolCalls >= loop.MaxSameToolCalls {
 		return fmt.Sprintf("same Tool call repeated %d times", sameToolCalls)
 	}
@@ -2381,6 +2415,12 @@ func stuckReason(loop types.LoopConfig, sameToolCalls, noProgressRounds, sameMod
 	}
 	if loop.MaxSameModelTexts > 0 && sameModelTexts >= loop.MaxSameModelTexts {
 		return fmt.Sprintf("same model response repeated %d times", sameModelTexts)
+	}
+	// A read-only call that keeps returning the same bytes has nothing left to
+	// tell the model. This is a different signal from "same Tool call": the
+	// calls may be spread across rounds that each also did something else.
+	if repeatedReads >= repeatedReadCap(loop) {
+		return fmt.Sprintf("the same read returned %d times with no write in between", repeatedReads)
 	}
 	return ""
 }

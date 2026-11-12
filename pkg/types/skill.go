@@ -15,6 +15,12 @@ type Skill struct {
 	Scripts []string `yaml:"scripts,omitempty" json:"scripts,omitempty"`
 	Prompt  string   `yaml:"-" json:"prompt"`
 	Body    string   `yaml:"-" json:"body"`
+	// Path is where the Skill's SKILL.md lives, relative to the workspace. The
+	// system prompt carries this path and the description instead of the body:
+	// a Skill whose instructions are not needed costs one index line per call
+	// rather than its whole text, and the model reads the file when the task
+	// matches it.
+	Path string `yaml:"-" json:"path,omitempty"`
 }
 
 type SkillSummary struct {

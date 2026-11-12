@@ -759,6 +759,11 @@ func TestContextManagerCompactionKeepsInjectedProvenance(t *testing.T) {
 		Role: "assistant", TeamID: "owner", Content: "the branch is main", Injected: true,
 	}))
 	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "the current task", Injected: true}))
+	// One older exchange that falls outside the budget: without something to
+	// drop there is nothing to summarise, and the test would only prove that an
+	// empty compaction is skipped.
+	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "an older request"}))
+	require.NoError(t, manager.AddMessage(types.Message{Role: "assistant", Content: "an older answer"}))
 	require.NoError(t, manager.AddMessage(types.Message{
 		Role: "assistant", Content: "old tool call",
 		ToolCalls: []types.ToolCall{{ID: "old", Name: "Read"}},

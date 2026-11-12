@@ -220,8 +220,8 @@ type AgentTranscript struct {
 	AgentID     string `json:"agent_id,omitempty"`
 	AgentTurnID string `json:"agent_turn_id,omitempty"`
 	// SystemHash detects an Agent definition change between turns. A transcript
-	// written under a different system prompt is not continued: the messages
-	// above it were produced under rules that no longer apply.
+	// written under a different system prompt is kept, but its system message
+	// is replaced: the rules changed, the conversation above it did not.
 	SystemHash string    `json:"system_hash,omitempty"`
 	Messages   []Message `json:"messages"`
 	// LastTurnID is the turn that last appended to this transcript, so a retry

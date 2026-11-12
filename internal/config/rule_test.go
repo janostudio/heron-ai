@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/heron-ai/heron-engine/internal/storage"
+	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
 // writeRule 在临时目录里写一个规则文件，返回可供 LoadRuleBody 使用的 FileStore 与相对路径。
@@ -94,4 +95,17 @@ func TestLoadRuleMetaStillParses(t *testing.T) {
 	require.Equal(t, 7, rule.Priority)
 	require.Equal(t, rel, rule.Path)
 	require.Equal(t, "", rule.Content)
+}
+
+// 声明了 paths 的规则会让 system prompt 随输入变化，缓存前缀随之失效。
+// 规则本身仍然可用，但这条代价必须能被告知——加载打日志，--check-config 打印。
+func TestRulePathWarning(t *testing.T) {
+	plain := types.RuleItem{ID: "plain", Content: "x"}
+	require.Empty(t, RulePathWarning(plain), "无条件规则不该有告警")
+
+	gated := types.RuleItem{ID: "go-only", Paths: []string{"*.go"}}
+	warning := RulePathWarning(gated)
+	require.Contains(t, warning, "go-only")
+	require.Contains(t, warning, "*.go")
+	require.Contains(t, warning, "input-dependent")
 }
