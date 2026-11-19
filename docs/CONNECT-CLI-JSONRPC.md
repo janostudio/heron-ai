@@ -128,7 +128,7 @@ heron --prompt "请检查项目中的 .gitignore"
 
 ```text
 Flow: my_agent
-Model: hy3-ioa
+Model: gpt-4o-mini
 FlowSession: fs_xxx
 Status: idle
 Tokens: 1234 (prompt 1000, completion 234)

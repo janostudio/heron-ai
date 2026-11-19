@@ -21,12 +21,19 @@ ID 串联见 `trace-ids.md`。
 │   ├── agent.jsonl               # agent 内部行为（模型输出、工具调用）
 │   ├── evidence.jsonl            # 证据链（Flow-scope SharedRecord）
 │   ├── teams/<team>/state.md     # team 状态快照
-│   └── agents/<team>/<agent>/state.md
-└── agents/<agentID>/…            # 实体状态（跨会话）
+│   └── agents/<team>/<call>/state.md
+├── agents/<agentID>/state/       # 实体状态（跨会话）
+├── agent-transcripts/<call_id>.json   # 单次 agent 调用的对话快照
+├── agent-checkpoints/<id>.json        # 上下文检查点（续跑用）
+├── tool-tasks/<id>.json               # 异步工具任务
+└── uploads/<hash>                     # 多媒体输入落盘
 ```
 
-`.agents/data/` 下**实际只有 `logs/`、`sessions/`、`agents/` 三个子目录**。
-checkpoint / 异步工具任务按需生成，不保证存在，不要假定其路径。
+`.agents/data/` 下的子目录**按需生成**：`agent-transcripts/`、`agent-checkpoints/`、
+`tool-tasks/`、`uploads/` 只在用到对应能力时出现，不要假定一定存在。排查聊天记录
+不需要它们——三层 jsonl 才是事实源；`agent-transcripts/<call_id>.json` 是从
+`agent.jsonl` 重建出来的对话视图，便于直接读，不是另一份数据。
+
 ## 2. 三层事件流：按 run 层级分流
 
 关键规则：**事件按产生它的 run 层级写入不同文件**，不是同级混放。
@@ -34,7 +41,7 @@ checkpoint / 异步工具任务按需生成，不保证存在，不要假定其�
 
 | 文件 | 只包含 | 事件 |
 |---|---|---|
-| `flow.jsonl` | flow 会话级 + **team turn 级** | `session.*`、`session.turn.*`、`session.team_session.*`、`session.team_turn.*`、`session.record.published`、`session.recovery.*` |
+| `flow.jsonl` | flow 会话级 + **team turn 级** | `session.created` / `session.updated`、`session.turn.*`、`session.team_session.*`、`session.team_turn.*`、`session.record.published` / `.consumed`、`session.recovery.*`、`session.mailbox.*`、`session.wakeup.*` |
 | `team.jsonl` | **call 层**：agent / command / webhook | `session.agent_session.*`、`session.agent_turn.*`、`session.command_turn.*`、`session.webhook_turn.*`、`session.approval.*` |
 | `agent.jsonl` | agent **内部**行为 | `session.agent.model_response`、`session.tool_call.*`、`session.agent.feedback`、`session.context.compacted` |
 
@@ -46,19 +53,26 @@ checkpoint / 异步工具任务按需生成，不保证存在，不要假定其�
   一个 call，所以和 `session.agent_turn.*` 同级。
 
 每行是一个 JSON 对象。共有字段：`seq`、`event_id`、`type`、`flow_session_id`、
-`team_turn_id`、`team_id`、`call_id`、`call_turn_id`、`call_type`、`attempt`、
-`created_at`、`payload`。
+`flow_turn_id`、`team_session_id`、`team_turn_id`、`team_id`、`call_id`、`call_turn_id`、
+`call_type`、`attempt`、`recovery_of`、`created_at`、`payload`。具体事件只用其中一部分
+（例如 flow 层事件没有 `call_id`），缺字段就是 `null`，不代表数据不全。
 
 ### flow.jsonl
 
 | type | 含义 |
 |---|---|
 | `session.created` / `session.updated` | 会话创建/更新 |
-| `session.turn.started` / `session.turn.completed` / `session.turn.idle` / `session.turn.failed` | 一轮 flow turn 生命周期 |
+| `session.turn.started` / `session.turn.completed` / `session.turn.idle` / `session.turn.waiting_tool` / `session.turn.waiting_approval` | 一轮 flow turn 生命周期 |
 | `session.team_session.created` / `session.team_session.updated` | team 会话 |
 | `session.team_turn.started` / `session.team_turn.completed` | team turn（**路由结果在这里**） |
 | `session.record.published` | 发布 SharedRecord |
 | `session.recovery.requested` / `session.recovery.completed` | 恢复 |
+| `session.mailbox.message.{enqueued,claimed,delivered,dead}` / `session.mailbox.batch.dispatched` | 信箱消息 |
+| `session.wakeup.{created,fired,skipped,cancelled,expired}` | 自唤醒 |
+
+> **没有 `session.turn.failed` 这个事件**。一轮失败也是 `session.turn.completed`，
+> 失败事实在 `payload.turn.status`（`failed` / `cancelled`）。按事件名去搜"失败"
+> 会一条都搜不到，这是最常见的误判之一。
 
 ### team.jsonl
 
@@ -88,6 +102,9 @@ checkpoint / 异步工具任务按需生成，不保证存在，不要假定其�
 
 排查时不要用「`round` 重复」推断数据重复——要用 `team_turn_id` 区分。
 判据：`team_turn_id` 不同就是不同的 turn，`round` 各自从 0 开始。
+
+**唯一例外是从检查点续跑**：续跑会从上次的下一轮接着计数（`round` 不从 0 开始）。
+看到首个 `round` 不是 0，说明这轮是 resume 出来的，不是数据错乱。
 
 ```bash
 # 按 turn 分组看各自的轮次
@@ -188,7 +205,7 @@ jq -r 'select(.type=="session.agent.model_response"
 
 | 你要看的 | 去哪读 | 字段 |
 |---|---|---|
-| **用户输入**（每一轮的提问原文） | `flow.jsonl` 的 `session.turn.started` | `payload.turn.input` |
+| **用户输入**（每一轮的提问原文） | `flow.jsonl` 的 `session.turn.started`，且 `payload.turn.origin == "user"` | `payload.turn.input` |
 | **模型每轮的原始回复** | `agent.jsonl` 的 `session.agent.model_response` | `payload.text`（含思考/JSON）、`payload.round` 标第几轮 |
 | **这一轮对用户答了什么、谁写的** | `flow.jsonl` 的 `flow_turn` 终态 | `payload.reply` + `payload.team`（`intermediate=true` 表示这是进度不是答复，`reply` 为空） |
 | **成品文本与依据** | `evidence.jsonl` 的 SharedRecord | `summary`、`basis[]` |
@@ -198,8 +215,9 @@ jq -r 'select(.type=="session.agent.model_response"
 ```bash
 S=.agents/data/sessions/<fs_id>
 
-# 用户提问时间线
-jq -r 'select(.type=="session.turn.started") | .payload.turn.input' $S/flow.jsonl
+# 用户提问时间线（只要人真正问的，排除 mailbox / wakeup / resume / tool 唤醒的回合）
+jq -r 'select(.type=="session.turn.started" and .payload.turn.origin=="user")
+       | .payload.turn.input' $S/flow.jsonl
 
 # 模型每轮回复（text 里可能含 <think> 或待解析的 JSON）
 jq -r 'select(.type=="session.agent.model_response") | "[round \(.payload.round)] \(.payload.text)"' $S/agent.jsonl
@@ -213,11 +231,16 @@ jq -r '.summary' $S/evidence.jsonl
 ```
 
 一个会话可以续聊多轮：**同一 `sessions/<fs_id>/` 目录会持续追加**，
-所以 `session.turn.started` 会出现多次，每次的 `payload.turn.input` 就是那一轮的用户输入。
+所以 `session.turn.started` 会出现多次。但**不是每条都是一次提问**——一条用户消息
+会派生多个 turn（派发给 Team、工具结果唤醒、自唤醒都会各起一轮），只有
+`payload.turn.origin == "user"` 的那些才是人问的；其余是引擎自己接着跑。
+要按轮次对齐回答，用 `payload.reply` 非空 + `payload.intermediate` 为假的那些。
+
 ## 4. 执行日志（logs/<日期>.log）
 
-JSON 行，字段：`ts`、`level`（debug/info/warn/error）、`msg`、`round`、
-`agent_id`、`call_id`、`team_id`、`model`、`error`，部分行带 `flow_session_id`。
+JSON 行，固定三个键 `ts` / `level`（debug/info/warn/error）/ `msg`，其余键由调用方附带
+（常见 `round`、`agent_id`、`call_id`、`team_id`、`model`、`error`，部分行带
+`flow_session_id`）——**不是固定 schema，不要假定某字段每行都有**。
 
 日志是**全局**的（不按 session 分文件），用 `flow_session_id` / `team_id` /
 `call_id` 做过滤。注意并非每行都有 `flow_session_id`，缺失时用时间窗 + 其它字段定位。

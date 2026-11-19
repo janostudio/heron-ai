@@ -28,8 +28,13 @@ Flow → Team → Call → Agent / Command / Webhook
 | `team` | string | 指向 `.agents/teams/` 下的真实 Team id |
 | `can_activate` | []string | 本绑定可激活的 Team。任何 Team 都可声明；不声明则不能激活别的 Team。被激活的 Team 结束后回到激活它的 Team |
 | `depends_on` | []string | 前置 Team（完成后本 Team 才执行） |
+| `lifecycle` | string | `resident`（默认，整个 FlowSession 一个 TeamSession）/ `per_task`（每个任务一个）。**entry team 禁止 `per_task`**；`per_task` 必须同时声明 `inputs.user_message: true`，否则加载期报错 |
 | `inputs` | object/list | 用户消息 + SharedRecord 输入 |
 | `on_proceed` | list/object | Team 以 `proceed` 结束后的固定路由 |
+
+> 绑定里**不再有 `coordinator` 键**：Team 是平权的，谁是入口由 Flow 的 `entry` 决定，
+> 结果回到激活它的 Team。老配置写了这个键会在加载期直接报错并给出替代写法，
+> 不会被静默忽略（静默忽略会悄悄改变路由）。
 
 ---
 
@@ -65,8 +70,10 @@ workspace:
 | `id` | string | Team 标识 |
 | `goal` | string | Team 目标 |
 | `calls` | map | 执行项集合 |
-| `output` | object | 对外发布的 SharedRecord（`from` + `record` + `scope`） |
-| `memory` | object | 可选 Team Memory（`enabled`/`max_items`/`max_chars`/`inject_summary`） |
+| `inputs` | object/list | Team 级输入（用户消息 / SharedRecord），语义同 Call 的 `inputs` |
+| `output` / `outputs` | object | 对外发布的 SharedRecord（`from` + `record` + `scope`；`outputs.records[]` 是一次发多条） |
+| `state` | object | 可选 Team State 扩展（`enabled`/`max_items`/`max_chars`/`inject_summary`） |
+| `workspace` | object | Team 级工作区覆盖（见 workspace 节） |
 
 ### Call（calls 下每个条目）
 
@@ -83,6 +90,9 @@ workspace:
 | `timeout` | string | 超时 |
 | `command.env` | map | （type=command）注入的环境变量，值支持 `${...}` 模板 |
 | `command.args` | []string | （type=command）位置参数，逐项支持 `${...}` 模板（见下节） |
+| `webhook.method` / `webhook.headers` | string / map | （type=webhook）请求方法与请求头；`webhook.timeout` 同上 |
+| `command.idempotency_key` / `webhook.idempotency_key` | string | 重放去重键。`replay_policy: idempotent` 时**必填**，缺了加载期报错 |
+| `command.replay_policy` / `webhook.replay_policy` | string | 恢复/重跑时能否重放：`never` / `idempotent`（配合去重键）/ `allow` |
 
 ### 调度规则
 
@@ -200,7 +210,7 @@ frontmatter 分组：
 ### model（未配置的字段从 models.json 继承）
 | 字段 | 含义 |
 |---|---|
-| `model` | 模型名（**直接写模型 id，勿用 `${ENV}` 占位符**） |
+| `model` | **模型 profile 的 `name`**（models.json 里按 `name` 查表，不是 `id`）；**勿用 `${ENV}` 占位符**，那里不展开 |
 | `temperature` | 覆盖默认温度 |
 | `top_p` / `top_k` / `repetition_penalty` | 覆盖采样参数 |
 | `reasoning` | 覆盖推理配置 |
@@ -213,7 +223,7 @@ frontmatter 分组：
 | `builtin` | 内置工具：Read/Write/Grep/Glob/Bash/WebSearch/WebFetch/CodeNav/AskUserQuestion/TodoWrite/TodoRead/Spawn/Collect/ListTeams/Team/TeamSession/State/Define（另有 `REPL`、`ScheduleWakeup`/`CancelWakeup` 见下） |
 | `custom` / `mcp` | 自定义 / MCP 工具 |
 
-> 没有 `Edit` 工具：改文件用 `Read` → `Write`。写错工具名**不会在加载期报错**，
+> 没有 `Edit` 工具：改文件用 `Read` → `Write`（整文件覆盖）。写错工具名**不会在加载期报错**，
 > 只是那个工具对模型不可见 —— 排查"模型说没有某能力"时先核对这个名字。
 
 > `Spawn`、`State`、`Define` 是**按需开启**的工具：不写进 `builtin` 就既不会
@@ -254,17 +264,38 @@ frontmatter 分组：
 | `tool_execution` | `sequential` / `parallel_safe` |
 | `max_parallel_tools` | 最大并发只读工具数 |
 | `async_tools` | 允许创建持久异步任务的工具 |
+| `max_same_tool_calls` | 同一个工具同参数最多连续几次就判定卡住 |
+| `max_no_progress_rounds` | 连续多少轮没有进展就判定卡住 |
+| `max_same_model_texts` | 连续多少轮模型输出完全一致就判定卡住 |
+| `max_repeated_reads` | 同一个只读调用（同参数）最多重复几次；**写操作之后的重复不计**（那是改-验循环，不是卡住） |
+| `stuck_action` | 判定卡住后怎么办：`fail` / `ask_user` |
+| `max_model_retries` | provider 瞬时失败的重试次数；上下文超限恢复另算，只尝试一次 |
 | `timeout` | 执行超时 |
 
 ### context（上下文窗口控制）
 | 字段 | 含义 |
 |---|---|
-| `target_ratio` | 目标 Active Context 比例（默认 0.70） |
-| `compaction_threshold` | 触发压缩的比例（默认 0.80） |
-| `hard_limit_ratio` | 硬上限比例（默认 0.90） |
+| `target_ratio` | 压缩后目标 Active Context 比例（默认 0.45） |
+| `compaction_threshold` | 触发压缩的比例（默认 0.90） |
+| `hard_limit_ratio` | 硬上限比例（默认 0.95） |
 | `output_reserve_ratio` | 为输出预留的比例（默认 0.15） |
 | `tool_output_ratio` | 工具输出预算比例（默认 0.10） |
 | `max_tool_output_chars` | 单条工具结果字符上限 |
+| `max_input_tokens` | 显式覆盖模型上下文容量（不配则用 model profile 的预算） |
+| `microcompact_threshold_chars` / `microcompact_max_chars` | 单条工具结果超阈值时截断到多少字符（默认 8192 / 4096） |
+| `recent_message_groups` | 压缩时保留最近几组消息原文（默认 2） |
+| `compactor` | 压缩器：`llm`（默认，摘要调用）/ `mechanical`（不调模型，纯裁剪） |
+
+> 默认值刻意"晚压、压狠"（90% 才压，压到 45%）：每次压缩是一次摘要调用加一次
+> 缓存重置，频繁小碎压的固定成本远高于一次压到位。
+
+### completion（完成证据，默认全关）
+| 字段 | 含义 |
+|---|---|
+| `require_tool` / `required_tools` | 必须调用过工具 / 必须调用过其中某个工具 |
+| `require_tool_success` | 工具调用必须成功 |
+| `require_workspace_read` / `require_workspace_change` | 必须读过工作区 / 必须改过工作区 |
+| `require_structured_output` | 必须产出符合 `structured_output` 的结构化结果 |
 
 ### budget（资源预算，0 = 不限制）
 | 字段 | 含义 |
@@ -279,11 +310,24 @@ frontmatter 分组：
 ### 其他
 | 字段 | 含义 |
 |---|---|
-| `structured_output` | `{type, schema}` 结构化输出契约 |
+| `structured_output` | `{type, schema, max_output_tokens, enforce_provider_format}` 结构化输出契约 |
 | `hitl` | `{enabled, timeout}` 人工审批 |
-| `hooks` | `{event, command, timeout}` 生命周期钩子 |
-| `handoffs` | 可委派任务的其他 agent 列表 |
-| `skills` / `knowledge` / `rules` | 引用的 skill / 知识 / 规则 |
+| `hooks` | **列表**，每项 `{event, command, timeout}`；写成单个映射会解码失败 |
+| `skills` / `rules` | 引用的 skill / 规则 |
+| `knowledge` | 声明的知识条目名（加载期校验存在性；**不产生注入内容**，见下） |
+
+> **`skills` 的实际效果**：声明后 system prompt 里只多一行**索引**
+> （`- <name> — <description>` + `read: <SKILL.md 路径>`），正文**不进** prompt；
+> 模型判断任务匹配时才用 `Read` 打开那个路径。所以正文改了**立即生效**，代价是模型
+> 多一次读文件调用。但 `tools` / `allowed-tools` 是**声明即授予**——工具定义会常驻
+> 上下文，只声明真正需要的 skill。正文长的拆到 `references/`，正文只留纲要与指向。
+>
+> **`knowledge` 的实际效果**：运行时只往提示词里注入一个**目录指路块**（该 agent
+> 可读哪些知识目录），不注入条目内容。读知识就是 `Glob` 定位 + `Read` 打开。
+> 因此 `knowledge:` 列表写错条目名不会让 agent 少读什么，它该看的是目录里有什么。
+> 知识目录有三处：`.agents/knowledge/`（全 Flow 共享）、
+> `.agents/teams/<team>/knowledge/`（Team 私有）、`.agents/agents/<agent>/knowledge/`
+> （Agent 私有）。
 
 ---
 
@@ -318,11 +362,11 @@ frontmatter 分组：
 
 ```json
 {
-  "model": "hy3-ioa",
+  "model": "gpt-4o-mini",
   "models": [
     {
-      "id": "hy3-ioa",
-      "name": "hy3-ioa",
+      "id": "gpt-4o-mini",
+      "name": "gpt-4o-mini",
       "protocol": "openai_chat",
       "base_url": "http://127.0.0.1:15721/v1",
       "api_key": "${OPENAI_API_KEY}",
@@ -335,22 +379,31 @@ frontmatter 分组：
 
 | 字段 | 含义 |
 |---|---|
-| `model` | 默认模型，按条目的 **`name`** 匹配（`name` 空时回填 `id`）；空则用第一条 |
-| `id` / `name` | `name` 是匹配键与显示名，`id` 是发给 API 的 wire model（空则用 `name`） |
+| `model` | 默认模型，按条目的 **`name`** 匹配；空则用第一条 |
+| `name` | **匹配键、显示名，也是 Agent `model.model` 要写的值**。每个 profile 都写它 |
+| `id` | 发给 API 的 wire model（`model` 字段）；空则用 `name` |
 | `protocol` | `openai_chat`（默认）/ `anthropic_messages`；不认识的值按 openai 处理 |
 | `base_url` | Provider 地址 |
+| `models_url` | 可选，`/models` 探测地址（Web UI / 校验用） |
 | `api_key` | 直接写值，或写 `${ENV_VAR}` 由引擎展开 |
-| `maxInputTokens` / `maxAllowedSize` | 上下文预算，压缩策略据此计算 |
+| `maxInputTokens` | 上下文预算，压缩策略据此计算 |
 | `maxOutputTokens` | 单次输出上限，缺省走协议默认 |
+| `stream` | 该 provider 需要流式调用；为 `true` 时把 SSE 分片聚合成一个响应 |
 | `temperature` / `top_p` / `top_k` / `repetition_penalty` | 采样默认值，缺省则不发送 |
-| `reasoning` | Provider-neutral 推理配置 |
+| `reasoning` / `onlyReasoning` | Provider-neutral 推理配置 / 只要推理不要正文 |
+| `supports*` | 能力声明（`supportsImages` / `supportsToolCall` / `supportsStructuredOutput` 等），按需显式声明 |
+| `fallback` | 该模型遇到可重试错误（限流 / 5xx / 超时 / 网络）时按顺序尝试的备用模型名 |
+| `cooldown_seconds` | 失败模型作为被动兜底被跳过的时长，默认 600 秒 |
+
+> **`maxAllowedSize` 是无效字段**：结构体里有声明，但没有任何代码读取它。
+> 上下文预算看 `maxInputTokens`。
 
 `api_key` 的两级来源与陷阱：
 
 - 写 `${VAR}` 时由引擎展开；**展开为空会直接报 `API key ... is not set`**，不会退回
   其他变量（防止把 A 厂商的 key 发给 B 厂商）。
 - 整段省略时按协议读 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`。
-- Agent 的 `model.model` 只写模型名，**不要写 `${ENV}`** —— 那里不做展开。
+- Agent 的 `model.model` 写 profile 的 **`name`**（不是 `id`），**不要写 `${ENV}`** —— 那里不做展开。
 
 ## settings.json（`.agents/settings.json`）
 
@@ -363,7 +416,7 @@ frontmatter 分组：
 | `knowledge` | 知识总结模型 | `summary_model`（空 = 默认模型） |
 | `web` | WebSearch / WebFetch 数据源 | 见上文 tools 节的 provider 对照 |
 | `mcp` | MCP server 列表 | `name` / `transport`(`stdio`\|`http`) / `command`+`args` / `url`+`headers` / `env` |
-| `tools` | 工具策略 | `restricted_bash_phrases`（只增不减）、`script.*`（默认关闭） |
+| `tools` | 工具策略 | `restricted_bash_phrases`（只增不减）、`repl.*`（默认关闭；开启后 agent 还必须配 `hitl.enabled`——整个脚本是人工审批的粒度） |
 | `env` | 注入所有子进程的环境变量 | **每个值都按路径解析**，相对**工作区根**（进程 cwd）：`"."` = 根，`".."` = 上一级。非路径值会被拼成路径（`"MODE": "prod"` → `<cwd>/prod`），这个段只适合放路径锚点 |
 
 **不生效的段**（老配置里常见，调了也没用）：
@@ -385,10 +438,19 @@ frontmatter 分组：
 type: hard        # hard 强制 / soft 建议
 scope:
   type: all       # all / team / agents
+  # type: team 时必须配 teams: [<team 局部名>]
+  # type: agents 时必须配 agents: [<agent id>]
 priority: 10
+paths:            # 可选：条件触发，命中这些 glob 才注入；不写=常驻
+  - "internal/**/*.go"
 ---
 规则正文。
 ```
+
+- `scope.type` 写 `team` / `agents` 却不配对应的名单，规则**永远不命中**，且加载期
+  不报错——排查"规则没生效"先看这里。注意是复数 `agents`，不是 `agent`。
+- 正文是渲染时按需读的：改规则文件不需要重启（skill 正文现在也是按需读，见上）。
+- `priority` 越大越靠前。
 
 ## 运行时事件字段（排查用）
 
@@ -405,6 +467,8 @@ priority: 10
 | `type` | 事件类型，如 `session.turn.started`、`session.agent_turn.completed` |
 | `flow_session_id` | 所属 Flow 会话，即目录名 `fs_xxx` |
 | `flow_turn_id` / `team_turn_id` | 轮次 ID，跨三层关联用 |
+| `team_session_id` | Team 会话 ID；`per_task` 生命周期下同一个 Team 会有多个 |
+| `recovery_of` | 本事件是恢复哪次尝试（`attempt` 会随重试 +1） |
 | `team_id` | **flow 局部名**（如 `default` / `diagnose`），不是 team 定义 id（`xxx_team`） |
 | `call_id` / `call_turn_id` | call 名与其轮次 ID |
 | `call_type` | `agent` / `command` / `webhook` |
@@ -417,22 +481,26 @@ priority: 10
 | 位置 | 字段 | 含义 |
 |---|---|---|
 | `session.turn.started` | `payload.turn.input` | **本轮用户输入原文** |
-| `session.turn.*` | `payload.turn.status` | `running` / `waiting_input` / `failed` / `cancelled` |
+| `session.turn.started` | `payload.turn.origin` | 这轮怎么被唤醒：`user`（用户提问）/ `mailbox` / `wakeup` / `resume` / `tool`。**只有 `user` 才是用户提问**，一条用户消息会派生多个 turn |
+| `session.turn.*` | `payload.turn.status` | `created` / `running` / `waiting_input` / `waiting_tool` / `waiting_approval` / `completed` / `failed` / `cancelled` |
 | `session.turn.*` | `payload.session.status` | 会话级状态，正常结束为 `idle` |
 | `flow_turn` 终态 | `payload.reply` | 这一轮给用户的答复（`intermediate=true` 时为空） |
 | `flow_turn` 终态 | `payload.team` | **写这条答复的 Team**（`origin` 只说明这轮怎么被唤醒，不是归属） |
 | `flow_turn` 终态 | `payload.contributors[]` | 这轮里每个 Team 说了什么、谁请求的——答复是复述时用它还原来源 |
 | `flow_turn` 终态 | `payload.deliveries[]` | 必须作为独立消息送达用户的结果：`message_id` / `team_id` / `text` |
 | `flow_turn` 终态 | `payload.intermediate` | `true` 表示这是内部进度而不是答案（`reply` 会被清空） |
+| `flow_turn` 终态 | `payload.limit` | 撞到兜底上限时的结构化事实：`name`（哪条上限）/ `value` / `observed` / `top_pairs`（最频繁的激活边）/ `recent`。比解析 `error` 字符串可靠 |
 | `session.turn.completed` | `payload.error` + `turn.status=cancelled` | 进程中断留下的悬空回合，在**下一个回合开始时**被补写为这个终态（`intermediate=true`），不属于本次运行的失败 |
-| `session.team_turn.completed` | `payload.team_result.turn.next.action` | 路由：`proceed` / `activate` / `return` / `coordinate` / `fail` |
+| `session.team_turn.completed` | `payload.team_result.turn.next.action` | 路由：`proceed` / `activate` / `return` / `coordinate` / `fail` / `wait_tool` / `wait_approval`（后两个是"等工具或审批"，不是失败） |
 | `session.team_turn.completed` | `payload.team_result.turn.status` | team turn 状态 |
 | `session.team_turn.completed` | `payload.team_result.reply` | 该 team 的最终文本 |
 | `session.team_turn.completed` | `payload.team_result.records[]` | 该 team 发布的 record |
 | `session.team_turn.completed` | `payload.team_result.call_results[]` | 各 call 的结果 |
 | `session.agent_turn.completed` | `payload.call_result.status` | call 状态（非 `completed` 即要看 `error`） |
 | `session.agent_turn.completed` | `payload.call_result.requests[]` | **消耗事实源**，每个元素 = 一轮模型调用 |
-| `session.agent_turn.completed` | `payload.call_result.requests[].usage` | `prompt_tokens` / `completion_tokens` |
+| `session.agent_turn.completed` | `payload.call_result.requests[].usage` | `prompt_tokens` / `completion_tokens` / `total_tokens`；缓存看 `prompt_cache_hit_tokens` 与 `cache_read_input_tokens`（不同 provider 命名不同，**取两者较大值，不可相加**） |
+| `session.agent_turn.completed` | `payload.spawn` | 子 agent 回合标记：`{agent, key, parent_call_id}`。以 `deliver=downstream` 派发的子任务会作为合成 call 计入父 `team_result.usage`；同步 inline spawn 不计 |
+| `session.context.compacted` | `payload.summary` / `payload.dropped_count` | 这一轮发生了上下文压缩：摘要文本 + 丢掉了多少条 |
 | `session.agent.model_response` | `payload.text` | **模型本轮回复原文**（不是 `content`） |
 | `session.agent.model_response` | `payload.round` / `tool_calls` / `finish_reason` | 第几轮 / 工具调用 / 停止原因 |
 | `session.tool_call.started` / `.completed` / `.failed` | `payload.tool_name` / `arguments` / `round`；`completed` 另有 `content`（结果）、`matches` 等 | 工具调用详情 |

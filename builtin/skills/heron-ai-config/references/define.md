@@ -48,7 +48,7 @@ persona:
   goal: "找出真实缺陷并给出可执行修复建议"
   backstory: "..."
 model:
-  model: hy3-ioa                   # 省略则继承 models.json
+  model: gpt-4o-mini                   # 省略则继承 models.json
 tools:
   builtin: [Read, Grep, Glob]
 skills: [code-review]
@@ -93,11 +93,15 @@ bind:                              # 绑定进当前 flow（省略则不绑定�
 
 | `bind` 字段 | 含义 |
 |---|---|
-| `key` | 在 Flow 里的局部名（必填，不能与已有绑定重复） |
+| `key` | 在 Flow 里的局部名（必填，不能与已有绑定重复；也可用 `bind_key`） |
 | `can_activate` | 本绑定可激活的其他 Team。任何 Team 都可以声明；不声明则不能激活别的 Team |
 | `depends_on` | 前置 Team |
 | `inputs` | 输入声明 |
 | `on_proceed` | 结束后的固定路由 |
+
+> **`bind` 没有 `lifecycle` 键**：Define 建不出 `per_task` 绑定（写了也会被忽略，
+> 最终是 `resident`）。确实需要 `per_task`，只能手写 flow 文件——而且它要求同时声明
+> `inputs.user_message: true`，否则加载期报错。
 
 ## create 与 upsert
 

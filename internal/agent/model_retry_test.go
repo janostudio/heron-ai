@@ -69,7 +69,7 @@ func TestTurnLoopRetriesProviderServerError(t *testing.T) {
 	loop := newEmptyResponseLoop(model)
 
 	result, err := loop.Run(context.Background(), types.AgentConfig{
-		Model: types.ModelConfig{Model: "hy3-ioa"},
+		Model: types.ModelConfig{Model: "gpt-4o-mini"},
 		Loop:  types.LoopConfig{MaxRounds: 2, MaxModelRetries: 1},
 	}, types.AgentRequest{})
 	require.NoError(t, err)
@@ -82,7 +82,7 @@ func TestTurnLoopDoesNotRetryProviderBadRequest(t *testing.T) {
 	loop := newEmptyResponseLoop(model)
 
 	_, err := loop.Run(context.Background(), types.AgentConfig{
-		Model: types.ModelConfig{Model: "hy3-ioa"},
+		Model: types.ModelConfig{Model: "gpt-4o-mini"},
 		Loop:  types.LoopConfig{MaxRounds: 2, MaxModelRetries: 2},
 	}, types.AgentRequest{})
 	require.Error(t, err)

@@ -125,11 +125,11 @@ flowchart LR
 
 ```json
 {
-  "model": "hy3-ioa",
+  "model": "gpt-4o-mini",
   "models": [
     {
-      "id": "hy3-ioa",
-      "name": "hy3-ioa",
+      "id": "gpt-4o-mini",
+      "name": "gpt-4o-mini",
       "protocol": "openai_chat",
       "base_url": "https://api.openai.com/v1",
       "api_key": "${OPENAI_API_KEY}",

@@ -5,7 +5,7 @@ persona:
   goal: "回答用户问题，提供帮助"
   backstory: "一个乐于助人的 AI 助手"
 model:
-  model: hy3-ioa
+  model: gpt-4o-mini
 tools:
   builtin:
     - Read

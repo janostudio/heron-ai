@@ -103,7 +103,7 @@ func TestCallResultWireFormatIsSnakeCase(t *testing.T) {
 	// silently rename one side.
 	data, err := json.Marshal(CallResult{
 		Usage:    TokenUsage{PromptTokens: 2195, CompletionTokens: 81, TotalTokens: 2276},
-		Requests: []ModelRequestStats{{Round: 3, MessageCount: 2, Model: "hy3-ioa"}},
+		Requests: []ModelRequestStats{{Round: 3, MessageCount: 2, Model: "gpt-4o-mini"}},
 	})
 	require.NoError(t, err)
 
@@ -126,7 +126,7 @@ func TestCallResultWireFormatIsSnakeCase(t *testing.T) {
 	require.Len(t, fields.Requests, 1)
 	require.Equal(t, 3, fields.Requests[0].Round)
 	require.Equal(t, 2, fields.Requests[0].MessageCount)
-	require.Equal(t, "hy3-ioa", fields.Requests[0].Model)
+	require.Equal(t, "gpt-4o-mini", fields.Requests[0].Model)
 }
 
 // TestCallResultUnmarshalPublishedPayload decodes a call_result payload in
@@ -150,7 +150,7 @@ func TestCallResultUnmarshalPublishedPayload(t *testing.T) {
 			"estimated_prompt_tokens": 1504,
 			"prompt_hash": "sha256:ebd5c19d14833c8145407d3fbb6c5f8f89b6c5cc821633ad053209e8f5b8a616",
 			"usage": {"prompt_tokens": 2195, "completion_tokens": 81, "total_tokens": 2276},
-			"model": "hy3-ioa"
+			"model": "gpt-4o-mini"
 		}],
 		"workspace_ops": null,
 		"tool_calls": 0,
@@ -172,7 +172,7 @@ func TestCallResultUnmarshalPublishedPayload(t *testing.T) {
 	require.Equal(t, 2195, result.Usage.PromptTokens)
 	require.Equal(t, 2276, result.Usage.TotalTokens)
 	require.Len(t, result.Requests, 1)
-	require.Equal(t, "hy3-ioa", result.Requests[0].Model)
+	require.Equal(t, "gpt-4o-mini", result.Requests[0].Model)
 	require.Equal(t, 2195, result.Requests[0].Usage.PromptTokens)
 	require.NotNil(t, result.Next)
 	require.Equal(t, "proceed", string(result.Next.Action))
