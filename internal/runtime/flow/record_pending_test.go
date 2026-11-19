@@ -40,7 +40,7 @@ func (progressTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (ty
 }
 
 // 一个团队把活派下去、自己的回合先结束时，它说的那句话只是进度。记录必须带
-// pending 状态，否则下一层会把它当结论转述给用户（fs_2864455499636f2b）。
+// pending 状态，否则下一层会把它当结论转述给用户（fs_sample_session）。
 func TestProgressRecordIsPendingWhileDownstreamRuns(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	writer := storage.NewJSONLSessionWriter(fileStore)
@@ -141,7 +141,7 @@ func TestSettleCallerProgressRetiresPendingRecords(t *testing.T) {
 }
 
 // 恢复轮要把当初派下去的任务一并交回：被唤醒的团队得知道自己原来在干什么，
-// 而不是靠翻 State 便签猜（fs_2864455499636f2b 花了 3 分半）。
+// 而不是靠翻 State 便签猜（fs_sample_session 花了 3 分半）。
 func TestResumeForToolResultCarriesOriginalTask(t *testing.T) {
 	recorder := &inputRecordingTeamRuntime{}
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
@@ -156,7 +156,7 @@ func TestResumeForToolResultCarriesOriginalTask(t *testing.T) {
 		ToolName:      types.ToolNameTeamRun,
 		Status:        types.ToolTaskFailed,
 		CreatedAt:     time.Now().UTC().Add(-time.Minute),
-		Arguments:     map[string]any{"item": "在 genie 仓库定位云函数接入方案"},
+		Arguments:     map[string]any{"item": "在 repo-a 仓库定位云函数接入方案"},
 	}}})
 
 	id := callerTranscriptID(session.ID, "default", "coordinator")
@@ -167,7 +167,7 @@ func TestResumeForToolResultCarriesOriginalTask(t *testing.T) {
 		CallID:        "coordinator",
 		Messages: []types.Message{
 			{Role: "system", Content: "sys"},
-			{Role: "user", Content: "分析 genie baas 云函数接入"},
+			{Role: "user", Content: "分析 repo-a 云函数接入"},
 		},
 	}))
 
@@ -188,7 +188,7 @@ func TestResumeForToolResultCarriesOriginalTask(t *testing.T) {
 	result := stored.Messages[3]
 	require.Equal(t, "tool", result.Role)
 	require.Contains(t, result.Content, "interrupted by process restart")
-	require.Contains(t, result.Content, "在 genie 仓库定位云函数接入方案",
+	require.Contains(t, result.Content, "在 repo-a 仓库定位云函数接入方案",
 		"原任务要随结果回到模型上下文，不能只留一句错误")
 }
 

@@ -16,7 +16,7 @@ import (
 func TestStructuredModelConfigKeepsToolLoopUnconstrained(t *testing.T) {
 	agent := types.AgentConfig{
 		Model: types.ModelConfig{
-			Model: "hy3-ioa",
+			Model: "gpt-4o-mini",
 		},
 		Structured: &types.StructuredOutput{
 			Type:            "json",
@@ -38,7 +38,7 @@ func TestStructuredModelConfigKeepsToolLoopUnconstrained(t *testing.T) {
 func TestStructuredModelConfigEnforceProviderFormatRestoresOverrides(t *testing.T) {
 	agent := types.AgentConfig{
 		Model: types.ModelConfig{
-			Model: "hy3-ioa",
+			Model: "gpt-4o-mini",
 		},
 		Structured: &types.StructuredOutput{
 			Type:                  "json",
@@ -61,7 +61,7 @@ func TestStructuredModelConfigEnforceProviderFormatRestoresOverrides(t *testing.
 
 func TestStructuredModelConfigUsesSafeDefaultOutputBudget(t *testing.T) {
 	config := structuredModelConfig(types.AgentConfig{
-		Model:      types.ModelConfig{Model: "hy3-ioa"},
+		Model:      types.ModelConfig{Model: "gpt-4o-mini"},
 		Structured: &types.StructuredOutput{Type: "json"},
 	})
 	require.NotNil(t, config.MaxOutputTokens)
@@ -85,7 +85,7 @@ func TestTurnLoopStructuredOutputStopsOnProviderLength(t *testing.T) {
 		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "review"}}},
 	)
 	result, err := loop.Run(context.Background(), types.AgentConfig{
-		Model: types.ModelConfig{Model: "hy3-ioa"},
+		Model: types.ModelConfig{Model: "gpt-4o-mini"},
 		Loop:  types.LoopConfig{MaxRounds: 1},
 		Structured: &types.StructuredOutput{
 			Type:            "json",
@@ -119,7 +119,7 @@ func TestTurnLoopRetriesTruncatedStructuredResponse(t *testing.T) {
 		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "review"}}},
 	)
 	result, err := loop.Run(context.Background(), types.AgentConfig{
-		Model: types.ModelConfig{Model: "hy3-ioa"},
+		Model: types.ModelConfig{Model: "gpt-4o-mini"},
 		Loop:  types.LoopConfig{MaxRounds: 2},
 		Structured: &types.StructuredOutput{
 			Type: "json",
@@ -151,7 +151,7 @@ func TestTurnLoopRetriesOneInvalidStructuredResponse(t *testing.T) {
 		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "review"}}},
 	)
 	result, err := loop.Run(context.Background(), types.AgentConfig{
-		Model: types.ModelConfig{Model: "hy3-ioa"},
+		Model: types.ModelConfig{Model: "gpt-4o-mini"},
 		Loop:  types.LoopConfig{MaxRounds: 2},
 		Structured: &types.StructuredOutput{
 			Type: "json",

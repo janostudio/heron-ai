@@ -20,8 +20,8 @@ func TestMergeProfileDefaults_AgentOverridesModel(t *testing.T) {
 	topP := 0.8
 	maxOutput := 64000
 	profile := types.ModelProfile{
-		ID:              "hy3-ioa",
-		Name:            "hy3-ioa",
+		ID:              "gpt-4o-mini",
+		Name:            "gpt-4o-mini",
 		BaseURL:         "http://model",
 		Temperature:     &temperature,
 		TopP:            &topP,
@@ -67,8 +67,8 @@ func TestOpenAIProvider_UsesModelDefaults(t *testing.T) {
 	topP := 0.8
 	maxOutput := 64000
 	profile := types.ModelProfile{
-		ID:                  "hy3-ioa",
-		Name:                "hy3-ioa",
+		ID:                  "gpt-4o-mini",
+		Name:                "gpt-4o-mini",
 		BaseURL:             "http://test.local/v1",
 		APIKey:              "test-key",
 		Temperature:         &temperature,
@@ -299,8 +299,8 @@ func TestOpenAIProvider_UsesIDAsRequestModel(t *testing.T) {
 		return jsonResponse(`{"choices":[{"message":{"content":"ok"}}]}`), nil
 	})
 	profile := types.ModelProfile{
-		ID:      "hy3-ioa",
-		Name:    "hy3-ioa-cp",
+		ID:      "gpt-4o-mini",
+		Name:    "gpt-4o-mini-cp",
 		BaseURL: "http://test.local/v1",
 	}
 	provider := NewOpenAIProviderWithProfile("key", profile.BaseURL, profile.Name, profile)
@@ -310,8 +310,8 @@ func TestOpenAIProvider_UsesIDAsRequestModel(t *testing.T) {
 		{Role: "user", Content: "hello"},
 	}, nil, types.ModelConfig{Model: profile.Name})
 	require.NoError(t, err)
-	assert.Equal(t, "hy3-ioa", request["model"])
-	assert.Equal(t, "hy3-ioa", resp.Model)
+	assert.Equal(t, "gpt-4o-mini", request["model"])
+	assert.Equal(t, "gpt-4o-mini", resp.Model)
 }
 
 func TestAnthropicProvider_UsesIDAsRequestModel(t *testing.T) {
@@ -359,8 +359,8 @@ func TestOpenAIProvider_EmptyIDFallsBackToName(t *testing.T) {
 
 func TestProviderRouter_IndexesByNameOnly(t *testing.T) {
 	router, err := NewProviderRouter("a-cp", []types.ModelProfile{
-		{ID: "hy3-ioa", Name: "a-cp", BaseURL: "http://127.0.0.1", APIKey: "key"},
-		{ID: "hy3-ioa", Name: "b-cp", BaseURL: "http://127.0.0.1", APIKey: "key"},
+		{ID: "gpt-4o-mini", Name: "a-cp", BaseURL: "http://127.0.0.1", APIKey: "key"},
+		{ID: "gpt-4o-mini", Name: "b-cp", BaseURL: "http://127.0.0.1", APIKey: "key"},
 	})
 	require.NoError(t, err)
 
@@ -371,7 +371,7 @@ func TestProviderRouter_IndexesByNameOnly(t *testing.T) {
 	require.True(t, ok)
 
 	// The shared ID must not be registered as its own key.
-	_, ok = router.providers["hy3-ioa"]
+	_, ok = router.providers["gpt-4o-mini"]
 	require.False(t, ok)
 
 	// Default model resolves to the first profile's name.

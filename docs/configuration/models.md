@@ -8,11 +8,11 @@ Agent 文件只需要指定模型名称；没有在 Agent 上显式配置的参�
 
 ```json
 {
-  "model": "hy3-ioa",
+  "model": "gpt-4o-mini",
   "models": [
     {
-      "id": "hy3-ioa",
-      "name": "hy3-ioa",
+      "id": "gpt-4o-mini",
+      "name": "gpt-4o-mini",
       "protocol": "openai_chat",
       "base_url": "http://127.0.0.1:15721/v1",
       "api_key": "${OPENAI_API_KEY}",
@@ -159,14 +159,14 @@ Provider 默认值
 
 ```yaml
 model:
-  model: hy3-ioa
+  model: gpt-4o-mini
 ```
 
 只有需要特殊行为时才覆盖：
 
 ```yaml
 model:
-  model: hy3-ioa
+  model: gpt-4o-mini
   temperature: 0
   max_output_tokens: 8192
 ```

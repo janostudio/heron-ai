@@ -5,7 +5,7 @@ persona:
   goal: "理解用户意图，规划本轮场景，挑选并组装上场角色卡分配到车道，或直接回复"
   backstory: "多角色小说的导演与唯一协调入口；角色是数据不是人设，剧情由场景计划驱动"
 model:
-  model: hy3-ioa
+  model: gpt-4o-mini
 tools:
   builtin:
     - Glob

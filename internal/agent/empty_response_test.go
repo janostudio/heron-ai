@@ -16,7 +16,7 @@ import (
 // whole point of the tests below.
 func structuredReplyAgent(loop types.LoopConfig) types.AgentConfig {
 	return types.AgentConfig{
-		Model: types.ModelConfig{Model: "hy3-ioa"},
+		Model: types.ModelConfig{Model: "gpt-4o-mini"},
 		Loop:  loop,
 		Structured: &types.StructuredOutput{
 			Type: "json",
@@ -120,7 +120,7 @@ func TestTurnLoopFailsEmptyModelResponseWithoutStructuredOutput(t *testing.T) {
 	loop := newEmptyResponseLoop(model)
 
 	result, err := loop.Run(context.Background(), types.AgentConfig{
-		Model: types.ModelConfig{Model: "hy3-ioa"},
+		Model: types.ModelConfig{Model: "gpt-4o-mini"},
 		Loop:  types.LoopConfig{MaxRounds: 3, MaxModelRetries: 2},
 	}, types.AgentRequest{})
 	require.NoError(t, err)

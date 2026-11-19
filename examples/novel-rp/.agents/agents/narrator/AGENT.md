@@ -5,7 +5,7 @@ persona:
   goal: "把各车道角色演绎编织成连贯的小说正文，维护悬念与角色状态"
   backstory: "故事的记录者，知晓一切但从不替角色做决定"
 model:
-  model: hy3-ioa
+  model: gpt-4o-mini
 knowledge:
   - lore
 loop:

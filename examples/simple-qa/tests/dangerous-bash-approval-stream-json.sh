@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # Real integration test:
-#   stream-json CLI → HTTP FlowRuntime → hy3-ioa Agent → Tool Policy/HITL
+#   stream-json CLI → HTTP FlowRuntime → gpt-4o-mini Agent → Tool Policy/HITL
 #   → HTTP approval → Agent Resume → Bash execution.
 #
 # It intentionally uses the existing local .agents/models.json and never

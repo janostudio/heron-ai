@@ -89,7 +89,7 @@ func (r *Runtime) ResumeForToolResult(ctx context.Context, sessionID string, sig
 	toolCallID := newID("call")
 	// The original task travels back with the result. A Team woken by its own
 	// call returning has to know what it was doing: without this it rebuilt the
-	// goal from its own State notes (fs_2864455499636f2b, 3m30s of rummaging
+	// goal from its own State notes (fs_sample_session, 3m30s of rummaging
 	// before it dispatched again), and a Team that keeps no notes would have had
 	// to guess. The task record is also where the record window starts, so both
 	// facts come from one load.
@@ -265,7 +265,7 @@ func callerTranscriptID(flowSessionID, teamID, callID string) string {
 // replaced by the caller's next conclusion (superseded) or contradicted by a
 // failure (invalidated). Leaving it active is what let a two-minute-old "正在
 // 取证" be relayed as the current progress after the callee had already died
-// (fs_2864455499636f2b).
+// (fs_sample_session).
 //
 // Scoped by call id: a Team may hold several calls at once, and one coming back
 // says nothing about the others' progress lines. An empty call id falls back to

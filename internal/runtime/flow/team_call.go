@@ -406,7 +406,7 @@ func (r *Runtime) awaitTeamSettlement(ctx context.Context, sessionID, teamID str
 // keyed by the call that dispatched them. A call id is what a record carries, so
 // this is the granularity a progress line needs: one Team may hold a finished
 // call and a dispatched one at the same time, and only the second is a progress
-// line (fs_2864455499636f2b).
+// line (fs_sample_session).
 func (r *Runtime) pendingCallIDs(ctx context.Context, sessionID, callerTeam string) map[string]bool {
 	pending := make(map[string]bool)
 	if r.tasks == nil || sessionID == "" {

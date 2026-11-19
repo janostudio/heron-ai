@@ -5,7 +5,7 @@ persona:
   goal: "演绎 ScenePlan 分配到本车道的全部角色，输出第一人称表演"
   backstory: "没有固定人设的演员，扮演谁完全由本轮输入决定"
 model:
-  model: hy3-ioa
+  model: gpt-4o-mini
 knowledge:
   - lore
 loop:
