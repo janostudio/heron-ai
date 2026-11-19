@@ -3,18 +3,19 @@
 三层 jsonl 靠 ID 串联。本文件给出**每类事件实际带哪些 ID**（串联地图）与
 正向/反向查询命令。数据落点见 `session-files.md`。
 
-有**三个反直觉点**会让 jq 取到 `null`，链路就断在这里。先看字段归属表，再照命令查。
+有**两个反直觉点**会让 jq 取到 `null`，链路就断在这里。先看字段归属表，再照命令查。
 
-### 9.1 ID 层级
+## 1. ID 层级
 
 ```text
 flow_session_id           → sessions/<fs_id>/ 目录（一次对话）
-  flow_turn_id (ft_…)     → 一轮用户输入（用户每问一次一个）
-    team_turn_id (tt_…)   → 某个 team 的一次执行
-      call_turn_id        → 某次 call（格式 "<tt>:<call_id>"）
+  flow_turn_id (ft_…)     → 一次 flow 执行（用户每问一次会派生多个：派发、唤醒、恢复各一轮）
+    team_session_id       → 某个 Team 的会话（per_task 下同一个 Team 有多个）
+      team_turn_id (tt_…) → 某个 team 的一次执行
+        call_turn_id      → 某次 call（格式 "<tt>:<call_id>"）
 ```
 
-### 9.2 每类事件实际带哪些 ID（串联地图）
+## 2. 每类事件实际带哪些 ID（串联地图）
 
 **这张表是本节的核心。** 打勾 = 该字段在事件顶层有值；空 = `null` 或缺失。
 
@@ -27,17 +28,16 @@ flow_session_id           → sessions/<fs_id>/ 目录（一次对话）
 | flow | `session.record.consumed` | ✓ | ✓ | ✓ | ✓ | | |
 | team | `session.agent_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | team | `session.command_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| agent | `session.agent.model_response` | ✓ | **✗** | ✓ | ✓ | ✓ | ✓ |
+| agent | `session.agent.model_response` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-三个反直觉点：
+两个反直觉点：
 
 1. **`session.record.published` 顶层没有 `team_id`**（取到 `null`）。
-   要串 record 的归属，读 `payload.record.producer`——那里**六个 ID 全有**，
+   要串 record 的归属，读 `payload.record.producer`——那里 ID 最全
+   （`flow_session_id` / `flow_turn_id` / `team_id` / `team_session_id` /
+   `team_turn_id` / `call_id` / `call_turn_id` / `task_context_id` 八个），
    是链路最完整的入口。
-2. **`session.agent.model_response` 没有 `flow_turn_id`**。想从某一轮模型输出回溯到
-   "是用户的哪次提问"，必须先拿 `team_turn_id` 去 `flow.jsonl` 查 `flow_turn_id`，
-   不能一步到位。
-3. **只有 agent call 会写 `agent.jsonl`**。command call（`session.command_turn.*`）只出现在
+2. **只有 agent call 会写 `agent.jsonl`**。command call（`session.command_turn.*`）只出现在
    `team.jsonl`，没有对应的 `session.agent.model_response`；它的输出在
    `session.command_turn.completed.payload` 里。
 
@@ -45,7 +45,7 @@ flow_session_id           → sessions/<fs_id>/ 目录（一次对话）
 record 的 Team 绑定名）。查"B 的产出交给了谁"用它，不必反推 `producer`：
 `published` 说明谁写的，`consumed` 说明谁用了，两者是独立事实。
 
-### 9.3 串联查询
+## 3. 串联查询
 
 ```bash
 S=.agents/data/sessions/<fs_id>
@@ -68,17 +68,16 @@ jq -r 'select(.type=="session.record.published")
        | "\(.payload.record.name) ← \(.payload.record.producer.team_id)/\(.payload.record.producer.call_id)"' \
   $S/flow.jsonl
 
-# ⑤ 反查：已知 session.agent.model_response，回溯到用户提问
-#    因 model_response 无 flow_turn_id，需经 team_turn_id 中转
-TT=$(jq -r 'select(.type=="session.agent.model_response")|.team_turn_id' $S/agent.jsonl | head -1)
-FT=$(jq -r --arg tt "$TT" 'select(.type=="session.team_turn.started" and .team_turn_id==$tt)|.flow_turn_id' $S/flow.jsonl)
-jq -r --arg ft "$FT" 'select(.type=="session.turn.started" and .payload.turn.id==$ft)|.payload.turn.input' $S/flow.jsonl
+# ⑤ 反查：已知某条 session.agent.model_response，回溯到用户提问
+#    model_response 顶层带 flow_turn_id，一步就能回查
+FT=$(jq -r 'select(.type=="session.agent.model_response")|.flow_turn_id' $S/agent.jsonl | head -1)
+jq -r --arg ft "$FT" 'select(.type=="session.turn.started" and .payload.turn.id==$ft)|"\(.payload.turn.origin)\t\(.payload.turn.input)"' $S/flow.jsonl
 
-# record 的完整溯源（六 ID 齐全）
+# record 的完整溯源（producer 里八个 ID 齐全）
 jq -c 'select(.type=="session.record.published") | .payload.record.producer' $S/flow.jsonl
 ```
 
-### 9.4 一条完整链路长什么样
+## 4. 一条完整链路长什么样
 
 以 `fs_xxx` 第 2 轮为例，从提问串到答复：
 
@@ -97,5 +96,7 @@ session.turn.started        ft_e6212632…  input='提问：这个功能应该�
 session.turn.idle
 ```
 
-**注意 `round` 在 `agent_turn` 内从 0 重数**，跨 `agent_turn` 不连续——用
-`call_turn_id` + `round` 组合定位唯一的某一轮。
+**注意 `round` 在 `agent_turn` 内从 0 重数**，跨 `agent_turn` 不连续。定位唯一的某一轮
+要用 `call_turn_id` + `round`；**子 agent（`Spawn` 出来的回合）例外**：它复用父调用的
+`call_turn_id`，`round` 也从 0 起，两者会撞车——这时必须再加 `payload.spawn.parent_call_id`
+（或 `payload.spawn.key`）才能区分父子回合。

@@ -2,6 +2,10 @@
 
 引擎内置的、可复用的 Skill。用户通过**软连接**在自己的项目里复用，无需拷贝维护两份。
 
+> **前提**：这个目录随源码仓库分发，npm 包只装二进制、不含 `builtin/`。所以软连接
+> 方式只适用于从源码使用（clone 或 `go build`）的场景；npm 安装的用户想用这份 skill，
+> 需要另行取得该目录（例如 clone 仓库后指过去）。
+
 ## 使用方式（软连接）
 
 在你的项目 `.agents/skills/` 下软连接到本目录的某个 skill：
@@ -19,6 +23,19 @@ skills:
   - heron-ai-config
 ```
 
+声明后立刻生效的检验方式：
+
+```bash
+heron --check-config --flow .agents/flows/default.yml   # 会校验 skill 的 scripts 路径存在
+heron --prompt "这个项目的 flow 入口是哪个 team？"       # 一轮真实对话，看它是否按 skill 回答
+```
+
+> **索引常驻，正文按需读**：Agent 声明了 skill 之后，system prompt 里只多一行索引
+> （名字 + `description` + `SKILL.md` 的路径），正文**不进** prompt；模型判断任务匹配时
+> 才用 `Read` 打开那个路径。所以正文改了**立即生效**，不需要重启；代价是模型多一次读
+> 文件调用。但 skill 的 `tools` 是**声明即授予**——工具定义会常驻上下文，所以只给真正
+> 需要的 agent 声明。
+
 ## 目录
 
 ```
@@ -28,11 +45,11 @@ builtin/skills/
     ├── references/
     │   ├── debug-triage.md   # 排查入口：判定标准、异常模式、从配置预测行为
     │   ├── session-files.md  # 数据落点、三层 jsonl、执行日志
-    │   ├── token-usage.md    # 按 team / agent / 轮次统计 token
+    │   ├── token-usage.md    # 按 flow / team / agent / 轮次统计 token + 缓存命中
     │   ├── trace-ids.md      # 事件 ID 串联地图
     │   ├── fields.md         # 每个配置字段的含义 + ${records.*} 模板
     │   ├── organization.md   # 目录组织、三层编排、设计优势
-    │   ├── operations.md     # 安装/启动/关闭/校验的完整命令
+    │   ├── operations.md     # 全部 CLI 参数、安装/启动/关闭、校验范围
     │   └── define.md         # Define 工具：让 Agent 自建 Agent/Team
     └── scripts/
         ├── build.sh          # 从源码构建二进制

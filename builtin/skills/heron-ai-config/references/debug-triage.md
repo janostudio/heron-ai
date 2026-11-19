@@ -87,24 +87,25 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 > node 在本项目里总是可用（heron 的 skill 脚本统一用 node）。
 > 上面的单引号写法在 Linux / macOS / Git Bash / PowerShell 7 均可直接执行；
 > 老版 PowerShell 需改用双引号并把内部 `"` 转义。
+
 ## 2. 怎么判定"符合预期"
 
 | 检查项 | 预期 |
 |---|---|
 | 会话定位 | 一次 `--prompt` 或 `--session` 续聊 → 一个 `sessions/<fs_id>/`，续聊是**追加**写入同一目录，按 `seq` / `created_at` 判断先后，不要按行号 |
-| 事件顺序 | `session.created` → `session.turn.started` → `team_*` → `session.turn.idle` |
+| 事件顺序 | `session.created` → `session.turn.started` → `team_*` → 正常结束时 `session.turn.idle` |
 | **轮次** | 一轮 = `session.agent_turn.completed` 的 `call_result.requests` 里一个元素；同一 agent 多个 Request 说明它多轮调用了模型 |
-| **route** | `session.team_turn.completed.payload.team_result.turn.next.action` ∈ `proceed` / `activate` / `return` / `coordinate` / `fail` |
-| **终态** | 正常结束必然是 `session.turn.idle`（会话可续聊）；`failed` 是这一轮失败。`cancelled` 有两种来源：进程中断留下的悬空回合（见下），或外部取消——看 `payload.error` 是否写着 interrupted |
+| **route** | `session.team_turn.completed.payload.team_result.turn.next.action` ∈ `proceed` / `activate` / `return` / `coordinate` / `fail` / `wait_tool` / `wait_approval` |
+| **终态** | 正常结束是 `session.turn.idle`（会话可续聊，等下一句）；`session.turn.completed` + `turn.status=failed` 是这轮失败；`cancelled` 有两种来源：进程中断留下的悬空回合（见下），或外部取消——看 `payload.error` 是否写着 interrupted。等工具/等审批各有自己的等待态事件（`waiting_tool` / `waiting_approval`），不是失败 |
 | **team 范围** | 寒暄类应只激活 `entry` team；出现 specialist team 说明路由把它当成任务了 |
-| **消耗** | 事实源是 `team.jsonl` 的 `session.agent_turn.completed → payload.call_result.requests[].usage`；flow 级加总 = 各 agent 之和 |
+| **消耗** | 事实源是 `session.agent_turn.completed → payload.call_result.requests[].usage`；flow 级总量 = 各 `session.team_turn.completed` 的 `payload.team_result.usage` 求和（与终端 `Tokens:` 行同口径；team 层已含本轮执行过的 call，**不要再与 call 层相加**），算法见 `token-usage.md` |
 | **证据** | 发布的 SharedRecord 同时出现在 `flow.jsonl` 的 `session.record.published` 与 `evidence.jsonl`。被派发的子 Team 产出的记录会以 flow 作用域副本进入 `evidence.jsonl`，所以那里出现"不是入口 Team 写的"记录是正常的 |
 
 ### 异常模式对照
 
 | 现象 | 去看什么 |
 |---|---|
-| `session.turn.completed`（`payload.turn.status=failed`） | 它的 `error`；常见 `flow turn exceeded max team turns`（路由成环、或 agent 没识别"这一步已完成"。先修路由，只有在确属合法的多次转交时才调 `settings.json` 的 `runtime.max_team_turns`） |
+| `session.turn.completed`（`payload.turn.status=failed`） | 它的 `error`；常见 `flow turn exceeded max team turns`（路由成环、或 agent 没识别"这一步已完成"。先修路由，只有在确属合法的多次转交时才调 `settings.json` 的 `runtime.max_team_turns`）。撞上限时 `payload.limit` 里有结构化事实（哪条上限、实际到多少、最频繁的激活边、最近几跳），比读 error 字符串快 |
 | `call_result.status` 非 completed | `call_result.error` |
 | 某 agent 的 `Requests` 数暴涨 | 上下文膨胀。每轮把前序工具输出重新带给模型；查 `session.context.compacted`，并考虑收窄工具输出或减少读取量 |
 | `flow_turn` 迟迟不结束 | `runtime.max_team_turns` 兜底上限（默认很宽松，正常编排不会碰到）与路由是否成环 |
@@ -112,6 +113,7 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 | 某条 record 明明产出了，下游 `flow_records` 却读不到 | 先看 `session.record.consumed` 有没有对应事件：没有，说明下游根本没被移交这条记录（检查 `inputs` 名字与时间窗）；有事件却没内容，才去看下游的注入 |
 | 模型输出为空 / 解析失败 | 先确认读的是 `payload.text` 而非 `payload.content`；若有 `session.agent.feedback`，说明模型没按 schema 输出，引擎已追加重试提示 |
 | command call 无输出 | `session.command_turn.*` 在 `team.jsonl`；看 `payload` 的退出码与 stderr |
+
 ## 3. 从配置预测"该发生什么"
 
 排查的前提是知道**正常长什么样**。运行时的形态直接由配置决定，所以先读配置、
@@ -141,25 +143,26 @@ jq -r 'select(.type=="session.team_turn.started") | .team_id' $S/flow.jsonl | so
 - 配了 agent call 却只有 `session.command_turn.*` → 检查 call 的 `type` 字段
 - 没有任何 `session.agent.feedback` 但 agent 有 `structured_output` → 模型每次都合规，正常
 - `Requests` 数接近 `max_rounds` → 该 agent 快撞上限，考虑放宽或收敛 prompt
+
 ## 4. 排查思路
 
 1. **agent 为什么这样回答**：`agent.jsonl` 的 `model_response` 序列 + `session.agent.feedback`
    （结构化重试）+ `session.context.compacted`（上下文怎么被压缩）。
 2. **卡在哪 / 报什么错**：三层 jsonl 的等待态事件 + 执行日志的 error。
-3. **消耗多少**：见第 6 节（按 team / agent / 总计）。
+3. **消耗多少**：见 `token-usage.md`（按 flow / team / agent / 总计）。
 4. **为什么走到这一步**：`flow.jsonl` 的 `session.team_turn.completed` 路由链
    （谁 activate 了谁、第几次回退）。
 5. **结论基于什么**：`evidence.jsonl` 的 basis（文件路径 + 行号）。
-6. **完整调用链**：用第 9 节的四个 ID 跨三层关联。
+6. **完整调用链**：见 `trace-ids.md` 的 ID 串联地图与查询。
 
 ### 一个通用的排查顺序
 
 ```text
 1. 定位会话        ls -1dt .agents/data/sessions/fs_* | head
-2. 看整体形态      flow.jsonl 的 type 序列（是不是正常走完）
-3. 看轮次与路由    第 5 节「快速体检」三条命令
-4. 看消耗          第 6 节三条统计命令
-5. 定位异常点      第 7 节「异常模式对照」按现象查
-6. 下钻细节        第 9 节四个 ID 串到具体 call / 具体轮
-7. 对照配置        第 8 节确认"该发生什么"，判断是配置问题还是运行问题
+2. 看整体形态      本文件 §1：flow.jsonl 的 type 序列（是不是正常走完）
+3. 看轮次与路由    本文件 §1 的「轮次 + 消耗」「route」两条命令
+4. 看消耗          token-usage.md 的三条统计命令
+5. 定位异常点      本文件 §2 的「异常模式对照」按现象查
+6. 下钻细节        trace-ids.md 的串联查询，串到具体 call / 具体轮
+7. 对照配置        本文件 §3 确认"该发生什么"，判断是配置问题还是运行问题
 ```
