@@ -171,8 +171,7 @@ func TestQueue4QueuedInputsRunInOrder(t *testing.T) {
 		ended := 0
 		for _, ev := range events {
 			switch ev.Type {
-			case "session.turn.completed", "session.turn.idle",
-				"session.turn.waiting_tool", "session.turn.waiting_approval":
+			case "session.turn.ended":
 				ended++
 			}
 		}

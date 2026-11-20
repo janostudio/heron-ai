@@ -20,7 +20,6 @@ func TestContextConfigWithDefaults(t *testing.T) {
 			want: ContextConfig{
 				TargetRatio:                0.45,
 				CompactionThreshold:        0.90,
-				HardLimitRatio:             0.95,
 				OutputReserveRatio:         0,
 				ToolOutputRatio:            0.10,
 				MaxToolOutputChars:         0,
@@ -34,7 +33,6 @@ func TestContextConfigWithDefaults(t *testing.T) {
 			in: ContextConfig{
 				TargetRatio:          -1,
 				CompactionThreshold:  1.5,
-				HardLimitRatio:       2,
 				OutputReserveRatio:   -0.5,
 				ToolOutputRatio:      1,
 				MicrocompactMaxChars: 100000,
@@ -42,7 +40,6 @@ func TestContextConfigWithDefaults(t *testing.T) {
 			want: ContextConfig{
 				TargetRatio:                0.45,
 				CompactionThreshold:        0.90,
-				HardLimitRatio:             0.95,
 				OutputReserveRatio:         0.15,
 				ToolOutputRatio:            0.10,
 				MicrocompactThresholdChars: 8192,
@@ -55,14 +52,12 @@ func TestContextConfigWithDefaults(t *testing.T) {
 			in: ContextConfig{
 				TargetRatio:         0,
 				CompactionThreshold: 0,
-				HardLimitRatio:      0,
 				OutputReserveRatio:  0,
 				ToolOutputRatio:     0,
 			},
 			want: ContextConfig{
 				TargetRatio:                0.45,
 				CompactionThreshold:        0.90,
-				HardLimitRatio:             0.95,
 				OutputReserveRatio:         0,
 				ToolOutputRatio:            0.10,
 				MicrocompactThresholdChars: 8192,
@@ -71,18 +66,16 @@ func TestContextConfigWithDefaults(t *testing.T) {
 			},
 		},
 		{
-			name: "ratio exactly one clamps except hard limit allows one",
+			name: "ratio exactly one clamps the ratios but leaves reserve alone",
 			in: ContextConfig{
 				TargetRatio:         1,
 				CompactionThreshold: 1,
-				HardLimitRatio:      1,
 				OutputReserveRatio:  1,
 				ToolOutputRatio:     1,
 			},
 			want: ContextConfig{
 				TargetRatio:                0.45,
 				CompactionThreshold:        0.90,
-				HardLimitRatio:             1,
 				OutputReserveRatio:         0.15,
 				ToolOutputRatio:            0.10,
 				MicrocompactThresholdChars: 8192,
@@ -95,14 +88,12 @@ func TestContextConfigWithDefaults(t *testing.T) {
 			in: ContextConfig{
 				TargetRatio:         0.55,
 				CompactionThreshold: 0.75,
-				HardLimitRatio:      0.85,
 				OutputReserveRatio:  0.20,
 				ToolOutputRatio:     0.05,
 			},
 			want: ContextConfig{
 				TargetRatio:                0.55,
 				CompactionThreshold:        0.75,
-				HardLimitRatio:             0.85,
 				OutputReserveRatio:         0.20,
 				ToolOutputRatio:            0.05,
 				MicrocompactThresholdChars: 8192,
@@ -111,16 +102,14 @@ func TestContextConfigWithDefaults(t *testing.T) {
 			},
 		},
 		{
-			name: "compaction threshold clamped to hard limit",
+			name: "compaction threshold is no longer clamped by the removed hard limit",
 			in: ContextConfig{
 				TargetRatio:         0.70,
 				CompactionThreshold: 0.95,
-				HardLimitRatio:      0.80,
 			},
 			want: ContextConfig{
 				TargetRatio:                0.70,
-				CompactionThreshold:        0.80,
-				HardLimitRatio:             0.80,
+				CompactionThreshold:        0.95,
 				OutputReserveRatio:         0,
 				ToolOutputRatio:            0.10,
 				MicrocompactThresholdChars: 8192,
@@ -136,7 +125,6 @@ func TestContextConfigWithDefaults(t *testing.T) {
 			want: ContextConfig{
 				TargetRatio:                0.45,
 				CompactionThreshold:        0.90,
-				HardLimitRatio:             0.95,
 				OutputReserveRatio:         0,
 				ToolOutputRatio:            0.10,
 				MaxToolOutputChars:         0,
@@ -154,7 +142,6 @@ func TestContextConfigWithDefaults(t *testing.T) {
 			want: ContextConfig{
 				TargetRatio:                0.45,
 				CompactionThreshold:        0.90,
-				HardLimitRatio:             0.95,
 				OutputReserveRatio:         0,
 				ToolOutputRatio:            0.10,
 				MicrocompactThresholdChars: 1000,

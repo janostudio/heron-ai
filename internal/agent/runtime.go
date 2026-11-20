@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/definitions"
@@ -235,30 +236,6 @@ func (t *TurnLoop) emitAgentEvent(ctx context.Context, req types.AgentRequest, r
 	_, _ = t.sessionWriter.Append(ctx, req.FlowSessionID, storage.LayerAgent, event)
 }
 
-// DefaultAgentTurnTimeout bounds one AgentTurn when the agent declares no
-// Timeout. It is generous on purpose: it exists to end a hung turn (a stalled
-// model connection, a wedged tool) so the session does not stay "running"
-// forever, not to cap ordinary long work.
-const DefaultAgentTurnTimeout = 30 * time.Minute
-
-// parseAgentTimeout parses an agent's configured Timeout. Empty means "use the
-// default"; a non-empty but invalid or non-positive value is a configuration
-// error, not a silent fallback.
-func parseAgentTimeout(value string) (time.Duration, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(value)
-	if err != nil {
-		return 0, fmt.Errorf("agent timeout %q is invalid: %w", value, err)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("agent timeout %q must be positive", value)
-	}
-	return d, nil
-}
-
 // Run executes one AgentTurn. An Agent is request/response in V1:
 // multiple model/tool rounds are still internal to this one call and no
 // background mailbox or active-agent protocol is introduced.
@@ -301,21 +278,11 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 	}
 	ctx = WithHookExecutor(ctx, turnHooks)
 
-	// Bound the whole turn in wall-clock time. Without this, a stalled model
-	// connection (or a tool the executor's own backstop cannot reach) leaves
-	// the turn — and the session — running forever. agent.Timeout overrides the
-	// default; the default is generous so it only fires on a real hang.
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		turnTimeout := DefaultAgentTurnTimeout
-		if parsed, parseErr := parseAgentTimeout(agent.Loop.Timeout); parseErr != nil {
-			return nil, parseErr
-		} else if parsed > 0 {
-			turnTimeout = parsed
-		}
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, turnTimeout)
-		defer cancel()
-	}
+	// 这里不再给整轮加墙钟上限。agent 的耗时由任务决定，不是函数调用的固定成本；
+	// 墙钟区分不了"还在干活"和"卡住"，而且到点会把整轮已产出的结果一起丢掉。
+	// 挂死由更近的守卫兜住：模型连接（internal/model/client.go 的传输超时）、
+	// 单次工具（DefaultToolTimeout）、无进展（noProgressRounds / 重复读 / 同参数
+	// 工具 / 同文回复）。需要上限的调用方在 call 层显式配 timeout。
 
 	lastRound := 0
 	if turnHooks != nil {
@@ -443,6 +410,10 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 	repeatReads := make(map[string]int)
 	repeatAtWriteGen := make(map[string]int)
 	latestReadResult := make(map[string]string)
+	// softenedReads marks the signatures already given their one warning. The
+	// first trip over the cap asks the model to move on; a second trip stops the
+	// turn. Counted per turn like the streak itself.
+	softenedReads := make(map[string]bool)
 	repeatedReads := 0
 	// Generation counter for workspace writes. A read result carries its own
 	// read operation, so counting every operation would reset the streak on the
@@ -467,11 +438,6 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		budget.usage = checkpoint.BudgetUsage
 		if !checkpoint.BudgetUsage.StartedAt.IsZero() {
 			budget.usage.StartedAt = checkpoint.BudgetUsage.StartedAt
-		}
-		if agent.Budget.MaxWallTime != "" && !budget.usage.StartedAt.IsZero() {
-			if duration, parseErr := time.ParseDuration(agent.Budget.MaxWallTime); parseErr == nil {
-				budget.deadline = budget.usage.StartedAt.Add(duration)
-			}
 		}
 		totalUsage = checkpoint.Usage
 		lastText = checkpoint.LastText
@@ -1260,15 +1226,36 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 				}
 				repeatReads[signature]++
 				repeatAtWriteGen[signature] = writeGeneration
-				if repeatReads[signature] > repeatedReads {
-					repeatedReads = repeatReads[signature]
+				if readCap := repeatedReadCap(agent.Loop); repeatReads[signature] >= readCap && !softenedReads[signature] {
+					// First trip: warn instead of failing. A read-only task has
+					// no write to reset the streak, so the cap alone cannot tell
+					// "the model forgot after a compaction" from "the model is
+					// looping" — and a failed turn throws away everything already
+					// found. The second trip happens with the warning in context,
+					// which is a real stall.
+					softenedReads[signature] = true
+					repeatReads[signature] = 0
+					repeatedReads = 0
+					for _, count := range repeatReads {
+						if count > repeatedReads {
+							repeatedReads = count
+						}
+					}
+					if addErr := contextManager.AddMessageContext(ctx, types.Message{Role: "user", Content: repeatedReadNotice(call, readCap)}); addErr != nil {
+						t.emitErrorHook(ctx, agent, req, round, addErr)
+						return nil, addErr
+					}
+				} else {
+					if repeatReads[signature] > repeatedReads {
+						repeatedReads = repeatReads[signature]
+					}
+					if previous, ok := latestReadResult[signature]; ok {
+						// The same answer is already coming back later in this
+						// conversation; keep one copy, not two.
+						contextManager.ReplaceToolResult(previous, repeatedCallPlaceholder(call))
+					}
+					latestReadResult[signature] = call.ID
 				}
-				if previous, ok := latestReadResult[signature]; ok {
-					// The same answer is already coming back later in this
-					// conversation; keep one copy, not two.
-					contextManager.ReplaceToolResult(previous, repeatedCallPlaceholder(call))
-				}
-				latestReadResult[signature] = call.ID
 			}
 			workspaceOps = append(workspaceOps, toolResult.WorkspaceOps...)
 			budget.usage.ToolOutput += len(content)
@@ -2079,12 +2066,47 @@ func approvalID(req types.AgentRequest, call types.ToolCall) string {
 
 func (t *TurnLoop) contextConfig(agent types.AgentConfig) types.ContextConfig {
 	config := agent.Context
+	capacity := 0
+	if sizer, ok := t.model.(ModelContextSizer); ok {
+		capacity = sizer.MaxInputTokens(agent.Model)
+	}
 	if config.MaxInputTokens <= 0 {
-		if sizer, ok := t.model.(ModelContextSizer); ok {
-			config.MaxInputTokens = sizer.MaxInputTokens(agent.Model)
+		config.MaxInputTokens = capacity
+	}
+	// Static mismatches here are invisible at runtime: --check-config accepts
+	// them and the only symptom is "compaction happens every few rounds". Say it
+	// once per agent instead of leaving it to be reverse-engineered from event
+	// counts.
+	for _, warning := range contextConfigWarnings(agent.Context, capacity) {
+		key := agent.Name + "|" + warning
+		if _, seen := contextConfigWarningsSeen.LoadOrStore(key, true); seen {
+			continue
 		}
+		logging.Warn(warning, map[string]any{"agent_id": agent.Name, "model": agent.Model.Model})
 	}
 	return config
+}
+
+// contextConfigWarningsSeen keeps the configuration warnings to one line per
+// agent: the inputs are static, so repeating them every turn is pure noise.
+var contextConfigWarningsSeen sync.Map
+
+// contextConfigWarnings reports configuration that silently changes compaction
+// behaviour. A narrowed window is accepted by the loader and produces no error —
+// it only shows up as a window that fills far sooner than the model allows, and
+// the operator has no way to tell that from a genuinely large conversation.
+//
+// Ratio ordering (target < threshold < hard limit) is not checked here: the
+// loader rejects it outright, because the ordering is a hard invariant of the
+// compaction path and a silent clamp would hide which number actually applied.
+func contextConfigWarnings(config types.ContextConfig, modelCapacity int) []string {
+	var warnings []string
+	if config.MaxInputTokens > 0 && modelCapacity > 0 && config.MaxInputTokens < modelCapacity {
+		warnings = append(warnings, fmt.Sprintf(
+			"context.max_input_tokens=%d narrows the model window (%d). It is a capacity override, not a token-cost cap; compaction triggers proportionally earlier. Use budget.max_input_tokens for cost limits",
+			config.MaxInputTokens, modelCapacity))
+	}
+	return warnings
 }
 
 // rejectToolCall records a tool invocation that never reached the executor

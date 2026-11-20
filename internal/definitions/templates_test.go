@@ -62,7 +62,9 @@ func TestAgentTemplateIsValidConfig(t *testing.T) {
 	require.NotEmpty(t, strings.TrimSpace(agent.Persona.Goal))
 	require.NotEmpty(t, strings.TrimSpace(agent.Body))
 	require.Positive(t, agent.Loop.MaxRounds)
-	require.NotEmpty(t, strings.TrimSpace(agent.Loop.Timeout))
+	// 总时长不设默认上限：长任务与挂死的区别不在墙钟，而在有没有进展。
+	// 需要上限的 agent 自己写 loop.timeout。
+	require.Empty(t, strings.TrimSpace(agent.Loop.Timeout))
 	require.NotNil(t, agent.HITL)
 
 	require.NotEmpty(t, agent.Tools.Builtin)

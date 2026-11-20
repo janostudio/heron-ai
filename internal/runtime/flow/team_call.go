@@ -125,7 +125,6 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 		ID:            newID("ft"),
 		FlowSessionID: session.ID,
 		Input:         input,
-		Status:        types.TurnRunning,
 		Origin:        turnOriginTool,
 		StartedAt:     now,
 	}
@@ -460,7 +459,7 @@ func (r *Runtime) lastTeamReply(ctx context.Context, sessionID, teamID string) (
 	reply := ""
 	for _, event := range events {
 		switch event.Type {
-		case types.EventFlowTurnWaitingInput, types.EventFlowTurnCompleted:
+		case types.EventFlowTurnEnded:
 			if event.TeamID != "" && event.TeamID != teamID {
 				continue
 			}

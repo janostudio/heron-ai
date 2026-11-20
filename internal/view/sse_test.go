@@ -86,7 +86,7 @@ func TestWriteSessionEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	ev := storage.SessionEvent{EventHeader: types.EventHeader{Seq: 42, Type: "session.turn.completed", FlowSessionID: "s1"}}
+	ev := storage.SessionEvent{EventHeader: types.EventHeader{Seq: 42, Type: "session.turn.ended", FlowSessionID: "s1"}}
 	if err := w.WriteSessionEvent(ev); err != nil {
 		t.Fatalf("WriteSessionEvent: %v", err)
 	}

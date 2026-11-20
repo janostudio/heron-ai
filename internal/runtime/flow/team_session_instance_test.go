@@ -74,7 +74,7 @@ func TestPerTaskTeamRejectsRouteActivation(t *testing.T) {
 			"dev_team":   {ID: "dev_team"},
 		},
 	}
-	flowTurn := types.FlowTurn{ID: "ft_test", FlowSessionID: session.ID, Status: types.TurnRunning}
+	flowTurn := types.FlowTurn{ID: "ft_test", FlowSessionID: session.ID}
 
 	_, err := rt.executeTeamTurn(ctx, defs, session, flowTurn,
 		activation{teamID: "dev"}, "task", nil, time.Now().UTC(), nil)

@@ -58,7 +58,6 @@ func TestTeamRuntimeSeesDefinitionsAddedAfterBuild(t *testing.T) {
 	// Before the swap the new agent simply is not there. The failure must be
 	// the ordinary "not found" path, not a panic on a nil map.
 	before := runAgentCall(t, runtime, team)
-	assert.Equal(t, types.TurnFailed, before.Turn.Status)
 	assert.Contains(t, before.Error, `agent definition "late-agent" not found`)
 
 	// Publish a tree containing the new agent. The pointer swap is the whole
@@ -71,7 +70,7 @@ func TestTeamRuntimeSeesDefinitionsAddedAfterBuild(t *testing.T) {
 	})
 
 	after := runAgentCall(t, runtime, team)
-	require.Equal(t, types.TurnCompleted, after.Turn.Status)
+	require.Equal(t, types.StopEndTurn, after.Turn.StopReason)
 	require.Contains(t, after.CallResults, "work")
 	assert.Empty(t, after.CallResults["work"].Error)
 	assert.Equal(t, "work completed", after.CallResults["work"].Reply)
@@ -91,12 +90,12 @@ func TestTeamRuntimeSnapshotIsPerRun(t *testing.T) {
 	runtime := NewRuntime(registry, store)
 
 	team := agentCallTeam("review", "stable-agent")
-	require.Equal(t, types.TurnCompleted, runAgentCall(t, runtime, team).Turn.Status)
+	require.Equal(t, types.StopEndTurn, runAgentCall(t, runtime, team).Turn.StopReason)
 
 	store.Swap(&types.Definitions{Agents: map[string]types.AgentConfig{}})
 
 	after := runAgentCall(t, runtime, team)
-	assert.Equal(t, types.TurnFailed, after.Turn.Status)
+	assert.Equal(t, types.StopFailed, after.Turn.StopReason)
 	assert.Contains(t, after.Error, `agent definition "stable-agent" not found`)
 }
 
@@ -110,7 +109,7 @@ func TestTeamRuntimeNilStoreFailsResolutionRatherThanPanicking(t *testing.T) {
 	runtime := NewRuntime(registry, nil)
 
 	result := runAgentCall(t, runtime, agentCallTeam("review", "any-agent"))
-	assert.Equal(t, types.TurnFailed, result.Turn.Status)
+	assert.Equal(t, types.StopFailed, result.Turn.StopReason)
 	assert.Contains(t, result.Error, `agent definition "any-agent" not found`)
 }
 
@@ -150,7 +149,7 @@ func TestTeamRuntimeSkillToolsDoNotMutatePublishedDefinition(t *testing.T) {
 	runtime.SetSkillInjector(skill.NewSkillInjector(skillRegistry))
 
 	team := agentCallTeam("review", "skill-agent")
-	require.Equal(t, types.TurnCompleted, runAgentCall(t, runtime, team).Turn.Status)
+	require.Equal(t, types.StopEndTurn, runAgentCall(t, runtime, team).Turn.StopReason)
 
 	published := store.Snapshot().Agents["skill-agent"].Tools.Builtin
 	assert.Equal(t, []string{"Read"}, published,

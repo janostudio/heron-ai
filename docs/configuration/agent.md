@@ -99,19 +99,16 @@ loop:
   tool_execution: sequential
   max_parallel_tools: 5
   async_tools: []
-  timeout: 120s
 context:
   # 按当前模型能力比例控制 Active Context
   target_ratio: 0.45
   compaction_threshold: 0.90
-  hard_limit_ratio: 0.95
   output_reserve_ratio: 0.15
   tool_output_ratio: 0.10
   max_tool_output_chars: 65536
 budget:
   max_model_rounds: 30
   max_tool_calls: 100
-  max_wall_time: 10m
   max_input_tokens: 100000
   max_output_tokens: 20000
   max_file_changes: 100
@@ -283,7 +280,7 @@ Behaviour worth knowing:
 | `max_repeated_reads` | integer | Stuck detection: repeats of one read-only call (same tool, same arguments) with no write in between; default 3 |
 | `stuck_action` | string | What to do when stuck: `fail` or `ask_user` |
 | `max_model_retries` | integer | Retries for transient provider failures (context-limit recovery is separate and tried once) |
-| `timeout` | string | Execution timeout |
+| ~~`timeout`~~ | — | Removed: an agent turn is bounded by rounds and tool calls, not by wall clock. Setting it is a load error. |
 
 ### context
 
@@ -293,11 +290,11 @@ may be compacted before the next model call.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `max_input_tokens` | integer | Optional explicit model input capacity |
-| `target_ratio` | number | Target Active Context ratio |
-| `compaction_threshold` | number | Ratio that triggers compaction |
-| `hard_limit_ratio` | number | Hard input limit ratio |
-| `output_reserve_ratio` | number | Ratio reserved for model output |
+| `max_input_tokens` | integer | Optional capacity **override** for runtimes that cannot expose the model profile. Omit it: the value comes from `models.json`, and writing a smaller number here shrinks the window (compaction then triggers proportionally earlier). It is not a token-cost cap — use `budget.max_input_tokens` for that. |
+| `target_ratio` | number | Target Active Context ratio after compaction |
+| `compaction_threshold` | number | Ratio that triggers compaction; must stay below the hard limit (`1 - output_reserve_ratio`) or loading fails |
+| ~~`hard_limit_ratio`~~ | — | Removed: the hard limit is derived as `1 - output_reserve_ratio`. Setting it is a load error. |
+| `output_reserve_ratio` | number | Ratio reserved for model output (default 0). The hard limit is `1 - this value`; there is no separate hard-limit field. |
 | `tool_output_ratio` | number | Default Tool output budget ratio |
 | `max_tool_output_chars` | integer | Optional per-tool-result character limit |
 
@@ -307,7 +304,6 @@ If `max_input_tokens` is omitted, the runtime uses the selected model profile's
 ```yaml
 target_ratio: 0.45
 compaction_threshold: 0.90
-hard_limit_ratio: 0.95
 output_reserve_ratio: 0.15
 tool_output_ratio: 0.10
 ```
@@ -325,7 +321,7 @@ steps.
 |-------|------|-------------|
 | `max_model_rounds` | integer | Maximum model calls |
 | `max_tool_calls` | integer | Maximum Tool calls |
-| `max_wall_time` | duration | Maximum wall-clock time, e.g. `10m` |
+| ~~`max_wall_time`~~ | — | Removed: a turn is bounded by work, not by the clock. Setting it is a load error. |
 | `max_input_tokens` | integer | Maximum cumulative model input tokens |
 | `max_output_tokens` | integer | Maximum cumulative model output tokens |
 | `max_file_changes` | integer | Maximum Workspace write operations |

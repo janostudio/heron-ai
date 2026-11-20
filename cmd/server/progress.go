@@ -17,9 +17,11 @@ import (
 // and heron-connect converges them onto core.Event with a separate adapter
 // each. Heron only has to keep its own projection stable.
 const (
-	progressTypeFlowTurnStarted   = "flow_turn_started"
-	progressTypeFlowTurnCompleted = "flow_turn_completed"
-	progressTypeTeamTurnStarted   = "team_turn_started"
+	progressTypeFlowTurnStarted = "flow_turn_started"
+	progressTypeTeamTurnStarted = "team_turn_started"
+	// The team frame keeps its historical name: it is the frame a pull client
+	// matches to render a team row as finished, and renaming it would silently
+	// drop that row in every consumer.
 	progressTypeTeamTurnCompleted = "team_turn_completed"
 	progressTypeCallStarted       = "call_started"
 	progressTypeCallCompleted     = "call_completed"
@@ -70,16 +72,10 @@ func projectSessionEvent(event storage.SessionEvent) map[string]any {
 		base["type"] = progressTypeFlowTurnStarted
 		copyTurnAnnouncement(base, event.Payload)
 		return base
-	case types.EventFlowTurnCompleted:
-		base["type"] = progressTypeFlowTurnCompleted
-		base["status"] = payloadTurnStatus(event.Payload)
-		base["error"] = payloadString(event.Payload, "error")
-		copyTurnAnnouncement(base, event.Payload)
-		return base
 	case types.EventTeamTurnStarted:
 		base["type"] = progressTypeTeamTurnStarted
 		return base
-	case types.EventTeamTurnCompleted:
+	case types.EventTeamTurnEnded:
 		base["type"] = progressTypeTeamTurnCompleted
 		base["status"] = payloadTurnStatus(event.Payload)
 		copyTeamUsage(base, event.Payload)
@@ -107,13 +103,15 @@ func projectSessionEvent(event storage.SessionEvent) map[string]any {
 		return projectRecordPublished(base, event.Payload)
 	case types.EventSharedRecordConsumed:
 		return projectRecordConsumed(base, event.Payload)
-	case types.EventFlowTurnWaitingInput, types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
+	case types.EventFlowTurnEnded:
+		// The flow turn's terminal frame keeps the "status" type: it is the
+		// frame a caller uses to learn how the turn ended and what the session
+		// is parked on, and it carries the reply of a turn nobody is waiting
+		// on. The two fields below say which of those it is.
 		base["type"] = progressTypeStatus
-		base["status"] = waitingEventStatus(event.Type)
-		// A finished turn also lands here when it ends waiting_input, which is
-		// every normal turn. Without the reply it carries, a caller would only
-		// ever see the turn boundary and never the answer of a turn it did not
-		// start.
+		base["status"] = payloadTurnStatus(event.Payload)
+		base["stop_reason"] = payloadString(event.Payload, "stop_reason")
+		base["awaiting"] = payloadString(event.Payload, "awaiting")
 		copyTurnAnnouncement(base, event.Payload)
 		return base
 	default:
@@ -215,21 +213,6 @@ func hoistContributors(value any) []map[string]any {
 		}
 	}
 	return trimmed
-}
-
-// waitingEventStatus maps the session.turn.waiting_* event to the session status
-// it leaves the session in.
-func waitingEventStatus(eventType string) string {
-	switch eventType {
-	case types.EventFlowTurnWaitingApproval:
-		return string(types.SessionWaitingApproval)
-	case types.EventFlowTurnWaitingTool:
-		return string(types.SessionWaitingTool)
-	case types.EventFlowTurnWaitingInput:
-		return string(types.SessionIdle)
-	default:
-		return ""
-	}
 }
 
 func optionalHeaderFields(header types.EventHeader) map[string]any {
@@ -497,34 +480,50 @@ func copyTeamUsage(base map[string]any, payload map[string]any) {
 	}
 }
 
-// payloadTurnStatus digests the turn status out of an event payload. Flow
-// events nest it as "turn"; team events nest the whole TeamTurnResult as
-// "team_result", whose Turn carries the status.
+// payloadTurnStatus digests the single status a progress consumer expects out
+// of the two terminal fields. Flow events carry them at the payload top level;
+// team events nest the whole TeamTurnResult under "team_result".
 //
 // Both typed and map-shaped payloads have to be handled: live subscribers see
 // the Go values a runtime appended, while a replay has been through JSON and
 // yields map[string]any.
 func payloadTurnStatus(payload map[string]any) string {
-	if turn, ok := payload["turn"]; ok {
-		switch typed := turn.(type) {
-		case types.FlowTurn:
-			return string(typed.Status)
-		case types.TeamTurn:
-			return string(typed.Status)
-		case map[string]any:
-			return payloadString(typed, "status")
-		}
-		return ""
+	if status := turnStatusFields(payloadString(payload, "stop_reason"), payloadString(payload, "awaiting")); status != "" {
+		return status
 	}
-	if teamResult, ok := payload["team_result"].(types.TeamTurnResult); ok {
-		return string(teamResult.Turn.Status)
-	}
-	if teamResult, ok := payload["team_result"].(map[string]any); ok {
-		if turn, ok := teamResult["Turn"].(map[string]any); ok {
-			return payloadString(turn, "status")
+	switch teamResult := payload["team_result"].(type) {
+	case types.TeamTurnResult:
+		return turnStatusFields(string(teamResult.Turn.StopReason), string(teamResult.Turn.Awaiting))
+	case map[string]any:
+		if turn, ok := teamResult["turn"].(map[string]any); ok {
+			return turnStatusFields(payloadString(turn, "stop_reason"), payloadString(turn, "awaiting"))
 		}
 	}
 	return ""
+}
+
+// turnStatusFields projects (stop_reason, awaiting) onto the status string a
+// progress frame carries. "Waiting for someone" wins: a turn held open is not
+// at rest even though it stopped.
+func turnStatusFields(reason, awaiting string) string {
+	switch awaiting {
+	case string(types.AwaitingApproval):
+		return string(types.SessionWaitingApproval)
+	case string(types.AwaitingTool):
+		return string(types.SessionWaitingTool)
+	case string(types.AwaitingUser):
+		return string(types.SessionIdle)
+	}
+	switch types.TurnStopReason(reason) {
+	case types.StopCancelled:
+		return string(types.SessionCancelled)
+	case types.StopEndTurn:
+		return string(types.SessionCompleted)
+	case "":
+		return ""
+	default:
+		return string(types.SessionFailed)
+	}
 }
 
 func payloadString(payload map[string]any, key string) string {
@@ -727,8 +726,8 @@ type progressEnvelope struct {
 }
 
 // statusNotificationsFromResult covers the case where a turn ends parked in a
-// waiting state: the session.turn.waiting_* event may have been published after
-// the subscription window closed, so the terminal result is the authoritative
+// waiting state: the session.turn.ended event may have been published after the
+// subscription window closed, so the terminal result is the authoritative
 // source for the pending state.
 func statusNotificationFromResult(result types.FlowTurnResult) map[string]any {
 	// waiting_input is the normal end of a turn that produced a reply: the

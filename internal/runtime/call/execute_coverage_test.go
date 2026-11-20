@@ -68,18 +68,6 @@ func TestAgentExecutorNilDefinition(t *testing.T) {
 	assert.Contains(t, err.Error(), "agent definition is required")
 }
 
-func TestAgentExecutorWithTimeoutError(t *testing.T) {
-	exec := NewAgentExecutor(&stubAgentRunner{})
-	req := validAgentRequest()
-	req.Call.Timeout = "not-a-duration"
-
-	result, err := exec.Execute(context.Background(), req)
-
-	require.Error(t, err)
-	assert.Equal(t, types.TurnFailed, result.Status)
-	assert.Contains(t, err.Error(), "invalid timeout")
-}
-
 func TestAgentExecutorRunError(t *testing.T) {
 	exec := NewAgentExecutor(&stubAgentRunner{err: errors.New("boom")})
 

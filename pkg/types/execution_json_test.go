@@ -236,7 +236,8 @@ func TestTeamTurnResultWireFormatIsSnakeCase(t *testing.T) {
 			FlowTurnID: "ft_1",
 			TeamID:     "default",
 			Attempt:    2,
-			Status:     TurnWaitingTool,
+			StopReason: StopEndTurn,
+			Awaiting:   AwaitingTool,
 			CallerTeam: "parent",
 			RecoveryOf: "tt_0",
 		},
@@ -247,13 +248,14 @@ func TestTeamTurnResultWireFormatIsSnakeCase(t *testing.T) {
 
 	var decoded struct {
 		Turn struct {
-			ID         string     `json:"id"`
-			FlowTurnID string     `json:"flow_turn_id"`
-			TeamID     string     `json:"team_id"`
-			Attempt    int        `json:"attempt"`
-			Status     TurnStatus `json:"status"`
-			CallerTeam string     `json:"caller_team"`
-			RecoveryOf string     `json:"recovery_of"`
+			ID         string         `json:"id"`
+			FlowTurnID string         `json:"flow_turn_id"`
+			TeamID     string         `json:"team_id"`
+			Attempt    int            `json:"attempt"`
+			StopReason TurnStopReason `json:"stop_reason"`
+			Awaiting   TurnAwaiting   `json:"awaiting"`
+			CallerTeam string         `json:"caller_team"`
+			RecoveryOf string         `json:"recovery_of"`
 		} `json:"turn"`
 		PendingToolTasks []struct {
 			CallID       string `json:"call_id"`
@@ -272,7 +274,7 @@ func TestTeamTurnResultWireFormatIsSnakeCase(t *testing.T) {
 	require.Equal(t, "ft_1", decoded.Turn.FlowTurnID)
 	require.Equal(t, "default", decoded.Turn.TeamID)
 	require.Equal(t, 2, decoded.Turn.Attempt)
-	require.Equal(t, TurnWaitingTool, decoded.Turn.Status)
+	require.Equal(t, AwaitingTool, decoded.Turn.Awaiting)
 	require.Equal(t, "parent", decoded.Turn.CallerTeam)
 	require.Equal(t, "tt_0", decoded.Turn.RecoveryOf)
 	require.Len(t, decoded.PendingToolTasks, 1)
@@ -294,7 +296,8 @@ func TestTeamTurnResultUnmarshalPublishedPayload(t *testing.T) {
 			"team_session_id": "fs_test_session:default",
 			"team_id": "default",
 			"attempt": 1,
-			"status": "completed",
+			"stop_reason": "end_turn",
+			"awaiting": "user",
 			"next": {"action": "proceed"},
 			"record_ids": ["answer-1791449146019266000"],
 			"started_at": "2026-10-08T08:45:44.463241Z",
@@ -330,7 +333,7 @@ func TestTeamTurnResultUnmarshalPublishedPayload(t *testing.T) {
 	require.Equal(t, "ft_b6a1a45aaea98e86", result.Turn.FlowTurnID)
 	require.Equal(t, "default", result.Turn.TeamID)
 	require.Equal(t, 1, result.Turn.Attempt)
-	require.Equal(t, TurnCompleted, result.Turn.Status)
+	require.Equal(t, StopEndTurn, result.Turn.StopReason)
 	require.Equal(t, "请问有什么可以帮您？", result.Reply)
 	require.Equal(t, 2295, result.Usage.PromptTokens)
 	require.Equal(t, 2302, result.Usage.TotalTokens)
@@ -353,7 +356,7 @@ func TestTeamTurnResultUnmarshalPublishedPayload(t *testing.T) {
 // the per-call results nested inside it.
 func TestTeamTurnResultRoundTrip(t *testing.T) {
 	original := TeamTurnResult{
-		Turn: TeamTurn{ID: "tt_1", TeamID: "default", Status: TurnWaitingTool, Attempt: 3},
+		Turn: TeamTurn{ID: "tt_1", TeamID: "default", StopReason: StopEndTurn, Awaiting: AwaitingTool, Attempt: 3},
 		CallResults: map[string]CallResult{
 			"answer": {
 				Status:       TurnWaitingTool,

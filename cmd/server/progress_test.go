@@ -435,13 +435,14 @@ func TestServerWriterSerialisesNotificationsAndResponses(t *testing.T) {
 // ride on that event as well as on session.turn.completed.
 func TestProjectFlowTurnCarriesReplyAndOrigin(t *testing.T) {
 	payload := map[string]any{
-		"turn":         types.FlowTurn{ID: "ft-bg", Status: types.TurnWaitingInput, Origin: "mailbox"},
+		"turn": types.FlowTurn{ID: "ft-bg", StopReason: types.StopEndTurn,
+			Awaiting: types.AwaitingUser, Origin: "mailbox"},
 		"error":        "",
 		"reply":        "heron-ai 的主分支是 master",
 		"origin":       "mailbox",
 		"intermediate": true,
 	}
-	for _, eventType := range []string{types.EventFlowTurnCompleted, types.EventFlowTurnWaitingInput} {
+	for _, eventType := range []string{types.EventFlowTurnEnded, types.EventFlowTurnEnded} {
 		event := storage.SessionEvent{
 			EventHeader: types.EventHeader{
 				Type:          eventType,
@@ -463,11 +464,12 @@ func TestProjectFlowTurnCarriesReplyAndOrigin(t *testing.T) {
 func TestProjectFlowTurnOmitsAnnouncementFieldsWhenUnset(t *testing.T) {
 	event := storage.SessionEvent{
 		EventHeader: types.EventHeader{
-			Type:          types.EventFlowTurnWaitingInput,
+			Type:          types.EventFlowTurnEnded,
 			FlowSessionID: "fs-1",
 			FlowTurnID:    "ft-user",
 		},
-		Payload: map[string]any{"turn": types.FlowTurn{ID: "ft-user", Status: types.TurnWaitingInput}},
+		Payload: map[string]any{"turn": types.FlowTurn{ID: "ft-user", StopReason: types.StopEndTurn,
+			Awaiting: types.AwaitingUser}},
 	}
 	params := projectSessionEvent(event)
 	require.NotNil(t, params)

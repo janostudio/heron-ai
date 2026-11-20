@@ -159,7 +159,7 @@ func (r *Runtime) taskSessions(ctx context.Context, spec types.TaskCatalogSpec) 
 	replies := make(map[string]string, len(sessions))
 	for _, event := range events {
 		switch event.Type {
-		case types.EventFlowTurnWaitingInput, types.EventFlowTurnCompleted:
+		case types.EventFlowTurnEnded:
 			if event.TeamSessionID == "" {
 				continue
 			}

@@ -64,7 +64,7 @@ func TestGraphNodeScope(t *testing.T) {
 	if node.CallType != types.CallAgent || node.AgentID != "research-searcher" {
 		t.Fatalf("call turn identity = %+v", node)
 	}
-	if node.Status != types.TurnCompleted {
+	if node.Status != string(types.TurnCompleted) {
 		t.Fatalf("call turn status = %q, want completed", node.Status)
 	}
 	if node.StartedAt.IsZero() || node.FinishedAt.IsZero() {

@@ -25,7 +25,7 @@ func newStreamFixture(t *testing.T) (*Handler, string) {
 	writer := storage.NewJSONLSessionWriter(files)
 	const sessionID = "fs_stream_follow"
 	ctx := context.Background()
-	for _, eventType := range []string{types.EventFlowTurnStarted, types.EventFlowTurnCompleted} {
+	for _, eventType := range []string{types.EventFlowTurnStarted, types.EventFlowTurnEnded} {
 		_, err := writer.Append(ctx, sessionID, storage.LayerFlow, storage.SessionEvent{
 			EventHeader: types.EventHeader{Type: eventType, FlowSessionID: sessionID},
 			Payload:     map[string]any{},

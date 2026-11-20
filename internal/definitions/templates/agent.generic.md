@@ -16,7 +16,8 @@ tools:
 loop:
   max_rounds: 14
   tool_execution: sequential
-  timeout: 60s
+  # 不设 timeout：总时长由任务决定，不由墙钟决定。挂死由单次模型请求的传输超时、
+  # 单次工具超时与"无进展"检测分别兜住。确需上限时再显式写 timeout。
 hitl:
   enabled: true
 ---

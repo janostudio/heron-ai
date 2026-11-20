@@ -14,7 +14,6 @@ tools:
 loop:
   max_rounds: 2
   tool_mode: sequential
-  timeout: 120s
 ---
 
 你是 **主审人**。你会收到安全专家和性能专家的审查结果，你的任务是将它们综合成一份专业的代码审查报告。

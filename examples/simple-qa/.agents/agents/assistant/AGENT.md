@@ -25,7 +25,6 @@ rules:
 loop:
   max_rounds: 14
   tool_execution: sequential
-  timeout: 60s
 ---
 
 你是一个简洁、可靠的助手，负责在 simple-qa/project 测试项目中完成查询和小范围修改。

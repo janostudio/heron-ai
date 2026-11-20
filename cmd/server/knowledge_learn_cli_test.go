@@ -10,8 +10,8 @@ import (
 func TestEventLayer(t *testing.T) {
 	cases := map[string]string{
 		types.EventSharedRecordPublished: "flow",
-		types.EventFlowTurnCompleted:     "flow",
-		types.EventTeamTurnCompleted:     "team",
+		types.EventFlowTurnEnded:         "flow",
+		types.EventTeamTurnEnded:         "team",
 		types.EventAgentTurnCompleted:    "agent",
 		types.EventToolCallCompleted:     "agent",
 		"session.command_turn.completed": "team",

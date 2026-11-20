@@ -29,6 +29,9 @@ type fakeTeamRuntime struct {
 }
 
 func (f *fakeTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.TeamTurnResult, error) {
+	// A Team runtime always reports how its turn ended; the default fake turn
+	// therefore ends normally unless a branch says otherwise.
+	req.TeamTurn.StopReason = types.StopEndTurn
 	f.mu.Lock()
 	f.allSessions = append(f.allSessions, req.TeamSession)
 	f.mu.Unlock()
@@ -127,7 +130,7 @@ func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, types.SessionIdle, result.Session.Status)
-	require.Equal(t, types.TurnWaitingInput, result.Turn.Status)
+	require.Equal(t, types.AwaitingUser, result.Turn.Awaiting)
 	require.Contains(t, result.Reply, "verification passed")
 	// Reply concatenates every hop; FinalReply is the hop that ended the turn
 	// (default taking the result back with nobody left to route to). A caller
@@ -149,7 +152,7 @@ func TestRuntimeStartsActivatesAndEndsResumable(t *testing.T) {
 	// decoding the turn record; that reply must be the answer, not every hop.
 	foundTerminal := false
 	for _, event := range replay.Events {
-		if event.Type != types.EventFlowTurnWaitingInput {
+		if event.Type != types.EventFlowTurnEnded {
 			continue
 		}
 		foundTerminal = true
@@ -227,9 +230,10 @@ func (waitingInputTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest)
 	}
 	return types.TeamTurnResult{
 		Turn: types.TeamTurn{
-			ID:     req.TeamTurn.ID,
-			TeamID: req.TeamTurn.TeamID,
-			Status: types.TurnWaitingInput,
+			ID:         req.TeamTurn.ID,
+			TeamID:     req.TeamTurn.TeamID,
+			StopReason: types.StopEndTurn,
+			Awaiting:   types.AwaitingUser,
 		},
 		Next: &types.Route{Action: types.NextProceed},
 		CallResults: map[string]types.CallResult{
@@ -258,7 +262,7 @@ func TestRuntimeTeamWaitingInputStatusSuspendsSession(t *testing.T) {
 	require.Equal(t, types.SessionIdle, result.Session.Status)
 	require.Len(t, result.TeamResults, 2)
 	require.Equal(t, "verify", result.TeamResults[1].Turn.TeamID)
-	require.Equal(t, types.TurnWaitingInput, result.TeamResults[1].Turn.Status)
+	require.Equal(t, types.AwaitingUser, result.TeamResults[1].Turn.Awaiting)
 }
 
 type aggregateResumeTeamRuntime struct {
@@ -407,9 +411,10 @@ func (r *approvalTeamRuntime) Run(_ context.Context, req types.TeamTurnRequest) 
 	}
 	return types.TeamTurnResult{
 		Turn: types.TeamTurn{
-			ID:     req.TeamTurn.ID,
-			TeamID: req.TeamTurn.TeamID,
-			Status: types.TurnWaitingApproval,
+			ID:         req.TeamTurn.ID,
+			TeamID:     req.TeamTurn.TeamID,
+			StopReason: types.StopEndTurn,
+			Awaiting:   types.AwaitingApproval,
 		},
 		Next: &types.Route{Action: types.NextWaitApproval},
 		CallResults: map[string]types.CallResult{

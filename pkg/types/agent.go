@@ -102,7 +102,7 @@ type LoopConfig struct {
 	// MaxModelRetries bounds retries for transient provider failures. Context
 	// limit recovery is handled separately and is attempted once.
 	MaxModelRetries int    `yaml:"max_model_retries,omitempty" json:"max_model_retries,omitempty"`
-	Timeout         string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Timeout         string `yaml:"timeout,omitempty" json:"timeout,omitempty"` // no longer honoured: kept so a stale config is rejected, not silently ignored
 }
 
 // CompletionConfig describes task-level completion evidence. All fields are
@@ -120,10 +120,23 @@ type CompletionConfig struct {
 // relative to the selected model's input context capacity. MaxInputTokens is
 // an optional explicit capacity override for runtimes that do not expose the
 // model profile to the Agent.
+//
+// Three numbers describe one axis — how much of the window may be sent, when to
+// compact, and where compaction lands — and they must stay ordered:
+//
+//	TargetRatio < CompactionThreshold < 1 - OutputReserveRatio
+//
+// The hard limit is not a separate knob: it is exactly 1 - OutputReserveRatio,
+// because that is the most that can be sent while still leaving room for the
+// response. Keeping a second configurable ceiling for the same boundary only
+// produced states where two limits silently collapsed onto one value.
 type ContextConfig struct {
-	MaxInputTokens             int     `yaml:"max_input_tokens,omitempty" json:"max_input_tokens,omitempty"`
-	TargetRatio                float64 `yaml:"target_ratio,omitempty" json:"target_ratio,omitempty"`
-	CompactionThreshold        float64 `yaml:"compaction_threshold,omitempty" json:"compaction_threshold,omitempty"`
+	MaxInputTokens      int     `yaml:"max_input_tokens,omitempty" json:"max_input_tokens,omitempty"`
+	TargetRatio         float64 `yaml:"target_ratio,omitempty" json:"target_ratio,omitempty"`
+	CompactionThreshold float64 `yaml:"compaction_threshold,omitempty" json:"compaction_threshold,omitempty"`
+	// HardLimitRatio is removed from the model. The field stays so an old
+	// config can be rejected with a migration hint instead of being silently
+	// ignored by the non-strict YAML decoder; the loader fails when it is set.
 	HardLimitRatio             float64 `yaml:"hard_limit_ratio,omitempty" json:"hard_limit_ratio,omitempty"`
 	OutputReserveRatio         float64 `yaml:"output_reserve_ratio,omitempty" json:"output_reserve_ratio,omitempty"`
 	ToolOutputRatio            float64 `yaml:"tool_output_ratio,omitempty" json:"tool_output_ratio,omitempty"`
@@ -132,6 +145,21 @@ type ContextConfig struct {
 	MicrocompactMaxChars       int     `yaml:"microcompact_max_chars,omitempty" json:"microcompact_max_chars,omitempty"`
 	RecentMessageGroups        int     `yaml:"recent_message_groups,omitempty" json:"recent_message_groups,omitempty"`
 	Compactor                  string  `yaml:"compactor,omitempty" json:"compactor,omitempty"` // "llm"(默认) | "mechanical"
+}
+
+// HardLimit returns the fraction of the window that may be sent, i.e. the hard
+// limit. It is derived rather than configured so the "how much can I send" and
+// "how much room is left for the answer" answers cannot disagree.
+func (c ContextConfig) HardLimit() float64 {
+	resolved := c.WithDefaults()
+	reserve := resolved.OutputReserveRatio
+	if reserve < 0 {
+		return 0
+	}
+	if reserve >= 1 {
+		return 0
+	}
+	return 1 - reserve
 }
 
 func (c ContextConfig) WithDefaults() ContextConfig {
@@ -146,12 +174,6 @@ func (c ContextConfig) WithDefaults() ContextConfig {
 	}
 	if c.CompactionThreshold <= 0 || c.CompactionThreshold >= 1 {
 		c.CompactionThreshold = 0.90
-	}
-	if c.HardLimitRatio <= 0 || c.HardLimitRatio > 1 {
-		c.HardLimitRatio = 0.95
-	}
-	if c.CompactionThreshold > c.HardLimitRatio {
-		c.CompactionThreshold = c.HardLimitRatio
 	}
 	if c.OutputReserveRatio < 0 || c.OutputReserveRatio >= 1 {
 		c.OutputReserveRatio = 0.15

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -94,23 +95,52 @@ func TestRepeatedReadReplacesEarlierResult(t *testing.T) {
 		"最新一份保留原文")
 }
 
-// 相同的读取反复回来时，回合要判停：模型已经拿不到任何新信息了。
+// 相同的读取反复回来时，回合最终要判停：模型已经拿不到任何新信息了。
 //
 // 读取本身也会产生 read 操作，所以"写后重置"必须只认写操作，否则第二次读取
 // 就被当成"写过东西了"，判停永远不会触发。
+//
+// 第一次触顶只提醒、不判停（给模型一次收口机会），所以判停发生在第二次触顶：
+// 3 次读 -> 警告并清零 -> 再 3 次读 -> 判停。
 func TestRepeatedReadTripsStuckGuard(t *testing.T) {
 	model := &mockModelProvider{responses: []types.ChatResponse{
 		{ToolCalls: []types.ToolCall{readToolCall("c1", "/a.go")}},
 		{ToolCalls: []types.ToolCall{readToolCall("c2", "/a.go")}},
 		{ToolCalls: []types.ToolCall{readToolCall("c3", "/a.go")}},
+		{ToolCalls: []types.ToolCall{readToolCall("c4", "/a.go")}},
+		{ToolCalls: []types.ToolCall{readToolCall("c5", "/a.go")}},
+		{ToolCalls: []types.ToolCall{readToolCall("c6", "/a.go")}},
 		{Text: "done"},
+	}}
+	loop := newRepeatReadLoop(model)
+
+	result, err := loop.Run(context.Background(), repeatReadAgent(10), types.AgentRequest{})
+	require.NoError(t, err)
+	require.Equal(t, types.TurnFailed, result.Status, "警告后仍然重复，要判停")
+	require.Contains(t, result.Error, "same read returned 3 times")
+}
+
+// 第一次触顶时只提醒模型换手段，回合继续；模型收口则正常完成。
+func TestRepeatedReadWarnsBeforeFailing(t *testing.T) {
+	model := &mockModelProvider{responses: []types.ChatResponse{
+		{ToolCalls: []types.ToolCall{readToolCall("c1", "/a.go")}},
+		{ToolCalls: []types.ToolCall{readToolCall("c2", "/a.go")}},
+		{ToolCalls: []types.ToolCall{readToolCall("c3", "/a.go")}},
+		{Text: "结论：文件内容没有变化，按已有信息收口"},
 	}}
 	loop := newRepeatReadLoop(model)
 
 	result, err := loop.Run(context.Background(), repeatReadAgent(6), types.AgentRequest{})
 	require.NoError(t, err)
-	require.Equal(t, types.TurnFailed, result.Status, "重复读取超过阈值要判停")
-	require.Contains(t, result.Error, "same read returned 3 times")
+	require.NotEqual(t, types.TurnFailed, result.Status, "首次触顶只提醒，不判停")
+
+	var warned bool
+	for _, message := range model.lastMessages {
+		if message.Role == "user" && strings.Contains(message.Content, "has now returned the same content") {
+			warned = true
+		}
+	}
+	require.True(t, warned, "触发上限时要给模型一条换手段的提示")
 }
 
 // 相同的调用之间发生过写操作时，重复是编辑-校验循环，不算卡住。

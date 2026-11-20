@@ -238,7 +238,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 			}
 			result.Error = err.Error()
 			result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
-			result.Turn.Status = types.TurnFailed
+			result.Turn.StopReason = types.StopFailed
 			logging.ErrorUnlessCancelled(err, "team batch failed", map[string]any{
 				"flow_session_id": req.FlowSession.ID,
 				"team_id":         req.Team.ID,
@@ -287,7 +287,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 			if callResult.Status != types.TurnCompleted {
 				result.Error = fmt.Sprintf("call %q failed: %s", name, callResult.Error)
 				result.Next = &types.Route{Action: types.NextCoordinate, Reason: result.Error}
-				result.Turn.Status = types.TurnFailed
+				result.Turn.StopReason = types.StopFailed
 				logging.Error("team call failed", map[string]any{
 					"flow_session_id": req.FlowSession.ID,
 					"team_id":         req.Team.ID,
@@ -302,15 +302,18 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 			// The whole ready batch is now represented by this TeamTurn.
 			// Keep all pending calls together so Flow.Resume can wait for and
 			// resume them as one aggregate rather than selecting one event.
+			// Waiting is not a way to end: the turn finished (end_turn) and is
+			// held open by whoever it waits for.
+			result.Turn.StopReason = types.StopEndTurn
 			switch {
 			case hasWaitingApproval:
-				result.Turn.Status = types.TurnWaitingApproval
+				result.Turn.Awaiting = types.AwaitingApproval
 				result.Next = &types.Route{Action: types.NextWaitApproval, Reason: "one or more Agent Tool calls require approval"}
 			case hasWaitingTool:
-				result.Turn.Status = types.TurnWaitingTool
+				result.Turn.Awaiting = types.AwaitingTool
 				result.Next = &types.Route{Action: types.NextWaitTool, Reason: "one or more Agent Tool tasks are still running"}
 			case waitingInput != nil:
-				result.Turn.Status = types.TurnWaitingInput
+				result.Turn.Awaiting = types.AwaitingUser
 				result.Next = waitingInput.Next
 			}
 			result.Reply = strings.Join(allReply, "\n\n")
@@ -321,7 +324,7 @@ func (r *Runtime) Run(ctx context.Context, req types.TeamTurnRequest) (types.Tea
 	result.Records = selectTeamRecords(req.Team, result.CallResults, allRecords, state)
 	result.Reply = strings.Join(allReply, "\n\n")
 	result.Next = resolveNext(result.CallResults)
-	result.Turn.Status = types.TurnCompleted
+	result.Turn.StopReason = types.StopEndTurn
 	result.Turn.RecordIDs = recordIDs(result.Records)
 	if states != nil && req.Team.State.Enabled {
 		// Only the structured ledger is recorded. next_steps used to receive the

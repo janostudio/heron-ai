@@ -56,7 +56,7 @@ func History(fs storage.FileStore, sessionDir string) ([]Turn, error) {
 		case types.EventFlowTurnStarted:
 			input, _ := event.Payload["input"].(string)
 			turns = append(turns, Turn{Input: input})
-		case types.EventTeamTurnCompleted:
+		case types.EventTeamTurnEnded:
 			data := teamTurnData(event.Payload)
 			// Every team turn belongs to the most recent user input; if none
 			// exists yet (an activation turn the user did not type), start an

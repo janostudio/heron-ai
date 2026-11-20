@@ -22,8 +22,9 @@ flow_session_id           → sessions/<fs_id>/ 目录（一次对话）
 | 文件 | 事件 | flow_session_id | flow_turn_id | team_id | team_turn_id | call_id | call_turn_id |
 |---|---|---|---|---|---|---|---|
 | flow | `session.turn.started` | ✓ | ✓ | | | | |
+| flow | `session.turn.ended` | ✓ | ✓ | | | | |
 | flow | `session.team_turn.started` | ✓ | ✓ | ✓ | ✓ | | |
-| flow | `session.team_turn.completed` | ✓ | ✓ | ✓ | ✓ | | |
+| flow | `session.team_turn.ended` | ✓ | ✓ | ✓ | ✓ | | |
 | flow | `session.record.published` | ✓ | ✓ | **✗** | ✓ | | |
 | flow | `session.record.consumed` | ✓ | ✓ | ✓ | ✓ | | |
 | team | `session.agent_turn.*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -91,9 +92,9 @@ session.turn.started        ft_e6212632…  input='提问：这个功能应该�
       session.agent.model_response round=2  finish=tool_calls  → Read
       session.agent.model_response round=3  finish=stop  text='{"reply":…}'
     session.agent_turn.completed Requests=4  Usage.total_tokens=29218
-  session.team_turn.completed    next.action=proceed
+  session.team_turn.ended    next.action=proceed
   session.record.published PlannerReply
-session.turn.idle
+session.turn.ended   stop_reason=end_turn  awaiting=user
 ```
 
 **注意 `round` 在 `agent_turn` 内从 0 重数**，跨 `agent_turn` 不连续。定位唯一的某一轮

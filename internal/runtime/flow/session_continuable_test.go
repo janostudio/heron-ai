@@ -47,14 +47,14 @@ func TestFailedTurnLeavesSessionContinuable(t *testing.T) {
 	ctx := context.Background()
 	first, err := runtime.Start(ctx, types.StartFlowRequest{FlowID: "code-fix", Input: "boom"})
 	require.Error(t, err, "the turn itself must report failure")
-	require.Equal(t, types.TurnFailed, first.Turn.Status)
+	require.Equal(t, types.StopFailed, first.Turn.StopReason)
 	require.Equal(t, types.SessionIdle, first.Session.Status, "the session must stay continuable")
 
 	second, err := runtime.HandleInputWithContext(ctx, first.Session.ID, "retry", nil)
 	require.NoError(t, err, "a failed turn must not block the next one")
 	require.Equal(t, first.Session.ID, second.Session.ID)
 	require.NotEqual(t, first.Turn.ID, second.Turn.ID)
-	require.Equal(t, types.TurnWaitingInput, second.Turn.Status)
+	require.Equal(t, types.AwaitingUser, second.Turn.Awaiting)
 	require.Equal(t, types.SessionIdle, second.Session.Status)
 }
 
@@ -111,7 +111,7 @@ func TestRunningTeamBlocksNewTurnUntilItDrains(t *testing.T) {
 	runtime.dispatchMu.Unlock()
 	require.NoError(t, runtime.appendSessionEvent(ctx, first.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
-			Type:          types.EventTeamTurnCompleted,
+			Type:          types.EventTeamTurnEnded,
 			FlowSessionID: first.Session.ID,
 			TeamTurnID:    "tt_slow",
 			TeamID:        "slow-team",

@@ -268,7 +268,7 @@
     },
     {
       "seq": 16,
-      "type": "session.team_turn.completed",
+      "type": "session.team_turn.ended",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_a",
       "call_turn_id": "",
@@ -360,7 +360,7 @@
     },
     {
       "seq": 22,
-      "type": "session.team_turn.completed",
+      "type": "session.team_turn.ended",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_b",
       "call_turn_id": "",
@@ -415,7 +415,7 @@
     },
     {
       "seq": 25,
-      "type": "session.team_turn.completed",
+      "type": "session.team_turn.ended",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_c",
       "call_turn_id": "",
@@ -470,7 +470,7 @@
     },
     {
       "seq": 28,
-      "type": "session.team_turn.completed",
+      "type": "session.team_turn.ended",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_d",
       "call_turn_id": "",
@@ -525,7 +525,7 @@
     },
     {
       "seq": 31,
-      "type": "session.team_turn.completed",
+      "type": "session.team_turn.ended",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "tt_e",
       "call_turn_id": "",
@@ -544,7 +544,7 @@
     },
     {
       "seq": 32,
-      "type": "session.turn.idle",
+      "type": "session.turn.ended",
       "flow_turn_id": "ft_multi",
       "team_turn_id": "",
       "call_turn_id": "",

@@ -73,7 +73,7 @@ func TestFinishTurnWritesLimitIntoPayload(t *testing.T) {
 
 	var found map[string]any
 	for _, event := range sessionEvents(t, writer, started.Session.ID) {
-		if event.Type != types.EventFlowTurnCompleted {
+		if event.Type != types.EventFlowTurnEnded {
 			continue
 		}
 		raw, ok := event.Payload["limit"].(map[string]any)

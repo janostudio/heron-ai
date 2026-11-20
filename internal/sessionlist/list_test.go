@@ -51,7 +51,7 @@ func TestListSummarizesSession(t *testing.T) {
 		`{"seq":1,"type":"session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_abc","flow_id":"default","status":"created","updated_at":"2026-10-09T09:00:00Z"}}}`,
 		`{"seq":2,"type":"session.turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"hello world"}}`,
 		`{"seq":3,"type":"session.turn.started","created_at":"2026-10-09T09:01:00Z","payload":{"input":"second"}}`,
-		`{"seq":4,"type":"session.turn.idle","created_at":"2026-10-09T09:02:00Z","payload":{}}`,
+		`{"seq":4,"type":"session.turn.ended","created_at":"2026-10-09T09:02:00Z","payload":{}}`,
 	}, []string{
 		`{"seq":1,"type":"session.agent_turn.completed","payload":{"call_result":{"Usage":{"prompt_tokens":100,"total_tokens":120}}}}`,
 		`{"seq":2,"type":"session.agent_turn.completed","payload":{"call_result":{"Usage":{"prompt_tokens":200,"total_tokens":230}}}}`,
@@ -76,9 +76,9 @@ func TestListCountsUserTurnsOnly(t *testing.T) {
 	writeSession(t, root, "fs_turns", []string{
 		`{"seq":1,"type":"session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_turns","flow_id":"default","status":"idle","updated_at":"2026-10-09T09:00:00Z"}}}`,
 		`{"seq":2,"type":"session.turn.started","created_at":"2026-10-09T09:00:01Z","payload":{"input":"查主分支","turn":{"id":"ft_1","origin":"user","input":"查主分支"}}}`,
-		`{"seq":3,"type":"session.turn.idle","created_at":"2026-10-09T09:00:02Z","payload":{"origin":"user","intermediate":true}}`,
+		`{"seq":3,"type":"session.turn.ended","created_at":"2026-10-09T09:00:02Z","payload":{"origin":"user","intermediate":true}}`,
 		`{"seq":4,"type":"session.turn.started","created_at":"2026-10-09T09:00:03Z","payload":{"turn":{"id":"ft_2","origin":"tool"}}}`,
-		`{"seq":5,"type":"session.turn.idle","created_at":"2026-10-09T09:00:04Z","payload":{"origin":"tool"}}`,
+		`{"seq":5,"type":"session.turn.ended","created_at":"2026-10-09T09:00:04Z","payload":{"origin":"tool"}}`,
 	}, nil)
 
 	sessions, err := List(storage.NewFileStore(root), SessionsDir)
@@ -110,7 +110,7 @@ func TestListNotActiveAfterWaitingInput(t *testing.T) {
 		`{"seq":1,"type":"session.created","created_at":"2026-10-09T09:00:00Z","payload":{"session":{"id":"fs_idle","flow_id":"default","status":"created","updated_at":"2026-10-09T09:00:00Z"}}}`,
 		`{"seq":2,"type":"session.updated","created_at":"2026-10-09T09:00:01Z","payload":{"session":{"id":"fs_idle","flow_id":"default","status":"running","updated_at":"2026-10-09T09:00:01Z"}}}`,
 		`{"seq":3,"type":"session.turn.started","created_at":"2026-10-09T09:00:02Z","payload":{"input":"done"}}`,
-		`{"seq":4,"type":"session.turn.idle","created_at":"2026-10-09T09:00:03Z","payload":{}}`,
+		`{"seq":4,"type":"session.turn.ended","created_at":"2026-10-09T09:00:03Z","payload":{}}`,
 	}, nil)
 
 	sessions, err := List(storage.NewFileStore(root), SessionsDir)

@@ -78,3 +78,24 @@ func repeatedReadCap(loop types.LoopConfig) int {
 	}
 	return defaultMaxRepeatedReads
 }
+
+// repeatedReadNotice is the one-time nudge handed to the model when a read-only
+// call keeps returning identical bytes.
+//
+// The guard cannot tell "the model lost track after compaction" from "the model
+// is looping", and ending the turn costs every finding gathered so far — far
+// more than one extra round. So the first time the cap is reached the model is
+// told to move on; only a second trip, with the warning already in context,
+// counts as a real stall and stops the turn.
+func repeatedReadNotice(call types.ToolCall, cap int) string {
+	subject := call.Name
+	if target := readCallTarget(call); target != "" {
+		subject = fmt.Sprintf("%s %s", call.Name, target)
+	}
+	return fmt.Sprintf(
+		"[system] %s has now returned the same content %d times with no workspace write in between. "+
+			"Nothing changed, so an identical call adds no information: continue with what you already have, "+
+			"or switch approach (search for a specific fragment, read a range you have not read yet, "+
+			"or check runtime data/logs instead). Repeating it again ends this turn with a stuck-guard failure.",
+		subject, cap)
+}

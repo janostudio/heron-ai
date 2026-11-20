@@ -85,6 +85,7 @@ func readSession(fs storage.FileStore, id, dir string) (Session, bool) {
 	session := Session{ID: id}
 	var sessionUpdatedAt time.Time
 	var lastTurnEvent string
+	var lastTurnAwaiting string
 	titleSet := false
 
 	for _, event := range flowEvents {
@@ -121,9 +122,11 @@ func readSession(fs storage.FileStore, id, dir string) (Session, bool) {
 				}
 			}
 			lastTurnEvent = event.Type
-		case types.EventFlowTurnCompleted, types.EventFlowTurnWaitingInput,
-			types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
+		case types.EventFlowTurnEnded:
 			lastTurnEvent = event.Type
+			if awaiting, ok := event.Payload["awaiting"].(string); ok {
+				lastTurnAwaiting = awaiting
+			}
 		}
 	}
 
@@ -132,10 +135,13 @@ func readSession(fs storage.FileStore, id, dir string) (Session, bool) {
 	if sessionUpdatedAt.After(session.UpdatedAt) {
 		session.UpdatedAt = sessionUpdatedAt
 	}
-	// A turn that only ever emitted session.turn.started (or is parked on a tool /
-	// approval gate) is still executing; completed / waiting_input are at rest.
-	switch lastTurnEvent {
-	case types.EventFlowTurnStarted, types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
+	// A turn that only ever emitted session.turn.started, or that ended while
+	// still waiting for a tool/approval, is still executing; a turn that ended
+	// with nobody to wait for is at rest.
+	if lastTurnEvent == types.EventFlowTurnStarted {
+		session.Active = true
+	}
+	if lastTurnEvent == types.EventFlowTurnEnded && lastTurnAwaiting != "" {
 		session.Active = true
 	}
 

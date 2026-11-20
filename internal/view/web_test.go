@@ -34,7 +34,6 @@ func newWebFixture(t *testing.T) (*Handler, string) {
 	turn := types.FlowTurn{
 		ID:            "ft_1",
 		FlowSessionID: sessionID,
-		Status:        types.TurnWaitingInput,
 		Origin:        "user",
 		Input:         "看看构建为什么失败",
 	}
@@ -56,7 +55,7 @@ func newWebFixture(t *testing.T) (*Handler, string) {
 	appendEvent(types.EventToolCallFailed, "ft_1", map[string]any{
 		"tool_name": "Bash", "tool_call_id": "call_1", "error": "exit=2",
 	})
-	appendEvent(types.EventFlowTurnWaitingInput, "ft_1", map[string]any{
+	appendEvent(types.EventFlowTurnEnded, "ft_1", map[string]any{
 		"turn": turn, "origin": "user",
 		"reply": "构建失败，原因是锁文件过期。", "intermediate": false,
 	})

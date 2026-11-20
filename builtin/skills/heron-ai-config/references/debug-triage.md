@@ -30,7 +30,7 @@ jq -r '.type' $S/flow.jsonl
 jq -r '.type' $S/team.jsonl
 
 # 路由结果：每个 team turn 结束时的 next.action
-jq -r 'select(.type=="session.team_turn.completed") | .payload.team_result.turn
+jq -r 'select(.type=="session.team_turn.ended") | .payload.team_result.turn
        | "\(.team_id) \(.status) next=\(.next.action) teams=\(.next.teams // [])"' \
   $S/flow.jsonl
 
@@ -93,23 +93,23 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 | 检查项 | 预期 |
 |---|---|
 | 会话定位 | 一次 `--prompt` 或 `--session` 续聊 → 一个 `sessions/<fs_id>/`，续聊是**追加**写入同一目录，按 `seq` / `created_at` 判断先后，不要按行号 |
-| 事件顺序 | `session.created` → `session.turn.started` → `team_*` → 正常结束时 `session.turn.idle` |
+| 事件顺序 | `session.created` → `session.turn.started` → `team_*` → `session.turn.ended` |
 | **轮次** | 一轮 = `session.agent_turn.completed` 的 `call_result.requests` 里一个元素；同一 agent 多个 Request 说明它多轮调用了模型 |
-| **route** | `session.team_turn.completed.payload.team_result.turn.next.action` ∈ `proceed` / `activate` / `return` / `coordinate` / `fail` / `wait_tool` / `wait_approval` |
-| **终态** | 正常结束是 `session.turn.idle`（会话可续聊，等下一句）；`session.turn.completed` + `turn.status=failed` 是这轮失败；`cancelled` 有两种来源：进程中断留下的悬空回合（见下），或外部取消——看 `payload.error` 是否写着 interrupted。等工具/等审批各有自己的等待态事件（`waiting_tool` / `waiting_approval`），不是失败 |
+| **route** | `session.team_turn.ended.payload.team_result.turn.next.action` ∈ `proceed` / `activate` / `return` / `coordinate` / `fail` / `wait_tool` / `wait_approval` |
+| **终态** | 只看 `session.turn.ended` 的两个字段：`stop_reason`（`end_turn` / `failed` / `cancelled` / `max_rounds` / `max_tool_calls` / `max_tokens` / `refusal`）说怎么结束，`awaiting`（`user` / `tool` / `approval` / 空）说在等谁。等工具、等审批**不是失败**。旧事件名已不再发出 |
 | **team 范围** | 寒暄类应只激活 `entry` team；出现 specialist team 说明路由把它当成任务了 |
-| **消耗** | 事实源是 `session.agent_turn.completed → payload.call_result.requests[].usage`；flow 级总量 = 各 `session.team_turn.completed` 的 `payload.team_result.usage` 求和（与终端 `Tokens:` 行同口径；team 层已含本轮执行过的 call，**不要再与 call 层相加**），算法见 `token-usage.md` |
+| **消耗** | 事实源是 `session.agent_turn.completed → payload.call_result.requests[].usage`；flow 级总量 = 各 `session.team_turn.ended` 的 `payload.team_result.usage` 求和（与终端 `Tokens:` 行同口径；team 层已含本轮执行过的 call，**不要再与 call 层相加**），算法见 `token-usage.md` |
 | **证据** | 发布的 SharedRecord 同时出现在 `flow.jsonl` 的 `session.record.published` 与 `evidence.jsonl`。被派发的子 Team 产出的记录会以 flow 作用域副本进入 `evidence.jsonl`，所以那里出现"不是入口 Team 写的"记录是正常的 |
 
 ### 异常模式对照
 
 | 现象 | 去看什么 |
 |---|---|
-| `session.turn.completed`（`payload.turn.status=failed`） | 它的 `error`；常见 `flow turn exceeded max team turns`（路由成环、或 agent 没识别"这一步已完成"。先修路由，只有在确属合法的多次转交时才调 `settings.json` 的 `runtime.max_team_turns`）。撞上限时 `payload.limit` 里有结构化事实（哪条上限、实际到多少、最频繁的激活边、最近几跳），比读 error 字符串快 |
+| `session.turn.ended`（`stop_reason=failed`） | 它的 `error`；常见 `flow turn exceeded max team turns`（路由成环、或 agent 没识别"这一步已完成"。先修路由，只有在确属合法的多次转交时才调 `settings.json` 的 `runtime.max_team_turns`）。撞上限时 `payload.limit` 里有结构化事实（哪条上限、实际到多少、最频繁的激活边、最近几跳），比读 error 字符串快 |
 | `call_result.status` 非 completed | `call_result.error` |
 | 某 agent 的 `Requests` 数暴涨 | 上下文膨胀。每轮把前序工具输出重新带给模型；查 `session.context.compacted`，并考虑收窄工具输出或减少读取量 |
 | `flow_turn` 迟迟不结束 | `runtime.max_team_turns` 兜底上限（默认很宽松，正常编排不会碰到）与路由是否成环 |
-| 会话尾巴上有一个 `running` 的回合，之后再没动过 | 进程在回合中途退出。**下一次在这个会话里发消息时**，引擎会先给那个回合补写 `session.turn.completed` + `status=cancelled` + `payload.error=interrupted…`，然后才开始新回合。看到这条 `cancelled` 说明"上次是被中断的"，不是这次新出的错 |
+| 会话尾巴上有一个 `running` 的回合，之后再没动过 | 进程在回合中途退出。**下一次在这个会话里发消息时**，引擎会先给那个回合补写 `session.turn.ended` + `stop_reason=cancelled` + `payload.error=interrupted…`，然后才开始新回合。看到这条 `cancelled` 说明"上次是被中断的"，不是这次新出的错 |
 | 某条 record 明明产出了，下游 `flow_records` 却读不到 | 先看 `session.record.consumed` 有没有对应事件：没有，说明下游根本没被移交这条记录（检查 `inputs` 名字与时间窗）；有事件却没内容，才去看下游的注入 |
 | 模型输出为空 / 解析失败 | 先确认读的是 `payload.text` 而非 `payload.content`；若有 `session.agent.feedback`，说明模型没按 schema 输出，引擎已追加重试提示 |
 | command call 无输出 | `session.command_turn.*` 在 `team.jsonl`；看 `payload` 的退出码与 stderr |
@@ -126,7 +126,7 @@ for (const line of fs.readFileSync(path, "utf8").split("\n")) {
 | `teams/*.yml` 的 `output.record` | 该 team 该发布什么 record | `flow.jsonl` 的 `session.record.published` 的 `name` |
 | `agents/*/AGENT.md` 的 `loop` / `budget` | 轮数上限 | `Requests` 元素个数不应超过 `max_rounds` |
 | `agents/*/AGENT.md` 的 `structured_output` | 是否会有 `session.agent.feedback` 重试 | 有则说明模型没按 schema 输出 |
-| `settings.json` 的 `runtime` | `max_team_turns` / `max_calls_per_team_turn` / `max_agent_rounds` 等 | 触发上限时 `session.turn.completed`（`turn.status=failed`） |
+| `settings.json` 的 `runtime` | `max_team_turns` / `max_calls_per_team_turn` / `max_agent_rounds` 等 | 触发上限时 `session.turn.ended`（`stop_reason=max_rounds` / `max_tool_calls` / `max_tokens`） |
 
 ```bash
 # 该 flow 允许激活哪些 team
@@ -150,7 +150,7 @@ jq -r 'select(.type=="session.team_turn.started") | .team_id' $S/flow.jsonl | so
    （结构化重试）+ `session.context.compacted`（上下文怎么被压缩）。
 2. **卡在哪 / 报什么错**：三层 jsonl 的等待态事件 + 执行日志的 error。
 3. **消耗多少**：见 `token-usage.md`（按 flow / team / agent / 总计）。
-4. **为什么走到这一步**：`flow.jsonl` 的 `session.team_turn.completed` 路由链
+4. **为什么走到这一步**：`flow.jsonl` 的 `session.team_turn.ended` 路由链
    （谁 activate 了谁、第几次回退）。
 5. **结论基于什么**：`evidence.jsonl` 的 basis（文件路径 + 行号）。
 6. **完整调用链**：见 `trace-ids.md` 的 ID 串联地图与查询。

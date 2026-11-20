@@ -6,7 +6,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// TurnStatus is the lifecycle state of one execution.
+// TurnStatus is the single-dimension status of one *call* (agent / command /
+// webhook). Those layers only ever need to say "finished" or "waiting", so one
+// enum is enough there.
+//
+// FlowTurn and TeamTurn do NOT use it: their terminal state is the pair
+// TurnStopReason + TurnAwaiting, because a turn can finish (how) while still
+// waiting for someone (who).
 type TurnStatus string
 
 const (
@@ -18,6 +24,34 @@ const (
 	TurnCompleted       TurnStatus = "completed"
 	TurnFailed          TurnStatus = "failed"
 	TurnCancelled       TurnStatus = "cancelled"
+)
+
+// TurnStopReason answers "how did this turn end", one dimension only.
+//
+// The vocabulary follows the Agent Client Protocol's stopReason so a consumer
+// that already speaks ACP does not need a second translation table.
+type TurnStopReason string
+
+const (
+	StopEndTurn      TurnStopReason = "end_turn"
+	StopMaxRounds    TurnStopReason = "max_rounds"
+	StopMaxToolCalls TurnStopReason = "max_tool_calls"
+	StopMaxTokens    TurnStopReason = "max_tokens"
+	StopCancelled    TurnStopReason = "cancelled"
+	StopRefusal      TurnStopReason = "refusal"
+	StopFailed       TurnStopReason = "failed"
+)
+
+// TurnAwaiting answers "who is the turn waiting for". Empty means nothing is
+// pending: the turn is over. It is deliberately separate from StopReason —
+// "finished, waiting for the user" and "finished, waiting for approval" are the
+// same stop reason with different blockers.
+type TurnAwaiting string
+
+const (
+	AwaitingUser     TurnAwaiting = "user"
+	AwaitingTool     TurnAwaiting = "tool"
+	AwaitingApproval TurnAwaiting = "approval"
 )
 
 // NextAction is the small routing protocol shared by FlowRuntime and
@@ -96,11 +130,13 @@ type FlowTurn struct {
 	RecoveryOf    string         `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
 	Input         string         `yaml:"input" json:"input"`
 	ContextBlocks []ContextBlock `yaml:"context_blocks,omitempty" json:"context_blocks,omitempty"`
-	Status        TurnStatus     `yaml:"status" json:"status"`
-	Next          *Route         `yaml:"next,omitempty" json:"next,omitempty"`
-	RecordIDs     []string       `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
-	StartedAt     time.Time      `yaml:"started_at" json:"started_at"`
-	FinishedAt    *time.Time     `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
+	// 终态只有两个维度：怎么结束、在等谁。
+	StopReason TurnStopReason `yaml:"stop_reason,omitempty" json:"stop_reason,omitempty"`
+	Awaiting   TurnAwaiting   `yaml:"awaiting,omitempty" json:"awaiting,omitempty"`
+	Next       *Route         `yaml:"next,omitempty" json:"next,omitempty"`
+	RecordIDs  []string       `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
+	StartedAt  time.Time      `yaml:"started_at" json:"started_at"`
+	FinishedAt *time.Time     `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
 	// Origin records who started the turn: the caller ("user"), a mailbox
 	// wake-up ("mailbox"), or a tool/approval resume ("resume"). A consumer
 	// that only relays user-facing answers needs it because a session may run
@@ -114,18 +150,20 @@ type FlowTurn struct {
 
 // TeamTurn represents one invocation of a TeamSession.
 type TeamTurn struct {
-	ID            string     `yaml:"id" json:"id"`
-	FlowTurnID    string     `yaml:"flow_turn_id" json:"flow_turn_id"`
-	TeamSessionID string     `yaml:"team_session_id" json:"team_session_id"`
-	TeamID        string     `yaml:"team_id" json:"team_id"`
-	Attempt       int        `yaml:"attempt" json:"attempt"`
-	RecoveryOf    string     `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
-	CallerTeam    string     `yaml:"caller_team,omitempty" json:"caller_team,omitempty"`
-	Status        TurnStatus `yaml:"status" json:"status"`
-	Next          *Route     `yaml:"next,omitempty" json:"next,omitempty"`
-	RecordIDs     []string   `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
-	StartedAt     time.Time  `yaml:"started_at" json:"started_at"`
-	FinishedAt    *time.Time `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
+	ID            string `yaml:"id" json:"id"`
+	FlowTurnID    string `yaml:"flow_turn_id" json:"flow_turn_id"`
+	TeamSessionID string `yaml:"team_session_id" json:"team_session_id"`
+	TeamID        string `yaml:"team_id" json:"team_id"`
+	Attempt       int    `yaml:"attempt" json:"attempt"`
+	RecoveryOf    string `yaml:"recovery_of,omitempty" json:"recovery_of,omitempty"`
+	CallerTeam    string `yaml:"caller_team,omitempty" json:"caller_team,omitempty"`
+	// 终态只有两个维度：怎么结束、在等谁。
+	StopReason TurnStopReason `yaml:"stop_reason,omitempty" json:"stop_reason,omitempty"`
+	Awaiting   TurnAwaiting   `yaml:"awaiting,omitempty" json:"awaiting,omitempty"`
+	Next       *Route         `yaml:"next,omitempty" json:"next,omitempty"`
+	RecordIDs  []string       `yaml:"record_ids,omitempty" json:"record_ids,omitempty"`
+	StartedAt  time.Time      `yaml:"started_at" json:"started_at"`
+	FinishedAt *time.Time     `yaml:"finished_at,omitempty" json:"finished_at,omitempty"`
 }
 
 // AgentTurn represents one request/response execution by an Agent Call.

@@ -495,8 +495,9 @@ type turnResult struct {
 		Status string `json:"status"`
 	} `json:"session"`
 	Turn struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
+		ID         string `json:"id"`
+		StopReason string `json:"stop_reason"`
+		Awaiting   string `json:"awaiting"`
 	} `json:"turn"`
 	Reply            string            `json:"reply"`
 	FinalReply       string            `json:"final_reply"`

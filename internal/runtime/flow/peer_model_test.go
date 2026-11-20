@@ -62,7 +62,7 @@ func (r *peerRuntime) Run(_ context.Context, req types.TeamTurnRequest) (types.T
 func peerFail(reason string) types.TeamTurnResult {
 	return types.TeamTurnResult{
 		Error: reason,
-		Turn:  types.TeamTurn{Status: types.TurnFailed},
+		Turn:  types.TeamTurn{StopReason: types.StopFailed},
 		Next:  &types.Route{Action: types.NextFail, Reason: reason},
 	}
 }
@@ -137,7 +137,7 @@ func TestEntryFailureFailsSession(t *testing.T) {
 	result, err := runPeer(t, defs, fake, types.RuntimeLimits{}, false)
 	require.Error(t, err)
 	require.Equal(t, types.SessionIdle, result.Session.Status, "a failed turn must leave the session continuable")
-	require.Equal(t, types.TurnFailed, result.Turn.Status)
+	require.Equal(t, types.StopFailed, result.Turn.StopReason)
 }
 
 // TeamFailureReport is an ordinary record. A Team that does not list it in its

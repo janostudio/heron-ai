@@ -320,7 +320,7 @@ func TestSchedulerFiresDueWakeupWithoutAnyCaller(t *testing.T) {
 	// Let the turn finish before the test directory is removed: the fired turn
 	// runs in the scheduler's goroutine, and its last write races cleanup.
 	require.Eventually(t, func() bool {
-		return countEvents(sessionEvents(t, writer, started.Session.ID), types.EventFlowTurnWaitingInput) >= 2
+		return countEvents(sessionEvents(t, writer, started.Session.ID), types.EventFlowTurnEnded) >= 2
 	}, 5*time.Second, 20*time.Millisecond, "the wake-up turn must settle")
 }
 
