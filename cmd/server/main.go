@@ -574,9 +574,7 @@ func learnOneSessionWithFiles(
 func eventLayer(eventType string) string {
 	switch eventType {
 	case types.EventFlowSessionCreated, types.EventFlowSessionUpdated,
-		types.EventFlowTurnStarted, types.EventFlowTurnCompleted,
-		types.EventFlowTurnWaitingInput, types.EventFlowTurnWaitingTool,
-		types.EventFlowTurnWaitingApproval,
+		types.EventFlowTurnStarted, types.EventFlowTurnEnded,
 		types.EventSharedRecordPublished, types.EventSharedRecordConsumed,
 		types.EventRecoveryRequested, types.EventRecoveryCompleted,
 		types.EventMailboxMessageEnqueued, types.EventMailboxMessageClaimed,
@@ -586,9 +584,7 @@ func eventLayer(eventType string) string {
 		types.EventWakeupCancelled, types.EventWakeupExpired:
 		return "flow"
 	case types.EventTeamSessionCreated, types.EventTeamSessionUpdated,
-		types.EventTeamTurnStarted, types.EventTeamTurnCompleted,
-		types.EventTeamTurnWaitingInput, types.EventTeamTurnWaitingTool,
-		types.EventTeamTurnWaitingApproval,
+		types.EventTeamTurnStarted, types.EventTeamTurnEnded,
 		types.EventApprovalRequested, types.EventApprovalResolved,
 		types.EventCommandTurnStarted, types.EventCommandTurnCompleted,
 		types.EventWebhookTurnStarted, types.EventWebhookTurnCompleted:

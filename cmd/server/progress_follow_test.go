@@ -17,7 +17,7 @@ import (
 func TestSessionHasBackgroundWork(t *testing.T) {
 	terminal := func(action string) storage.SessionEvent {
 		return storage.SessionEvent{
-			EventHeader: types.EventHeader{Type: types.EventFlowTurnWaitingInput},
+			EventHeader: types.EventHeader{Type: types.EventFlowTurnEnded},
 			Payload: map[string]any{
 				"turn": map[string]any{"next": map[string]any{"action": action}},
 			},
@@ -95,7 +95,7 @@ func TestSessionHasBackgroundWork(t *testing.T) {
 // the window on one path and not the other.
 func TestSessionHasBackgroundWorkAcceptsTypedPayloads(t *testing.T) {
 	typedTurn := storage.SessionEvent{
-		EventHeader: types.EventHeader{Type: types.EventFlowTurnWaitingInput},
+		EventHeader: types.EventHeader{Type: types.EventFlowTurnEnded},
 		Payload: map[string]any{
 			"turn": types.FlowTurn{Next: &types.Route{Action: types.NextActivate}},
 		},

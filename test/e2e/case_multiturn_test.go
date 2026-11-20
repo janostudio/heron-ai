@@ -75,7 +75,7 @@ func TestTurn1EachTurnKeepsItsOwnReply(t *testing.T) {
 	}
 	terminal := 0
 	for _, ev := range events {
-		if (strings.HasPrefix(ev.Type, "session.turn.waiting") || ev.Type == "session.turn.idle") || ev.Type == "session.turn.completed" {
+		if ev.Type == "session.turn.ended" {
 			terminal++
 		}
 	}

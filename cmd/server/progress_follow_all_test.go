@@ -32,8 +32,8 @@ func TestPumpForwardsOtherTurnsWhileFollowing(t *testing.T) {
 	// Following starts: the filter must stop applying.
 	pump.followAll.Store(true)
 
-	answer := eventFor(0, types.EventFlowTurnWaitingInput, map[string]any{
-		"turn":  types.FlowTurn{ID: "ft-2", Status: types.TurnWaitingInput, Origin: "tool"},
+	answer := eventFor(0, types.EventFlowTurnEnded, map[string]any{
+		"turn":  types.FlowTurn{ID: "ft-2", StopReason: types.StopEndTurn, Awaiting: types.AwaitingUser, Origin: "tool"},
 		"reply": "版本号是 v9.9.9。",
 	})
 	answer.FlowTurnID = "ft-2"

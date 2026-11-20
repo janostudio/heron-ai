@@ -100,9 +100,8 @@ func testFlowTurnResult(status types.SessionStatus, reply string) types.FlowTurn
 			UpdatedAt: time.Unix(2, 0).UTC(),
 		},
 		Turn: types.FlowTurn{
-			ID:     "ft-1",
-			Status: types.TurnCompleted,
-			Input:  "hello",
+			ID:    "ft-1",
+			Input: "hello",
 		},
 		Reply: reply,
 		Records: []types.SharedRecord{{

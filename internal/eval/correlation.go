@@ -59,15 +59,27 @@ type Node struct {
 	AgentID       string
 	Attempt       int
 
-	// Status is the raw status of the turn or session payload. The two
-	// status vocabularies (types.TurnStatus, types.SessionStatus) share
-	// their values, so one field covers both.
-	Status types.TurnStatus
+	// Status is the raw status a call-level payload carried (agent / command /
+	// webhook) or a session payload carries. Those two are single-dimension by
+	// nature: a call is running, finished, or parked waiting for something.
+	//
+	// It stays a plain string because it holds two vocabularies
+	// (types.TurnStatus for calls, types.SessionStatus for sessions) whose
+	// values overlap but are not the same — casting one to the other would
+	// claim an equivalence that does not hold.
+	Status string
+
+	// StopReason / Awaiting are the terminal pair of a flow or team turn. Two
+	// fields because "how it ended" and "who it is waiting for" are
+	// independent: a turn can end (end_turn) while still holding the session
+	// open for a tool result.
+	StopReason types.TurnStopReason
+	Awaiting   types.TurnAwaiting
 
 	// StartedAt / FinishedAt are zero when the event stream never carried
 	// the corresponding timestamp. For turns, FinishedAt is set by any
-	// terminal event, including the waiting_* ones: a turn that ends
-	// waiting is resumable, but it did leave the running state.
+	// terminal event: a turn that ends awaiting something is resumable, but it
+	// did leave the running state.
 	StartedAt  time.Time
 	FinishedAt time.Time
 
@@ -291,15 +303,15 @@ func (g *Graph) applyTurnLifecycle(event storage.SessionEvent, teamSession *Node
 	switch event.Type {
 	case types.EventFlowSessionCreated, types.EventFlowSessionUpdated:
 		if session, ok := payloadAs[types.FlowSession](event.Payload, "session"); ok {
-			g.track(NodeFlowSession, session.ID, event, types.TurnStatus(session.Status), session.CreatedAt, session.UpdatedAt, 0)
+			g.track(NodeFlowSession, session.ID, event, nodeState{status: string(session.Status)}, session.CreatedAt, session.UpdatedAt, 0)
 		}
 	case types.EventTeamSessionCreated, types.EventTeamSessionUpdated:
 		if session, ok := payloadAs[types.TeamSession](event.Payload, "team_session"); ok {
-			g.track(NodeTeamSession, session.ID, event, types.TurnStatus(session.Status), session.CreatedAt, session.UpdatedAt, 0)
+			g.track(NodeTeamSession, session.ID, event, nodeState{status: string(session.Status)}, session.CreatedAt, session.UpdatedAt, 0)
 		}
 	case types.EventAgentSessionCreated, types.EventAgentSessionUpdated:
 		if session, ok := payloadAs[types.AgentSession](event.Payload, "agent_session"); ok {
-			g.track(NodeAgentSession, session.ID, event, types.TurnStatus(session.Status), session.CreatedAt, session.UpdatedAt, 0)
+			g.track(NodeAgentSession, session.ID, event, nodeState{status: string(session.Status)}, session.CreatedAt, session.UpdatedAt, 0)
 			if node := g.nodes[session.ID]; node != nil {
 				applyScope(node, event)
 				node.TeamSessionID = session.TeamSessionID
@@ -308,8 +320,7 @@ func (g *Graph) applyTurnLifecycle(event storage.SessionEvent, teamSession *Node
 				g.link(node, teamSession)
 			}
 		}
-	case types.EventFlowTurnStarted, types.EventFlowTurnCompleted,
-		types.EventFlowTurnWaitingInput, types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
+	case types.EventFlowTurnStarted, types.EventFlowTurnEnded:
 		if turn, ok := payloadAs[types.FlowTurn](event.Payload, "turn"); ok {
 			id := turn.ID
 			if id == "" {
@@ -319,19 +330,18 @@ func (g *Graph) applyTurnLifecycle(event storage.SessionEvent, teamSession *Node
 			if turn.FinishedAt != nil {
 				finished = *turn.FinishedAt
 			}
-			g.track(NodeFlowTurn, id, event, turn.Status, turn.StartedAt, finished, turn.Attempt)
+			g.track(NodeFlowTurn, id, event, turnState(turn.StopReason, turn.Awaiting), turn.StartedAt, finished, turn.Attempt)
 		}
-	case types.EventTeamTurnStarted, types.EventTeamTurnCompleted,
-		types.EventTeamTurnWaitingInput, types.EventTeamTurnWaitingTool, types.EventTeamTurnWaitingApproval:
+	case types.EventTeamTurnStarted, types.EventTeamTurnEnded:
 		id := event.TeamTurnID
-		var status types.TurnStatus
+		state := turnState("", "")
 		started := time.Time{}
 		finished := time.Time{}
 		if turn, ok := payloadAs[types.TeamTurn](event.Payload, "team_turn"); ok {
 			if turn.ID != "" {
 				id = turn.ID
 			}
-			status = turn.Status
+			state = turnState(turn.StopReason, turn.Awaiting)
 			started = turn.StartedAt
 			if turn.FinishedAt != nil {
 				finished = *turn.FinishedAt
@@ -341,27 +351,27 @@ func (g *Graph) applyTurnLifecycle(event storage.SessionEvent, teamSession *Node
 			if result.Turn.ID != "" {
 				id = result.Turn.ID
 			}
-			status = result.Turn.Status
+			state = turnState(result.Turn.StopReason, result.Turn.Awaiting)
 			started = result.Turn.StartedAt
 			if result.Turn.FinishedAt != nil {
 				finished = *result.Turn.FinishedAt
 			}
 		}
-		g.track(NodeTeamTurn, id, event, status, started, finished, event.Attempt)
+		g.track(NodeTeamTurn, id, event, state, started, finished, event.Attempt)
 	case types.EventAgentTurnStarted, types.EventCommandTurnStarted, types.EventWebhookTurnStarted:
 		if call, ok := payloadAs[types.Call](event.Payload, "call"); ok {
 			if node := g.ensure(NodeCallTurn, event.CallTurnID); node != nil && node.AgentID == "" {
 				node.AgentID = call.AgentID
 			}
 		}
-		g.track(NodeCallTurn, event.CallTurnID, event, turnStatusForEvent(event.Type), time.Time{}, time.Time{}, event.Attempt)
+		g.track(NodeCallTurn, event.CallTurnID, event, callState(turnStatusForEvent(event.Type)), time.Time{}, time.Time{}, event.Attempt)
 	case types.EventAgentTurnCompleted, types.EventCommandTurnCompleted, types.EventWebhookTurnCompleted:
 		if result, ok := payloadAs[types.CallResult](event.Payload, "call_result"); ok {
 			id := event.CallTurnID
 			if result.CallTurnID != "" {
 				id = result.CallTurnID
 			}
-			g.track(NodeCallTurn, id, event, result.Status, time.Time{}, time.Time{}, event.Attempt)
+			g.track(NodeCallTurn, id, event, callState(result.Status), time.Time{}, time.Time{}, event.Attempt)
 			if node := g.nodes[id]; node != nil && node.AgentID == "" {
 				node.AgentID = result.AgentID
 			}
@@ -371,20 +381,45 @@ func (g *Graph) applyTurnLifecycle(event storage.SessionEvent, teamSession *Node
 		if result, ok := payloadAs[types.CallResult](event.Payload, "call_result"); ok && result.Status != "" {
 			status = result.Status
 		}
-		g.track(NodeCallTurn, event.CallTurnID, event, status, time.Time{}, time.Time{}, event.Attempt)
+		g.track(NodeCallTurn, event.CallTurnID, event, callState(status), time.Time{}, time.Time{}, event.Attempt)
 	}
 }
 
 // track records status and timestamps on a node. Timestamps already known win
 // over zero values; when the payload carries none, the event's own CreatedAt
 // is used for the end of a terminal event or the start of a started one.
-func (g *Graph) track(kind NodeKind, id string, event storage.SessionEvent, status types.TurnStatus, startedAt, finishedAt time.Time, attempt int) {
+// nodeState is what a lifecycle event says about a node's progress. Exactly one
+// of the two shapes is used: call turns carry a single status, flow/team turns
+// carry the terminal pair.
+type nodeState struct {
+	status     string
+	stopReason types.TurnStopReason
+	awaiting   types.TurnAwaiting
+}
+
+// callState is the single-dimension state of an agent / command / webhook call.
+func callState(status types.TurnStatus) nodeState {
+	return nodeState{status: string(status)}
+}
+
+// turnState is the terminal pair of a flow or team turn.
+func turnState(reason types.TurnStopReason, awaiting types.TurnAwaiting) nodeState {
+	return nodeState{stopReason: reason, awaiting: awaiting}
+}
+
+func (g *Graph) track(kind NodeKind, id string, event storage.SessionEvent, state nodeState, startedAt, finishedAt time.Time, attempt int) {
 	node := g.ensure(kind, id)
 	if node == nil {
 		return
 	}
-	if status != "" {
-		node.Status = status
+	if state.status != "" {
+		node.Status = state.status
+	}
+	if state.stopReason != "" {
+		node.StopReason = state.stopReason
+	}
+	if state.awaiting != "" {
+		node.Awaiting = state.awaiting
 	}
 	if attempt > 0 {
 		node.Attempt = attempt
@@ -401,13 +436,16 @@ func (g *Graph) track(kind NodeKind, id string, event storage.SessionEvent, stat
 	}
 }
 
+// turnStatusForEvent maps the call-level waiting events onto the single status
+// the evaluator records. Flow/team turns no longer have waiting events: they
+// end once and say who they wait for in the payload.
 func turnStatusForEvent(eventType string) types.TurnStatus {
 	switch eventType {
-	case types.EventFlowTurnWaitingInput, types.EventTeamTurnWaitingInput, types.EventAgentTurnWaitingInput:
+	case types.EventAgentTurnWaitingInput:
 		return types.TurnWaitingInput
-	case types.EventFlowTurnWaitingTool, types.EventTeamTurnWaitingTool, types.EventAgentTurnWaitingTool:
+	case types.EventAgentTurnWaitingTool:
 		return types.TurnWaitingTool
-	case types.EventFlowTurnWaitingApproval, types.EventTeamTurnWaitingApproval, types.EventAgentTurnWaitingApproval:
+	case types.EventAgentTurnWaitingApproval:
 		return types.TurnWaitingApproval
 	default:
 		return types.TurnRunning

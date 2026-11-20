@@ -57,8 +57,8 @@ func TestRun1SingleTurnProducesTerminalResult(t *testing.T) {
 	if !hasEvent(events, "session.agent.model_response") {
 		t.Fatalf("no session.agent.model_response event; types=%v", typesOf(events))
 	}
-	if status := finalTurnStatus(events); status == "" {
-		t.Fatalf("turn never reached a terminal status; types=%v", typesOf(events))
+	if reason, _ := finalTurnEndpoint(events); reason == "" {
+		t.Fatalf("turn never reported how it ended; types=%v", typesOf(events))
 	}
 }
 

@@ -42,15 +42,15 @@ func TestStatus1ReportsIdleWhenTurnWaitsForInput(t *testing.T) {
 	}
 
 	events := readSession(t, e.Root, result.Session.ID)
-	turnStatus := finalTurnStatus(events)
-	if turnStatus == "" {
+	reason, awaiting := finalTurnEndpoint(events)
+	if reason == "" {
 		t.Fatalf("turn has no terminal event; types=%v", typesOf(events))
 	}
-	if !strings.Contains(turnStatus, "waiting_input") {
-		t.Fatalf("turn ended as %q; test assumes an interactive fixture that waits for the user", turnStatus)
+	if reason != "end_turn" || awaiting != "user" {
+		t.Fatalf("turn ended as stop_reason=%q awaiting=%q; test assumes an interactive fixture that answers and waits", reason, awaiting)
 	}
 	if session.Status != "idle" {
-		t.Fatalf("status endpoint says %q while the turn ended as %q", session.Status, turnStatus)
+		t.Fatalf("status endpoint says %q while the turn ended as stop_reason=%q awaiting=%q", session.Status, reason, awaiting)
 	}
 }
 

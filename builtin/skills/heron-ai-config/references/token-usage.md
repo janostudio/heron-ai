@@ -9,7 +9,7 @@
 ```text
 requests[]（一轮模型调用：usage.prompt_tokens / completion_tokens / total_tokens）
   → call_result.usage           单个 call 内所有轮次的加总（agent.jsonl 事件里叫 payload.call_result）
-    → team_result.usage         该 team 内所有 call 的加总（flow.jsonl 的 session.team_turn.completed）
+    → team_result.usage         该 team 内所有 call 的加总（flow.jsonl 的 session.team_turn.ended）
       → 终端 Tokens 行          对本次 FlowTurn 里所有 team_result.usage 求和
 ```
 
@@ -39,11 +39,11 @@ Cache: 50120 of 55980 prompt tokens (89.5%)
 S=.agents/data/sessions/<fs_id>
 
 # 1) 总计：对每个 team turn 的 usage 求和（与终端 Tokens 行同口径）
-jq -s '[.[] | select(.type=="session.team_turn.completed")
+jq -s '[.[] | select(.type=="session.team_turn.ended")
         | .payload.team_result.usage.total_tokens] | add' $S/flow.jsonl
 
 # 2) 按 team 汇总
-jq -r -s '[.[] | select(.type=="session.team_turn.completed")]
+jq -r -s '[.[] | select(.type=="session.team_turn.ended")]
           | group_by(.team_id)
           | map({team: .[0].team_id,
                  prompt: ([.[].payload.team_result.usage.prompt_tokens] | add),
@@ -83,7 +83,7 @@ jq -r -s '[.[] | select(.type=="session.agent_turn.completed")]
 
 ```bash
 # 每个 team turn 的缓存命中率
-jq -r 'select(.type=="session.team_turn.completed")
+jq -r 'select(.type=="session.team_turn.ended")
        | .payload.team_result.usage as $u
        | "\($u.prompt_tokens)\t\([$u.prompt_cache_hit_tokens, $u.cache_read_input_tokens] | max)\t\($u.cache_creation_input_tokens // 0)"' \
   $S/flow.jsonl
@@ -131,7 +131,7 @@ const read = (p) => fs.readFileSync(p, "utf8").split("\n").filter(Boolean)
 let total = 0;
 const byTeam = {};
 for (const e of read(flowPath)) {
-  if (e.type !== "session.team_turn.completed") continue;
+  if (e.type !== "session.team_turn.ended") continue;
   const u = e.payload.team_result.usage || {};
   total += u.total_tokens || 0;
   const t = (byTeam[e.team_id] ||= { prompt: 0, completion: 0, total: 0 });

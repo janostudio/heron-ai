@@ -184,7 +184,7 @@ SubmitInput(ctx, sessionID, input, blocks):
 
 `setTimeout(800)` 那段 fallback 已删除：它存在的唯一理由是「提交是同步的，所以
 流里应该没有新东西了，但万一有呢」。提交改成 202 之后，流就是唯一通道，收尾由
-`session.turn.idle` / `session.turn.completed` 事件决定。
+`session.turn.ended` 事件决定（`stop_reason` 说怎么结束，`awaiting` 说在等谁）。
 
 ### 3.6 record 补上 status（已完成）
 
@@ -257,9 +257,19 @@ Go 字段名（PascalCase）统一成 snake_case。字段集合由
 动作词保持 `started` / `completed` / `failed` / `cancelled`：事件记录的是已经发生的事，
 过去时是对的。`in_progress` 是状态名，不是事件名，所以没有采用。
 
-一个事件名跟着状态走：`session.turn.idle` → `session.turn.idle`，与 `SessionIdle` 对齐。
-`session.team_turn.idle` / `session.agent_turn.idle` 同理，但它们对应的 `TurnStatus` 值没变，
-所以事件名与状态名在这两处并不一一对应——这是 TurnStatus 保留 `waiting_input` 的直接后果。
+**flow / team turn 的终态只有一个事件 `session.turn.ended`**（team 层是
+`session.team_turn.ended`），事件名不再编码状态，改由 payload 的两个字段表达：
+
+| 字段 | 取值 | 回答的问题 |
+|---|---|---|
+| `stop_reason` | `end_turn` / `max_rounds` / `max_tool_calls` / `max_tokens` / `cancelled` / `refusal` / `failed` | 这一轮怎么结束的 |
+| `awaiting` | `user` / `tool` / `approval` / 空 | 接下来在等谁 |
+
+早期四个终态事件（`session.turn.idle` / `.completed` / `.waiting_tool` /
+`.waiting_approval`）已删除：它们把"在等谁"写进了事件名，导致 `session.turn.idle`
+与 `TurnStatus=waiting_input` 长期对不上。`TurnStatus` 只保留在 call 层
+（`session.agent_turn.*` / `.command_turn.*` / `.webhook_turn.*`），那一层的语义本来就是
+单维的。
 
 `EventHeader` 的 id 字段（`flow_session_id` / `flow_turn_id`）**没有改**：它们标识的是
 Go 类型 `FlowSession` / `FlowTurn`，改名要动 502 处生产代码，而 wire 上换来的只是措辞。
@@ -371,7 +381,7 @@ POST /sessions/turn                     POST /sessions/{id}/events
   → 200 FlowTurnResult                    事件从常驻流进来：
                                             session.turn.started
 事件同时从常驻流进来                          session.agent.model_response
-                                            session.turn.idle        ← 结束
+                                            session.turn.ended       ← 结束
 POST 返回后 setTimeout(800)
   判断"流收到过帧吗"
   没收到 → 整页重拉
@@ -394,7 +404,7 @@ POST /sessions/turn                     POST /sessions/{id}/events
   │                                       ├─ 3s   流：session.team_turn.started
   │   ⚠ 代理 60s 空闲超时会掐断这条连接    ├─ 90s  流：session.agent.model_response
   │   ⚠ 掐断后客户端看到的是"发送失败"     ├─ ...
-  │      但服务端仍在跑                    ├─ 240s 流：session.turn.idle
+  │      但服务端仍在跑                    ├─ 240s 流：session.turn.ended
   │                                       │
   ├─ 240s 才返回 200                      └─ 全程只有一条流，且一直有事件或心跳
   │
@@ -428,7 +438,7 @@ POST /sessions/turn                     POST /sessions/{id}/events
 |---|---|---|
 | 提交请求占用连接 | turn 全程（可能几分钟） | 毫秒级 |
 | 长任务期间「无数据的长连接」 | 一条（POST） | 零条 |
-| 一轮结束的判定依据 | POST 返回 + `setTimeout(800)` 猜测 | 流里的 `session.turn.idle` 事件 |
+| 一轮结束的判定依据 | POST 返回 + `setTimeout(800)` 猜测 | 流里的 `session.turn.ended` 事件 |
 | 结果的来源 | 两处（POST JSON + 流事件） | 一处（流） |
 | turn 失败与连接失败 | 客户端无法区分 | 流里都有明确事件 |
 | 已终态会话 | 仍挂一条流 | 不订阅 |

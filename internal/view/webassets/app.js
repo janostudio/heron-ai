@@ -1283,15 +1283,15 @@
         view["team_" + teamID] = row;
         return;
       }
-      if (event.type === "session.team_turn.completed") {
-        var doneID = (payload.team_turn && payload.team_turn.id) || "";
+      if (event.type === "session.team_turn.ended") {
+        // The terminal event carries the finished turn under team_result.
+        var doneTurn = payload.team_turn || (payload.team_result || {}).turn || {};
+        var doneID = doneTurn.id || event.team_turn_id || "";
         var doneRow = view["team_" + doneID];
         if (doneRow) {
           var state = doneRow.querySelector(".step-state");
           if (state) { state.textContent = "\u5b8c\u6210"; }
-          var took = elapsed(
-            (payload.team_turn && payload.team_turn.started_at) || "",
-            event.created_at || "");
+          var took = elapsed(doneTurn.started_at || "", event.created_at || "");
           if (took) { doneRow.appendChild(el("span", { class: "took" }, took)); }
         }
         return;
@@ -1419,11 +1419,11 @@
   /* The stop button and the running hint follow the turn, not the composer's
    * sending state: an accepted message frees the composer at once, while the
    * turn it started may run for minutes. */
-  /* Turn events that end a turn. session.turn.idle is "waiting for the next
-   * message", which is the end of the turn as far as this page is concerned. */
+  /* A flow turn ends exactly once, through session.turn.ended: stop_reason
+   * says how, awaiting says who it is waiting for. There is no second name to
+   * remember. */
   function isTurnEndType(type) {
-    return type === "session.turn.idle" || type === "session.turn.completed" ||
-      type === "session.turn.waiting_tool" || type === "session.turn.waiting_approval";
+    return type === "session.turn.ended";
   }
 
   /* Does the record still hold a turn open?
@@ -1640,7 +1640,7 @@
         turn.attachments = turnAttachments(payload);
         turn.startedAt = event.created_at || turn.startedAt;
       }
-      if (event.type === "session.turn.idle" || event.type === "session.turn.completed") {
+      if (event.type === "session.turn.ended") {
         turn.origin = payload.origin || turn.origin;
         turn.reply = payload.reply || turn.reply;
         turn.error = payload.error || turn.error;
@@ -2389,7 +2389,7 @@
 
     events.forEach(function (event) {
       var payload = event.payload || {};
-      if (event.type === "session.team_turn.started" || event.type === "session.team_turn.completed") {
+      if (event.type === "session.team_turn.started" || event.type === "session.team_turn.ended") {
         // The completed event carries its result under team_result.turn, the
         // started one under team_turn. Reading only the latter left every Team
         // row with no end time, so a finished turn rendered as 运行中.

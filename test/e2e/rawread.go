@@ -151,33 +151,29 @@ func tail(values []string, limit int) []string {
 }
 
 // turnTerminated reports whether the turn reached a state a client can act on.
+// A flow turn ends exactly once, through session.turn.ended.
 func turnTerminated(events []event) bool {
-	for _, ev := range events {
-		switch ev.Type {
-		case "session.turn.completed", "session.turn.idle",
-			"session.turn.waiting_tool", "session.turn.waiting_approval":
-			return true
-		}
-	}
-	return false
+	return hasEvent(events, "session.turn.ended")
 }
 
-// finalTurnStatus returns the terminal status seen for the turn, if any.
-func finalTurnStatus(events []event) string {
+// finalTurnEndpoint returns how the turn ended and who it is waiting for, read
+// from session.turn.ended. Both are empty when the turn never ended.
+//
+// Two fields, not one: "waiting for the user" and "failed" are answers to
+// different questions, and the event name no longer encodes either of them.
+func finalTurnEndpoint(events []event) (stopReason, awaiting string) {
 	for index := len(events) - 1; index >= 0; index-- {
 		ev := events[index]
-		switch ev.Type {
-		case "session.turn.completed", "session.turn.idle",
-			"session.turn.waiting_tool", "session.turn.waiting_approval":
-			if payload, ok := ev.Raw["payload"].(map[string]any); ok {
-				if turn, ok := payload["turn"].(map[string]any); ok {
-					if status, ok := turn["status"].(string); ok && status != "" {
-						return status
-					}
-				}
-			}
-			return ev.Type
+		if ev.Type != "session.turn.ended" {
+			continue
 		}
+		payload, ok := ev.Raw["payload"].(map[string]any)
+		if !ok {
+			return "", ""
+		}
+		stopReason, _ = payload["stop_reason"].(string)
+		awaiting, _ = payload["awaiting"].(string)
+		return stopReason, awaiting
 	}
-	return ""
+	return "", ""
 }

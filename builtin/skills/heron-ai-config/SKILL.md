@@ -84,7 +84,7 @@ jq -r 'select(.type=="session.agent.model_response") | "[round \(.payload.round)
 | `team.jsonl` | **call 层**：`session.agent_turn.*`、`session.command_turn.*`、`session.webhook_turn.*`、`session.approval.*`（**消耗在这里**） |
 | `agent.jsonl` | agent 内部：`session.agent.model_response`、`session.tool_call.*`、`session.agent.feedback`、`session.context.compacted`（回复原文在 **`payload.text`**） |
 
-所以：在 `team.jsonl` 里找不到 `session.team_turn.completed` 是正常的，不是缺数据。
+所以：在 `team.jsonl` 里找不到 `session.team_turn.ended` 是正常的，不是缺数据。
 同一 `fs_id` 目录**追加式**记录，续聊会继续往里写，所以 `session.turn.started` 会出现多次，
 每次对应一轮。
 
@@ -92,7 +92,7 @@ jq -r 'select(.type=="session.agent.model_response") | "[round \(.payload.round)
 
 ```bash
 S=.agents/data/sessions/<fs_id>
-jq -r 'select(.type=="session.team_turn.completed") | .payload.team_result.turn
+jq -r 'select(.type=="session.team_turn.ended") | .payload.team_result.turn
        | "\(.team_id) \(.status) next=\(.next.action)"' $S/flow.jsonl
 jq -r 'select(.type=="session.agent_turn.completed") | .payload.call_result
        | "\(.agent_id) 轮次=\(.requests|length) tokens=\([.requests[].usage.prompt_tokens]|add)"' $S/team.jsonl
@@ -107,8 +107,9 @@ jq -r 'select(.type|startswith("session.turn.")) | .type' $S/flow.jsonl
 
 1. **分层**：`session.team_turn.*` 在 `flow.jsonl`；`session.command_turn.*` 在 `team.jsonl`。搜不到不等于缺数据。
 2. **字段名**：模型回复原文是 `session.agent.model_response` 的 **`payload.text`**，不是 `content`。
-3. **没有 `session.turn.failed` 这个事件**：失败也是 `session.turn.completed` + `payload.turn.status=failed`；
-   正常结束是 `session.turn.idle`。按事件名搜"失败"会一条都搜不到。
+3. **终态只有一个事件 `session.turn.ended`**：`payload.stop_reason` 说怎么结束（`end_turn` / `failed` /
+   `cancelled` / `max_rounds` …），`payload.awaiting` 说在等谁。旧事件名（`.completed` / `.idle` /
+   `.waiting_*`）已移除，不再发出。
 4. **`turn.started` 不等于一次提问**：一条用户消息会派生多个 turn（派发、工具唤醒、自唤醒各一轮），
    只有 `payload.turn.origin=="user"` 才是人问的；其余是引擎自己接着跑。
 5. **`round` 是 turn 内局部序号**，每轮从 0 重数（从检查点续跑例外）；用 `team_turn_id` 区分是否同一轮，
@@ -122,13 +123,13 @@ jq -r 'select(.type|startswith("session.turn.")) | .type' $S/flow.jsonl
 判定标准、异常模式对照、配置对照见 `references/debug-triage.md`。
 
 **Token 消耗统计**：终端 `Tokens: N (prompt X, completion Y)` 是本次 FlowTurn 总额，
-等于各 `session.team_turn.completed` 的 `payload.team_result.usage` 之和
+等于各 `session.team_turn.ended` 的 `payload.team_result.usage` 之和
 （team 层已含本 TeamTurn 执行过的 call，**不要**再与 call 层相加；缓存命中信息也在里面）。
 按 team / agent 拆分、缓存命中率口径见 `references/token-usage.md`。
 
 ```bash
 # 总计（与终端 Tokens: 行同口径）
-jq -s '[.[]|select(.type=="session.team_turn.completed")|.payload.team_result.usage.total_tokens]|add' $S/flow.jsonl
+jq -s '[.[]|select(.type=="session.team_turn.ended")|.payload.team_result.usage.total_tokens]|add' $S/flow.jsonl
 
 # 按 agent 汇总（agent 粒度在 call 层）
 jq -r -s '[.[]|select(.type=="session.agent_turn.completed")]|group_by(.payload.call_result.agent_id)

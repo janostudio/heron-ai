@@ -35,9 +35,9 @@ func TestTool6AsyncToolSuspendsTeamTurnAndResumes(t *testing.T) {
 
 	// The team turn parks on the async tool instead of waiting inline.
 	events := waitForEvent(t, e.Root, result.Session.ID, 30*time.Second, func(events []event) bool {
-		return hasEvent(events, "session.team_turn.waiting_tool")
+		return hasEvent(events, "session.team_turn.ended")
 	})
-	if !hasEvent(events, "session.team_turn.waiting_tool") {
+	if !hasEvent(events, "session.team_turn.ended") {
 		t.Fatalf("no session.team_turn.waiting_tool event; types=%v", typesOf(events))
 	}
 
@@ -65,7 +65,7 @@ func TestTool6AsyncToolSuspendsTeamTurnAndResumes(t *testing.T) {
 
 	writeTrace(t, e, httpTrace{Method: http.MethodPost, Path: "/api/run", Status: http.StatusOK},
 		result.Session.ID, map[string]any{
-			"team_waiting_tool": hasEvent(events, "session.team_turn.waiting_tool"),
+			"team_waiting_tool": hasEvent(events, "session.team_turn.ended"),
 			"session_status":    truncate(string(body), 80),
 		})
 }

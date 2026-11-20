@@ -330,7 +330,7 @@ func TestRuntime_AsyncDownstreamInsertsChildAndDownstreamWaitsForGroup(t *testin
 		Team:        downstreamSpawnTeam(),
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.TurnCompleted, result.Turn.Status)
+	require.Equal(t, types.StopEndTurn, result.Turn.StopReason)
 
 	// Both synthetic children executed as scheduled calls and published
 	// records under the parent's output.record name.
@@ -382,7 +382,7 @@ func TestRuntime_AsyncDownstreamChildFailureFailsTeamWithKey(t *testing.T) {
 		Team:        downstreamSpawnTeam(),
 	})
 	require.Error(t, err)
-	require.Equal(t, types.TurnFailed, result.Turn.Status)
+	require.Equal(t, types.StopFailed, result.Turn.StopReason)
 
 	// The failure aggregation names the failing member with its key; the
 	// sibling member completed normally (existing team failure semantics).
@@ -415,7 +415,7 @@ func TestRuntime_AgentStateRoutingForSyntheticCalls(t *testing.T) {
 		Team:        team,
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.TurnCompleted, result.Turn.Status)
+	require.Equal(t, types.StopEndTurn, result.Turn.StopReason)
 
 	// The per-call state keeps only the structured ledger; the responsibility
 	// is no longer copied into the goal.
@@ -740,7 +740,7 @@ func TestRuntime_TurnLoopSpawnDownstreamEndToEnd(t *testing.T) {
 		Team:        downstreamSpawnTeam(),
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.TurnCompleted, result.Turn.Status)
+	require.Equal(t, types.StopEndTurn, result.Turn.StopReason)
 
 	// The spawned child entered the DAG and published its record.
 	childResult, ok := result.CallResults["fixer/k1"]

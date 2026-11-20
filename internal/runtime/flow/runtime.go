@@ -460,7 +460,8 @@ func (r *Runtime) ResumeWithContext(ctx context.Context, sessionID, input string
 					PendingToolTasks: pendingTeam.PendingToolTasks,
 					Turn: types.FlowTurn{
 						FlowSessionID: session.ID,
-						Status:        types.TurnWaitingTool,
+						StopReason:    types.StopEndTurn,
+						Awaiting:      types.AwaitingTool,
 					},
 				}, nil
 			}
@@ -964,7 +965,6 @@ func (r *Runtime) runTurnWithOrigin(
 		RecoveryOf:    recoveryOf,
 		Input:         input,
 		ContextBlocks: blocks,
-		Status:        types.TurnRunning,
 		StartedAt:     time.Now().UTC(),
 	}
 	// 用户回合以本轮开始时间为界；被唤起的回合由调用方给出邮箱到达时间。
@@ -1210,7 +1210,7 @@ func (r *Runtime) runTurnWithOrigin(
 			result.Reply = joinReply(result.Reply, teamResult.Reply)
 			allRecords = append(allRecords, teamResult.Records...)
 			result.Records = append(result.Records, teamResult.Records...)
-			if teamResult.Error == "" && teamResult.Turn.Status != types.TurnFailed {
+			if teamResult.Error == "" && teamResult.Turn.StopReason != types.StopFailed {
 				completedTeams[execution.activation.teamID] = true
 			} else {
 				failedTeams[execution.activation.teamID] = true
@@ -1255,7 +1255,7 @@ func (r *Runtime) runTurnWithOrigin(
 				next = &types.Route{Action: types.NextProceed}
 			}
 			resolvedRoute = next
-			if execution.result.Turn.Status == types.TurnWaitingInput {
+			if execution.result.Turn.Awaiting == types.AwaitingUser {
 				// The Team paused mid-execution for user input. Do not route
 				// it onward; the FlowTurn ends resumable instead.
 				hasWaitInput = true
@@ -1637,7 +1637,6 @@ func (r *Runtime) executeTeamTurn(
 		Attempt:       current.attempt,
 		RecoveryOf:    current.recoveryOf,
 		CallerTeam:    current.callerTeam,
-		Status:        types.TurnRunning,
 		StartedAt:     time.Now().UTC(),
 	}
 
@@ -1737,7 +1736,7 @@ func (r *Runtime) executeTeamTurn(
 			"team_turn_id":    teamTurn.ID,
 		})
 		teamResult.Error = runErr.Error()
-		teamResult.Turn.Status = types.TurnFailed
+		teamResult.Turn.StopReason = types.StopFailed
 	}
 
 	// A failed Agent/Call makes its containing Team fail. Escalate that
@@ -1747,7 +1746,7 @@ func (r *Runtime) executeTeamTurn(
 	// (the entry) has nobody to escalate to, so its failure ends the FlowTurn.
 	teamFailed := runErr != nil ||
 		teamResult.Error != "" ||
-		teamResult.Turn.Status == types.TurnFailed ||
+		teamResult.Turn.StopReason == types.StopFailed ||
 		(teamResult.Next != nil && teamResult.Next.Action == types.NextFail)
 	if teamFailed {
 		reason := strings.TrimSpace(teamResult.Error)
@@ -1765,7 +1764,7 @@ func (r *Runtime) executeTeamTurn(
 		} else {
 			teamResult.Next = &types.Route{Action: types.NextCoordinate, Reason: reason}
 		}
-		teamResult.Turn.Status = types.TurnFailed
+		teamResult.Turn.StopReason = types.StopFailed
 	}
 
 	next := teamResult.Next
@@ -1783,27 +1782,21 @@ func (r *Runtime) executeTeamTurn(
 	// record below: the flow layer owns the record, but only the Team knows
 	// whether it paused mid-execution (for example through the
 	// AskUserQuestion Tool).
-	teamTurnStatus := teamResult.Turn.Status
+	// The Team runtime owns the terminal pair; the flow layer keeps its record
+	// (IDs, attempt, timestamps) but must not drop that pair when it swaps in
+	// the turn it created.
+	teamStopReason, teamAwaiting := teamResult.Turn.StopReason, teamResult.Turn.Awaiting
 	teamResult.Next = next
 	teamResult.Turn = teamTurn
 	teamResult.Turn.Next = next
-	waitingInput := teamTurnStatus == types.TurnWaitingInput
-	waitingTool := teamTurnStatus == types.TurnWaitingTool ||
-		next.Action == types.NextWaitTool
-	waitingApproval := teamTurnStatus == types.TurnWaitingApproval ||
-		next.Action == types.NextWaitApproval
-	teamResult.Turn.Status = types.TurnCompleted
-	if teamFailed {
-		teamResult.Turn.Status = types.TurnFailed
-	} else if waitingApproval {
-		teamResult.Turn.Status = types.TurnWaitingApproval
-	} else if waitingTool {
-		teamResult.Turn.Status = types.TurnWaitingTool
-	} else if waitingInput {
-		teamResult.Turn.Status = types.TurnWaitingInput
-	}
-	if teamResult.Error != "" {
-		teamResult.Turn.Status = types.TurnFailed
+	teamResult.Turn.StopReason = teamStopReason
+	teamResult.Turn.Awaiting = teamAwaiting
+	if teamFailed || teamResult.Error != "" {
+		teamResult.Turn.StopReason = types.StopFailed
+	} else if next.Action == types.NextWaitApproval {
+		teamResult.Turn.Awaiting = types.AwaitingApproval
+	} else if next.Action == types.NextWaitTool {
+		teamResult.Turn.Awaiting = types.AwaitingTool
 	}
 	teamResult.Turn.RecordIDs = recordIDs(teamResult.Records)
 	teamResult.Turn.FinishedAt = &now
@@ -1871,14 +1864,7 @@ func (r *Runtime) executeTeamTurn(
 	// and a session in that state refuses new input until it is recovered.
 	ctx = writeEvenIfCancelled(ctx)
 
-	eventType := types.EventTeamTurnCompleted
-	if waitingApproval && teamResult.Error == "" {
-		eventType = types.EventTeamTurnWaitingApproval
-	} else if waitingTool && teamResult.Error == "" {
-		eventType = types.EventTeamTurnWaitingTool
-	} else if waitingInput && teamResult.Error == "" {
-		eventType = types.EventTeamTurnWaitingInput
-	}
+	eventType := types.EventTeamTurnEnded
 	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
 			Type:          eventType,
@@ -1890,11 +1876,17 @@ func (r *Runtime) executeTeamTurn(
 			Attempt:       teamTurn.Attempt,
 			RecoveryOf:    teamTurn.RecoveryOf,
 		},
-		Payload: map[string]any{"team_result": teamResult},
+		Payload: map[string]any{
+			"team_result": teamResult,
+			// Same two fields as the flow-level event: a consumer should never
+			// have to dig into the nested turn to learn how it ended.
+			"stop_reason": string(teamResult.Turn.StopReason),
+			"awaiting":    string(teamResult.Turn.Awaiting),
+		},
 	}); err != nil {
 		return execution, err
 	}
-	teamSession.Status = sessionStatusForTurn(teamResult.Turn.Status)
+	teamSession.Status = sessionStatusForTurn(teamResult.Turn.StopReason, teamResult.Turn.Awaiting)
 	teamSession.UpdatedAt = now
 	if err := r.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
@@ -1936,7 +1928,7 @@ func failureReply(err error) string {
 func failedTeamCalls(results []types.TeamTurnResult) (reasons []string, noneSucceeded bool) {
 	noneSucceeded = true
 	for _, result := range results {
-		failed := result.Turn.Status == types.TurnFailed || strings.TrimSpace(result.Error) != ""
+		failed := result.Turn.StopReason == types.StopFailed || strings.TrimSpace(result.Error) != ""
 		if !failed {
 			noneSucceeded = false
 			continue
@@ -1986,7 +1978,7 @@ func (r *Runtime) publishFlowRecord(
 
 func teamFailureRecord(flowTurn types.FlowTurn, execution teamExecution) *types.SharedRecord {
 	teamResult := execution.result
-	if teamResult.Error == "" && teamResult.Turn.Status != types.TurnFailed {
+	if teamResult.Error == "" && teamResult.Turn.StopReason != types.StopFailed {
 		return nil
 	}
 	// A Team nobody activated (the entry) has nobody to report to. Its
@@ -2103,7 +2095,9 @@ func (r *Runtime) finishTurn(
 	now := time.Now().UTC()
 	result.Session.Status = sessionStatusAfterTurn(status)
 	result.Session.UpdatedAt = now
-	result.Turn.Status = turnStatusForSession(status)
+	stopReason, awaiting := turnEndpoint(status, runErr)
+	result.Turn.StopReason = stopReason
+	result.Turn.Awaiting = awaiting
 	result.Turn.FinishedAt = &now
 	if runErr != nil {
 		result.Error = runErr.Error()
@@ -2114,15 +2108,7 @@ func (r *Runtime) finishTurn(
 			"flow_turn_id":    result.Turn.ID,
 		})
 	}
-	eventType := types.EventFlowTurnCompleted
-	switch status {
-	case types.SessionIdle:
-		eventType = types.EventFlowTurnWaitingInput
-	case types.SessionWaitingTool:
-		eventType = types.EventFlowTurnWaitingTool
-	case types.SessionWaitingApproval:
-		eventType = types.EventFlowTurnWaitingApproval
-	}
+
 	// A caller relaying this turn needs the answer, not every intermediate
 	// hop concatenated: FinalReply is the hop that ended the turn. Fall back
 	// to the concatenation for turns that never reached that hop (a failure
@@ -2193,6 +2179,10 @@ func (r *Runtime) finishTurn(
 		// Deliveries travel with the turn event: they are results the user
 		// must see as their own messages, independent of the reply above.
 		"deliveries": deliveryPayload(result.Deliveries),
+		// Two top-level fields so a reader never has to map an event name to a
+		// status: stop_reason says how it ended, awaiting says who it waits for.
+		"stop_reason": string(stopReason),
+		"awaiting":    string(awaiting),
 	}
 	// A tripped backstop carries structured facts alongside its message, so a
 	// reader can mark the turn, highlight the looping edges, or count how often
@@ -2203,7 +2193,7 @@ func (r *Runtime) finishTurn(
 	}
 	if err := r.appendSessionEvent(ctx, result.Session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
-			Type:          eventType,
+			Type:          types.EventFlowTurnEnded,
 			FlowSessionID: result.Session.ID,
 			FlowTurnID:    result.Turn.ID,
 		},
@@ -2216,7 +2206,8 @@ func (r *Runtime) finishTurn(
 	logging.Info("flow turn finished", map[string]any{
 		"flow_session_id": result.Session.ID,
 		"flow_turn_id":    result.Turn.ID,
-		"status":          string(result.Turn.Status),
+		"stop_reason":     string(result.Turn.StopReason),
+		"awaiting":        string(result.Turn.Awaiting),
 		"team":            result.FinalReplyTeam,
 		"intermediate":    result.Turn.Intermediate,
 		"error":           result.Error,
@@ -2298,10 +2289,7 @@ func (r *Runtime) runningTeams(ctx context.Context, sessionID string) ([]string,
 		case types.EventTeamTurnStarted:
 			started[key] = true
 			teamOf[key] = event.TeamID
-		case types.EventTeamTurnCompleted,
-			types.EventTeamTurnWaitingInput,
-			types.EventTeamTurnWaitingTool,
-			types.EventTeamTurnWaitingApproval:
+		case types.EventTeamTurnEnded:
 			finished[key] = true
 		}
 	}
@@ -2396,22 +2384,28 @@ func (r *Runtime) appendTeamStartedEvents(
 	return nil
 }
 
-func sessionStatusForTurn(status types.TurnStatus) types.SessionStatus {
-	switch status {
-	case types.TurnCompleted:
-		return types.SessionCompleted
-	case types.TurnWaitingInput:
-		return types.SessionIdle
-	case types.TurnWaitingTool:
-		return types.SessionWaitingTool
-	case types.TurnCancelled:
-		return types.SessionCancelled
-	case types.TurnFailed:
-		return types.SessionFailed
-	case types.TurnWaitingApproval:
+// sessionStatusForTurn projects the terminal pair onto the session status a
+// caller uses to decide whether the session accepts new input. "Waiting for
+// someone" wins over "how it ended": a turn that is held open is not finished
+// as far as the session is concerned.
+func sessionStatusForTurn(reason types.TurnStopReason, awaiting types.TurnAwaiting) types.SessionStatus {
+	switch awaiting {
+	case types.AwaitingApproval:
 		return types.SessionWaitingApproval
-	default:
+	case types.AwaitingTool:
+		return types.SessionWaitingTool
+	case types.AwaitingUser:
+		return types.SessionIdle
+	}
+	switch reason {
+	case types.StopCancelled:
+		return types.SessionCancelled
+	case types.StopEndTurn:
+		return types.SessionCompleted
+	case "":
 		return types.SessionRunning
+	default:
+		return types.SessionFailed
 	}
 }
 
@@ -2466,19 +2460,25 @@ func interruptedExecutions(events []storage.SessionEvent, live liveIndex) []type
 		switch event.Type {
 		case types.EventFlowTurnStarted:
 			startedFlows[event.FlowTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
-		case types.EventFlowTurnCompleted:
-			completedFlows[event.FlowTurnID] = true
-		case types.EventFlowTurnWaitingInput, types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
-			// A FlowTurn that ended waiting is not interrupted; it stays
-			// resumable by design.
-			waitingFlows[event.FlowTurnID] = true
+		case types.EventFlowTurnEnded:
+			// One terminal event: what happens next depends on whether it is
+			// still waiting for someone, not on the event name.
+			if payloadString(event.Payload, "awaiting") != "" {
+				// A FlowTurn that ended waiting is not interrupted; it stays
+				// resumable by design.
+				waitingFlows[event.FlowTurnID] = true
+			} else {
+				completedFlows[event.FlowTurnID] = true
+			}
 		case types.EventTeamTurnStarted:
 			startedTeams[event.TeamTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
-		case types.EventTeamTurnCompleted:
-			completedTeams[event.TeamTurnID] = true
-		case types.EventTeamTurnWaitingInput, types.EventTeamTurnWaitingTool, types.EventTeamTurnWaitingApproval:
-			waitingTeams[event.TeamTurnID] = true
-			waitingFlows[event.FlowTurnID] = true
+		case types.EventTeamTurnEnded:
+			if payloadString(event.Payload, "awaiting") != "" {
+				waitingTeams[event.TeamTurnID] = true
+				waitingFlows[event.FlowTurnID] = true
+			} else {
+				completedTeams[event.TeamTurnID] = true
+			}
 		case types.EventAgentTurnStarted, types.EventCommandTurnStarted, types.EventWebhookTurnStarted:
 			startedCalls[event.CallTurnID] = started{event: event, input: payloadString(event.Payload, "input")}
 		case types.EventAgentTurnCompleted, types.EventCommandTurnCompleted, types.EventWebhookTurnCompleted:
@@ -2610,8 +2610,11 @@ func pendingTeamResumes(events []storage.SessionEvent) []pendingTeamResumeInfo {
 	seen := make(map[string]bool)
 	for index := len(events) - 1; index >= 0; index-- {
 		event := events[index]
-		if event.Type != types.EventTeamTurnWaitingTool &&
-			event.Type != types.EventTeamTurnWaitingApproval {
+		if event.Type != types.EventTeamTurnEnded {
+			continue
+		}
+		if awaiting := payloadString(event.Payload, "awaiting"); awaiting != string(types.AwaitingTool) &&
+			awaiting != string(types.AwaitingApproval) {
 			continue
 		}
 		if event.TeamTurnID != "" && seen[event.TeamTurnID] {
@@ -2982,107 +2985,6 @@ func recordTaskContextOf(session types.TeamSession) string {
 }
 
 // selectFlowRecords keeps the session-wide contract: only records outside any
-// task context are considered.
-func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec, since time.Time) []types.SharedRecord {
-	return selectFlowRecordsInContext(records, spec, since, "", "", "")
-}
-
-func selectFlowRecordsInContext(records []types.SharedRecord, spec types.InputSpec, since time.Time, taskContextID, consumerTeam, flowTurnID string) []types.SharedRecord {
-	if spec.FlowRecords == nil && spec.Records == nil {
-		return nil
-	}
-
-	allowed := make(map[string]struct{})
-	for _, name := range spec.FlowRecords {
-		allowed[name] = struct{}{}
-	}
-	for _, binding := range spec.Records {
-		if binding.Record != "" {
-			allowed[binding.Record] = struct{}{}
-		}
-	}
-
-	// Evidence is append-only, so one record id appears once per revision.
-	// Without folding to the latest revision, a record that has since been
-	// settled reads as active again the moment its earlier copy is scanned.
-	latest := make(map[string]int, len(records))
-	for index, record := range records {
-		latest[record.RecordID] = index
-	}
-
-	selected := make([]types.SharedRecord, 0, len(records))
-	for index, record := range records {
-		if latest[record.RecordID] != index {
-			continue
-		}
-		if _, ok := allowed[record.Name]; !ok {
-			continue
-		}
-		// Only an active record is input. A pending one is a progress line whose
-		// work has not come back yet; superseded or invalidated text has already
-		// been replaced or contradicted by what happened after it.
-		if record.Status != "" && record.Status != types.RecordActive {
-			continue
-		}
-		// A Team does not read its own words from an earlier turn as input. It
-		// wrote them, and feeding a progress line back is how the entry Team
-		// answered the user with its own sentence from five minutes earlier
-		// (fs_xxx). Within one turn the record stays readable: that
-		// is a Team continuing its own work, and examples/novel-rp relies on a
-		// Team reading the record it produced (lobby declares ScenePlan as both
-		// output and input).
-		if consumerTeam != "" && record.Producer.TeamID == consumerTeam &&
-			flowTurnID != "" && record.Producer.FlowTurnID != flowTurnID {
-			continue
-		}
-		// 记录跨轮留存：上一轮问题产生的结论不能被当成本轮已确认的事实。
-		// 只取本轮会话窗口内的记录，避免 owner 把旧结论直接当答案（s13）。
-		if !since.IsZero() && !record.CreatedAt.IsZero() && record.CreatedAt.Before(since) {
-			continue
-		}
-		// Tasks are isolated by context: a record produced inside one task
-		// context is invisible outside it. Records with no context belong to the
-		// session-wide layer (coordination output) and stay visible to everyone,
-		// which is what keeps a resident coordinator readable to its tasks.
-		if record.Producer.TaskContextID != "" && record.Producer.TaskContextID != taskContextID {
-			continue
-		}
-		selected = append(selected, record)
-	}
-	return selected
-}
-
-func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding, since time.Time, taskContextID, flowTurnID string) []types.SharedRecord {
-	return selectFlowRecordsInContext(records, binding.Inputs, since, taskContextID, binding.ID, flowTurnID)
-}
-
-func recordIDs(records []types.SharedRecord) []string {
-	ids := make([]string, 0, len(records))
-	for _, record := range records {
-		if record.RecordID != "" {
-			ids = append(ids, record.RecordID)
-		}
-	}
-	return ids
-}
-
-func turnStatusForSession(status types.SessionStatus) types.TurnStatus {
-	switch status {
-	case types.SessionIdle:
-		return types.TurnWaitingInput
-	case types.SessionWaitingTool:
-		return types.TurnWaitingTool
-	case types.SessionCompleted:
-		return types.TurnCompleted
-	case types.SessionCancelled:
-		return types.TurnCancelled
-	case types.SessionFailed:
-		return types.TurnFailed
-	default:
-		return types.TurnRunning
-	}
-}
-
 // sessionStatusAfterTurn maps a turn outcome onto the session state. A failed
 // turn ends that turn, not the conversation: the session goes back to
 // waiting_input so the next user message starts a new turn, while the turn
@@ -3177,13 +3079,13 @@ func (r *Runtime) closeInterruptedTurns(ctx context.Context, sessionID string) {
 			Attempt:       item.Attempt,
 			RecoveryOf:    item.RecoveryOf,
 			Input:         item.Input,
-			Status:        types.TurnCancelled,
+			StopReason:    types.StopCancelled,
 			StartedAt:     item.StartedAt,
 			FinishedAt:    &now,
 		}
 		if err := r.appendSessionEvent(ctx, sessionID, storage.SessionEvent{
 			EventHeader: types.EventHeader{
-				Type:          types.EventFlowTurnCompleted,
+				Type:          types.EventFlowTurnEnded,
 				FlowSessionID: sessionID,
 				FlowTurnID:    item.FlowTurnID,
 				Attempt:       item.Attempt,
@@ -3400,4 +3302,89 @@ func writeEvenIfCancelled(ctx context.Context) context.Context {
 		return ctx
 	}
 	return context.Background()
+}
+
+// selectFlowRecords keeps the session-wide contract: only records outside any
+// task context are considered.
+func selectFlowRecords(records []types.SharedRecord, spec types.InputSpec, since time.Time) []types.SharedRecord {
+	return selectFlowRecordsInContext(records, spec, since, "", "", "")
+}
+
+func selectFlowRecordsInContext(records []types.SharedRecord, spec types.InputSpec, since time.Time, taskContextID, consumerTeam, flowTurnID string) []types.SharedRecord {
+	if spec.FlowRecords == nil && spec.Records == nil {
+		return nil
+	}
+
+	allowed := make(map[string]struct{})
+	for _, name := range spec.FlowRecords {
+		allowed[name] = struct{}{}
+	}
+	for _, binding := range spec.Records {
+		if binding.Record != "" {
+			allowed[binding.Record] = struct{}{}
+		}
+	}
+
+	// Evidence is append-only, so one record id appears once per revision.
+	// Without folding to the latest revision, a record that has since been
+	// settled reads as active again the moment its earlier copy is scanned.
+	latest := make(map[string]int, len(records))
+	for index, record := range records {
+		latest[record.RecordID] = index
+	}
+
+	selected := make([]types.SharedRecord, 0, len(records))
+	for index, record := range records {
+		if latest[record.RecordID] != index {
+			continue
+		}
+		if _, ok := allowed[record.Name]; !ok {
+			continue
+		}
+		// Only an active record is input. A pending one is a progress line whose
+		// work has not come back yet; superseded or invalidated text has already
+		// been replaced or contradicted by what happened after it.
+		if record.Status != "" && record.Status != types.RecordActive {
+			continue
+		}
+		// A Team does not read its own words from an earlier turn as input. It
+		// wrote them, and feeding a progress line back is how the entry Team
+		// answered the user with its own sentence from five minutes earlier
+		// (fs_xxx). Within one turn the record stays readable: that
+		// is a Team continuing its own work, and examples/novel-rp relies on a
+		// Team reading the record it produced (lobby declares ScenePlan as both
+		// output and input).
+		if consumerTeam != "" && record.Producer.TeamID == consumerTeam &&
+			flowTurnID != "" && record.Producer.FlowTurnID != flowTurnID {
+			continue
+		}
+		// 记录跨轮留存：上一轮问题产生的结论不能被当成本轮已确认的事实。
+		// 只取本轮会话窗口内的记录，避免 owner 把旧结论直接当答案（s13）。
+		if !since.IsZero() && !record.CreatedAt.IsZero() && record.CreatedAt.Before(since) {
+			continue
+		}
+		// Tasks are isolated by context: a record produced inside one task
+		// context is invisible outside it. Records with no context belong to the
+		// session-wide layer (coordination output) and stay visible to everyone,
+		// which is what keeps a resident coordinator readable to its tasks.
+		if record.Producer.TaskContextID != "" && record.Producer.TaskContextID != taskContextID {
+			continue
+		}
+		selected = append(selected, record)
+	}
+	return selected
+}
+
+func selectFlowRecordsForBinding(records []types.SharedRecord, binding types.FlowTeamBinding, since time.Time, taskContextID, flowTurnID string) []types.SharedRecord {
+	return selectFlowRecordsInContext(records, binding.Inputs, since, taskContextID, binding.ID, flowTurnID)
+}
+
+func recordIDs(records []types.SharedRecord) []string {
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		if record.RecordID != "" {
+			ids = append(ids, record.RecordID)
+		}
+	}
+	return ids
 }

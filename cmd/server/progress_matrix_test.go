@@ -52,8 +52,8 @@ func TestProjectEventFieldMatrix(t *testing.T) {
 		{
 			name: "flow_turn_completed",
 			event: storage.SessionEvent{
-				EventHeader: header(types.EventFlowTurnCompleted),
-				Payload:     map[string]any{"turn": types.FlowTurn{ID: "ft-1", Status: types.TurnCompleted}},
+				EventHeader: header(types.EventFlowTurnEnded),
+				Payload:     map[string]any{"turn": types.FlowTurn{ID: "ft-1", StopReason: types.StopEndTurn}},
 			},
 			want: []string{"type", "session_id", "flow_turn_id", "status"},
 		},
@@ -99,9 +99,10 @@ func TestProjectEventFieldMatrix(t *testing.T) {
 		{
 			name: "status_waiting_input",
 			event: storage.SessionEvent{
-				EventHeader: header(types.EventFlowTurnWaitingInput),
+				EventHeader: header(types.EventFlowTurnEnded),
 				Payload: map[string]any{
-					"turn":   types.FlowTurn{ID: "ft-1", Status: types.TurnWaitingInput, Origin: "tool"},
+					"turn": types.FlowTurn{ID: "ft-1", StopReason: types.StopEndTurn,
+						Awaiting: types.AwaitingUser, Origin: "tool"},
 					"origin": "tool",
 					"reply":  "done",
 				},

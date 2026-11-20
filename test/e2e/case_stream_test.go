@@ -167,7 +167,7 @@ func (s *stream) waitForTerminal(timeout time.Duration) []sseFrame {
 
 func isTerminalFrame(frame sseFrame) bool {
 	eventType := frameTypeOf(frame.Data)
-	return eventType == "session.turn.completed" || (strings.HasPrefix(eventType, "session.turn.waiting") || eventType == "session.turn.idle")
+	return eventType == "session.turn.ended"
 }
 
 // frameTypeOf extracts the event type of a session frame payload.

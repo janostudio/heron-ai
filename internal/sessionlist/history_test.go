@@ -16,11 +16,11 @@ func TestHistoryPairsInputAndReply(t *testing.T) {
 	writeSession(t, root, id, []string{
 		`{"seq":1,"type":"session.created","payload":{"session":{"id":"fs_hist","status":"waiting_input"}}}`,
 		`{"seq":2,"type":"session.turn.started","payload":{"input":"hello"}}`,
-		`{"seq":3,"type":"session.team_turn.completed","payload":{"team_result":{"reply":"Hi there."}}}`,
-		`{"seq":4,"type":"session.turn.idle","payload":{}}`,
+		`{"seq":3,"type":"session.team_turn.ended","payload":{"team_result":{"reply":"Hi there."}}}`,
+		`{"seq":4,"type":"session.turn.ended","payload":{}}`,
 		`{"seq":5,"type":"session.turn.started","payload":{"input":"bye"}}`,
-		`{"seq":6,"type":"session.team_turn.completed","payload":{"team_result":{"reply":"Bye."}}}`,
-		`{"seq":7,"type":"session.turn.idle","payload":{}}`,
+		`{"seq":6,"type":"session.team_turn.ended","payload":{"team_result":{"reply":"Bye."}}}`,
+		`{"seq":7,"type":"session.turn.ended","payload":{}}`,
 	}, nil)
 
 	turns, err := History(storage.NewFileStore(root), filepath.Join(SessionsDir, id))
@@ -40,7 +40,7 @@ func TestHistorySkipsCorruptLines(t *testing.T) {
 	writeSession(t, root, id, []string{
 		`{"seq":1,"type":"session.turn.started","payload":{"input":"question"}}`,
 		`not json at all`,
-		`{"seq":3,"type":"session.team_turn.completed","payload":{"team_result":{"reply":"answer"}}}`,
+		`{"seq":3,"type":"session.team_turn.ended","payload":{"team_result":{"reply":"answer"}}}`,
 	}, nil)
 
 	turns, err := History(storage.NewFileStore(root), filepath.Join(SessionsDir, id))
@@ -70,9 +70,9 @@ func TestHistoryCapturesUsage(t *testing.T) {
 	id := "fs_usage"
 	writeSession(t, root, id, []string{
 		`{"seq":1,"type":"session.turn.started","payload":{"input":"q1"}}`,
-		`{"seq":2,"type":"session.team_turn.completed","payload":{"team_result":{"reply":"a1","usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}}}`,
+		`{"seq":2,"type":"session.team_turn.ended","payload":{"team_result":{"reply":"a1","usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}}}`,
 		`{"seq":3,"type":"session.turn.started","payload":{"input":"q2"}}`,
-		`{"seq":4,"type":"session.team_turn.completed","payload":{"team_result":{"reply":"a2","usage":{"prompt_tokens":200,"completion_tokens":30,"total_tokens":230}}}}`,
+		`{"seq":4,"type":"session.team_turn.ended","payload":{"team_result":{"reply":"a2","usage":{"prompt_tokens":200,"completion_tokens":30,"total_tokens":230}}}}`,
 	}, nil)
 
 	turns, err := History(storage.NewFileStore(root), filepath.Join(SessionsDir, id))
@@ -91,7 +91,7 @@ func TestHistoryCapturesCallIdentity(t *testing.T) {
 	id := "fs_ident"
 	writeSession(t, root, id, []string{
 		`{"seq":1,"type":"session.turn.started","payload":{"input":"go"}}`,
-		`{"seq":2,"type":"session.team_turn.completed","payload":{"team_result":{"turn":{"team_id":"diagnose"},"reply":"merged","call_results":{"root_cause":{"agent_id":"root-cause-analyst","reply":"cause is X"},"search":{"agent_id":"issue-searcher","reply":"found 3"}}}}}`,
+		`{"seq":2,"type":"session.team_turn.ended","payload":{"team_result":{"turn":{"team_id":"diagnose"},"reply":"merged","call_results":{"root_cause":{"agent_id":"root-cause-analyst","reply":"cause is X"},"search":{"agent_id":"issue-searcher","reply":"found 3"}}}}}`,
 	}, nil)
 
 	turns, err := History(storage.NewFileStore(root), filepath.Join(SessionsDir, id))
@@ -114,7 +114,7 @@ func TestHistoryFallsBackToTeamReply(t *testing.T) {
 	id := "fs_team"
 	writeSession(t, root, id, []string{
 		`{"seq":1,"type":"session.turn.started","payload":{"input":"go"}}`,
-		`{"seq":2,"type":"session.team_turn.completed","payload":{"team_result":{"turn":{"team_id":"default"},"reply":"team reply"}}}`,
+		`{"seq":2,"type":"session.team_turn.ended","payload":{"team_result":{"turn":{"team_id":"default"},"reply":"team reply"}}}`,
 	}, nil)
 
 	turns, err := History(storage.NewFileStore(root), filepath.Join(SessionsDir, id))
@@ -132,7 +132,7 @@ func TestHistoryKeepsOpsOnlyCall(t *testing.T) {
 	id := "fs_ops"
 	writeSession(t, root, id, []string{
 		`{"seq":1,"type":"session.turn.started","payload":{"input":"go"}}`,
-		`{"seq":2,"type":"session.team_turn.completed","payload":{"team_result":{"turn":{"team_id":"research"},"call_results":{"acquire":{"agent_id":"searcher","reply":"","workspace_ops":[{"kind":"bash","command":"build.sh repo-a","exit_code":0}]}}}}}`,
+		`{"seq":2,"type":"session.team_turn.ended","payload":{"team_result":{"turn":{"team_id":"research"},"call_results":{"acquire":{"agent_id":"searcher","reply":"","workspace_ops":[{"kind":"bash","command":"build.sh repo-a","exit_code":0}]}}}}}`,
 	}, nil)
 
 	turns, err := History(storage.NewFileStore(root), filepath.Join(SessionsDir, id))

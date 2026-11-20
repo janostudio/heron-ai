@@ -104,7 +104,7 @@ func (r *Runtime) runMessageTurn(ctx context.Context, session types.FlowSession,
 	if err != nil {
 		execution.result.Error = err.Error()
 	}
-	teamFailed := execution.result.Error != "" || execution.result.Turn.Status == types.TurnFailed
+	teamFailed := execution.result.Error != "" || execution.result.Turn.StopReason == types.StopFailed
 
 	// Report the work message's own lifecycle first, then post the result.
 	resultPayload := map[string]any{"team_result": execution.result}
@@ -245,7 +245,7 @@ func (r *Runtime) parkDispatchedSession(
 	flowTurn types.FlowTurn,
 	execution teamExecution,
 ) error {
-	status := sessionStatusForTurn(execution.result.Turn.Status)
+	status := sessionStatusForTurn(execution.result.Turn.StopReason, execution.result.Turn.Awaiting)
 	switch status {
 	case types.SessionIdle, types.SessionWaitingTool, types.SessionWaitingApproval:
 	default:

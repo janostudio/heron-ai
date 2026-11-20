@@ -194,7 +194,7 @@ func TestDispatch3ResultBecomesTheConclusion(t *testing.T) {
 
 	terminals := 0
 	for _, ev := range events {
-		if (strings.HasPrefix(ev.Type, "session.turn.waiting") || ev.Type == "session.turn.idle") || ev.Type == "session.turn.completed" {
+		if ev.Type == "session.turn.ended" {
 			terminals++
 		}
 	}
@@ -274,7 +274,7 @@ func TestDispatch4DownstreamFailureIsReported(t *testing.T) {
 func turnErrorOf(events []event) (string, bool) {
 	last := ""
 	for _, ev := range events {
-		if !(strings.HasPrefix(ev.Type, "session.turn.waiting") || ev.Type == "session.turn.idle") && ev.Type != "session.turn.completed" {
+		if !(ev.Type == "session.turn.ended") && ev.Type != "session.turn.ended" {
 			continue
 		}
 		payload, _ := ev.Raw["payload"].(map[string]any)
@@ -297,7 +297,7 @@ func recordValue(record map[string]any, key string) map[string]any {
 func terminalCount(events []event) int {
 	count := 0
 	for _, ev := range events {
-		if (strings.HasPrefix(ev.Type, "session.turn.waiting") || ev.Type == "session.turn.idle") || ev.Type == "session.turn.completed" {
+		if ev.Type == "session.turn.ended" {
 			count++
 		}
 	}
@@ -317,7 +317,7 @@ func conclusionOf(events []event) (string, int) {
 	reply := ""
 	count := 0
 	for _, ev := range events {
-		if !(strings.HasPrefix(ev.Type, "session.turn.waiting") || ev.Type == "session.turn.idle") && ev.Type != "session.turn.completed" {
+		if !(ev.Type == "session.turn.ended") && ev.Type != "session.turn.ended" {
 			continue
 		}
 		payload, _ := ev.Raw["payload"].(map[string]any)

@@ -38,8 +38,8 @@ func TestObserveFlowTurns(t *testing.T) {
 	if first.FlowTurnID != fixtureFlow1 || first.Input != "fix the bug" {
 		t.Fatalf("first flow turn = %+v", first)
 	}
-	if first.Status != types.TurnCompleted {
-		t.Fatalf("first flow turn status = %q", first.Status)
+	if first.StopReason != types.StopEndTurn || first.Awaiting != "" {
+		t.Fatalf("first flow turn terminal pair = %q / %q", first.StopReason, first.Awaiting)
 	}
 	if first.Next == nil || first.Next.Action != types.NextProceed {
 		t.Fatalf("first flow turn next = %+v", first.Next)
@@ -56,7 +56,7 @@ func TestObserveFlowTurns(t *testing.T) {
 	}
 
 	second := facts.FlowTurns[1]
-	if second.Status != types.TurnWaitingInput || second.Input != "thanks" {
+	if second.StopReason != types.StopEndTurn || second.Awaiting != types.AwaitingUser || second.Input != "thanks" {
 		t.Fatalf("second flow turn = %+v", second)
 	}
 }
@@ -234,7 +234,7 @@ func TestObserveGoldenSession(t *testing.T) {
 		t.Fatalf("expected 1 flow turn, got %d", len(facts.FlowTurns))
 	}
 	turn := facts.FlowTurns[0]
-	if turn.Input != "hi" || turn.Status != types.TurnWaitingInput {
+	if turn.Input != "hi" || turn.Awaiting != types.AwaitingUser {
 		t.Fatalf("golden flow turn = %+v", turn)
 	}
 	if !equalStrings(turn.Teams, []string{"default"}) {
@@ -308,12 +308,12 @@ func TestObserveLinksDispatchTurnToItsCause(t *testing.T) {
 		types.EventHeader{Type: types.EventFlowTurnStarted, FlowSessionID: fixtureSession, FlowTurnID: userTurn},
 		map[string]any{"input": "查主分支", "turn": types.FlowTurn{
 			ID: userTurn, FlowSessionID: fixtureSession, Input: "查主分支",
-			Status: types.TurnRunning, Origin: "user",
+			Origin: "user",
 		}})
 	f.append(storage.LayerFlow,
 		types.EventHeader{Type: types.EventTeamTurnStarted, FlowSessionID: fixtureSession,
 			FlowTurnID: userTurn, TeamTurnID: "tt_caller", TeamID: "frontdesk"},
-		map[string]any{"team_turn": types.TeamTurn{ID: "tt_caller", TeamID: "frontdesk", Status: types.TurnRunning}})
+		map[string]any{"team_turn": types.TeamTurn{ID: "tt_caller", TeamID: "frontdesk"}})
 
 	// The callee's session names the call turn that created it, and that call
 	// turn belongs to the caller's turn.
@@ -331,14 +331,14 @@ func TestObserveLinksDispatchTurnToItsCause(t *testing.T) {
 	f.append(storage.LayerFlow,
 		types.EventHeader{Type: types.EventTeamTurnStarted, FlowSessionID: fixtureSession,
 			FlowTurnID: dispatchTurn, TeamTurnID: "tt_callee", TeamID: "dev-lead"},
-		map[string]any{"team_turn": types.TeamTurn{ID: "tt_callee", TeamID: "dev-lead", Status: types.TurnRunning}})
+		map[string]any{"team_turn": types.TeamTurn{ID: "tt_callee", TeamID: "dev-lead"}})
 
 	// The resume turn continues the same question but re-states no dispatcher:
 	// the runtime starts it when the pending Team call returns.
 	const resumeTurn = "ft_resume"
 	f.append(storage.LayerFlow,
 		types.EventHeader{Type: types.EventFlowTurnStarted, FlowSessionID: fixtureSession, FlowTurnID: resumeTurn},
-		map[string]any{"turn": types.FlowTurn{ID: resumeTurn, FlowSessionID: fixtureSession, Status: types.TurnRunning, Origin: "tool"}})
+		map[string]any{"turn": types.FlowTurn{ID: resumeTurn, FlowSessionID: fixtureSession, Origin: "tool"}})
 
 	facts := f.observe()
 	causes := make(map[string]string)

@@ -45,8 +45,12 @@ type FlowTurnFact struct {
 	// turn at the turn it continues. Empty for a user turn and whenever the
 	// cause is not recorded.
 	CausedBy string
-	Status   types.TurnStatus
-	Next     *types.Route
+	// StopReason / Awaiting answer "how did it end" and "who is it waiting
+	// for" separately; a turn that ended while holding the session open for a
+	// tool reports both.
+	StopReason types.TurnStopReason
+	Awaiting   types.TurnAwaiting
+	Next       *types.Route
 	// Teams are the Team ids activated during this turn, in execution order.
 	Teams     []string
 	TeamTurns []TeamTurnFact
@@ -64,7 +68,8 @@ type TeamTurnFact struct {
 	TeamTurnID    string
 	TeamID        string
 	TeamSessionID string
-	Status        types.TurnStatus
+	StopReason    types.TurnStopReason
+	Awaiting      types.TurnAwaiting
 	Next          *types.Route
 	Calls         []CallTurnFact
 	Usage         types.TokenUsage
@@ -165,8 +170,7 @@ func newFactIndex(events []storage.SessionEvent) *factIndex {
 	}
 	for _, event := range events {
 		switch event.Type {
-		case types.EventFlowTurnStarted, types.EventFlowTurnCompleted,
-			types.EventFlowTurnWaitingInput, types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
+		case types.EventFlowTurnStarted, types.EventFlowTurnEnded:
 			if turn, ok := payloadAs[types.FlowTurn](event.Payload, "turn"); ok && turn.ID != "" {
 				index.flowTurns[turn.ID] = turn
 			}
@@ -174,8 +178,7 @@ func newFactIndex(events []storage.SessionEvent) *factIndex {
 			if turn, ok := payloadAs[types.TeamTurn](event.Payload, "team_turn"); ok && turn.ID != "" {
 				index.teamTurns[turn.ID] = turn
 			}
-		case types.EventTeamTurnCompleted, types.EventTeamTurnWaitingInput,
-			types.EventTeamTurnWaitingTool, types.EventTeamTurnWaitingApproval:
+		case types.EventTeamTurnEnded:
 			if result, ok := payloadAs[types.TeamTurnResult](event.Payload, "team_result"); ok {
 				if result.Turn.ID != "" {
 					index.teamResults[result.Turn.ID] = result
@@ -219,7 +222,8 @@ func deriveFlowTurns(graph *Graph, events []storage.SessionEvent) []FlowTurnFact
 	for _, node := range graph.NodesOfKind(NodeFlowTurn) {
 		fact := FlowTurnFact{
 			FlowTurnID: node.ID,
-			Status:     node.Status,
+			StopReason: node.StopReason,
+			Awaiting:   node.Awaiting,
 			StartedAt:  node.StartedAt,
 			FinishedAt: node.FinishedAt,
 			Records:    index.records[node.ID],
@@ -262,9 +266,7 @@ func linkTurnCauses(facts []FlowTurnFact, events []storage.SessionEvent) {
 	cause := make(map[string]string)
 	for _, event := range events {
 		switch event.Type {
-		case types.EventTeamTurnStarted, types.EventTeamTurnCompleted,
-			types.EventTeamTurnWaitingInput, types.EventTeamTurnWaitingTool,
-			types.EventTeamTurnWaitingApproval:
+		case types.EventTeamTurnStarted, types.EventTeamTurnEnded:
 			if event.TeamTurnID != "" && event.FlowTurnID != "" {
 				flowOfTeamTurn[event.TeamTurnID] = event.FlowTurnID
 			}
@@ -351,7 +353,8 @@ func deriveTeamTurn(index *factIndex, node *Node, callNodes []*Node) TeamTurnFac
 		TeamTurnID:    node.ID,
 		TeamID:        node.TeamID,
 		TeamSessionID: node.TeamSessionID,
-		Status:        node.Status,
+		StopReason:    node.StopReason,
+		Awaiting:      node.Awaiting,
 		StartedAt:     node.StartedAt,
 		FinishedAt:    node.FinishedAt,
 	}
@@ -384,7 +387,7 @@ func deriveCallTurn(index *factIndex, node *Node) CallTurnFact {
 		CallID:       node.CallID,
 		CallType:     node.CallType,
 		AgentID:      node.AgentID,
-		Status:       node.Status,
+		Status:       types.TurnStatus(node.Status),
 		ToolFailures: index.toolFailures[node.ID],
 		StartedAt:    node.StartedAt,
 		FinishedAt:   node.FinishedAt,

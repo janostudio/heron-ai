@@ -433,10 +433,7 @@ func (b *backgroundWork) apply(event storage.SessionEvent) {
 		if id := strings.TrimSpace(event.FlowTurnID); id != "" {
 			b.openFlows[id] = struct{}{}
 		}
-	case types.EventFlowTurnCompleted,
-		types.EventFlowTurnWaitingInput,
-		types.EventFlowTurnWaitingTool,
-		types.EventFlowTurnWaitingApproval:
+	case types.EventFlowTurnEnded:
 		if id := strings.TrimSpace(event.FlowTurnID); id != "" {
 			delete(b.openFlows, id)
 		}
@@ -462,10 +459,7 @@ func (b *backgroundWork) apply(event storage.SessionEvent) {
 			}
 			b.openTeams[id] = struct{}{}
 		}
-	case types.EventTeamTurnCompleted,
-		types.EventTeamTurnWaitingInput,
-		types.EventTeamTurnWaitingTool,
-		types.EventTeamTurnWaitingApproval:
+	case types.EventTeamTurnEnded:
 		// A paused TeamTurn no longer owes the caller background work: the
 		// engine will not continue on its own, and the pause event itself has
 		// already been forwarded. Treating only completed as terminal would

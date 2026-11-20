@@ -124,7 +124,7 @@ func TestTool2ScriptInnerDispatch(t *testing.T) {
 	// would be a hole, not a shortcut.
 	if len(result.PendingApprovals) == 0 {
 		t.Fatalf("REPL ran without asking for approval; result status=%q reply=%q",
-			result.Turn.Status, strings.TrimSpace(firstNonEmpty(result.FinalReply, result.Reply)))
+			result.Turn.StopReason, strings.TrimSpace(firstNonEmpty(result.FinalReply, result.Reply)))
 	}
 	approval := result.PendingApprovals[0]
 	if approval.ToolName != "REPL" {
@@ -274,7 +274,7 @@ func TestTool4DeniedApprovalDoesNotExecute(t *testing.T) {
 
 	result := e.runTurn(map[string]any{"input": "用脚本读文件"})
 	if len(result.PendingApprovals) == 0 {
-		t.Fatalf("REPL did not ask for approval; status=%q", result.Turn.Status)
+		t.Fatalf("REPL did not ask for approval; status=%q", result.Turn.StopReason)
 	}
 	approval := result.PendingApprovals[0]
 

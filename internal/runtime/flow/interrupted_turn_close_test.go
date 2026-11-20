@@ -36,7 +36,6 @@ func TestCloseInterruptedTurnsClosesDanglingFlowTurn(t *testing.T) {
 				ID:            "ft-dangling",
 				FlowSessionID: session.ID,
 				Input:         "查一下版本号",
-				Status:        types.TurnRunning,
 				StartedAt:     time.Now().UTC().Add(-time.Minute),
 			},
 		},
@@ -48,7 +47,7 @@ func TestCloseInterruptedTurnsClosesDanglingFlowTurn(t *testing.T) {
 	require.NoError(t, err)
 	var terminals []map[string]any
 	for _, event := range replay.Events {
-		if event.Type != types.EventFlowTurnCompleted {
+		if event.Type != types.EventFlowTurnEnded {
 			continue
 		}
 		if event.FlowTurnID != "ft-dangling" {
@@ -60,7 +59,7 @@ func TestCloseInterruptedTurnsClosesDanglingFlowTurn(t *testing.T) {
 		terminals = append(terminals, turn)
 	}
 	require.Len(t, terminals, 1, "悬空回合必须被收口，且只收一次")
-	require.Equal(t, string(types.TurnCancelled), terminals[0]["status"])
+	require.Equal(t, string(types.StopCancelled), terminals[0]["stop_reason"])
 	require.NotEmpty(t, terminals[0]["finished_at"])
 
 	// A second pass must not write a second terminal.
@@ -69,7 +68,7 @@ func TestCloseInterruptedTurnsClosesDanglingFlowTurn(t *testing.T) {
 	require.NoError(t, err)
 	count := 0
 	for _, event := range replay.Events {
-		if event.Type == types.EventFlowTurnCompleted && event.FlowTurnID == "ft-dangling" {
+		if event.Type == types.EventFlowTurnEnded && event.FlowTurnID == "ft-dangling" {
 			count++
 		}
 	}
@@ -86,19 +85,25 @@ func TestCloseInterruptedTurnsLeavesResumableTurnAlone(t *testing.T) {
 
 	require.NoError(t, rt.appendSessionEvent(context.Background(), session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{Type: types.EventFlowTurnStarted, FlowSessionID: session.ID, FlowTurnID: "ft-waiting"},
-		Payload:     map[string]any{"turn": types.FlowTurn{ID: "ft-waiting", FlowSessionID: session.ID, Status: types.TurnRunning}},
+		Payload:     map[string]any{"turn": types.FlowTurn{ID: "ft-waiting", FlowSessionID: session.ID}},
 	}))
 	require.NoError(t, rt.appendSessionEvent(context.Background(), session.ID, storage.SessionEvent{
-		EventHeader: types.EventHeader{Type: types.EventFlowTurnWaitingInput, FlowSessionID: session.ID, FlowTurnID: "ft-waiting"},
-		Payload:     map[string]any{"turn": types.FlowTurn{ID: "ft-waiting", FlowSessionID: session.ID, Status: types.TurnWaitingInput}},
+		EventHeader: types.EventHeader{Type: types.EventFlowTurnEnded, FlowSessionID: session.ID, FlowTurnID: "ft-waiting"},
+		Payload: map[string]any{
+			"turn":     types.FlowTurn{ID: "ft-waiting", FlowSessionID: session.ID, StopReason: types.StopEndTurn, Awaiting: types.AwaitingUser},
+			"awaiting": string(types.AwaitingUser),
+		},
 	}))
 
 	rt.closeInterruptedTurns(context.Background(), session.ID)
 
 	replay, err := rt.sessions.Replay(context.Background(), session.ID)
 	require.NoError(t, err)
+	ended := 0
 	for _, event := range replay.Events {
-		require.NotEqual(t, types.EventFlowTurnCompleted, event.Type,
-			"等待用户的回合是可恢复的，不能被当成中断收口")
+		if event.Type == types.EventFlowTurnEnded {
+			ended++
+		}
 	}
+	require.Equal(t, 1, ended, "等待用户的回合是可恢复的，不能被再次收口")
 }

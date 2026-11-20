@@ -47,7 +47,7 @@ ID 串联见 `trace-ids.md`。
 
 由此得出两个高频误判：
 
-- **`session.team_turn.completed` 在 `flow.jsonl`，不在 `team.jsonl`。** 在 `team.jsonl`
+- **`session.team_turn.ended` 在 `flow.jsonl`，不在 `team.jsonl`。** 在 `team.jsonl`
   里搜它必然一条都找不到——这是正常的分层，不是数据缺失。
 - **`session.command_turn.*` 在 `team.jsonl`，不在 `flow.jsonl`。** command 是 team 的
   一个 call，所以和 `session.agent_turn.*` 同级。
@@ -62,17 +62,17 @@ ID 串联见 `trace-ids.md`。
 | type | 含义 |
 |---|---|
 | `session.created` / `session.updated` | 会话创建/更新 |
-| `session.turn.started` / `session.turn.completed` / `session.turn.idle` / `session.turn.waiting_tool` / `session.turn.waiting_approval` | 一轮 flow turn 生命周期 |
+| `session.turn.started` / **`session.turn.ended`** | 一轮 flow turn 生命周期。终态只有一个事件，`payload.stop_reason` 说怎么结束、`payload.awaiting` 说在等谁 |
 | `session.team_session.created` / `session.team_session.updated` | team 会话 |
-| `session.team_turn.started` / `session.team_turn.completed` | team turn（**路由结果在这里**） |
+| `session.team_turn.started` / `session.team_turn.ended` | team turn（**路由结果在这里**） |
 | `session.record.published` | 发布 SharedRecord |
 | `session.recovery.requested` / `session.recovery.completed` | 恢复 |
 | `session.mailbox.message.{enqueued,claimed,delivered,dead}` / `session.mailbox.batch.dispatched` | 信箱消息 |
 | `session.wakeup.{created,fired,skipped,cancelled,expired}` | 自唤醒 |
 
-> **没有 `session.turn.failed` 这个事件**。一轮失败也是 `session.turn.completed`，
-> 失败事实在 `payload.turn.status`（`failed` / `cancelled`）。按事件名去搜"失败"
-> 会一条都搜不到，这是最常见的误判之一。
+> 失败事实在 `payload.stop_reason`（`failed` / `cancelled` / `max_rounds` / `max_tool_calls` / `max_tokens`），
+> 不在事件名里：所有终态都叫 `session.turn.ended`。按事件名去搜"失败"会一条都搜不到，
+> 这是最常见的误判之一。
 
 ### team.jsonl
 

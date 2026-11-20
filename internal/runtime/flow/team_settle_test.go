@@ -27,7 +27,7 @@ func TestLastTeamReplyPicksCalleeConclusion(t *testing.T) {
 	} {
 		require.NoError(t, rt.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
 			EventHeader: types.EventHeader{
-				Type:          types.EventFlowTurnWaitingInput,
+				Type:          types.EventFlowTurnEnded,
 				FlowSessionID: session.ID,
 				FlowTurnID:    "ft-" + event.team,
 				TeamID:        event.team,
@@ -60,7 +60,7 @@ func TestAwaitTeamSettlementReturnsAfterPendingClears(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		_ = rt.appendSessionEvent(context.Background(), session.ID, storage.SessionEvent{
 			EventHeader: types.EventHeader{
-				Type:          types.EventFlowTurnWaitingInput,
+				Type:          types.EventFlowTurnEnded,
 				FlowSessionID: session.ID,
 				FlowTurnID:    "ft-c",
 				TeamID:        "owner",
@@ -121,7 +121,7 @@ func TestAwaitTeamSettlementWaitsForConclusionNotReceipt(t *testing.T) {
 	// 被调用方此刻已经说过"我派下去了"。
 	require.NoError(t, rt.appendSessionEvent(ctx, session.ID, storage.SessionEvent{
 		EventHeader: types.EventHeader{
-			Type:          types.EventFlowTurnWaitingInput,
+			Type:          types.EventFlowTurnEnded,
 			FlowSessionID: session.ID,
 			FlowTurnID:    "ft-a",
 			TeamID:        "owner",
@@ -139,7 +139,7 @@ func TestAwaitTeamSettlementWaitsForConclusionNotReceipt(t *testing.T) {
 		// 收口回合跑完，结论落地。
 		_ = rt.appendSessionEvent(context.Background(), session.ID, storage.SessionEvent{
 			EventHeader: types.EventHeader{
-				Type:          types.EventFlowTurnWaitingInput,
+				Type:          types.EventFlowTurnEnded,
 				FlowSessionID: session.ID,
 				FlowTurnID:    "ft-b",
 				TeamID:        "owner",

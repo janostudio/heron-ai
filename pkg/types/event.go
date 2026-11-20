@@ -35,19 +35,17 @@ type EventHeader struct {
 // object and the last one the action. Actions are past tense: an event records
 // something that already happened, not a state to be reached.
 const (
-	EventFlowSessionCreated      = "session.created"
-	EventFlowSessionUpdated      = "session.updated"
-	EventFlowTurnStarted         = "session.turn.started"
-	EventFlowTurnCompleted       = "session.turn.completed"
-	EventFlowTurnWaitingInput    = "session.turn.idle"
-	EventFlowTurnWaitingTool     = "session.turn.waiting_tool"
-	EventFlowTurnWaitingApproval = "session.turn.waiting_approval"
-	EventTeamTurnStarted         = "session.team_turn.started"
-	EventTeamTurnCompleted       = "session.team_turn.completed"
-	EventTeamTurnWaitingInput    = "session.team_turn.idle"
-	EventTeamTurnWaitingTool     = "session.team_turn.waiting_tool"
-	EventTeamTurnWaitingApproval = "session.team_turn.waiting_approval"
-	EventSharedRecordPublished   = "session.record.published"
+	EventFlowSessionCreated = "session.created"
+	EventFlowSessionUpdated = "session.updated"
+	EventFlowTurnStarted    = "session.turn.started"
+	// EventFlowTurnEnded is the single turn-terminal event: how the turn ended
+	// (stop_reason) and who it is waiting for (awaiting) are separate fields in
+	// the payload, so a consumer never has to map event name to status.
+	EventFlowTurnEnded   = "session.turn.ended"
+	EventTeamTurnStarted = "session.team_turn.started"
+	// EventTeamTurnEnded mirrors EventFlowTurnEnded one level down.
+	EventTeamTurnEnded         = "session.team_turn.ended"
+	EventSharedRecordPublished = "session.record.published"
 	// EventSharedRecordConsumed records that a Team is being handed an existing
 	// record. It exists so a display layer can say which Team uses which
 	// production ("B → A") without duplicating the content: the production is

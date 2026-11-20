@@ -460,16 +460,17 @@ func (h *Handler) streamReplayBoundary(ctx context.Context, sessionID string) (i
 // progress report and the conclusion it reports on has not been produced yet;
 // closing there hands the client the handoff and drops the answer.
 func turnStreamEnded(event storage.SessionEvent) bool {
-	intermediate, _ := event.Payload["intermediate"].(bool)
-	switch event.Type {
-	case types.EventFlowTurnCompleted:
-		return true
-	case types.EventFlowTurnWaitingInput:
-		return !intermediate
-	case types.EventFlowTurnWaitingTool, types.EventFlowTurnWaitingApproval:
-		return true
+	if event.Type != types.EventFlowTurnEnded {
+		return false
 	}
-	return false
+	awaiting, _ := event.Payload["awaiting"].(string)
+	if awaiting == string(types.AwaitingUser) {
+		// Waiting for the user ends the stream unless the turn is only a
+		// progress report: then the answer is still coming from downstream.
+		intermediate, _ := event.Payload["intermediate"].(bool)
+		return !intermediate
+	}
+	return true
 }
 
 // streamHeartbeatInterval bounds how long a followed stream stays silent.

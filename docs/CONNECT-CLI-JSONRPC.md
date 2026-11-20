@@ -963,7 +963,7 @@ heron-connect 保存 session_id
 {
   "seq": 12,
   "event_id": "fs_001-12",
-  "type": "session.team_turn.completed",
+  "type": "session.team_turn.ended",
   "flow_session_id": "fs_001",
   "flow_turn_id": "ft_001",
   "team_session_id": "ts_001",

@@ -28,7 +28,7 @@ func TestExtractSharedRecords(t *testing.T) {
 			},
 			{
 				EventHeader: types.EventHeader{
-					Type:          types.EventTeamTurnCompleted,
+					Type:          types.EventTeamTurnEnded,
 					FlowSessionID: "s1",
 				},
 				Payload: map[string]any{"team_result": "ignored"},

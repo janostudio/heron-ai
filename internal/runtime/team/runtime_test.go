@@ -320,7 +320,7 @@ func TestRuntimeAggregatesParallelWaitingToolCalls(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.TurnWaitingTool, result.Turn.Status)
+	require.Equal(t, types.AwaitingTool, result.Turn.Awaiting)
 	require.Equal(t, types.NextWaitTool, result.Next.Action)
 	require.Len(t, result.PendingToolTasks, 2)
 	require.Len(t, result.CallResults, 2)
@@ -367,7 +367,7 @@ func TestRuntimeAggregateResumeSkipsCompletedSiblingCall(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, types.TurnCompleted, result.Turn.Status)
+	require.Equal(t, types.StopEndTurn, result.Turn.StopReason)
 	require.Len(t, result.CallResults, 2)
 	assert.Equal(t, "a already completed", result.CallResults["a"].Reply)
 	assert.Equal(t, "b resumed", result.CallResults["b"].Reply)

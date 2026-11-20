@@ -87,7 +87,6 @@ func (f *fixtureBuilder) build() *fixtureBuilder {
 			"input": "fix the bug",
 			"turn": types.FlowTurn{
 				ID: fixtureFlow1, FlowSessionID: fixtureSession, Attempt: 1,
-				Input: "fix the bug", Status: types.TurnRunning, StartedAt: f.clock,
 			},
 		})
 
@@ -95,12 +94,12 @@ func (f *fixtureBuilder) build() *fixtureBuilder {
 	f.teamTurn(fixtureFlow1, fixtureTeam2, "default", "fs_eval_fixture:default", []string{"answer"})
 
 	finished := f.clock
-	f.append(storage.LayerFlow, types.EventHeader{Type: types.EventFlowTurnCompleted, FlowSessionID: fixtureSession, FlowTurnID: fixtureFlow1, Attempt: 1},
+	f.append(storage.LayerFlow, types.EventHeader{Type: types.EventFlowTurnEnded, FlowSessionID: fixtureSession, FlowTurnID: fixtureFlow1, Attempt: 1},
 		map[string]any{
 			"session": map[string]any{"id": fixtureSession, "flow_id": "eval_fixture", "status": types.SessionIdle},
 			"turn": types.FlowTurn{
 				ID: fixtureFlow1, FlowSessionID: fixtureSession, Attempt: 1,
-				Input: "fix the bug", Status: types.TurnCompleted,
+				Input: "fix the bug", StopReason: types.StopEndTurn,
 				Next:      &types.Route{Action: types.NextProceed},
 				RecordIDs: []string{"research-findings"},
 				StartedAt: f.clock.Add(-time.Minute), FinishedAt: &finished,
@@ -112,18 +111,19 @@ func (f *fixtureBuilder) build() *fixtureBuilder {
 			"input": "thanks",
 			"turn": types.FlowTurn{
 				ID: fixtureFlow2, FlowSessionID: fixtureSession, Attempt: 1,
-				Input: "thanks", Status: types.TurnRunning, StartedAt: f.clock,
+				Input: "thanks", StartedAt: f.clock,
 			},
 		})
 	f.teamTurn(fixtureFlow2, fixtureTeam3, "default", "fs_eval_fixture:default", []string{"answer", "reviewer"})
 
 	finished = f.clock
-	f.append(storage.LayerFlow, types.EventHeader{Type: types.EventFlowTurnWaitingInput, FlowSessionID: fixtureSession, FlowTurnID: fixtureFlow2, Attempt: 1},
+	f.append(storage.LayerFlow, types.EventHeader{Type: types.EventFlowTurnEnded, FlowSessionID: fixtureSession, FlowTurnID: fixtureFlow2, Attempt: 1},
 		map[string]any{
 			"session": map[string]any{"id": fixtureSession, "flow_id": "eval_fixture", "status": types.SessionIdle},
 			"turn": types.FlowTurn{
 				ID: fixtureFlow2, FlowSessionID: fixtureSession, Attempt: 1,
-				Input: "thanks", Status: types.TurnWaitingInput,
+				Input: "thanks", StopReason: types.StopEndTurn,
+				Awaiting:  types.AwaitingUser,
 				Next:      &types.Route{Action: types.NextProceed},
 				StartedAt: f.clock.Add(-time.Minute), FinishedAt: &finished,
 			},
@@ -149,7 +149,7 @@ func (f *fixtureBuilder) teamTurn(flowTurnID, teamTurnID, teamID, teamSessionID 
 		"input": "fix the bug",
 		"team_turn": types.TeamTurn{
 			ID: teamTurnID, FlowTurnID: flowTurnID, TeamSessionID: teamSessionID, TeamID: teamID,
-			Attempt: 1, Status: types.TurnRunning, StartedAt: f.clock,
+			Attempt: 1, StartedAt: f.clock,
 		},
 	})
 
@@ -160,12 +160,12 @@ func (f *fixtureBuilder) teamTurn(flowTurnID, teamTurnID, teamID, teamSessionID 
 
 	finished := f.clock
 	f.append(storage.LayerFlow, types.EventHeader{
-		Type: types.EventTeamTurnCompleted, FlowSessionID: fixtureSession, FlowTurnID: flowTurnID,
+		Type: types.EventTeamTurnEnded, FlowSessionID: fixtureSession, FlowTurnID: flowTurnID,
 		TeamSessionID: teamSessionID, TeamTurnID: teamTurnID, TeamID: teamID, Attempt: 1,
 	}, map[string]any{"team_result": types.TeamTurnResult{
 		Turn: types.TeamTurn{
 			ID: teamTurnID, FlowTurnID: flowTurnID, TeamSessionID: teamSessionID, TeamID: teamID,
-			Attempt: 1, Status: types.TurnCompleted, Next: &types.Route{Action: types.NextProceed},
+			Attempt: 1, StopReason: types.StopEndTurn, Next: &types.Route{Action: types.NextProceed},
 			StartedAt: f.clock.Add(-time.Minute), FinishedAt: &finished,
 		},
 		CallResults: results,

@@ -31,7 +31,7 @@ func TestQueue5InputDuringApprovalIsRefusedNotQueued(t *testing.T) {
 
 	result := e.runTurn(map[string]any{"input": "用脚本读文件"})
 	if len(result.PendingApprovals) == 0 {
-		t.Fatalf("REPL ran without asking for approval; status=%q", result.Turn.Status)
+		t.Fatalf("REPL ran without asking for approval; status=%q", result.Turn.StopReason)
 	}
 	approval := result.PendingApprovals[0]
 

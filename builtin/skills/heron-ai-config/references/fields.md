@@ -270,15 +270,14 @@ frontmatter 分组：
 | `max_repeated_reads` | 同一个只读调用（同参数）最多重复几次；**写操作之后的重复不计**（那是改-验循环，不是卡住） |
 | `stuck_action` | 判定卡住后怎么办：`fail` / `ask_user` |
 | `max_model_retries` | provider 瞬时失败的重试次数；上下文超限恢复另算，只尝试一次 |
-| `timeout` | 执行超时 |
+| ~~`timeout`~~ | 已移除：agent turn 由轮次与工具调用数约束，不看墙钟；写了会加载报错 |
 
 ### context（上下文窗口控制）
 | 字段 | 含义 |
 |---|---|
 | `target_ratio` | 压缩后目标 Active Context 比例（默认 0.45） |
 | `compaction_threshold` | 触发压缩的比例（默认 0.90） |
-| `hard_limit_ratio` | 硬上限比例（默认 0.95） |
-| `output_reserve_ratio` | 为输出预留的比例（默认 0.15） |
+| `output_reserve_ratio` | 为输出预留的比例（默认 0）。**硬限就是 `1 - 这个值`**，没有单独的配置项 |
 | `tool_output_ratio` | 工具输出预算比例（默认 0.10） |
 | `max_tool_output_chars` | 单条工具结果字符上限 |
 | `max_input_tokens` | 显式覆盖模型上下文容量（不配则用 model profile 的预算） |
@@ -302,7 +301,6 @@ frontmatter 分组：
 |---|---|
 | `max_model_rounds` | 最大模型调用数 |
 | `max_tool_calls` | 最大工具调用数 |
-| `max_wall_time` | 最大墙钟时间（如 `10m`） |
 | `max_input_tokens` / `max_output_tokens` | 累计 token 上限 |
 | `max_file_changes` | 最大 workspace 写操作数 |
 | `max_tool_output` | 累计工具输出字符上限 |
@@ -482,20 +480,21 @@ paths:            # 可选：条件触发，命中这些 glob 才注入；不写
 |---|---|---|
 | `session.turn.started` | `payload.turn.input` | **本轮用户输入原文** |
 | `session.turn.started` | `payload.turn.origin` | 这轮怎么被唤醒：`user`（用户提问）/ `mailbox` / `wakeup` / `resume` / `tool`。**只有 `user` 才是用户提问**，一条用户消息会派生多个 turn |
-| `session.turn.*` | `payload.turn.status` | `created` / `running` / `waiting_input` / `waiting_tool` / `waiting_approval` / `completed` / `failed` / `cancelled` |
-| `session.turn.*` | `payload.session.status` | 会话级状态，正常结束为 `idle` |
+| `session.turn.ended` | `payload.stop_reason` | **怎么结束的**：`end_turn` / `max_rounds` / `max_tool_calls` / `max_tokens` / `cancelled` / `refusal` / `failed` |
+| `session.turn.ended` | `payload.awaiting` | **在等谁**：`user` / `tool` / `approval`；空表示不再等任何人。等工具、等审批不是失败 |
+| `session.turn.ended` | `payload.session.status` | 会话级状态：等用户 → `idle`，等工具/审批 → 对应等待态 |
 | `flow_turn` 终态 | `payload.reply` | 这一轮给用户的答复（`intermediate=true` 时为空） |
 | `flow_turn` 终态 | `payload.team` | **写这条答复的 Team**（`origin` 只说明这轮怎么被唤醒，不是归属） |
 | `flow_turn` 终态 | `payload.contributors[]` | 这轮里每个 Team 说了什么、谁请求的——答复是复述时用它还原来源 |
 | `flow_turn` 终态 | `payload.deliveries[]` | 必须作为独立消息送达用户的结果：`message_id` / `team_id` / `text` |
 | `flow_turn` 终态 | `payload.intermediate` | `true` 表示这是内部进度而不是答案（`reply` 会被清空） |
 | `flow_turn` 终态 | `payload.limit` | 撞到兜底上限时的结构化事实：`name`（哪条上限）/ `value` / `observed` / `top_pairs`（最频繁的激活边）/ `recent`。比解析 `error` 字符串可靠 |
-| `session.turn.completed` | `payload.error` + `turn.status=cancelled` | 进程中断留下的悬空回合，在**下一个回合开始时**被补写为这个终态（`intermediate=true`），不属于本次运行的失败 |
-| `session.team_turn.completed` | `payload.team_result.turn.next.action` | 路由：`proceed` / `activate` / `return` / `coordinate` / `fail` / `wait_tool` / `wait_approval`（后两个是"等工具或审批"，不是失败） |
-| `session.team_turn.completed` | `payload.team_result.turn.status` | team turn 状态 |
-| `session.team_turn.completed` | `payload.team_result.reply` | 该 team 的最终文本 |
-| `session.team_turn.completed` | `payload.team_result.records[]` | 该 team 发布的 record |
-| `session.team_turn.completed` | `payload.team_result.call_results[]` | 各 call 的结果 |
+| `session.turn.ended` | `payload.stop_reason=cancelled` + `payload.error` | 进程中断留下的悬空回合，在**下一个回合开始时**被补写为这个终态（`intermediate=true`），不属于本次运行的失败 |
+| `session.team_turn.ended` | `payload.team_result.turn.next.action` | 路由：`proceed` / `activate` / `return` / `coordinate` / `fail` / `wait_tool` / `wait_approval`（后两个是"等工具或审批"，不是失败） |
+| `session.team_turn.ended` | `payload.team_result.turn.stop_reason` / `.awaiting` | team turn 的终态两维，语义与 flow 层一致；同名字段也在 payload 顶层 |
+| `session.team_turn.ended` | `payload.team_result.reply` | 该 team 的最终文本 |
+| `session.team_turn.ended` | `payload.team_result.records[]` | 该 team 发布的 record |
+| `session.team_turn.ended` | `payload.team_result.call_results[]` | 各 call 的结果 |
 | `session.agent_turn.completed` | `payload.call_result.status` | call 状态（非 `completed` 即要看 `error`） |
 | `session.agent_turn.completed` | `payload.call_result.requests[]` | **消耗事实源**，每个元素 = 一轮模型调用 |
 | `session.agent_turn.completed` | `payload.call_result.requests[].usage` | `prompt_tokens` / `completion_tokens` / `total_tokens`；缓存看 `prompt_cache_hit_tokens` 与 `cache_read_input_tokens`（不同 provider 命名不同，**取两者较大值，不可相加**） |

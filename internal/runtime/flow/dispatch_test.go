@@ -111,7 +111,7 @@ func TestAsyncDispatchDoesNotWakeRunningSession(t *testing.T) {
 		Payload:     map[string]any{"session": session},
 	}))
 
-	turn := types.FlowTurn{ID: newID("ft"), FlowSessionID: session.ID, Status: types.TurnRunning}
+	turn := types.FlowTurn{ID: newID("ft"), FlowSessionID: session.ID}
 	msg, err := runtime.enqueueWorkMessage(ctx, session, turn,
 		types.MailboxAddress{TeamID: "verify"},
 		map[string]any{"caller_team": "default"},

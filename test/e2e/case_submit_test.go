@@ -71,7 +71,7 @@ func TestSubmit1AcceptsBeforeTheTurnFinishes(t *testing.T) {
 	// The turn must actually run, and end on its own.
 	events := waitForEvent(t, e.Root, sessionID, 60*time.Second, func(events []event) bool {
 		return countEvents(events, "session.turn.started") >= 1 &&
-			(countEvents(events, "session.turn.idle") >= 1 || countEvents(events, "session.turn.completed") >= 1)
+			(countEvents(events, "session.turn.ended") >= 1)
 	})
 	if countEvents(events, "session.turn.started") == 0 {
 		t.Fatalf("accepted input never started a turn: %v", typesOf(events))
@@ -123,7 +123,7 @@ func TestSubmit2SecondInputIsQueuedNotRefused(t *testing.T) {
 		ended := 0
 		for _, ev := range events {
 			switch ev.Type {
-			case "session.turn.idle", "session.turn.completed":
+			case "session.turn.ended":
 				ended++
 			}
 		}
