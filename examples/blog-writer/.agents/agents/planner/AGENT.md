@@ -26,7 +26,6 @@ rules:
 loop:
   max_rounds: 5
   tool_mode: sequential
-  timeout: 120s
 structured_output:
   type: json
   schema:

@@ -35,11 +35,12 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		return types.CallResult{Status: types.TurnFailed, Error: "agent definition is required"}, fmt.Errorf("agent definition is required for call %q", req.Call.ID)
 	}
 
-	execCtx, cancel, err := withTimeout(ctx, req.Call.Timeout, req.AgentDefinition.Loop.Timeout)
-	if err != nil {
-		return types.CallResult{Status: types.TurnFailed, Error: err.Error()}, err
+	// agent call 不设任何墙钟上限：耗时由任务决定，不是函数调用的固定成本。
+	// 需要停止的判据是"有没有进展"（循环守卫）与"单次调用是否挂死"（传输/工具超时）。
+	execCtx := ctx
+	if execCtx == nil {
+		execCtx = context.Background()
 	}
-	defer cancel()
 
 	// Spawned children publishing with deliver=downstream write into this
 	// collector; the records are attached to this call's result below so

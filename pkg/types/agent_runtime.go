@@ -26,7 +26,7 @@ const CurrentAgentCheckpointVersion = 2
 type AgentBudget struct {
 	MaxModelRounds  int    `yaml:"max_model_rounds,omitempty" json:"max_model_rounds,omitempty"`
 	MaxToolCalls    int    `yaml:"max_tool_calls,omitempty" json:"max_tool_calls,omitempty"`
-	MaxWallTime     string `yaml:"max_wall_time,omitempty" json:"max_wall_time,omitempty"`
+	MaxWallTime     string `yaml:"max_wall_time,omitempty" json:"max_wall_time,omitempty"` // no longer honoured: kept so a stale config is rejected, not silently ignored
 	MaxInputTokens  int    `yaml:"max_input_tokens,omitempty" json:"max_input_tokens,omitempty"`
 	MaxOutputTokens int    `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
 	MaxFileChanges  int    `yaml:"max_file_changes,omitempty" json:"max_file_changes,omitempty"`

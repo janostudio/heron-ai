@@ -663,8 +663,7 @@ func TestContextManager_PreservesCanonicalAndCompactsActiveMessages(t *testing.T
 			MaxInputTokens:      100,
 			TargetRatio:         0.40,
 			CompactionThreshold: 0.50,
-			HardLimitRatio:      0.80,
-			OutputReserveRatio:  0,
+			OutputReserveRatio:  0.20,
 			MaxToolOutputChars:  24,
 		},
 		charCountEstimator{},
@@ -698,8 +697,7 @@ func TestContextManagerCompactionKeepsStableSystemAndRecentToolGroup(t *testing.
 			MaxInputTokens:      120,
 			TargetRatio:         0.35,
 			CompactionThreshold: 0.45,
-			HardLimitRatio:      0.75,
-			OutputReserveRatio:  0,
+			OutputReserveRatio:  0.25,
 			MaxToolOutputChars:  24,
 		},
 		charCountEstimator{},
@@ -747,8 +745,7 @@ func TestContextManagerCompactionKeepsInjectedProvenance(t *testing.T) {
 			MaxInputTokens:      120,
 			TargetRatio:         0.35,
 			CompactionThreshold: 0.45,
-			HardLimitRatio:      0.75,
-			OutputReserveRatio:  0,
+			OutputReserveRatio:  0.25,
 			MaxToolOutputChars:  24,
 		},
 		charCountEstimator{},
@@ -806,7 +803,7 @@ func TestContextManager_ToolOutputTruncatedOnlyInActiveContext(t *testing.T) {
 
 func TestContextManager_ContextCancel(t *testing.T) {
 	manager := NewContextManagerWithEstimator(
-		types.ContextConfig{MaxInputTokens: 20, CompactionThreshold: 0.5, HardLimitRatio: 0.9},
+		types.ContextConfig{MaxInputTokens: 20, CompactionThreshold: 0.5, OutputReserveRatio: 0.1},
 		charCountEstimator{},
 	)
 	require.NoError(t, manager.AddMessage(types.Message{Role: "user", Content: "1234567890"}))
@@ -914,11 +911,6 @@ func TestBudgetTracker_EnforcesIndependentLimits(t *testing.T) {
 	require.NoError(t, budget.beforeModel(context.Background()))
 	budget.usage.ModelRounds++
 	require.ErrorContains(t, budget.beforeModel(context.Background()), "max_model_rounds")
-}
-
-func TestBudgetTracker_ParsesWallTime(t *testing.T) {
-	_, err := newBudgetTracker(types.AgentBudget{MaxWallTime: "not-a-duration"}, 0, time.Now())
-	require.ErrorContains(t, err, "max_wall_time")
 }
 
 func TestFileCheckpointStore_SaveLoadDelete(t *testing.T) {

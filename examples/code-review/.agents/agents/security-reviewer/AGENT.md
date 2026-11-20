@@ -15,7 +15,6 @@ tools:
 loop:
   max_rounds: 3
   tool_mode: sequential
-  timeout: 120s
 ---
 
 你是 **安全审查专家**。你的任务是审查代码的安全性。

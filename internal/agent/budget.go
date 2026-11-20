@@ -8,30 +8,17 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
+// budgetTracker counts model rounds, tool calls and volume. It deliberately has
+// no wall clock: an agent's cost is how much work it does, not how long the
+// clock runs, and a time-based stop cannot tell "still working" from "wedged".
 type budgetTracker struct {
-	limit    types.AgentBudget
-	usage    types.AgentBudgetUsage
-	deadline time.Time
+	limit types.AgentBudget
+	usage types.AgentBudgetUsage
 }
 
 func newBudgetTracker(limit types.AgentBudget, fallbackRounds int, now time.Time) (*budgetTracker, error) {
 	if limit.MaxModelRounds <= 0 && fallbackRounds > 0 {
 		limit.MaxModelRounds = fallbackRounds
-	}
-	if limit.MaxWallTime != "" {
-		duration, err := time.ParseDuration(limit.MaxWallTime)
-		if err != nil {
-			return nil, fmt.Errorf("parse agent budget max_wall_time: %w", err)
-		}
-		if duration <= 0 {
-			return nil, fmt.Errorf("agent budget max_wall_time must be positive")
-		}
-		now = now.UTC()
-		return &budgetTracker{
-			limit:    limit,
-			usage:    types.AgentBudgetUsage{StartedAt: now},
-			deadline: now.Add(duration),
-		}, nil
 	}
 	return &budgetTracker{
 		limit: limit,
@@ -40,13 +27,7 @@ func newBudgetTracker(limit types.AgentBudget, fallbackRounds int, now time.Time
 }
 
 func (b *budgetTracker) checkContext(ctx context.Context) error {
-	if err := contextErr(ctx); err != nil {
-		return err
-	}
-	if !b.deadline.IsZero() && !time.Now().Before(b.deadline) {
-		return fmt.Errorf("agent budget exceeded: max_wall_time")
-	}
-	return nil
+	return contextErr(ctx)
 }
 
 func (b *budgetTracker) beforeModel(ctx context.Context) error {

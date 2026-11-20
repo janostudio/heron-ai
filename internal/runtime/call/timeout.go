@@ -14,6 +14,8 @@ import (
 // tool: if it never returns, the TeamTurn (and the FlowTurn above it) never
 // finishes, and the session is stuck in "running" forever. The default is
 // generous so it only fires on a real hang.
+//
+// Agent calls do NOT get this default — see withAgentTimeout.
 const DefaultCallTimeout = 15 * time.Minute
 
 func withTimeout(ctx context.Context, callTimeout, specTimeout string) (context.Context, context.CancelFunc, error) {

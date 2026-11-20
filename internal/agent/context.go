@@ -339,27 +339,24 @@ func (m *MessageContextManager) minCompactionSavingLocked() int {
 }
 
 func (m *MessageContextManager) targetLimitTokens() int {
-	return m.effectiveRatioLimit(m.config.TargetRatio)
+	return m.ratioTokens(m.config.TargetRatio)
 }
 
 func (m *MessageContextManager) compactionLimitTokens() int {
-	return m.effectiveRatioLimit(m.config.CompactionThreshold)
+	return m.ratioTokens(m.config.CompactionThreshold)
 }
 
+// hardLimitTokens is the most that may be sent: the window minus the room kept
+// for the response. It is derived, not configured — a second knob for the same
+// boundary could disagree with this one, and the disagreement was invisible
+// until a turn failed.
 func (m *MessageContextManager) hardLimitTokens() int {
-	return m.effectiveRatioLimit(m.config.HardLimitRatio)
+	return m.ratioTokens(m.config.HardLimit())
 }
 
-func (m *MessageContextManager) effectiveRatioLimit(ratio float64) int {
-	if m.config.MaxInputTokens <= 0 {
+func (m *MessageContextManager) ratioTokens(ratio float64) int {
+	if m.config.MaxInputTokens <= 0 || ratio <= 0 {
 		return 0
-	}
-	// Reserve space for the next model output. The ratio limits describe the
-	// model input capacity, while OutputReserveRatio is subtracted from the
-	// usable input budget.
-	usableRatio := 1 - m.config.OutputReserveRatio
-	if ratio > usableRatio {
-		ratio = usableRatio
 	}
 	return int(float64(m.config.MaxInputTokens) * ratio)
 }

@@ -10,7 +10,6 @@ knowledge:
   - lore
 loop:
   max_rounds: 2
-  timeout: 120s
 structured_output:
   type: json
   schema:
