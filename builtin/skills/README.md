@@ -41,15 +41,14 @@ heron --prompt "这个项目的 flow 入口是哪个 team？"       # 一轮真�
 ```
 builtin/skills/
 └── heron-ai-config/          # 配置编写 + 运维 + 运行排查
-    ├── SKILL.md              # 入口：先自检 → 再排查 → 按需读参考
+    ├── SKILL.md              # 入口：默认优先 → 三档字段 → 症状索引 → 自检
     ├── references/
-    │   ├── debug-triage.md   # 排查入口：判定标准、异常模式、从配置预测行为
-    │   ├── session-files.md  # 数据落点、三层 jsonl、执行日志
-    │   ├── token-usage.md    # 按 flow / team / agent / 轮次统计 token + 缓存命中
-    │   ├── trace-ids.md      # 事件 ID 串联地图
-    │   ├── fields.md         # 每个配置字段的含义 + ${records.*} 模板
-    │   ├── organization.md   # 目录组织、三层编排、设计优势
-    │   ├── operations.md     # 全部 CLI 参数、安装/启动/关闭、校验范围
+    │   ├── minimal.md        # 三份最小可跑模板（单 agent / 两跳 / command 链）
+    │   ├── fields.md         # 配置字段字典：类型、默认值、必写/别写/禁写
+    │   ├── tuning.md         # 旋钮手册：哪个症状才该改哪个键、代价与验证
+    │   ├── diagnose.md       # 判定：正常长什么样、异常看哪、配置 vs 运行 vs 环境
+    │   ├── observe.md        # 运行时：数据落点、三层事件、payload、token、ID 串联
+    │   ├── operations.md     # 安装/启动/CLI/HTTP 入口/校验
     │   └── define.md         # Define 工具：让 Agent 自建 Agent/Team
     └── scripts/
         ├── build.sh          # 从源码构建二进制
