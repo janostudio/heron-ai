@@ -53,11 +53,11 @@
 
 | 文件 | 什么时候读 |
 |---|---|
-| [../builtin/skills/heron-ai-config/SKILL.md](../builtin/skills/heron-ai-config/SKILL.md) | 排查入口：会话在哪、聊天记录在哪、三层 jsonl 各装什么 |
-| [../builtin/skills/heron-ai-config/references/debug-triage.md](../builtin/skills/heron-ai-config/references/debug-triage.md) | 判定标准、异常模式对照、从配置预测行为 |
-| [../builtin/skills/heron-ai-config/references/session-files.md](../builtin/skills/heron-ai-config/references/session-files.md) | 数据落点、执行日志位置 |
-| [../builtin/skills/heron-ai-config/references/token-usage.md](../builtin/skills/heron-ai-config/references/token-usage.md) | 按 team / agent / 轮次统计 token |
-| [../builtin/skills/heron-ai-config/references/trace-ids.md](../builtin/skills/heron-ai-config/references/trace-ids.md) | 用 ID 把一次跨层调用串起来 |
+| [../builtin/skills/heron-ai-config/SKILL.md](../builtin/skills/heron-ai-config/SKILL.md) | 入口：默认优先、三档字段、症状 → 改哪个键、自检范围 |
+| [../builtin/skills/heron-ai-config/references/minimal.md](../builtin/skills/heron-ai-config/references/minimal.md) | 最小可跑模板（单 agent / 两跳 / command 链） |
+| [../builtin/skills/heron-ai-config/references/tuning.md](../builtin/skills/heron-ai-config/references/tuning.md) | 哪个症状才该调哪个旋钮、代价与验证方式 |
+| [../builtin/skills/heron-ai-config/references/diagnose.md](../builtin/skills/heron-ai-config/references/diagnose.md) | 判定标准、异常模式对照、配置 vs 运行 vs 环境的边界 |
+| [../builtin/skills/heron-ai-config/references/observe.md](../builtin/skills/heron-ai-config/references/observe.md) | 数据落点、三层事件、payload、token 统计、ID 串联 |
 
 CLI 侧的现象与命令见 [CLI.md](./CLI.md)；`heron-ai` Skill 的安装方式见
 [../builtin/skills/README.md](../builtin/skills/README.md)。
