@@ -10,7 +10,7 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// twoInstanceDefinitions is a Flow whose only non-entry Team is per_task, so it
+// twoInstanceDefinitions is a Flow whose only non-entry Team is isolated, so it
 // can hold several instances at once.
 func twoInstanceDefinitions() *types.Definitions {
 	return &types.Definitions{
@@ -19,7 +19,7 @@ func twoInstanceDefinitions() *types.Definitions {
 			EntryTeamID: "desk",
 			Teams: map[string]types.FlowTeamBinding{
 				"desk": {ID: "desk", TeamID: "desk-team", CanActivate: []string{"work"}},
-				"work": {ID: "work", TeamID: "work-team", Lifecycle: types.TeamLifecyclePerTask},
+				"work": {ID: "work", TeamID: "work-team", Lifecycle: types.TeamLifecycleIsolated},
 			},
 		},
 		Teams: map[string]types.Team{
@@ -41,18 +41,18 @@ func appendTeamSession(t *testing.T, rt *Runtime, sessionID, instanceID, teamID 
 			FlowSessionID: sessionID,
 			TeamID:        teamID,
 			SessionSeq:    seq,
-			Lifecycle:     types.TeamLifecyclePerTask,
+			Lifecycle:     types.TeamLifecycleIsolated,
 			Status:        status,
 		}},
 	})
 	require.NoError(t, err)
 }
 
-// A per_task Team can execute several tasks at once. Folding team sessions by
+// An isolated Team can execute several tasks at once. Folding team sessions by
 // Team id made the last event win, so a finished instance could hide a running
 // one and the board would report the Team as idle; the board has to count
 // instances instead.
-func TestTopologyCountsConcurrentPerTaskInstances(t *testing.T) {
+func TestTopologyCountsConcurrentIsolatedInstances(t *testing.T) {
 	fileStore := storage.NewFileStore(t.TempDir())
 	rt := newTestRuntime(twoInstanceDefinitions(), &fakeTeamRuntime{},
 		storage.NewJSONLSessionWriter(fileStore), nil)

@@ -81,7 +81,7 @@ func main() {
 
 	// --check-config validates configuration without building a provider or
 	// touching a session. It is the pre-deployment gate: a binding that asks for
-	// lifecycle per_task without inputs.user_message fails the load, and this is
+	// lifecycle isolated without inputs.user_message fails the load, and this is
 	// where that shows up before an agent starts.
 	if *checkConfig {
 		os.Exit(checkConfigOnly(*flow))
@@ -1295,16 +1295,16 @@ func checkConfigOnly(flowPath string) int {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	perTask := 0
+	isolated := 0
 	for _, name := range names {
 		binding := defs.Flow.Teams[name]
 		lifecycle := binding.EffectiveLifecycle()
-		if lifecycle.IsPerTask() {
-			perTask++
+		if lifecycle.IsIsolated() {
+			isolated++
 		}
 		fmt.Printf("%-12s team=%-12s lifecycle=%s\n", name, binding.TeamID, lifecycle)
 	}
-	fmt.Printf("flow %s: %d bindings ok (%d per_task)\n", defs.Flow.ID, len(names), perTask)
+	fmt.Printf("flow %s: %d bindings ok (%d isolated)\n", defs.Flow.ID, len(names), isolated)
 	printRulePathWarnings(defs)
 	return 0
 }

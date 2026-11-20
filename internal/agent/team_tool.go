@@ -36,7 +36,7 @@ func NewTeamTool(runner types.TeamRunner) *TeamTool {
 
 // SetCatalog wires the Flow graph so a dispatch can record the callee's
 // lifecycle alongside the task. Optional: without it the queue treats every
-// target as resident and serializes, which is slower but never wrong.
+// target as shared and serializes, which is slower but never wrong.
 func (t *TeamTool) SetCatalog(catalog types.TeamCatalog) {
 	if t == nil {
 		return
@@ -84,7 +84,7 @@ func (t *TeamTool) Parameters() map[string]any {
 		},
 		"task_key": map[string]any{
 			"type":        "string",
-			"description": "Business key of this task (e.g. repoA-143). Required when the target Team uses lifecycle per_task: the same key continues the same Team instance later.",
+			"description": "Business key of this task (e.g. repoA-143). Required when the target Team uses lifecycle isolated: the same key continues the same Team instance later.",
 		},
 		"run_in_background": map[string]any{
 			"type":        "boolean",
@@ -279,11 +279,11 @@ func teamCallSpecFromContext(ctx context.Context, teamID string, item any) types
 // teamRunArguments builds the durable task's arguments.
 //
 // It stamps the callee's lifecycle, because the execution queue needs it to
-// decide what "two tasks for the same Team" means: two instances (per_task,
-// addressed by task_key) or one (resident, so the second task waits). The queue
+// decide what "two tasks for the same Team" means: two instances (isolated,
+// addressed by task_key) or one (shared, so the second task waits). The queue
 // runs in this package and cannot read the Flow configuration itself, and
 // inferring the lifecycle from "is task_key set" is what made two dispatches to
-// one resident Team run at once and collide on the single slot behind them.
+// one shared Team run at once and collide on the single slot behind them.
 func (t *TeamTool) teamRunArguments(ctx context.Context, spec types.TeamCallSpec) map[string]any {
 	args := teamRunArguments(spec)
 	if lifecycle := t.lifecycleOf(ctx, spec); lifecycle != "" {
@@ -293,7 +293,7 @@ func (t *TeamTool) teamRunArguments(ctx context.Context, spec types.TeamCallSpec
 }
 
 // lifecycleOf reads the callee's lifecycle from the caller's view of the Flow.
-// An unknown answer stays empty: the queue then treats the target as resident,
+// An unknown answer stays empty: the queue then treats the target as shared,
 // which serializes rather than running two tasks that may collide.
 func (t *TeamTool) lifecycleOf(ctx context.Context, spec types.TeamCallSpec) string {
 	if t == nil || t.catalog == nil {

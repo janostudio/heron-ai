@@ -41,13 +41,14 @@ type FlowTeamBinding struct {
 	CanActivate []string `yaml:"can_activate,omitempty" json:"can_activate,omitempty"`
 	DependsOn   []string `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 	// Lifecycle selects how many sessions this Team has inside one FlowSession:
-	// "resident" (default, one shared session) or "per_task" (one per task).
+	// "shared" (default, one session reused by every dispatch) or "isolated"
+	// (one session per task).
 	Lifecycle TeamLifecycleMode `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty"`
 	Inputs    InputSpec         `yaml:"inputs,omitempty" json:"inputs,omitempty"`
 	OnProceed *Route            `yaml:"on_proceed,omitempty" json:"on_proceed,omitempty"`
 }
 
-// EffectiveLifecycle returns the binding's lifecycle, defaulting to resident.
+// EffectiveLifecycle returns the binding's lifecycle, defaulting to shared.
 func (b FlowTeamBinding) EffectiveLifecycle() TeamLifecycleMode {
 	return NormalizeTeamLifecycle(b.Lifecycle)
 }
@@ -291,22 +292,22 @@ func (f Flow) Validate() error {
 			}
 		}
 		switch lifecycle := team.EffectiveLifecycle(); lifecycle {
-		case TeamLifecycleResident:
+		case TeamLifecycleShared:
 			// The historical shape: nothing to check.
-		case TeamLifecyclePerTask:
+		case TeamLifecycleIsolated:
 			if name == f.EntryTeamID {
 				return fmt.Errorf(
-					"flow %q: entry team %q cannot use lifecycle per_task: nobody dispatches the entry, so no instance can own a task",
+					"flow %q: entry team %q cannot use lifecycle isolated: nobody dispatches the entry, so no instance can own a task",
 					f.ID, name)
 			}
 			if !team.Inputs.UserMessage {
 				return fmt.Errorf(
-					"flow %q: team %q uses lifecycle per_task but inputs.user_message is not enabled: the dispatched task text would be dropped",
+					"flow %q: team %q uses lifecycle isolated but inputs.user_message is not enabled: the dispatched task text would be dropped",
 					f.ID, name)
 			}
 		default:
 			return fmt.Errorf(
-				"flow %q: team %q: lifecycle %q is not supported (use resident or per_task)",
+				"flow %q: team %q: lifecycle %q is not supported (use shared or isolated)",
 				f.ID, name, team.Lifecycle)
 		}
 	}

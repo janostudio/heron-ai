@@ -90,8 +90,8 @@ them only when you want a runaway loop to fail earlier.
 | `max_parallel_calls` | one `TeamTurn` | `20` | Calls running at once. Calls beyond it are deferred to the next batch, not dropped. |
 | `max_parallel_tools` | one `AgentTurn` | `20` | Tool calls running at once inside the agent loop. |
 | `max_coordinate_retries` | per Team, per `FlowTurn` | `20` | How often one Team may hand a decision back to its activator. Over the limit that route is **skipped**; the turn itself does not fail. |
-| `max_active_team_sessions` | one `FlowSession` | `8` | `per_task` Team instances kept open at once. Closed instances do not count. |
-| `max_task_context_depth` | one `Flow` | `3` | How deeply `per_task` Team instances may nest. |
+| `max_active_team_sessions` | one `FlowSession` | `8` | `isolated` Team instances kept open at once. Closed instances do not count. |
+| `max_task_context_depth` | one `Flow` | `3` | How deeply `isolated` Team instances may nest. |
 
 `max_team_turns` is deliberately per-turn, not a session total: a session-wide
 counter would eventually make a long-running conversation stop accepting input,

@@ -287,13 +287,13 @@ provider and without touching a session, then prints every Team binding's
 resolved lifecycle:
 
 ```
-default      team=qa_team      lifecycle=resident
-flow default: 1 bindings ok (0 per_task)
+default      team=qa_team      lifecycle=shared
+flow default: 1 bindings ok (0 isolated)
 ```
 
 Exit code 0 means the configuration is valid; 1 prints the loader error to
 stderr. Use it as a pre-deployment gate: a binding that declares
-`lifecycle: per_task` without `inputs.user_message` fails here instead of on
+`lifecycle: isolated` without `inputs.user_message` fails here instead of on
 the first real turn.
 
 ## Teams Commands
@@ -352,7 +352,7 @@ name: review-team
 version: 0.1.0
 description: Multi-reviewer code review team
 runtime:
-  lifecycle: resident      # resident (default) | per_task
+  lifecycle: shared      # shared (default) | isolated
 provides:
   teams: [review_team]
   agents: [lead-reviewer, security-reviewer]

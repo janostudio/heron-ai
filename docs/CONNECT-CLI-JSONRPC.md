@@ -409,7 +409,7 @@ bundle.Flow.Resume(ctx, sessionID, input)
 | `cancelled` | 上一轮被取消 | 继续同一个 FlowSession |
 | `interrupted` | 存在未完成的执行 | 需要先执行 Recovery，不能直接发送普通 `turn` |
 | `completed` | 仅出现在旧数据回放中 | 新引擎不再产生该状态；旧 `completed` 会话也可以继续同一个 FlowSession |
-| `closed` | `per_task` Team 实例的软关闭：实例不再接活，会话本身仍可继续 | 继续同一个 FlowSession；新的派发会另开实例 |
+| `closed` | `isolated` Team 实例的软关闭：实例不再接活，会话本身仍可继续 | 继续同一个 FlowSession；新的派发会另开实例 |
 
 会话生命周期由运行时决定：轮次正常结束一律可续，`on_proceed` 不再提供
 `complete` / `wait_input` 之类的生命周期动作。因此 `heron-connect` 可以把
@@ -513,7 +513,7 @@ bundle.Flow.ResumeApprovalWithResponse(ctx, sessionID, types.HITLResponse{
 |---|---|---|
 | `session_id` | string | FlowSession ID |
 | `flow_turn_id` | string | 本次 FlowTurn ID |
-| `status` | string | 完整枚举（`pkg/types/session.go`）：`created`、`running`、`idle`、`waiting_tool`、`waiting_approval`、`interrupted`、`completed`、`failed`、`cancelled`、`closed`（`per_task` 实例软关闭）。各状态下 `turn` 的行为见 §6.2 表格；`completed` 仅存在于旧数据回放 |
+| `status` | string | 完整枚举（`pkg/types/session.go`）：`created`、`running`、`idle`、`waiting_tool`、`waiting_approval`、`interrupted`、`completed`、`failed`、`cancelled`、`closed`（`isolated` 实例软关闭）。各状态下 `turn` 的行为见 §6.2 表格；`completed` 仅存在于旧数据回放 |
 | `reply` | string | 用户可见的最终回复；`intermediate=true` 时该字段缺失属正常 |
 | `intermediate` | bool | 这一轮只是过程（结论在派发出去的后台轮次里），调用方不应把它当最终答复 |
 | `team` | string | 产生这条回复的 Team，多 Team 轮次用它做归属 |

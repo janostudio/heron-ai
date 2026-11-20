@@ -21,7 +21,7 @@ const (
 	SessionCompleted       SessionStatus = "completed"
 	SessionFailed          SessionStatus = "failed"
 	SessionCancelled       SessionStatus = "cancelled"
-	// SessionClosed is a soft close: a per_task instance stops accepting work
+	// SessionClosed is a soft close: an isolated instance stops accepting work
 	// but keeps its transcript and records, and may be reopened by dispatching
 	// the same task_key again.
 	SessionClosed SessionStatus = "closed"
@@ -39,31 +39,31 @@ type FlowSession struct {
 
 // TeamLifecycleMode is the lifetime shape of a TeamSession.
 //
-// resident keeps the pre-existing behaviour: one session per Team inside a
-// FlowSession, reused by every dispatch. per_task gives every dispatched task
-// its own session so the same Team definition can run several tasks at once.
+// shared gives one session per Team inside a FlowSession, reused by every
+// dispatch. isolated gives every dispatched task its own session so the same
+// Team definition can run several tasks at once.
 type TeamLifecycleMode string
 
 const (
-	// TeamLifecycleResident is the default: one session per Team per FlowSession.
-	TeamLifecycleResident TeamLifecycleMode = "resident"
-	// TeamLifecyclePerTask gives every dispatched task its own session.
-	TeamLifecyclePerTask TeamLifecycleMode = "per_task"
+	// TeamLifecycleShared is the default: one session per Team per FlowSession.
+	TeamLifecycleShared TeamLifecycleMode = "shared"
+	// TeamLifecycleIsolated gives every dispatched task its own session.
+	TeamLifecycleIsolated TeamLifecycleMode = "isolated"
 )
 
-// NormalizeTeamLifecycle maps an unset value to resident. Unknown values are
+// NormalizeTeamLifecycle maps an unset value to shared. Unknown values are
 // passed through: load-time validation reports them with the offending field
-// instead of letting a typo silently behave like resident.
+// instead of letting a typo silently behave like shared.
 func NormalizeTeamLifecycle(mode TeamLifecycleMode) TeamLifecycleMode {
 	if mode == "" {
-		return TeamLifecycleResident
+		return TeamLifecycleShared
 	}
 	return mode
 }
 
-// IsPerTask reports whether the session is task-scoped.
-func (mode TeamLifecycleMode) IsPerTask() bool {
-	return mode == TeamLifecyclePerTask
+// IsIsolated reports whether the session is task-scoped.
+func (mode TeamLifecycleMode) IsIsolated() bool {
+	return mode == TeamLifecycleIsolated
 }
 
 // TeamSessionRef identifies the instance that dispatched a task. It is the
@@ -113,9 +113,9 @@ func (g *AuthorizationGrant) ScopesEqual(other *AuthorizationGrant) bool {
 
 // TeamSession is the continuing context of a Team inside one FlowSession.
 //
-// resident sessions keep the historical id "<flowSessionID>:<teamKey>" and
-// reuse it for every dispatch. per_task sessions append ":" plus SessionSeq so
-// two tasks of the same Team never share a session.
+// A shared session uses the id "<flowSessionID>:<teamKey>" and reuses it for
+// every dispatch. An isolated session appends ":" plus SessionSeq so two tasks
+// of the same Team never share a session.
 type TeamSession struct {
 	ID string `yaml:"id" json:"id"`
 	// FlowSessionID scopes the instance: a task instance never outlives its
@@ -127,23 +127,23 @@ type TeamSession struct {
 	TeamID string `yaml:"team_id" json:"team_id"`
 	// TeamDefinitionID is the definition this instance runs (.agents/teams/<id>).
 	TeamDefinitionID string `yaml:"team_definition_id,omitempty" json:"team_definition_id,omitempty"`
-	// SessionSeq is the instance ordinal; 0 means the resident session.
+	// SessionSeq is the instance ordinal; 0 means the shared session.
 	SessionSeq int `yaml:"session_seq,omitempty" json:"session_seq,omitempty"`
-	// Lifecycle is empty for data written before the field existed, which
-	// reads as resident (see EffectiveLifecycle).
+	// Lifecycle is this session's lifetime shape; empty means shared (see
+	// EffectiveLifecycle).
 	Lifecycle TeamLifecycleMode `yaml:"lifecycle,omitempty" json:"lifecycle,omitempty"`
 	// DispatchedBy names the instance that created this one. Empty for the
 	// entry Team, which nobody dispatched.
 	DispatchedBy *TeamSessionRef `yaml:"dispatched_by,omitempty" json:"dispatched_by,omitempty"`
 	// TaskKey is the business key of the task this instance serves. Required
-	// for per_task sessions; it is what makes "continue the same task" find
+	// for isolated sessions; it is what makes "continue the same task" find
 	// the same instance after a restart.
 	TaskKey string `yaml:"task_key,omitempty" json:"task_key,omitempty"`
 	// TaskContextID groups a dispatch and all of its descendants. Records are
 	// isolated by this value; it is empty for session-wide records.
 	TaskContextID string `yaml:"task_context_id,omitempty" json:"task_context_id,omitempty"`
 	// TaskDepth is the nesting depth inside one task context: a task dispatched
-	// by a resident instance is 1, a task dispatched by a per_task instance is
+	// by a shared instance is 1, a task dispatched by an isolated instance is
 	// its dispatcher's depth + 1.
 	TaskDepth int `yaml:"task_depth,omitempty" json:"task_depth,omitempty"`
 	// DispatchCount counts dispatched rounds (continue calls) on this instance.
@@ -163,15 +163,15 @@ type TeamSession struct {
 	ClosedAt      *time.Time          `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`
 }
 
-// EffectiveLifecycle returns the lifecycle, defaulting to resident for data
+// EffectiveLifecycle returns the lifecycle, defaulting to shared for data
 // written before the field existed.
 func (s TeamSession) EffectiveLifecycle() TeamLifecycleMode {
 	return NormalizeTeamLifecycle(s.Lifecycle)
 }
 
-// IsPerTask reports whether this session is task-scoped.
-func (s TeamSession) IsPerTask() bool {
-	return s.EffectiveLifecycle().IsPerTask()
+// IsIsolated reports whether this session is task-scoped.
+func (s TeamSession) IsIsolated() bool {
+	return s.EffectiveLifecycle().IsIsolated()
 }
 
 // AgentSession is the private continuing context of an Agent Call.

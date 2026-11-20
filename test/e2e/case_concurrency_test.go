@@ -54,9 +54,9 @@ func twoTeamCallsScript(first, second string, workerDelay time.Duration) []step 
 }
 
 // TestDispatch5SameTeamTasksQueueAndFinish covers I-DISPATCH-5: two tasks for
-// one resident Team queue behind each other and both finish.
+// one shared Team queue behind each other and both finish.
 //
-// A resident Team is one execution unit, so the second task is not an error —
+// A shared Team is one execution unit, so the second task is not an error —
 // it is work that has to wait. The failure this guards is the refusal: "already
 // running" arriving as a failed task tells the caller nothing happened, when the
 // only thing that happened is that it had to wait its turn.
@@ -117,7 +117,7 @@ func TestDispatch5SameTeamTasksQueueAndFinish(t *testing.T) {
 	}
 	// Serial evidence: the second task may not start before the first finished.
 	if workerCalls[2].StartedAt.Before(workerCalls[1].FinishedAt) {
-		t.Fatalf("two tasks for one resident Team ran at the same time; one instance means one execution")
+		t.Fatalf("two tasks for one shared Team ran at the same time; one instance means one execution")
 	}
 
 	// The queue has to be visible as a queue: a task that waited logs why.
@@ -165,22 +165,22 @@ func TestDispatch6DifferentTeamsRunInParallel(t *testing.T) {
 		result.Session.ID, map[string]any{"worker": len(first), "worker_b": len(second)})
 }
 
-// TestDispatch7PerTaskInstancesRunConcurrently covers I-DISPATCH-7: a team that
-// declares lifecycle per_task gets one instance per dispatched task, so two
+// TestDispatch7IsolatedInstancesRunConcurrently covers I-DISPATCH-7: a team that
+// declares lifecycle isolated gets one instance per dispatched task, so two
 // tasks in one response run at the same time instead of one being refused.
 //
-// The failure this guards is silent: if per_task degrades into a single
+// The failure this guards is silent: if isolated degrades into a single
 // instance, the second dispatch comes back as "already running" and the
 // declaration stops meaning anything — the flow says concurrent, the engine
 // serialises.
-func TestDispatch7PerTaskInstancesRunConcurrently(t *testing.T) {
+func TestDispatch7IsolatedInstancesRunConcurrently(t *testing.T) {
 	judge(t, "I-DISPATCH-7", "dispatch")
 
 	const delay = 400 * time.Millisecond
 	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-DISPATCH-7", fixture: "dispatch"})
 	e.Mock.script(
 		step{match: []string{"You are 接待"}, toolCalls: []mockToolCall{
-			// A per_task team is addressed by task_key: it is what lets a later
+			// An isolated team is addressed by task_key: it is what lets a later
 			// dispatch find the instance instead of starting another one.
 			{ID: "call_probe_1", Name: "Team", Args: map[string]any{
 				"subagent_type": "probe", "prompt": "任务一", "description": "任务一", "task_key": "probe-1",
@@ -203,7 +203,7 @@ func TestDispatch7PerTaskInstancesRunConcurrently(t *testing.T) {
 
 	tasks := taskRecords(t, e.Root)
 	if len(tasks) != 2 {
-		t.Fatalf("two dispatches to a per_task team produced %d durable tasks; each task needs its own instance", len(tasks))
+		t.Fatalf("two dispatches to an isolated team produced %d durable tasks; each task needs its own instance", len(tasks))
 	}
 
 	var refused []string
@@ -220,7 +220,7 @@ func TestDispatch7PerTaskInstancesRunConcurrently(t *testing.T) {
 		}
 	}
 	if len(refused) > 0 {
-		t.Fatalf("per_task dispatch did not get its own instance: %v", refused)
+		t.Fatalf("isolated dispatch did not get its own instance: %v", refused)
 	}
 
 	workerCalls := requestsOf(e.Mock.requests(), "You are 执行者")
@@ -228,15 +228,15 @@ func TestDispatch7PerTaskInstancesRunConcurrently(t *testing.T) {
 		t.Fatalf("worker ran %d times for 2 tasks; want 2", len(workerCalls))
 	}
 	if !overlaps(workerCalls[0], workerCalls[1]) {
-		t.Fatalf("two per_task instances ran one after another; the lifecycle declares them concurrent")
+		t.Fatalf("two isolated instances ran one after another; the lifecycle declares them concurrent")
 	}
 
 	writeTrace(t, e, httpTrace{Method: "POST", Path: "/api/run", Status: 200},
 		result.Session.ID, map[string]any{"tasks": len(tasks), "worker_calls": len(workerCalls), "overlapping": true})
 }
 
-// TestDispatch8ResidentTeamQueuesDespiteDistinctTaskKeys covers I-DISPATCH-8:
-// two dispatches to one resident Team queue even when each carries its own
+// TestDispatch8SharedTeamQueuesDespiteDistinctTaskKeys covers I-DISPATCH-8:
+// two dispatches to one shared Team queue even when each carries its own
 // task_key.
 //
 // The failure this guards is the one that made a finished task look failed. The
@@ -247,15 +247,15 @@ func TestDispatch7PerTaskInstancesRunConcurrently(t *testing.T) {
 // the model retried and finished the work anyway. The user saw a failed turn
 // for work that was done.
 //
-// task_key addresses an instance of a per_task Team. For a resident Team there
+// task_key addresses an instance of an isolated Team. For a shared Team there
 // is one instance per session, so the key cannot create a second one.
-func TestDispatch8ResidentTeamQueuesDespiteDistinctTaskKeys(t *testing.T) {
+func TestDispatch8SharedTeamQueuesDespiteDistinctTaskKeys(t *testing.T) {
 	judge(t, "I-DISPATCH-8", "dispatch")
 
 	e := newEnv(t, envOptions{caseName: t.Name(), intent: "I-DISPATCH-8", fixture: "dispatch"})
 	e.Mock.script(
 		step{match: []string{"You are 接待"}, toolCalls: []mockToolCall{
-			// The key is what the model wrote while the target was resident: it
+			// The key is what the model wrote while the target was shared: it
 			// must not turn into a second instance.
 			{ID: "call_keyed_1", Name: "Team", Args: map[string]any{
 				"subagent_type": "worker", "prompt": "任务一", "description": "任务一",
@@ -294,13 +294,13 @@ func TestDispatch8ResidentTeamQueuesDespiteDistinctTaskKeys(t *testing.T) {
 		}
 	}
 
-	// Two distinct keys must not buy two executions of one resident instance.
+	// Two distinct keys must not buy two executions of one shared instance.
 	workerCalls := requestsOf(e.Mock.requests(), "You are 执行者")
 	if len(workerCalls) != 2 {
 		t.Fatalf("worker ran %d times for 2 tasks; want 2", len(workerCalls))
 	}
 	if overlaps(workerCalls[0], workerCalls[1]) {
-		t.Fatalf("two task_keys started two executions of one resident Team; the key cannot create an instance")
+		t.Fatalf("two task_keys started two executions of one shared Team; the key cannot create an instance")
 	}
 
 	queued := 0

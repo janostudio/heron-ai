@@ -109,7 +109,7 @@ cd <项目根>            # 必须在含 .agents/ 的目录：定义以 cwd 的 
 heron --check-config
 ```
 
-输出形如 `solo team=solo lifecycle=resident` / `flow main: 1 bindings ok (0 per_task)`。
+输出形如 `solo team=solo lifecycle=shared` / `flow main: 1 bindings ok (0 isolated)`。
 能拦什么、拦不住什么见 `../SKILL.md` §5。校验通过后再 `--prompt "ping"` 试一轮——那一步会花 token，
 但能暴露校验看不见的问题（模型名、key、MCP、工具被拒）。
 

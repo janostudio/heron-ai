@@ -9,18 +9,17 @@ import (
 )
 
 // TestTranscriptIDSeparatesTeamInstances is the isolation contract for
-// conversations: a per_task instance gets its own transcript, while a resident
-// instance (and any request written before the field existed) keeps the
-// historical key byte for byte.
+// conversations: an isolated instance gets its own transcript, while a shared
+// instance keys on the Team alone.
 func TestTranscriptIDSeparatesTeamInstances(t *testing.T) {
-	legacy := types.AgentRequest{FlowSessionID: "fs", TeamID: "dev", CallID: "code"}
-	require.Equal(t, "fs:dev:code", transcriptID(legacy))
+	unscoped := types.AgentRequest{FlowSessionID: "fs", TeamID: "dev", CallID: "code"}
+	require.Equal(t, "fs:dev:code", transcriptID(unscoped))
 
-	resident := types.AgentRequest{
+	shared := types.AgentRequest{
 		FlowSessionID: "fs", TeamID: "dev", TeamSessionID: "fs:dev", CallID: "code",
 	}
-	require.Equal(t, "fs:dev:code", transcriptID(resident),
-		"a resident instance must keep the historical transcript key")
+	require.Equal(t, "fs:dev:code", transcriptID(shared),
+		"a shared instance keys on the Team alone")
 
 	first := types.AgentRequest{
 		FlowSessionID: "fs", TeamID: "dev", TeamSessionID: "fs:dev:1", CallID: "code",
@@ -31,5 +30,5 @@ func TestTranscriptIDSeparatesTeamInstances(t *testing.T) {
 	require.Equal(t, "fs:dev:1:code", transcriptID(first))
 	require.Equal(t, "fs:dev:2:code", transcriptID(second))
 	require.NotEqual(t, transcriptID(first), transcriptID(second),
-		"two per_task instances must not share a conversation")
+		"two isolated instances must not share a conversation")
 }

@@ -12,10 +12,10 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-// TestTeamSessionIDKeepsResidentCompatibility pins the id contract: resident
+// TestTeamSessionIDKeepsSharedCompatibility pins the id contract: shared
 // sessions keep the historical two-part id (so existing transcripts and state
-// files still resolve) and per_task sessions append their ordinal.
-func TestTeamSessionIDKeepsResidentCompatibility(t *testing.T) {
+// files still resolve) and isolated sessions append their ordinal.
+func TestTeamSessionIDKeepsSharedCompatibility(t *testing.T) {
 	require.Equal(t, "fs:dev", teamSessionID("fs", "dev", 0))
 	require.Equal(t, "fs:dev:2", teamSessionID("fs", "dev", 2))
 }
@@ -46,11 +46,11 @@ func TestNextTeamSessionSeqReadsTheEventStream(t *testing.T) {
 	require.Equal(t, 1, next)
 }
 
-// TestPerTaskTeamRejectsRouteActivation guards the one way a per_task binding
+// TestIsolatedTeamRejectsRouteActivation guards the one way an isolated binding
 // could silently run without a task: being reached by routing instead of being
 // dispatched with a task_key. The error names the fix instead of creating an
 // instance nobody owns.
-func TestPerTaskTeamRejectsRouteActivation(t *testing.T) {
+func TestIsolatedTeamRejectsRouteActivation(t *testing.T) {
 	rt, _ := newMailboxTestRuntime(t)
 	ctx := context.Background()
 	session, _ := mailboxTestSession(t)
@@ -64,7 +64,7 @@ func TestPerTaskTeamRejectsRouteActivation(t *testing.T) {
 				"dev": {
 					ID:        "dev",
 					TeamID:    "dev_team",
-					Lifecycle: types.TeamLifecyclePerTask,
+					Lifecycle: types.TeamLifecycleIsolated,
 					Inputs:    types.InputSpec{UserMessage: true},
 				},
 			},
@@ -95,7 +95,7 @@ func appendTeamSessionWithSeq(t *testing.T, rt *Runtime, sessionID, teamID strin
 			FlowSessionID: sessionID,
 			TeamID:        teamID,
 			SessionSeq:    seq,
-			Lifecycle:     types.TeamLifecyclePerTask,
+			Lifecycle:     types.TeamLifecycleIsolated,
 			Status:        types.SessionCompleted,
 		}},
 	})

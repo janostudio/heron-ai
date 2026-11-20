@@ -11,9 +11,9 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-func newPerTaskRuntimeWithLimits(t *testing.T, limits types.RuntimeLimits) (*Runtime, *fakeTeamRuntime) {
+func newIsolatedRuntimeWithLimits(t *testing.T, limits types.RuntimeLimits) (*Runtime, *fakeTeamRuntime) {
 	t.Helper()
-	defs := perTaskDefinitions()
+	defs := isolatedDefinitions()
 	defs.Limits = limits
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	fake := &fakeTeamRuntime{}
@@ -26,7 +26,7 @@ func newPerTaskRuntimeWithLimits(t *testing.T, limits types.RuntimeLimits) (*Run
 // same task_key afterwards reopens the same instance rather than creating a new
 // one.
 func TestCloseTaskCascadesAndReopenKeepsTheInstance(t *testing.T) {
-	rt, _ := newPerTaskRuntime(t)
+	rt, _ := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 	ctx := context.Background()
@@ -58,7 +58,7 @@ func TestCloseTaskCascadesAndReopenKeepsTheInstance(t *testing.T) {
 // TestCloseTaskRejectsForeignInstance keeps closing behind the same ownership
 // rule as continuing.
 func TestCloseTaskRejectsForeignInstance(t *testing.T) {
-	rt, _ := newPerTaskRuntime(t)
+	rt, _ := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 	ctx := context.Background()
@@ -73,7 +73,7 @@ func TestCloseTaskRejectsForeignInstance(t *testing.T) {
 // TestActiveTaskLimitBoundsInFlightWork pins the ceiling: closed tasks do not
 // count, so a session that finishes its work can keep dispatching.
 func TestActiveTaskLimitBoundsInFlightWork(t *testing.T) {
-	rt, _ := newPerTaskRuntimeWithLimits(t, types.RuntimeLimits{MaxActiveTeamSessions: 1})
+	rt, _ := newIsolatedRuntimeWithLimits(t, types.RuntimeLimits{MaxActiveTeamSessions: 1})
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 	ctx := context.Background()
@@ -95,7 +95,7 @@ func TestActiveTaskLimitBoundsInFlightWork(t *testing.T) {
 // TestTaskDepthLimitStopsRunawayNesting pins the second ceiling: a task may
 // hand work to a sub-task, but only so deep.
 func TestTaskDepthLimitStopsRunawayNesting(t *testing.T) {
-	rt, _ := newPerTaskRuntimeWithLimits(t, types.RuntimeLimits{MaxTaskContextDepth: 1})
+	rt, _ := newIsolatedRuntimeWithLimits(t, types.RuntimeLimits{MaxTaskContextDepth: 1})
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 
@@ -111,7 +111,7 @@ func TestTaskDepthLimitStopsRunawayNesting(t *testing.T) {
 // TestAuthorizationIsFrozen: a task keeps the permission it was created with.
 // Continuing it may repeat that grant, never widen it.
 func TestAuthorizationIsFrozen(t *testing.T) {
-	rt, _ := newPerTaskRuntime(t)
+	rt, _ := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 
@@ -153,7 +153,7 @@ func TestAuthorizationIsFrozen(t *testing.T) {
 // TestPendingUserInputIsVisible pins the signal the scheduler uses to let a
 // person's follow-up run before more work is started.
 func TestPendingUserInputIsVisible(t *testing.T) {
-	rt, _ := newPerTaskRuntime(t)
+	rt, _ := newIsolatedRuntime(t)
 	session, turn := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 	ctx := context.Background()
@@ -171,7 +171,7 @@ func TestPendingUserInputIsVisible(t *testing.T) {
 // TestSubscriptionDeliveryIsDeduped: a subscribed source event reaches the task
 // once; a retry with the same event id does not run it again.
 func TestSubscriptionDeliveryIsDeduped(t *testing.T) {
-	rt, _ := newPerTaskRuntime(t)
+	rt, _ := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 	ctx := context.Background()
@@ -236,7 +236,7 @@ func TestInterruptedExecutionsArePerInstance(t *testing.T) {
 // TestListTaskTreesGroupsByContext is the ops view: a dispatched task and the
 // sub-task it handed out form one tree; an independent task forms another.
 func TestListTaskTreesGroupsByContext(t *testing.T) {
-	rt, _ := newPerTaskRuntime(t)
+	rt, _ := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 	ctx := context.Background()
@@ -260,11 +260,11 @@ func TestListTaskTreesGroupsByContext(t *testing.T) {
 		"the sub-task must sit in its dispatcher's tree")
 }
 
-// TestWakeInheritsTaskContext: a resident dispatcher woken by a task result
+// TestWakeInheritsTaskContext: a shared dispatcher woken by a task result
 // judges that task with the task's context, which is what lets it read the
 // records the task produced — while its own output stays session-wide.
 func TestWakeInheritsTaskContext(t *testing.T) {
-	rt, fake := newPerTaskRuntime(t)
+	rt, fake := newIsolatedRuntime(t)
 	session, turn := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 	ctx := context.Background()
@@ -284,7 +284,7 @@ func TestWakeInheritsTaskContext(t *testing.T) {
 	require.NotEmpty(t, fake.allSessions)
 	seen := fake.allSessions[0]
 	require.Equal(t, "fs:dev:1", seen.TaskContextID,
-		"the woken resident turn must carry the task context it is judging")
-	require.False(t, seen.IsPerTask(),
-		"the dispatcher stays resident; only its read view follows the task")
+		"the woken shared turn must carry the task context it is judging")
+	require.False(t, seen.IsIsolated(),
+		"the dispatcher stays shared; only its read view follows the task")
 }

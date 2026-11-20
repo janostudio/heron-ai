@@ -26,7 +26,7 @@ type TeamCallSpec struct {
 	CallID      string
 	AgentTurnID string
 	// TaskKey is the business key of the task. Required when the callee binding
-	// uses lifecycle per_task: it is what lets a later dispatch find and
+	// uses lifecycle isolated: it is what lets a later dispatch find and
 	// continue the same instance.
 	TaskKey string
 	// Subscriptions are the sources (issue / PR / CI / thread ids) whose later
@@ -136,7 +136,7 @@ type TeamCatalogEntry struct {
 	// knows what to read next.
 	Produces string `json:"produces,omitempty"`
 	// Lifecycle tells the caller whether handing work over creates a task
-	// instance ("per_task", needs task_key) or reuses the resident session.
+	// instance ("isolated", needs task_key) or reuses the shared session.
 	Lifecycle string `json:"lifecycle,omitempty"`
 }
 

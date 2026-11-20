@@ -100,7 +100,7 @@ teams:
       flow_records: [WorkerReply] # 它要读下游的结论（按名匹配）
   worker:
     team: worker
-    lifecycle: per_task           # 每个任务一个实例；必须配 inputs.user_message
+    lifecycle: isolated           # 每个任务一个实例；必须配 inputs.user_message
     inputs:
       user_message: true
 ```
@@ -140,7 +140,7 @@ output:
 要点：
 - `can_activate` 不写 → 这个 team 谁也不能激活。
 - 被激活的 team 结束后**回到激活它的 team**，不是回到用户。
-- 入口 team 不能 `per_task`。
+- 入口 team 不能 `isolated`。
 
 ---
 

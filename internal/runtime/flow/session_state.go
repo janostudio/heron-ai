@@ -21,7 +21,7 @@ const agentSessionPayloadKey = "agent_session"
 // seen for each Team, in SessionSeq order.
 //
 // loadTeamSessions keeps one entry per Team because the scheduler only needs
-// "is this Team free". A board needs the instances: a per_task Team can have
+// "is this Team free". A board needs the instances: an isolated Team can have
 // several running at once, and collapsing them makes the last event win — a
 // finished instance can hide a running one and report the Team as idle.
 func (r *Runtime) loadTeamInstances(ctx context.Context, sessionID string) (map[string][]types.TeamSession, error) {
@@ -58,13 +58,13 @@ func (r *Runtime) loadTeamInstances(ctx context.Context, sessionID string) (map[
 	return instances, nil
 }
 
-// nextTeamSessionSeq returns the next per_task instance ordinal for a Team in
+// nextTeamSessionSeq returns the next isolated instance ordinal for a Team in
 // one FlowSession.
 //
 // It derives the number from the event stream instead of keeping an in-memory
 // counter: after a restart the next instance must not reuse an id that already
-// owns transcripts and records. Resident sessions are not numbered (seq 0), so
-// this only ever grows the per_task space.
+// owns transcripts and records. Shared sessions are not numbered (seq 0), so
+// this only ever grows the isolated space.
 func (r *Runtime) nextTeamSessionSeq(ctx context.Context, sessionID, teamID string) (int, error) {
 	events, err := r.replayFlowEvents(ctx, sessionID)
 	if err != nil {
@@ -110,7 +110,7 @@ func (r *Runtime) loadAgentSessions(ctx context.Context, sessionID string) (map[
 // teamIdle reports whether a Team can take a new message. It encodes the one
 // scheduling rule of the execution-state model: a Team with no instance
 // executing is free. A Team never seen in the event stream has never run, so it
-// is idle. per_task Teams can hold several instances, and any one of them
+// is idle. isolated Teams can hold several instances, and any one of them
 // running makes the Team busy.
 func teamIdle(instances map[string][]types.TeamSession, teamID string) bool {
 	for _, session := range instances[teamID] {

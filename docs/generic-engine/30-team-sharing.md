@@ -783,7 +783,7 @@ agents/skills/rules，不报错 —— 否则卸载后整个配置会起不来�
 
 ## 14. 与任务实例的关系（2026-11-03 补）
 
-引擎在同一天合入了 Team 的任务实例模型：Flow 绑定可以声明 `lifecycle: per_task`，同一个 Team 定义按任务开多个实例，对话隔离、状态共享，派发需要 `task_key`。分享包原本只管"把团队搬过去"，不管"搬过去以后按什么形态跑"，这一节补上两者的接缝。
+引擎在同一天合入了 Team 的任务实例模型：Flow 绑定可以声明 `lifecycle: isolated`，同一个 Team 定义按任务开多个实例，对话隔离、状态共享，派发需要 `task_key`。分享包原本只管"把团队搬过去"，不管"搬过去以后按什么形态跑"，这一节补上两者的接缝。
 
 ### 14.1 包如何声明期望的运行形态
 
@@ -791,20 +791,20 @@ agents/skills/rules，不报错 —— 否则卸载后整个配置会起不来�
 
 ```yaml
 runtime:
-  lifecycle: per_task   # 缺省 resident
+  lifecycle: isolated   # 缺省 shared
 ```
 
-它是**提示，不是运行环境**：和 sandbox 一样，接收方仍然决定这个 team 摆在 Flow 的哪个位置。但少了它，作者"这个团队应该一任务一实例"的意图无法随包传递，接收方按摘要接线就会得到 resident——跨任务共享上下文，而且不报错。这是比报错更糟的失败方式。
+它是**提示，不是运行环境**：和 sandbox 一样，接收方仍然决定这个 team 摆在 Flow 的哪个位置。但少了它，作者"这个团队应该一任务一实例"的意图无法随包传递，接收方按摘要接线就会得到 shared——跨任务共享上下文，而且不报错。这是比报错更糟的失败方式。
 
-`lifecycle` 取值只接受 `resident` / `per_task`，其他值在 `LoadManifest` 阶段报错，不做静默降级（与 Flow 绑定的校验一致）。
+`lifecycle` 取值只接受 `shared` / `isolated`，其他值在 `LoadManifest` 阶段报错，不做静默降级（与 Flow 绑定的校验一致）。
 
 ### 14.2 安装摘要会说什么
 
-`per_task` 包的摘要多两段：
+`isolated` 包的摘要多两段：
 
 ```
       team: "review-team/review_team"
-      lifecycle: per_task
+      lifecycle: isolated
       inputs:
         user_message: true
 
@@ -812,14 +812,14 @@ This team runs one instance per task: dispatch it with a task_key, and
 declare TeamSession in the caller if it needs to query or close tasks.
 ```
 
-`resident` 包保持原样，不出现 `lifecycle` 行，避免让常见情况变吵。
+`shared` 包保持原样，不出现 `lifecycle` 行，避免让常见情况变吵。
 
 ### 14.3 接收方的接线清单
 
-1. 粘贴摘要里的 Flow 片段（`lifecycle` 行只在 `per_task` 时出现）；
-2. 确认 `inputs.user_message: true` 保留了——`per_task` 没有它会在加载期直接报错（任务说明书送不进去）；
+1. 粘贴摘要里的 Flow 片段（`lifecycle` 行只在 `isolated` 时出现）；
+2. 确认 `inputs.user_message: true` 保留了——`isolated` 没有它会在加载期直接报错（任务说明书送不进去）；
 3. 在**调用方** Agent 的 `tools.builtin` 里加 `TeamSession`，并在其提示词里约定 `task_key` 的取法（如 `<repo>-<issue>`）；只写提示词不声明工具，模型看不到该工具，指令等于死指令；
-4. 跑一次 `heron --check-config`，它打印每个绑定的 lifecycle，并在 `per_task` 缺 `user_message` 时启动前就失败。
+4. 跑一次 `heron --check-config`，它打印每个绑定的 lifecycle，并在 `isolated` 缺 `user_message` 时启动前就失败。
 
 ### 14.4 依赖声明：requires.teams
 

@@ -48,8 +48,8 @@ type Manifest struct {
 
 // Runtime is the execution expectation a package declares.
 type Runtime struct {
-	// Lifecycle mirrors the Flow binding's lifecycle: "resident" (default) or
-	// "per_task". A per_task team runs one instance per task, so the receiver's
+	// Lifecycle mirrors the Flow binding's lifecycle: "shared" (default) or
+	// "isolated". An isolated team runs one instance per task, so the receiver's
 	// binding must say so or the shared team silently shares context across
 	// tasks.
 	Lifecycle string `yaml:"lifecycle,omitempty"`
@@ -57,15 +57,15 @@ type Runtime struct {
 
 // Lifecycle values a package may declare.
 const (
-	LifecycleResident = "resident"
-	LifecyclePerTask  = "per_task"
+	LifecycleShared   = "shared"
+	LifecycleIsolated = "isolated"
 )
 
-// EffectiveLifecycle maps an unset lifecycle to resident, matching the Flow
+// EffectiveLifecycle maps an unset lifecycle to shared, matching the Flow
 // binding's own default.
 func (r Runtime) EffectiveLifecycle() string {
 	if strings.TrimSpace(r.Lifecycle) == "" {
-		return LifecycleResident
+		return LifecycleShared
 	}
 	return r.Lifecycle
 }
@@ -158,10 +158,10 @@ func (m *Manifest) validate() error {
 		return fmt.Errorf("manifest %q: version is required", m.Name)
 	}
 	switch lifecycle := m.Runtime.EffectiveLifecycle(); lifecycle {
-	case LifecycleResident, LifecyclePerTask:
+	case LifecycleShared, LifecycleIsolated:
 	default:
 		return fmt.Errorf(
-			"manifest %q: runtime.lifecycle %q is not supported (resident|per_task)",
+			"manifest %q: runtime.lifecycle %q is not supported (shared|isolated)",
 			m.Name, m.Runtime.Lifecycle,
 		)
 	}

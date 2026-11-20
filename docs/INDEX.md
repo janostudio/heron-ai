@@ -10,7 +10,7 @@
 | [getting-started.md](./getting-started.md)（中） | 安装 → 最小可运行配置 → 跑通第一轮 → 确认数据落点 |
 | [../examples/README.md](../examples/README.md)（中） | 四个完整示例怎么补 `models.json` 并跑起来 |
 | [configuration/flow.md](./configuration/flow.md)（EN） | Flow 配置：阶段、信号路由、团队绑定 |
-| [configuration/team.md](./configuration/team.md)（EN） | Team 配置：并行/串行、per_task、策略 |
+| [configuration/team.md](./configuration/team.md)（EN） | Team 配置：并行/串行、isolated、策略 |
 | [configuration/models.md](./configuration/models.md)（EN） | `models.json`：模型注册表、协议、key 与环境变量展开 |
 | [configuration/settings.md](./configuration/settings.md)（EN） | `settings.json`：日志、runtime 上限、web、mcp、env |
 

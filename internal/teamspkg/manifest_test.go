@@ -98,27 +98,27 @@ func TestLoadManifestInvalid(t *testing.T) {
 	}
 }
 
-// TestManifestRuntimeLifecycle pins the binding hint a package may declare. A
-// per_task team that the receiver installs as resident would share context
+// TestManifestRuntimeLifecycle pins the binding hint a package may declare. An
+// isolated team that the receiver installs as shared would share context
 // across tasks, which is exactly what the author packaged it to avoid.
 func TestManifestRuntimeLifecycle(t *testing.T) {
-	t.Run("unset means resident", func(t *testing.T) {
+	t.Run("unset means shared", func(t *testing.T) {
 		m, err := LoadManifest([]byte(validManifest))
 		if err != nil {
 			t.Fatalf("LoadManifest: %v", err)
 		}
-		if got := m.Runtime.EffectiveLifecycle(); got != LifecycleResident {
-			t.Fatalf("EffectiveLifecycle = %q, want resident", got)
+		if got := m.Runtime.EffectiveLifecycle(); got != LifecycleShared {
+			t.Fatalf("EffectiveLifecycle = %q, want shared", got)
 		}
 	})
 
-	t.Run("per_task accepted", func(t *testing.T) {
-		m, err := LoadManifest([]byte(validManifest + "runtime:\n  lifecycle: per_task\n"))
+	t.Run("isolated accepted", func(t *testing.T) {
+		m, err := LoadManifest([]byte(validManifest + "runtime:\n  lifecycle: isolated\n"))
 		if err != nil {
 			t.Fatalf("LoadManifest: %v", err)
 		}
-		if got := m.Runtime.EffectiveLifecycle(); got != LifecyclePerTask {
-			t.Fatalf("EffectiveLifecycle = %q, want per_task", got)
+		if got := m.Runtime.EffectiveLifecycle(); got != LifecycleIsolated {
+			t.Fatalf("EffectiveLifecycle = %q, want isolated", got)
 		}
 	})
 

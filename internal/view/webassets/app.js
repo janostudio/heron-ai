@@ -2283,7 +2283,7 @@
     var runningCalls = items.agents.filter(function (agent) {
       return agent.status === "running";
     }).length;
-    // A per_task Team can hold several instances at once: "1 个 team 在跑" would
+    // An isolated team can hold several instances at once: "1 个 team 在跑" would
     // hide that three tasks are executing.
     var runningInstances = items.teams.reduce(function (sum, team) {
       return sum + (team.runningInstances || 0);
@@ -2344,7 +2344,7 @@
           el("span", { class: "run-name" }, team.name),
           meta.length ? el("span", { class: "run-badge" }, meta.join(" · ")) : null,
           running && team.runningInstances > 1
-            ? el("span", { class: "run-badge run-parallel", title: "并发的 per_task 实例数" },
+            ? el("span", { class: "run-badge run-parallel", title: "并发的 isolated 实例数" },
                 "×" + team.runningInstances)
             : null),
         el("div", { class: "run-node-calls" },

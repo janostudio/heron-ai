@@ -279,11 +279,11 @@ func (r *Runtime) postResult(ctx context.Context,
 		return nil
 	}
 	payload := map[string]any{"team_result": execution.result}
-	// A per_task Team's result carries its task context: the instance that
+	// An isolated Team's result carries its task context: the instance that
 	// dispatched it is woken to judge this task, and needs to read the records
-	// the task produced. Resident results carry no context — they are the
+	// the task produced. Shared results carry no context — they are the
 	// coordination layer and stay readable session-wide.
-	if execution.session.IsPerTask() && execution.session.TaskContextID != "" {
+	if execution.session.IsIsolated() && execution.session.TaskContextID != "" {
 		payload["task_context_id"] = execution.session.TaskContextID
 	}
 	// The entry Team is woken to answer the user, so it needs the question —

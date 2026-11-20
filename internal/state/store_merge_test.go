@@ -88,7 +88,7 @@ func TestSaveTeamConcurrentWritersAllLand(t *testing.T) {
 }
 
 // TestSaveAgentMergesConcurrentWriters pins the same contract for the per-call
-// agent state, which per_task instances of one Team share.
+// agent state, which isolated instances of one Team share.
 func TestSaveAgentMergesConcurrentWriters(t *testing.T) {
 	ctx := context.Background()
 	store := newMergeStore(t)
