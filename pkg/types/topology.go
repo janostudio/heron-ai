@@ -39,8 +39,8 @@ type TopologyTeam struct {
 	CallStatus map[string]string `json:"call_status,omitempty"`
 
 	// Instances is how many Team instances this session has created for the
-	// binding (1 for a resident Team, N for per_task); RunningInstances is how
-	// many of them are executing right now. A per_task Team can run several
+	// binding (1 for a shared Team, N for isolated); RunningInstances is how
+	// many of them are executing right now. An isolated Team can run several
 	// tasks at once, and a board that shows only "running" would hide that.
 	Instances        int `json:"instances,omitempty"`
 	RunningInstances int `json:"running_instances,omitempty"`

@@ -73,7 +73,7 @@
 |---|---|---|---|
 | `runtime.max_team_turns` | 100 / 每 FlowTurn | 合法的长编排被截断（先确认不是路由成环） | 调高会掩盖成环问题 |
 | `runtime.max_agent_rounds` | 200 | 同 §0，会与 `loop.max_rounds` 取 min | 同上 |
-| `runtime.max_active_team_sessions` | 8 | `per_task` 实例不够用（未关闭的实例计入配额） | 太高会累积未关闭实例 |
+| `runtime.max_active_team_sessions` | 8 | `isolated` 实例不够用（未关闭的实例计入配额） | 太高会累积未关闭实例 |
 | `logging.level` | `info` | 要 `model request usage` 之类细节 | 日志体积上涨 |
 | `tools.restricted_bash_phrases` | 内置 5 条 | 需要额外禁用某类命令 | 命中是"需审批"而非拒绝，无人审批时挂起 |
 

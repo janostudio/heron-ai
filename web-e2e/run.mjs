@@ -464,7 +464,7 @@ await run("record: multiple agents", async () => {
   check("运行中的 team 标出在跑的 call",
     (await page.locator(".run-node.running .run-node-calls").first().innerText()).includes("运行中"));
 
-  // Two per_task instances of analyze run at once: the node says ×2 and the
+  // Two isolated instances of analyze run at once: the node says ×2 and the
   // summary counts instances, not Teams.
   const summary = await page.locator(".run-summary").innerText();
   check("summary 按实例计数", summary.includes("当前 2 个 team / 3 个实例在跑"), summary);

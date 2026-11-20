@@ -45,11 +45,11 @@ func TestDispatch8SameTeamThreeTasksQueue(t *testing.T) {
 	if len(worker) != 3 {
 		t.Fatalf("worker ran %d times, want 3 (one execution per queued task)", len(worker))
 	}
-	// A resident team is one execution unit: its tasks may queue but must not
+	// A shared team is one execution unit: its tasks may queue but must not
 	// overlap.
 	for i := 1; i < len(worker); i++ {
 		if overlaps(worker[i-1], worker[i]) {
-			t.Fatalf("task %d and %d ran at the same time (%s..%s / %s..%s): a resident team must serialise its tasks",
+			t.Fatalf("task %d and %d ran at the same time (%s..%s / %s..%s): a shared team must serialise its tasks",
 				i, i+1,
 				worker[i-1].StartedAt.Format("15:04:05.000"), worker[i-1].FinishedAt.Format("15:04:05.000"),
 				worker[i].StartedAt.Format("15:04:05.000"), worker[i].FinishedAt.Format("15:04:05.000"))

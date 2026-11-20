@@ -20,8 +20,8 @@ type AgentRequest struct {
 	FlowTurnID    string
 	TeamID        string
 	// TeamSessionID is the Team instance this turn belongs to. Transcripts are
-	// keyed by it, so two per_task instances of the same Team get separate
-	// conversations while a resident instance keeps the historical key.
+	// keyed by it, so two isolated instances of the same Team get separate
+	// conversations while a shared instance keeps the historical key.
 	TeamSessionID      string
 	TeamTurnID         string
 	CallID             string
@@ -417,12 +417,12 @@ type RuntimeLimits struct {
 	// Activations beyond it are deferred to the next batch, not dropped.
 	MaxParallelTeams int `json:"max_parallel_teams"`
 
-	// MaxActiveTeamSessions bounds how many per_task Team instances one Flow
+	// MaxActiveTeamSessions bounds how many isolated Team instances one Flow
 	// session may keep open. Closed instances do not count, so a long session
 	// that finishes its tasks never hits the ceiling.
 	MaxActiveTeamSessions int `json:"max_active_team_sessions"`
 
-	// MaxTaskContextDepth bounds how deeply per_task instances may nest: a
+	// MaxTaskContextDepth bounds how deeply isolated instances may nest: a
 	// dispatched task may hand work to another task, but only this far.
 	MaxTaskContextDepth int `json:"max_task_context_depth"`
 

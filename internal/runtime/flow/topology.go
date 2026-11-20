@@ -66,7 +66,7 @@ func (r *Runtime) Topology(ctx context.Context, sessionID string) (types.FlowTop
 			CallStatus:  map[string]string{},
 		}
 
-		// per_task Teams can have several instances at once: the Team is running
+		// isolated Teams can have several instances at once: the Team is running
 		// when any of them is, and a Call is running when any instance runs it.
 		instances := teamInstances[name]
 		if len(instances) > 0 {

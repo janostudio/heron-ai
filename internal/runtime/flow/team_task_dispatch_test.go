@@ -11,7 +11,7 @@ import (
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
-func perTaskDefinitions() *types.Definitions {
+func isolatedDefinitions() *types.Definitions {
 	return &types.Definitions{
 		Flow: types.Flow{
 			ID:          "code-fix",
@@ -26,7 +26,7 @@ func perTaskDefinitions() *types.Definitions {
 				"dev": {
 					ID:        "dev",
 					TeamID:    "dev-team",
-					Lifecycle: types.TeamLifecyclePerTask,
+					Lifecycle: types.TeamLifecycleIsolated,
 					Inputs:    types.InputSpec{UserMessage: true},
 				},
 			},
@@ -38,11 +38,11 @@ func perTaskDefinitions() *types.Definitions {
 	}
 }
 
-func newPerTaskRuntime(t *testing.T) (*Runtime, *fakeTeamRuntime) {
+func newIsolatedRuntime(t *testing.T) (*Runtime, *fakeTeamRuntime) {
 	t.Helper()
 	writer := storage.NewJSONLSessionWriter(storage.NewFileStore(t.TempDir()))
 	fake := &fakeTeamRuntime{}
-	rt := newTestRuntime(perTaskDefinitions(), fake, writer, nil)
+	rt := newTestRuntime(isolatedDefinitions(), fake, writer, nil)
 	return rt, fake
 }
 
@@ -66,11 +66,11 @@ func dispatchTask(t *testing.T, rt *Runtime, sessionID, taskKey, dispatcher stri
 	return outcome
 }
 
-// TestRunTeamPerTaskReusesTheSameInstance is the core of "回到同一个任务":
+// TestRunTeamIsolatedReusesTheSameInstance is the core of "回到同一个任务":
 // one business key keeps one Team instance across dispatches, a second key runs
 // in parallel, and the handle comes back to the caller.
-func TestRunTeamPerTaskReusesTheSameInstance(t *testing.T) {
-	rt, fake := newPerTaskRuntime(t)
+func TestRunTeamIsolatedReusesTheSameInstance(t *testing.T) {
+	rt, fake := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 
@@ -98,11 +98,11 @@ func TestRunTeamPerTaskReusesTheSameInstance(t *testing.T) {
 		"the reused instance keeps its task context")
 }
 
-// TestRunTeamPerTaskRequiresTaskKey keeps the failure loud: without a key the
+// TestRunTeamIsolatedRequiresTaskKey keeps the failure loud: without a key the
 // task cannot be found again, so the dispatch is refused instead of creating an
 // orphan instance.
-func TestRunTeamPerTaskRequiresTaskKey(t *testing.T) {
-	rt, _ := newPerTaskRuntime(t)
+func TestRunTeamIsolatedRequiresTaskKey(t *testing.T) {
+	rt, _ := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 
@@ -115,10 +115,10 @@ func TestRunTeamPerTaskRequiresTaskKey(t *testing.T) {
 	require.Contains(t, outcome.Error, "task_key is required")
 }
 
-// TestRunTeamPerTaskRefusesForeignDispatcher pins ownership: the instance that
+// TestRunTeamIsolatedRefusesForeignDispatcher pins ownership: the instance that
 // dispatched a task owns it; another instance reusing the key is refused.
-func TestRunTeamPerTaskRefusesForeignDispatcher(t *testing.T) {
-	rt, _ := newPerTaskRuntime(t)
+func TestRunTeamIsolatedRefusesForeignDispatcher(t *testing.T) {
+	rt, _ := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 
@@ -130,10 +130,10 @@ func TestRunTeamPerTaskRefusesForeignDispatcher(t *testing.T) {
 	require.Contains(t, outcome.Error, "owned by")
 }
 
-// TestRunTeamResidentKeepsWorking guards the default: a resident Team still
+// TestRunTeamSharedKeepsWorking guards the default: a shared Team still
 // runs through the same path with no task_key at all.
-func TestRunTeamResidentKeepsWorking(t *testing.T) {
-	rt, fake := newPerTaskRuntime(t)
+func TestRunTeamSharedKeepsWorking(t *testing.T) {
+	rt, fake := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 
@@ -153,7 +153,7 @@ func TestRunTeamResidentKeepsWorking(t *testing.T) {
 // TestTaskCatalogSeesOnlyOwnTasks is the query side: an instance lists the
 // tasks it dispatched, not anybody else's.
 func TestTaskCatalogSeesOnlyOwnTasks(t *testing.T) {
-	rt, _ := newPerTaskRuntime(t)
+	rt, _ := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 	ctx := context.Background()
@@ -184,7 +184,7 @@ func TestTaskCatalogSeesOnlyOwnTasks(t *testing.T) {
 // the flow boundary: two unrelated repos run as two task instances, the caller
 // comes back to the first one, and abandoning the second leaves the first alone.
 func TestScenarioTwoReposThenReturn(t *testing.T) {
-	rt, fake := newPerTaskRuntime(t)
+	rt, fake := newIsolatedRuntime(t)
 	session, _ := mailboxTestSession(t)
 	writeFlowSession(t, rt, session)
 	ctx := context.Background()

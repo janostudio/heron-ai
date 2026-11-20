@@ -68,7 +68,7 @@ func (r *Runtime) ListTaskTrees(ctx context.Context, spec types.TaskCatalogSpec)
 			}
 		}
 		for _, session := range latest {
-			if !session.IsPerTask() || known[session.ID] {
+			if !session.IsIsolated() || known[session.ID] {
 				continue
 			}
 			if !contexts[session.TaskContextID] {
@@ -123,7 +123,7 @@ func (r *Runtime) GetTask(ctx context.Context, spec types.TaskCatalogSpec, taskK
 	return types.TaskInfo{}, fmt.Errorf("task %q not found among the tasks this instance dispatched", taskKey)
 }
 
-// taskSessions folds the per_task instances one caller dispatched, plus the
+// taskSessions folds the isolated instances one caller dispatched, plus the
 // last reply each produced.
 func (r *Runtime) taskSessions(ctx context.Context, spec types.TaskCatalogSpec) ([]types.TeamSession, map[string]string, error) {
 	events, err := r.replayFlowEvents(ctx, spec.FlowSessionID)
@@ -144,7 +144,7 @@ func (r *Runtime) taskSessions(ctx context.Context, spec types.TaskCatalogSpec) 
 
 	sessions := make([]types.TeamSession, 0, len(latest))
 	for _, session := range latest {
-		if !session.IsPerTask() {
+		if !session.IsIsolated() {
 			continue
 		}
 		if session.FlowSessionID != "" && session.FlowSessionID != spec.FlowSessionID {
@@ -184,7 +184,7 @@ func taskInfoOf(session types.TeamSession, lastReply string) types.TaskInfo {
 	}
 }
 
-// activeTaskCount counts the open per_task instances of one Flow session. Closed
+// activeTaskCount counts the open isolated instances of one Flow session. Closed
 // instances do not count: the limit is about work in flight, not about history.
 func (r *Runtime) activeTaskCount(ctx context.Context, sessionID string) (int, error) {
 	events, err := r.replayFlowEvents(ctx, sessionID)
@@ -204,7 +204,7 @@ func (r *Runtime) activeTaskCount(ctx context.Context, sessionID string) (int, e
 	}
 	count := 0
 	for _, session := range latest {
-		if session.IsPerTask() && session.Status != types.SessionClosed {
+		if session.IsIsolated() && session.Status != types.SessionClosed {
 			count++
 		}
 	}
@@ -296,7 +296,7 @@ func (r *Runtime) FindTasksBySubscription(ctx context.Context, flowSessionID, so
 	}
 	tasks := make([]types.TaskInfo, 0, 1)
 	for _, session := range latest {
-		if !session.IsPerTask() || session.Status == types.SessionClosed {
+		if !session.IsIsolated() || session.Status == types.SessionClosed {
 			continue
 		}
 		for _, subscription := range session.Subscriptions {

@@ -48,11 +48,11 @@ func (r *Runtime) RunTeam(ctx context.Context, spec types.TeamCallSpec) (types.T
 	lifecycle := binding.EffectiveLifecycle()
 	seq := 0
 	plan := taskDispatch{}
-	if lifecycle.IsPerTask() {
+	if lifecycle.IsIsolated() {
 		if strings.TrimSpace(spec.TaskKey) == "" {
 			return types.TeamCallOutcome{
 				Status: "failed",
-				Error:  fmt.Sprintf("team %q uses lifecycle per_task; task_key is required so the task can be found again", spec.TeamID),
+				Error:  fmt.Sprintf("team %q uses lifecycle isolated; task_key is required so the task can be found again", spec.TeamID),
 			}, nil
 		}
 		resolved, resolveErr := r.resolveTaskDispatch(ctx, session.ID, spec.TeamID, strings.TrimSpace(spec.TaskKey), spec.DispatchedBy)
@@ -316,7 +316,7 @@ func teamResponsibility(team types.Team) string {
 const teamSettleLimit = 5 * time.Minute
 
 // teamSlotWaitLimit bounds how long a dispatch waits for the instance it
-// targets. A resident Team runs one round at a time, so a second dispatch is
+// targets. A shared Team runs one round at a time, so a second dispatch is
 // queued work rather than a conflict — but a wedged round must not park the
 // caller forever, so the wait is bounded.
 const teamSlotWaitLimit = 30 * time.Minute
@@ -497,7 +497,7 @@ func totalToolCalls(result types.TeamTurnResult) int {
 // teamDeclaresTools reports whether any agent call of the given flow binding
 // declares at least one tool. It is what separates "an execution team that said
 // something instead of working" from "a team whose job is to answer", which the
-// taskDispatch is the resolved identity of one per_task dispatch: which
+// taskDispatch is the resolved identity of one isolated dispatch: which
 // instance runs it, and how many rounds it has already taken.
 type taskDispatch struct {
 	sessionSeq    int
@@ -534,7 +534,7 @@ func (r *Runtime) resolveTaskDispatch(
 	}
 	if dispatcher == nil || strings.TrimSpace(dispatcher.TeamSessionID) == "" {
 		return taskDispatch{}, fmt.Errorf(
-			"team %q uses lifecycle per_task; the caller instance is required to own the task", teamID)
+			"team %q uses lifecycle isolated; the caller instance is required to own the task", teamID)
 	}
 	events, err := r.replayFlowEvents(ctx, sessionID)
 	if err != nil {
@@ -563,7 +563,7 @@ func (r *Runtime) resolveTaskDispatch(
 	dispatcherContext := ""
 	var match *types.TeamSession
 	for _, session := range latest {
-		if session.TeamID != teamID || !session.IsPerTask() {
+		if session.TeamID != teamID || !session.IsIsolated() {
 			continue
 		}
 		if session.SessionSeq > maxSeq {
@@ -597,7 +597,7 @@ func (r *Runtime) resolveTaskDispatch(
 			created:       true,
 			depth:         dispatcherDepth + 1,
 			// A sub-task belongs to the dispatcher's task context; a Task
-			// dispatched by a resident instance roots a new one (set later
+			// dispatched by a shared instance roots a new one (set later
 			// from its own id).
 			taskContextID: dispatcherContext,
 		}, nil

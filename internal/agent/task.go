@@ -263,9 +263,9 @@ type AsyncToolExecutor struct {
 	// instanceBusy and instanceQueue serialize work per Team instance: the task
 	// holding instanceBusy is the one executing, the rest wait in FIFO order.
 	//
-	// Why here and not in the dispatcher: a resident Team is one execution unit,
+	// Why here and not in the dispatcher: a shared Team is one execution unit,
 	// so a second task for it is not an error, it is work that has to wait. The
-	// dispatcher refuses it because it cannot park it; the queue can. A per_task
+	// dispatcher refuses it because it cannot park it; the queue can. An isolated
 	// Team keys each task separately, so its tasks never meet in this map and
 	// still run concurrently.
 	instanceBusy  map[string]string
@@ -275,10 +275,10 @@ type AsyncToolExecutor struct {
 // instanceKeyOf names the execution slot a task occupies. Empty means "no
 // slot": a task that is not a Team dispatch runs without serialization.
 //
-// A per_task Team addresses instances by task_key, so two keys are two slots.
-// A resident Team has no key and shares one — including when the caller set a
+// An isolated Team addresses instances by task_key, so two keys are two slots.
+// A shared Team has no key and shares one — including when the caller set a
 // task_key anyway. The key alone cannot say which case it is: a model that
-// sends task_key to a resident Team is not asking for a second instance, it is
+// sends task_key to a shared Team is not asking for a second instance, it is
 // asking for the same one. Splitting the slot there let two dispatches both
 // start, and the second was then refused by the instance it had just been
 // allowed to run alongside.
@@ -297,7 +297,7 @@ func instanceKeyOf(task types.ToolTask) string {
 	}
 	key := task.FlowSessionID + "\x00" + teamID
 	lifecycle, _ := task.Arguments["lifecycle"].(string)
-	if strings.TrimSpace(lifecycle) != string(types.TeamLifecyclePerTask) {
+	if strings.TrimSpace(lifecycle) != string(types.TeamLifecycleIsolated) {
 		return key
 	}
 	if taskKey, _ := task.Arguments["task_key"].(string); strings.TrimSpace(taskKey) != "" {
@@ -452,7 +452,7 @@ func (e *AsyncToolExecutor) start(ctx context.Context, task types.ToolTask, forc
 	if !acquired {
 		// Stays queued, not failed: the caller gets a handle it can poll and the
 		// task keeps its place. A refusal here is what made two dispatches to one
-		// resident Team look like a conflict instead of a queue.
+		// shared Team look like a conflict instead of a queue.
 		logging.Info("tool task queued behind a running instance", map[string]any{
 			"task_id":         task.ID,
 			"flow_session_id": task.FlowSessionID,

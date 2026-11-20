@@ -48,7 +48,7 @@
 |---|---|
 | `session.created` / `.updated` | 会话创建 / 更新 |
 | `session.turn.started` / `.ended` | 一轮 flow turn 的生命周期。**终态只有一个事件**，怎么结束看 `stop_reason`，在等谁看 `awaiting` |
-| `session.team_session.created` / `.updated` | team 会话（`per_task` 下同一 team 多个） |
+| `session.team_session.created` / `.updated` | team 会话（`isolated` 下同一 team 多个） |
 | `session.team_turn.started` / `.ended` | team turn；**路由结果在这里** |
 | `session.record.published` / `.consumed` | record 发布 / 被消费 |
 | `session.recovery.*` / `session.mailbox.*` / `session.wakeup.*` | 恢复、信箱、自唤醒 |
@@ -180,7 +180,7 @@ jq -r 'select(.type=="session.agent_turn.completed")
 ```text
 flow_session_id  → sessions/<fs_id>/
   flow_turn_id (ft_…)   一次 flow 执行（一次提问会派生多个）
-    team_session_id     某个 Team 的会话（per_task 下同一 team 多个）
+    team_session_id     某个 Team 的会话（isolated 下同一 team 多个）
       team_turn_id (tt_…)  某个 team 的一次执行
         call_turn_id       <tt>:<call_id>
 ```

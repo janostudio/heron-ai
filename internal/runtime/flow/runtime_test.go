@@ -22,7 +22,7 @@ type fakeTeamRuntime struct {
 	mu        sync.Mutex
 	activated bool
 	// devSessions records the TeamSession each "dev" turn saw, in order. It is
-	// how the per_task tests pin instance reuse without asserting on events.
+	// how the isolated tests pin instance reuse without asserting on events.
 	devSessions []types.TeamSession
 	// allSessions records every turn's TeamSession, whatever the Team.
 	allSessions []types.TeamSession

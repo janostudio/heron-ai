@@ -185,11 +185,11 @@ func basisFromWorkspaceOps(operations []types.WorkspaceOperation) []types.BasisR
 }
 
 // taskContextOf is the task context a record produced by this session belongs
-// to. Only per_task instances are isolated: a resident session is the
+// to. Only isolated instances are isolated: a shared session is the
 // coordination layer, so its output stays readable session-wide even when the
 // turn was woken by a task.
 func taskContextOf(session types.TeamSession) string {
-	if session.IsPerTask() {
+	if session.IsIsolated() {
 		return session.TaskContextID
 	}
 	return ""

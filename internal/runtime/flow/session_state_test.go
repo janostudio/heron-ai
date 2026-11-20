@@ -114,7 +114,7 @@ func TestLoadAgentSessionsIgnoresMalformedPayload(t *testing.T) {
 
 // TestLoadTeamInstancesFoldsLatestPerInstance verifies the read path a
 // state-driven scheduler needs: the last status written for an instance wins,
-// and a per_task Team keeps one entry per instance rather than one per Team.
+// and an isolated Team keeps one entry per instance rather than one per Team.
 func TestLoadTeamInstancesFoldsLatestPerInstance(t *testing.T) {
 	rt, _ := newMailboxTestRuntime(t)
 	ctx := context.Background()

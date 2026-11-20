@@ -32,19 +32,19 @@ coordinator could not complete the task: team "coordinator" is already running i
 
 ```yaml
 # .agents/flows/<flow>.yml
-entry: entry-team          # 入口团队，强制 resident
+entry: entry-team          # 入口团队，强制 shared
 teams:
   - team: coordinator
-    # 未写 lifecycle → resident
+    # 未写 lifecycle → shared
   - team: worker
-    lifecycle: per_task    # 每个任务一个实例
+    lifecycle: isolated    # 每个任务一个实例
 ```
 
-- `resident`（默认）：一个共享会话。**串行** —— 同一时刻只跑一轮。
-- `per_task`：每个任务一个独立实例。**可并行**，受 `max_active_team_sessions` 限制
+- `shared`（默认）：一个共享会话。**串行** —— 同一时刻只跑一轮。
+- `isolated`：每个任务一个独立实例。**可并行**，受 `max_active_team_sessions` 限制
   （默认 8；本仓库设为 32，见 §6）。
 
-`entry` 不能用 `per_task`：它没有派发者，没人能给它建实例。引擎在加载配置时就拒绝
+`entry` 不能用 `isolated`：它没有派发者，没人能给它建实例。引擎在加载配置时就拒绝
 （`pkg/types/domain.go:296-303`）。
 
 ## 3. 并行不是靠"类型"，靠 busy 标记的 key
@@ -69,9 +69,9 @@ if err := r.acquireTeamSlot(ctx, session.ID, spec.TeamID, seq); err != nil {
 
 ```go
 // internal/runtime/flow/team_call.go:49
-seq := 0                       // resident：永远是 0
-if lifecycle.IsPerTask() {
-    seq = plan.sessionSeq      // per_task：每个任务一个序号
+seq := 0                       // shared：永远是 0
+if lifecycle.IsIsolated() {
+    seq = plan.sessionSeq      // isolated：每个任务一个序号
 }
 ```
 
@@ -79,18 +79,18 @@ busy 标记的 key 是 `{sessionID, teamID, seq}`（`dispatch.go:168`）。于�
 
 | lifecycle | key | 同一 team 的两个 call |
 |---|---|---|
-| resident | `{会话, team, 0}` | **撞**，第二个被拒 |
-| per_task | `{会话, team, 任务序号}` | 不撞，各自一个实例 |
+| shared | `{会话, team, 0}` | 同一个槽，第二个排队（§6 之前是被拒） |
+| isolated | `{会话, team, 任务序号}` | 不撞，各自一个实例 |
 
 所以"能不能并发"不是团队的类型属性，而是**配置项 + 派发时是否带了 task_key** 的结果。
 
 ## 4. 一次真实的撞车
 
-下面是改配置之前的现场（协调团队当时是 resident）。按 §6 把协调团队也改成 `per_task`
+下面是改配置之前的现场（协调团队当时是 shared）。按 §6 把协调团队也改成 `isolated`
 之后，这个场景不再发生 —— 保留它是因为撞车时的**后果**（回合判失败、任务却做完了）
 仍然成立，而那条路径没有随配置消失。
 
-假设入口团队已经把两个任务都交给同一个协调团队，后者是 resident：
+假设入口团队已经把两个任务都交给同一个协调团队，后者是 shared：
 
 ```
 t+0s    turn-1 开始（任务 A）
@@ -114,10 +114,10 @@ t+164s  turn-2 仍然以 failed 收尾
 ### ① 配置承诺与配置事实不一致
 
 协调团队的职责说明常常写着"可以并行派发给多个执行团队"。但执行团队里只有显式配了
-`per_task` 的才真的能并行。**并行派同一个 resident team 两次，第二次必然被拒。**
+`isolated` 的才真的能并行。**并行派同一个 shared team 两次，第二个只能等第一轮跑完（§6 之前是被拒）。**
 
-本仓库原先只有 `dev` 一个 `per_task`，其余 8 个执行团队和协调团队都是 resident ——
-职责说明承诺的并行能力只兑现了 1/9。现已按 §6 改为除入口外全部 `per_task`。
+本仓库原先只有 `dev` 一个 `isolated`，其余 8 个执行团队和协调团队都是 shared ——
+职责说明承诺的并行能力只兑现了 1/9。现已按 §6 改为除入口外全部 `isolated`。
 
 ### ② 同一件事有两条路径、两种策略
 
@@ -163,24 +163,24 @@ if reasons, noneSucceeded := failedTeamCalls(result.TeamResults); noneSucceeded 
 
 判定依据不是"它属于哪类角色"，而是"同一个 Flow session 里会不会同时有两个它的任务"。
 
-本仓库的实际选择是**除入口外全部 `per_task`**：
+本仓库的实际选择是**除入口外全部 `isolated`**：
 
 | team | lifecycle | 理由 |
 |---|---|---|
-| frontdesk | resident | 入口，引擎强制；且它是唯一用户出口，必须单实例 |
-| dev-lead 及其余 9 个 | per_task | 用户可能连续发多个任务，任何一个 team 成为串行点都会把后面的任务堵住 |
+| frontdesk | shared | 入口，引擎强制；且它是唯一用户出口，必须单实例 |
+| dev-lead 及其余 9 个 | isolated | 用户可能连续发多个任务，任何一个 team 成为串行点都会把后面的任务堵住 |
 
 两个前提必须同时满足，否则引擎拒绝加载：
 
-- 入口不能 `per_task` —— 没有派发者，没人给它建实例
-- 每个 `per_task` team 必须 `inputs.user_message: true` —— 否则派发的任务文本会被丢掉
+- 入口不能 `isolated` —— 没有派发者，没人给它建实例
+- 每个 `isolated` team 必须 `inputs.user_message: true` —— 否则派发的任务文本会被丢掉
 
-`per_task` 的实例不会自动关闭，未关闭的实例计入 `runtime.max_active_team_sessions`。
-默认值是 8，而本配置有 10 个 `per_task` team，一次完整任务链路就可能超限
+`isolated` 的实例不会自动关闭，未关闭的实例计入 `runtime.max_active_team_sessions`。
+默认值是 8，而本配置有 10 个 `isolated` team，一次完整任务链路就可能超限
 （`session already has 8 active task instances`）。因此 `.agents/settings.json` 把它设为 32。
 
-代价要说清：协调团队也 `per_task` 之后，**两个任务各有一个协调实例，进度不再汇入同一处**。
-并发度因此下移到了 frontdesk —— 它仍是 resident，两个协调实例的结果都要回到它。
+代价要说清：协调团队也 `isolated` 之后，**两个任务各有一个协调实例，进度不再汇入同一处**。
+并发度因此下移到了 frontdesk —— 它仍是 shared，两个协调实例的结果都要回到它。
 它是新的串行点，只是它只做转述，不参与编排，所以堵住的时长远小于协调团队。
 
 ### 引擎层
@@ -191,10 +191,10 @@ if reasons, noneSucceeded := failedTeamCalls(result.TeamResults); noneSucceeded 
 
 **排队槽位的 key 按 lifecycle 分槽**（已实现）：这是这次撞车的直接原因。执行队列原本用
 `(会话, team, task_key)` 当槽位 key —— 但 `task_key` 的有无不能说明目标是哪种 lifecycle。
-模型给一个 resident team 写了两个不同的 `task_key`（当时的文档说"只有 per_task 才需要"，
+模型给一个 shared team 写了两个不同的 `task_key`（当时的文档说"只有 isolated 才需要"，
 它写了也无害），队列把这当成两个实例、两个槽位，两次派发同时放行；而它们背后只有一个
 执行槽，第二个当场被拒。现在 `Team` 工具把目标的 lifecycle 写进任务参数，队列只在
-`per_task` 时才用 `task_key` 分槽，未知时按 resident 串行 —— 宁可慢，不会撞。
+`isolated` 时才用 `task_key` 分槽，未知时按 shared 串行 —— 宁可慢，不会撞。
 
 **补上成功保护**（待做）：`pendingFailure` 分支加与 `failedTeamCalls` 相同的判断 ——
 本回合有派发成功时，把失败降级为可见记录，不判回合失败。撞车不再是失败来源，但模型调用
@@ -210,12 +210,12 @@ drain 的触发条件是"上一个 turn 结束"，不是"目标 team 空闲"。�
 
 **已经改掉的三件：**
 
-1. **除入口外全部 `per_task`**（§6 配置层）—— 让同一 team 的不同任务各拿实例。
-2. **撞车改为排队**（§6 引擎层）—— resident 的第二个任务等第一轮跑完，不再失败。
+1. **除入口外全部 `isolated`**（§6 配置层）—— 让同一 team 的不同任务各拿实例。
+2. **撞车改为排队**（§6 引擎层）—— shared 的第二个任务等第一轮跑完，不再失败。
 3. **排队槽位按 lifecycle 分槽**（§6 引擎层）—— 修掉"两个 task_key 骗过队列、挤进一个
    执行槽"这个直接原因。
 
-**入口团队必须保持 resident**。引擎在加载配置时就拒绝入口用 `per_task`，理由是它没有派发者。
+**入口团队必须保持 shared**。引擎在加载配置时就拒绝入口用 `isolated`，理由是它没有派发者。
 
 **仍然要改的一件**：`pendingFailure` 一次失败判死整轮。撞车不再产生失败，但模型调用失败、
 工具失败仍走这条路径，而相邻分支已有"有派发成功就不算失败"的保护。这是独立问题。
@@ -224,7 +224,7 @@ drain 的触发条件是"上一个 turn 结束"，不是"目标 team 空闲"。�
 
 | 派发情形 | 现在 |
 |---|---|
-| 目标是 resident，它正在跑 | **排队**，等当前轮结束再执行 |
-| 目标是 `per_task`，`task_key` 与在跑的不同 | **新实例**，立即并发 |
-| 目标是 `per_task`，`task_key` 与在跑的相同 | **排队**，等同一实例跑完 |
+| 目标是 shared，它正在跑 | **排队**，等当前轮结束再执行 |
+| 目标是 `isolated`，`task_key` 与在跑的不同 | **新实例**，立即并发 |
+| 目标是 `isolated`，`task_key` 与在跑的相同 | **排队**，等同一实例跑完 |
 | 排队超过 30 分钟，或调用方取消 | 返回失败，错误写明是等待超时/取消，不是冲突 |

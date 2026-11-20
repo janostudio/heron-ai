@@ -106,7 +106,7 @@ tools:
 
 - **`models.json` 是唯一必需文件**：缺它或 `models` 为空，启动直接失败。
 - **`workspace.read_roots`**：只读扩展根，相对**进程 cwd** 解析；条目失效被跳过（不报错），代价是那一刻读不到。
-- **`lifecycle: per_task`** 必须同时 `inputs.user_message: true`，否则加载报错。
+- **`lifecycle: isolated`** 必须同时 `inputs.user_message: true`，否则加载报错。
 - **`settings.json` 的 `tools.restricted_bash_phrases`**：只增不减，命中变"需审批"。
 
 ## 5. 自检：`--check-config` 能拦什么
@@ -118,7 +118,7 @@ heron --check-config      # 退出码 0 才算合法
 | 能拦 | 拦不住 |
 |---|---|
 | `entry` / `agent` / `skill` / `rule` / `record` 引用缺失 | 未知键（静默丢弃） |
-| `per_task` 缺 `inputs.user_message`、entry 用 `per_task` | 数值语义（窗口写小、预算写紧） |
+| `isolated` 缺 `inputs.user_message`、entry 用 `isolated` | 数值语义（窗口写小、预算写紧） |
 | `loop.timeout` / `max_wall_time` / `hard_limit_ratio` | 字段缺失带来的默认行为 |
 | 比率顺序（`target < threshold < 硬限`） | 多个上限互相钳制（取 min） |
 

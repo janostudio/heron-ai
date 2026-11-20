@@ -99,8 +99,8 @@ bind:                              # 绑定进当前 flow（省略则不绑定�
 | `inputs` | 输入声明 |
 | `on_proceed` | 结束后的固定路由 |
 
-> **`bind` 没有 `lifecycle` 键**：Define 建不出 `per_task` 绑定（写了也会被忽略，
-> 最终是 `resident`）。确实需要 `per_task`，只能手写 flow 文件——而且它要求同时声明
+> **`bind` 没有 `lifecycle` 键**：Define 建不出 `isolated` 绑定（写了也会被忽略，
+> 最终是 `shared`）。确实需要 `isolated`，只能手写 flow 文件——而且它要求同时声明
 > `inputs.user_message: true`，否则加载期报错。
 
 ## create 与 upsert

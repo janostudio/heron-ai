@@ -122,7 +122,7 @@ body { overflow: hidden; }
   overflow: hidden; text-overflow: ellipsis; }
 .run-badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border);
   border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
-/* Several instances of one per_task Team executing at once. */
+/* Several instances of one isolated Team executing at once. */
 .run-badge.run-parallel { color: var(--accent); border-color: var(--accent);
   background: rgba(76, 141, 255, .12); font-weight: 600; }
 

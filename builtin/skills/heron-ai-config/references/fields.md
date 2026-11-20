@@ -38,7 +38,7 @@ Flow → Team 绑定 → Call(agent | command | webhook) → Agent
 | 必 | `team` | 指向 `.agents/teams/` 下的真实 Team id |
 | 选 | `can_activate` | 本绑定可激活的 Team。**不写 = 谁也不能激活**；被激活者结束后回到激活者 |
 | 选 | `depends_on` | 前置 Team（完成后本 Team 才执行） |
-| 选 | `lifecycle` | `resident`（默认，一个 FlowSession 一个 TeamSession）/ `per_task`（每任务一个）。**entry 禁止 per_task**；`per_task` 必须同时 `inputs.user_message: true`，否则加载报错 |
+| 选 | `lifecycle` | `shared`（默认，一个 FlowSession 一个 TeamSession）/ `isolated`（每任务一个）。**entry 禁止 isolated**；`isolated` 必须同时 `inputs.user_message: true`，否则加载报错 |
 | 选 | `inputs` | 用户消息 + SharedRecord 输入 |
 | 选 | `on_proceed` | Team 以 `proceed` 结束后的固定路由 |
 | 禁 | `coordinator` | 已移除；写了加载报错并给出替代写法 |

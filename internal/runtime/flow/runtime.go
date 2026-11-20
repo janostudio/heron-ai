@@ -66,11 +66,11 @@ type Runtime struct {
 	// getting it wrong means either refusing a live turn or resuming a dead one.
 	turnMu       sync.Mutex
 	runningTurns map[string]bool
-	// seqMu serializes per_task instance ordinal allocation. The ordinal is read
+	// seqMu serializes isolated instance ordinal allocation. The ordinal is read
 	// from the event stream and then incremented, so without it two dispatches
 	// from one model response can pick the same number and collide.
 	seqMu sync.Mutex
-	// allocatedSeq remembers the highest per_task ordinal handed out per session
+	// allocatedSeq remembers the highest isolated ordinal handed out per session
 	// in this process, so an instance whose created-event has not been written
 	// yet still reserves its number.
 	allocatedSeq map[string]int
@@ -1442,18 +1442,18 @@ type activation struct {
 	force      bool
 	attempt    int
 	recoveryOf string
-	// sessionSeq is the per_task instance ordinal. 0 means the resident
+	// sessionSeq is the isolated instance ordinal. 0 means the shared
 	// session, so a route activation (which carries no ord) cannot silently
 	// run a Team whose binding asks for one instance per task.
 	sessionSeq int
-	// taskKey and taskContextID are the task identity of a per_task dispatch.
-	// They are empty for resident activations.
+	// taskKey and taskContextID are the task identity of an isolated dispatch.
+	// They are empty for shared activations.
 	taskKey       string
 	taskContextID string
-	// taskDepth is the nesting depth inside the task context (resident
+	// taskDepth is the nesting depth inside the task context (shared
 	// dispatchers start at 1).
 	taskDepth int
-	// authorization is the frozen permission of the task (nil for resident
+	// authorization is the frozen permission of the task (nil for shared
 	// sessions and for tasks dispatched without a grant).
 	authorization *types.AuthorizationGrant
 	// subscriptions are the sources whose events belong to this task.
@@ -1559,9 +1559,9 @@ func limitActivations(items []activation, max int) ([]activation, []activation) 
 // so the routing that put this activation on the queue and the Team it now
 // runs are guaranteed to come from the same generation. This runs inside the
 // turn's parallel batch, so it must not re-read the store.
-// teamSessionID derives a Team instance id. Resident sessions keep the
+// teamSessionID derives a Team instance id. Shared sessions keep the
 // historical two-part id (so existing transcripts and state files still
-// resolve); per_task sessions append their ordinal, which is what makes two
+// resolve); isolated sessions append their ordinal, which is what makes two
 // tasks of the same Team independent.
 func teamSessionID(flowSessionID, teamID string, seq int) string {
 	if seq > 0 {
@@ -1595,14 +1595,14 @@ func (r *Runtime) executeTeamTurn(
 	}
 
 	lifecycle := binding.EffectiveLifecycle()
-	if lifecycle.IsPerTask() && current.sessionSeq <= 0 {
+	if lifecycle.IsIsolated() && current.sessionSeq <= 0 {
 		return execution, fmt.Errorf(
-			"team %q uses lifecycle per_task and must be dispatched as a task (Team tool with task_key), not activated by route",
+			"team %q uses lifecycle isolated and must be dispatched as a task (Team tool with task_key), not activated by route",
 			current.teamID)
 	}
-	if !lifecycle.IsPerTask() && current.sessionSeq > 0 {
+	if !lifecycle.IsIsolated() && current.sessionSeq > 0 {
 		return execution, fmt.Errorf(
-			"team %q is resident but the activation carried instance %d",
+			"team %q is shared but the activation carried instance %d",
 			current.teamID, current.sessionSeq)
 	}
 	teamSession := types.TeamSession{
@@ -1624,7 +1624,7 @@ func (r *Runtime) executeTeamTurn(
 		CreatedAt:        session.CreatedAt,
 		UpdatedAt:        time.Now().UTC(),
 	}
-	if lifecycle.IsPerTask() && teamSession.TaskContextID == "" {
+	if lifecycle.IsIsolated() && teamSession.TaskContextID == "" {
 		// A dispatched task roots its own task context; descendants inherit it.
 		teamSession.TaskContextID = teamSession.ID
 	}
@@ -2275,7 +2275,7 @@ func (r *Runtime) runningTeams(ctx context.Context, sessionID string) ([]string,
 		return nil, err
 	}
 	live := r.liveIndexFor(sessionID)
-	// Per instance, not per Team: one finished per_task instance must not make
+	// Per instance, not per Team: one finished isolated instance must not make
 	// a still-running sibling look finished (and the reverse).
 	started := make(map[string]bool)
 	finished := make(map[string]bool)
@@ -2975,10 +2975,10 @@ func teamInput(input string, spec types.InputSpec) string {
 	return ""
 }
 
-// recordTaskContextOf mirrors the rule used for call records: only per_task
+// recordTaskContextOf mirrors the rule used for call records: only isolated
 // instances isolate their output; the coordination layer stays session-wide.
 func recordTaskContextOf(session types.TeamSession) string {
-	if session.IsPerTask() {
+	if session.IsIsolated() {
 		return session.TaskContextID
 	}
 	return ""
@@ -3366,7 +3366,7 @@ func selectFlowRecordsInContext(records []types.SharedRecord, spec types.InputSp
 		// Tasks are isolated by context: a record produced inside one task
 		// context is invisible outside it. Records with no context belong to the
 		// session-wide layer (coordination output) and stay visible to everyone,
-		// which is what keeps a resident coordinator readable to its tasks.
+		// which is what keeps a shared coordinator readable to its tasks.
 		if record.Producer.TaskContextID != "" && record.Producer.TaskContextID != taskContextID {
 			continue
 		}

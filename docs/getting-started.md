@@ -144,12 +144,12 @@ heron --check-config
 生命周期：
 
 ```
-default      team=hello_team   lifecycle=resident
-flow default: 1 bindings ok (0 per_task)
+default      team=hello_team   lifecycle=shared
+flow default: 1 bindings ok (0 isolated)
 ```
 
 退出码 0 表示配置合法；非 0 会把 loader 的错误打到 stderr，例如 agent 名对不上、
-record 引用未声明、`per_task` 绑定缺 `inputs.user_message`。**每次改完配置先跑这一步**，
+record 引用未声明、`isolated` 绑定缺 `inputs.user_message`。**每次改完配置先跑这一步**，
 比跑一整轮对话再猜原因快得多。
 
 ## 6. 跑起来

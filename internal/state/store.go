@@ -144,7 +144,7 @@ func (s *Store) LoadAgent(ctx context.Context, sessionID, teamID, callID string)
 }
 
 // SaveAgent persists one Agent call's session-scoped state, with the same
-// merge semantics as SaveTeam: the per-call key is shared by every per_task
+// merge semantics as SaveTeam: the per-call key is shared by every isolated
 // instance of the Team, so concurrent writers must not erase each other.
 func (s *Store) SaveAgent(ctx context.Context, snapshot types.StateSnapshot) error {
 	snapshot.Scope = types.StateScopeAgent

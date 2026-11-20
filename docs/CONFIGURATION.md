@@ -38,7 +38,7 @@ heron
 | [models.json](./configuration/models.md) | Yes | Model registry and API keys |
 | [settings.json](./configuration/settings.md) | No | Engine behavior tuning; inert sections are called out explicitly |
 | [Flow](./configuration/flow.md) | Yes | Entry Team, Team bindings and signal routing (no Stage concept) |
-| [Team](./configuration/team.md) | Yes | Agent scheduling (parallel/sequential, per_task) |
+| [Team](./configuration/team.md) | Yes | Agent scheduling (parallel/sequential, isolated) |
 | [Agent](./configuration/agent.md) | Yes | Persona, tools, loop, hooks |
 | [Skill](./configuration/skill.md) | No | Packaged tool + prompt combinations |
 | [Knowledge](./configuration/knowledge.md) | No | Markdown knowledge entries (agentic search, no index) |

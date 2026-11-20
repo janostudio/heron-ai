@@ -46,7 +46,7 @@ func (p *serialProbe) peak() int {
 	return p.maxActive
 }
 
-// TestAsyncExecutorSerializesOneTeamInstance covers the queue a resident Team
+// TestAsyncExecutorSerializesOneTeamInstance covers the queue a shared Team
 // needs: a second task for the same instance waits instead of failing, runs
 // after the first, and both finish.
 //
@@ -84,10 +84,10 @@ func TestAsyncExecutorSerializesOneTeamInstance(t *testing.T) {
 	assert.Equal(t, 1, probe.peak(), "one Team instance runs one task at a time")
 }
 
-// TestAsyncExecutorRunsPerTaskKeysConcurrently covers the other half: two
-// task_key values are two instances of a per_task Team, so they must not wait
+// TestAsyncExecutorRunsIsolatedKeysConcurrently covers the other half: two
+// task_key values are two instances of an isolated Team, so they must not wait
 // for each other.
-func TestAsyncExecutorRunsPerTaskKeysConcurrently(t *testing.T) {
+func TestAsyncExecutorRunsIsolatedKeysConcurrently(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	store := NewFileToolTaskStore(files)
 	probe := &serialProbe{duration: 120 * time.Millisecond}
@@ -102,7 +102,7 @@ func TestAsyncExecutorRunsPerTaskKeysConcurrently(t *testing.T) {
 			ToolName:      "TeamRun",
 			Arguments: map[string]any{
 				"team_id": "probe", "task_key": id, "task_id": id,
-				"lifecycle": string(types.TeamLifecyclePerTask),
+				"lifecycle": string(types.TeamLifecycleIsolated),
 			},
 		}))
 	}
@@ -116,21 +116,21 @@ func TestAsyncExecutorRunsPerTaskKeysConcurrently(t *testing.T) {
 			}
 		}
 		return done == 2
-	}, 5*time.Second, 20*time.Millisecond, "both per_task instances must finish")
+	}, 5*time.Second, 20*time.Millisecond, "both isolated instances must finish")
 
 	assert.Equal(t, 2, probe.peak(), "distinct task_key values are distinct instances")
 }
 
-// TestAsyncExecutorSerializesResidentTeamWithDistinctTaskKeys covers the
+// TestAsyncExecutorSerializesSharedTeamWithDistinctTaskKeys covers the
 // regression that made two dispatches collide: a model sent a different
-// task_key to a resident Team, the queue read the two keys as two instances and
+// task_key to a shared Team, the queue read the two keys as two instances and
 // started both, and the second was then refused by the single execution slot
 // behind them — the caller was told its task failed, when the only thing that
 // happened is that it had to wait.
 //
-// A resident Team has one instance per session no matter what the caller wrote
+// A shared Team has one instance per session no matter what the caller wrote
 // in task_key, so the queue must serialize on the Team alone.
-func TestAsyncExecutorSerializesResidentTeamWithDistinctTaskKeys(t *testing.T) {
+func TestAsyncExecutorSerializesSharedTeamWithDistinctTaskKeys(t *testing.T) {
 	files := storage.NewFileStore(t.TempDir())
 	store := NewFileToolTaskStore(files)
 	probe := &serialProbe{duration: 60 * time.Millisecond}
@@ -139,13 +139,13 @@ func TestAsyncExecutorSerializesResidentTeamWithDistinctTaskKeys(t *testing.T) {
 	for _, id := range []string{"task-x", "task-y"} {
 		require.NoError(t, async.Start(context.Background(), types.ToolTask{
 			ID:            id,
-			FlowSessionID: "fs_resident",
+			FlowSessionID: "fs_shared",
 			TeamID:        "frontdesk",
 			ToolCallID:    "call-" + id,
 			ToolName:      "TeamRun",
 			Arguments: map[string]any{
 				"team_id": "worker", "task_key": id, "task_id": id,
-				"lifecycle": string(types.TeamLifecycleResident),
+				"lifecycle": string(types.TeamLifecycleShared),
 			},
 		}))
 	}
@@ -159,9 +159,9 @@ func TestAsyncExecutorSerializesResidentTeamWithDistinctTaskKeys(t *testing.T) {
 			}
 		}
 		return done == 2
-	}, 5*time.Second, 20*time.Millisecond, "both resident tasks must finish, one after the other")
+	}, 5*time.Second, 20*time.Millisecond, "both shared tasks must finish, one after the other")
 
-	assert.Equal(t, 1, probe.peak(), "a resident Team runs one task at a time however the caller keyed it")
+	assert.Equal(t, 1, probe.peak(), "a shared Team runs one task at a time however the caller keyed it")
 }
 
 // TestAsyncExecutorRunsDifferentTeamsConcurrently guards the boundary: two

@@ -560,7 +560,7 @@ func writeModelsJSON(t *testing.T, root, model string) {
 // instance per task, and which teams it does not ship.
 func TestInstallSummaryCarriesLifecycleAndRequiredTeams(t *testing.T) {
 	manifest, err := teamspkg.LoadManifest([]byte(testManifestText() +
-		"runtime:\n  lifecycle: per_task\nrequires:\n  teams: [lint-team]\n"))
+		"runtime:\n  lifecycle: isolated\nrequires:\n  teams: [lint-team]\n"))
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestInstallSummaryCarriesLifecycleAndRequiredTeams(t *testing.T) {
 	text := out.String()
 
 	for _, want := range []string{
-		"lifecycle: per_task",
+		"lifecycle: isolated",
 		"dispatch it with a task_key",
 		"Requires teams (install separately): lint-team",
 	} {
@@ -585,9 +585,9 @@ func TestInstallSummaryCarriesLifecycleAndRequiredTeams(t *testing.T) {
 	}
 }
 
-// TestInstallSummaryStaysResidentByDefault keeps the common case quiet: no
+// TestInstallSummaryStaysSharedByDefault keeps the common case quiet: no
 // lifecycle line, no task_key paragraph.
-func TestInstallSummaryStaysResidentByDefault(t *testing.T) {
+func TestInstallSummaryStaysSharedByDefault(t *testing.T) {
 	manifest, err := teamspkg.LoadManifest([]byte(testManifestText()))
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
@@ -598,9 +598,9 @@ func TestInstallSummaryStaysResidentByDefault(t *testing.T) {
 	text := out.String()
 
 	if strings.Contains(text, "lifecycle:") {
-		t.Fatalf("resident package must not suggest a lifecycle line:\n%s", text)
+		t.Fatalf("shared package must not suggest a lifecycle line:\n%s", text)
 	}
 	if strings.Contains(text, "task_key") {
-		t.Fatalf("resident package must not mention task_key:\n%s", text)
+		t.Fatalf("shared package must not mention task_key:\n%s", text)
 	}
 }

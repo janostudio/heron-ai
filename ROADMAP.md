@@ -11,7 +11,7 @@
 - [x] 信号路由：`continue` / `wait_input` / `goal_achieved` / `goal_failed` / `goal_impossible`
 - [x] Team 内并行 call 与 `depends_on` 依赖
 - [x] 层间 `SharedRecord` 传递，含 `${records.*}` 模板与 flow 作用域副本
-- [x] `per_task` 生命周期与嵌套深度限制
+- [x] `isolated` 生命周期与嵌套深度限制
 - [x] 每轮结束保持会话可续，失败只作用于当轮
 
 **Agent 运行时**

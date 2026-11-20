@@ -32,7 +32,7 @@ import (
 type teamKey struct {
 	sessionID string
 	teamID    string
-	// seq is the per_task instance ordinal (0 for the resident session), so two
+	// seq is the isolated instance ordinal (0 for the shared session), so two
 	// tasks of the same Team are two independent execution slots.
 	seq int
 }
@@ -158,7 +158,7 @@ func (r *Runtime) tryMarkTeamBusy(sessionID, teamID string) bool {
 }
 
 // tryMarkTeamBusySeq is tryMarkTeamBusy for one instance: seq 0 is the
-// resident session, a positive seq is a per_task instance.
+// shared session, a positive seq is an isolated instance.
 func (r *Runtime) tryMarkTeamBusySeq(sessionID, teamID string, seq int) bool {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
@@ -196,7 +196,7 @@ func (r *Runtime) teamBusy(sessionID, teamID string) bool {
 // running-team check read it: a Team running in another session must neither
 // be reported as interrupted in this one nor block its input.
 // liveTeamSessionsFor returns the Team instances executing in one session,
-// keyed by TeamSessionID. Interruption detection uses it: two per_task
+// keyed by TeamSessionID. Interruption detection uses it: two isolated
 // instances of one Team are two executions, so "is this turn still running?"
 // has to be answered per instance, not per Team.
 func (r *Runtime) liveTeamSessionsFor(sessionID string) map[string]bool {
