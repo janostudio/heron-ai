@@ -120,6 +120,11 @@ tool 消息，若超过 `MicrocompactThresholdChars`（默认 8192 字符），�
 4. 摘要合并进 `existingSummary`，以 `## Compacted Agent Context` marker 塞回上下文（作为一条 user 消息）；合并时**新摘要完整保留、旧摘要从尾部先截**，超预算再保留头尾丢中间——摘要结尾是 `Current Work` / `Next Step`，正是下一回合要照着做的
 5. 多层兜底：trim tool 消息 → trim 摘要 → 实在不行删摘要
 
+**压缩事件**：每次真的改了上下文的压缩都会写一条 `session.context.compacted`，
+payload 是 `summary` + `dropped_count`。`summary` 是**实际进入上下文**的摘要——
+上面第 5 步把摘要删掉时它就是空串；只要丢了消息组，即使没有摘要也会写事件，
+否则这次压缩在会话记录里不留痕迹，事后再也解释不了上下文为什么变短。
+
 **不压的情形**：一次压缩若丢弃量不足窗口的 5%，直接跳过（已超硬限时除外），
 不付这次摘要调用。空压缩只花钱、只脏上下文，不释放空间。
 
