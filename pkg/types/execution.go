@@ -520,6 +520,17 @@ type SessionCreator interface {
 	CreateSession(ctx context.Context, flowID string) (FlowSession, error)
 }
 
+// FlowRuntimeStopper is implemented by a runtime that owns background work of
+// its own — the wake-up scheduler loop and the turns that loop fires.
+//
+// It is separate from FlowRuntime rather than a sixth method on it: a stub that
+// only answers Start/Resume in a test has no background work to stop, and
+// forcing it to spell that out adds a method every implementation would leave
+// empty.
+type FlowRuntimeStopper interface {
+	Stop()
+}
+
 // RichFlowRuntime is an optional transport extension for structured content.
 // The compatibility-oriented FlowRuntime interface remains string-based.
 type RichFlowRuntime interface {

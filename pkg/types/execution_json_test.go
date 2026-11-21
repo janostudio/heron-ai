@@ -136,7 +136,7 @@ func TestCallResultUnmarshalPublishedPayload(t *testing.T) {
 	const payload = `{
 		"status": "completed",
 		"reply": "hi",
-		"call_turn_id": "tt_5eb9655c3700b924:answer",
+		"call_turn_id": "tt_test_answer:answer",
 		"agent_id": "assistant",
 		"records": [],
 		"next": {"action": "proceed"},
@@ -167,7 +167,7 @@ func TestCallResultUnmarshalPublishedPayload(t *testing.T) {
 
 	require.Equal(t, TurnCompleted, result.Status)
 	require.Equal(t, "hi", result.Reply)
-	require.Equal(t, "tt_5eb9655c3700b924:answer", result.CallTurnID)
+	require.Equal(t, "tt_test_answer:answer", result.CallTurnID)
 	require.Equal(t, "assistant", result.AgentID)
 	require.Equal(t, 2195, result.Usage.PromptTokens)
 	require.Equal(t, 2276, result.Usage.TotalTokens)
@@ -291,8 +291,8 @@ func TestTeamTurnResultWireFormatIsSnakeCase(t *testing.T) {
 func TestTeamTurnResultUnmarshalPublishedPayload(t *testing.T) {
 	const payload = `{
 		"turn": {
-			"id": "tt_7b562393f6deca50",
-			"flow_turn_id": "ft_b6a1a45aaea98e86",
+			"id": "tt_test_turn",
+			"flow_turn_id": "ft_test_flow",
 			"team_session_id": "fs_test_session:default",
 			"team_id": "default",
 			"attempt": 1,
@@ -309,7 +309,7 @@ func TestTeamTurnResultUnmarshalPublishedPayload(t *testing.T) {
 			"answer": {
 				"status": "completed",
 				"reply": "请问有什么可以帮您？",
-				"call_turn_id": "tt_7b562393f6deca50:answer",
+				"call_turn_id": "tt_test_turn:answer",
 				"agent_id": "assistant",
 				"next": {"action": "proceed"},
 				"usage": {"prompt_tokens": 2295, "completion_tokens": 7, "total_tokens": 2302},
@@ -329,8 +329,8 @@ func TestTeamTurnResultUnmarshalPublishedPayload(t *testing.T) {
 	var result TeamTurnResult
 	require.NoError(t, json.Unmarshal([]byte(payload), &result))
 
-	require.Equal(t, "tt_7b562393f6deca50", result.Turn.ID)
-	require.Equal(t, "ft_b6a1a45aaea98e86", result.Turn.FlowTurnID)
+	require.Equal(t, "tt_test_turn", result.Turn.ID)
+	require.Equal(t, "ft_test_flow", result.Turn.FlowTurnID)
 	require.Equal(t, "default", result.Turn.TeamID)
 	require.Equal(t, 1, result.Turn.Attempt)
 	require.Equal(t, StopEndTurn, result.Turn.StopReason)
@@ -346,7 +346,7 @@ func TestTeamTurnResultUnmarshalPublishedPayload(t *testing.T) {
 	callResult, ok := result.CallResults["answer"]
 	require.True(t, ok, `payload.team_result.call_results["answer"] missing`)
 	require.Equal(t, TurnCompleted, callResult.Status)
-	require.Equal(t, "tt_7b562393f6deca50:answer", callResult.CallTurnID)
+	require.Equal(t, "tt_test_turn:answer", callResult.CallTurnID)
 	require.Equal(t, "assistant", callResult.AgentID)
 	require.Equal(t, 2295, callResult.Usage.PromptTokens)
 }

@@ -24,10 +24,14 @@
 事件订阅在 `internal/storage/session.go`。
 
 除上表外，`--serve` 还注册了 `GET /api/health`（就绪探针，返回 `ready`、`version`、
-`commit`、`pending_wakeups`、`sessions_loaded`，免 token）、`GET /api/status`、
+`commit`、`pending_wakeups`、`sessions_loaded`，免 token）、`GET /metrics`（进程计数器，
+Prometheus 文本格式，与其它 API 一样需要 Bearer token）、`GET /api/status`、
 `GET /api/result`、`POST /api/resume`、`POST /api/cancel`、`POST /api/approvals`、
 `GET/POST /api/recovery*`、`GET/POST /api/tasks*` 与 `GET /api/media`。完整清单以
 `cmd/server/main.go` 的注册为准，`docs/CLI.md` 有对照表。
+
+`/metrics` 的数值是进程本地的，重启归零——它回答的是"这个进程现在在动吗"，不是
+历史累计。指标名与埋点位置见 `internal/metrics` 与 `internal/runtime/flow/metrics.go`。
 
 ### 1.2 浏览器实际走的是「常驻跟随 + 同步提交」
 

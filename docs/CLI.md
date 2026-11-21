@@ -211,6 +211,7 @@ Endpoints (registered in `cmd/server/main.go`):
 |--------|------|---------|
 | GET | `/` | Web UI (static assets, served from the same process) |
 | GET | `/api/health` | Readiness plus `pending_wakeups` and `sessions_loaded` |
+| GET | `/metrics` | Process counters in Prometheus text (turns, wake-ups); needs the same bearer token as the rest of the API |
 | POST | `/api/run` | Start a run, or continue one when the body carries `flow_session_id` |
 | POST | `/api/sessions` | Alias of `/api/run` |
 | POST | `/api/sessions/turn` | Send another input to an existing session (`?session_id=`) — **synchronous**, answers when the turn finishes |

@@ -22,9 +22,10 @@ model registry (endpoints and keys), `settings.json` is engine behavior.
 | `env` | `ConfigLoader.LoadGlobalEnv` | Env vars injected into every subprocess |
 
 Sections that are **not** read by any code path are listed in
-[Inert sections](#inert-sections). Writing them does not fail — the engine
-ignores them — so they are documented here to stop readers from tuning a knob
-that does nothing.
+[Inert sections](#inert-sections). Writing one does not fail, but it is not
+silent either: every key no section reads is reported at startup and by
+`heron --check-config`, together with the closest accepted name when the key
+looks like a typo. See [Unknown keys](#unknown-keys).
 
 ## logging
 
@@ -361,11 +362,37 @@ the process environment instead.
 
 Explicitly configured values win over the process's existing environment.
 
+## Unknown keys
+
+Any key that no section reads is reported, not rejected:
+
+```text
+$ heron --check-config
+warning: .agents/settings.json: unknown setting "runtme" (did you mean "runtime"?)
+warning: .agents/settings.json: unknown setting "web.timeout_ms"
+```
+
+The same lines go to the execution log at startup (`warn` level), so a server
+that is already running reports its configuration problems in the log it
+already collects.
+
+- Paths are exact: `mcp[0].arg` names an array element, `web.timeout_ms` names a
+  nested key.
+- A suggestion appears only when the name is close to an accepted one — an edit
+  distance of at most two, or one for keys of four characters or fewer — and an
+  adjacent-character swap counts as one edit (`nmae` → `name`).
+- Names are matched the way `encoding/json` matches them, so a case difference
+  (`Web`) is read rather than reported.
+- Map keys are user data, not schema: `env` and `headers` accept any name.
+- Reporting is not failure: a settings file written for a newer build still
+  starts. It is only a statement that the key has no reader.
+
 ## Inert sections
 
-These sections appear in older configurations. No code path reads them; they are
-documented here rather than silently interpreted. `configs/settings.json` in this
-repository already contains none of them.
+These sections appear in older configurations. No code path reads them, and
+[the unknown-key report](#unknown-keys) names them when they are present. They
+stay documented so a reader can tell "this was removed" from "this was never
+here". `configs/settings.json` in this repository contains none of them.
 
 | Section | Status | Why |
 |---------|--------|-----|
