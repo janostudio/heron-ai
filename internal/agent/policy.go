@@ -112,15 +112,19 @@ func (p *DefaultToolPolicy) Check(_ context.Context, req ToolPolicyRequest) (Too
 	if name == "" {
 		return ToolDeny, "tool name is empty", nil
 	}
+	// One lookup, two questions: the posture is asked once and then routed, so a
+	// tool cannot be allowed by the first read and asked by the second.
+	posture := ToolAllow
 	if types.Governed(name) {
-		if p.posture.DecisionFor(name) == types.PermissionDeny {
-			return ToolDeny, fmt.Sprintf("permissions: %s in this runtime", p.posture.DescribeTool(name)), nil
-		}
+		posture = decisionOf(p.posture.DecisionFor(name))
+	}
+	if posture == ToolDeny {
+		return ToolDeny, fmt.Sprintf("permissions: %s in this runtime", p.posture.DescribeTool(name)), nil
 	}
 	if reason, hit := p.floorHit(name, req.Call.Arguments); hit {
 		return ToolRequireApproval, reason, nil
 	}
-	if types.Governed(name) && p.posture.DecisionFor(name) == types.PermissionAsk {
+	if posture == ToolRequireApproval {
 		// The reason names the tool and its posture: "ask" without a reason is the
 		// prompt-with-no-information this design exists to replace.
 		return ToolRequireApproval, fmt.Sprintf("permissions: %s in this runtime", p.posture.DescribeTool(name)), nil
