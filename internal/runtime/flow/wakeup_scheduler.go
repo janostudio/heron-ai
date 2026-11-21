@@ -78,9 +78,13 @@ func (r *Runtime) RecoverWakeups(ctx context.Context) int {
 // It is called when there is something to wait for: a registration, or
 // recovered records with future deadlines. A process with no timers holds no
 // goroutine.
+//
+// The loop runs under the runtime's lifecycle context, not context.Background():
+// the latter left it with no way to stop except process exit, so a runtime that
+// was rebuilt after a reload kept the previous loop alive alongside the new one.
 func (r *Runtime) StartWakeupSchedulerAsync() {
 	r.wakeupOnce.Do(func() {
-		go r.RunWakeupScheduler(context.Background())
+		go r.RunWakeupScheduler(r.lifecycleContext())
 	})
 }
 
@@ -187,11 +191,19 @@ func (r *Runtime) wakeupHeld(wakeupID string, now time.Time) bool {
 	return held && hold.After(now)
 }
 
+// maxConcurrentWakeupFires bounds how many wake-up turns run at once. Each one
+// resumes a session, so the bound is about how many conversations this process
+// moves forward simultaneously, not about CPU. A record over the bound stays
+// scheduled and is picked up by a later iteration.
+const maxConcurrentWakeupFires = 8
+
 // fireDueWakeups starts every wake-up whose time has come. Each runs in its own
 // goroutine: a wake-up turn can take minutes, and one slow conversation must not
-// hold the others.
+// hold the others. The goroutine inherits this loop's context, so stopping the
+// runtime also stops the turns it started.
 func (r *Runtime) fireDueWakeups(ctx context.Context) {
 	now := time.Now().UTC()
+	sem := r.wakeupSemaphore()
 	for _, record := range r.pendingWakeups() {
 		if r.wakeupHeld(record.ID, now) {
 			continue
@@ -202,7 +214,19 @@ func (r *Runtime) fireDueWakeups(ctx context.Context) {
 		if !r.claimWakeupFire(record.ID) {
 			continue
 		}
-		go r.fireWakeup(context.Background(), record)
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			// The loop is stopping. Hand the record back rather than leaving it
+			// marked inflight: a later run of this process reads it from the
+			// event stream and fires it then.
+			r.releaseWakeupFire(record.ID)
+			return
+		}
+		go func(record types.WakeupRecord) {
+			defer func() { <-sem }()
+			r.fireWakeup(ctx, record)
+		}(record)
 	}
 }
 

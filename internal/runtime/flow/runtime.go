@@ -127,6 +127,20 @@ type Runtime struct {
 	// hold a goroutine that does nothing, and a test that never schedules a
 	// wake-up should not leave one behind.
 	wakeupOnce sync.Once
+	// lifecycle is the context the scheduler loop and the turns it fires run
+	// under. Detached work still needs one cancellation path that is tied to
+	// this runtime rather than to whichever request happened to build it:
+	// without it the loop started with context.Background() had no way to stop
+	// short of process exit. Stop cancels it.
+	lifecycle     context.Context
+	stopLifecycle context.CancelFunc
+	// wakeupSem bounds how many wake-up turns fire at once. The scheduler used
+	// to launch one goroutine per due record, so a backlog of a thousand due
+	// records became a thousand concurrent turns competing for the same store.
+	// Records over the bound stay scheduled and are picked up by a later
+	// iteration.
+	wakeupSem     chan struct{}
+	wakeupSemOnce sync.Once
 	// wakeRetryInterval / wakeRetryAttempts override the wake-retry knobs.
 	// Zero means "use the package default". They are per-runtime so the retry
 	// goroutine never reads a value a test is rewriting.
@@ -153,6 +167,7 @@ func NewRuntime(
 	sessionWriter storage.SessionWriter,
 	evidenceStore storage.EvidenceStore,
 ) *Runtime {
+	lifecycle, stopLifecycle := context.WithCancel(context.Background())
 	return &Runtime{
 		definitions:    definitions,
 		teams:          teamRuntime,
@@ -165,7 +180,45 @@ func NewRuntime(
 		wakeupCfg:      types.DefaultWakeupLimits(),
 		wakeupSignal:   make(chan struct{}, 1),
 		wakeupInflight: make(map[string]bool),
+		lifecycle:      lifecycle,
+		stopLifecycle:  stopLifecycle,
+		wakeupSem:      make(chan struct{}, maxConcurrentWakeupFires),
 	}
+}
+
+// Stop ends the background work this runtime started: the wake-up scheduler
+// loop and any wake-up turn still firing.
+//
+// It deliberately does not cancel turns or Teams the caller already accepted —
+// those have their own path (Cancel) and outliving a request is what makes
+// "accept the message, answer later" work. Stop is about the runtime's own
+// goroutines, which had no way to end before it existed.
+func (r *Runtime) Stop() {
+	if r == nil || r.stopLifecycle == nil {
+		return
+	}
+	r.stopLifecycle()
+}
+
+// lifecycleContext is the context background work runs under. A runtime built
+// as a zero value (tests do this) has no lifecycle, so it falls back to
+// context.Background() and keeps the old behaviour.
+func (r *Runtime) lifecycleContext() context.Context {
+	if r != nil && r.lifecycle != nil {
+		return r.lifecycle
+	}
+	return context.Background()
+}
+
+// wakeupSemaphore lazily builds the concurrency bound so a zero-value Runtime
+// still gets one.
+func (r *Runtime) wakeupSemaphore() chan struct{} {
+	r.wakeupSemOnce.Do(func() {
+		if r.wakeupSem == nil {
+			r.wakeupSem = make(chan struct{}, maxConcurrentWakeupFires)
+		}
+	})
+	return r.wakeupSem
 }
 
 func (r *Runtime) SetLimits(limits types.RuntimeLimits) {

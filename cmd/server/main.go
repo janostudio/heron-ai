@@ -1306,7 +1306,22 @@ func checkConfigOnly(flowPath string) int {
 	}
 	fmt.Printf("flow %s: %d bindings ok (%d isolated)\n", defs.Flow.ID, len(names), isolated)
 	printRulePathWarnings(defs)
+	printUnknownSettingsWarnings()
 	return 0
+}
+
+// printUnknownSettingsWarnings reports keys in .agents/settings.json that no
+// loader reads.
+//
+// A misspelled key is silent at runtime — each loader decodes its own section
+// and ignores the rest — so the file looks applied while part of it does
+// nothing. Printing here as well as through the logger is deliberate:
+// --check-config is the command a person runs *to* validate configuration, and
+// it never builds a logger.
+func printUnknownSettingsWarnings() {
+	for _, unknown := range config.NewConfigLoader(".").UnknownSettingsFields() {
+		fmt.Fprintf(os.Stderr, "warning: .agents/settings.json: %s\n", unknown)
+	}
 }
 
 // printRulePathWarnings reports rules that gate on paths.
