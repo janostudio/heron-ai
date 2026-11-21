@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/heron-ai/heron-engine/internal/knowledge"
@@ -205,21 +206,43 @@ func declaresTool(names []string, name string) bool {
 // purely to keep the call site in Run's shape symmetrical with the rest of that
 // function and is always nil.
 func (t *TurnLoop) withheldTools(ctx context.Context, agent types.AgentConfig, req types.AgentRequest) (map[string]string, error) {
-	if t == nil || t.files == nil {
-		// No file store wired: the gate cannot be evaluated, so it cannot
-		// withhold. This is the state every TurnLoop built without
-		// SetFileStore is in (most tests, and the CLI paths that do not build
-		// a knowledge-capable runtime). Granting Bash here rather than denying
-		// it is the deliberate choice: a loop with no file store cannot read
-		// knowledge at all, so there is no private tree it could be exposing,
-		// and denying would break every caller that supplies no store.
+	if t == nil {
 		return nil, nil
 	}
-	withheld, reason := bashWithheld(ctx, t.files, agent, agentIDOf(agent, req))
-	if !withheld {
-		return nil, nil
+	// A tool the posture refuses is withheld for the same reason the knowledge gate
+	// withholds Bash: the model should not be offered what the policy will refuse,
+	// or it learns that refusals are noise and keeps retrying. This part needs no
+	// file store, so it is evaluated before the knowledge gate's early return.
+	withheld := map[string]string{}
+	denied := t.deniedTools()
+	for _, name := range agent.Tools.Builtin {
+		if denied[name] {
+			withheld[name] = fmt.Sprintf("this runtime's permissions refuse %s", name)
+		}
 	}
-	return map[string]string{bashToolName: reason}, nil
+	if t.files == nil {
+		// No file store wired: the knowledge gate cannot be evaluated, so it cannot
+		// withhold. This is the state every TurnLoop built without SetFileStore is in
+		// (most tests, and the CLI paths that do not build a knowledge-capable
+		// runtime). Granting Bash here rather than denying it is the deliberate
+		// choice: a loop with no file store cannot read knowledge at all, so there is
+		// no private tree it could be exposing, and denying would break every caller
+		// that supplies no store. The posture-based entries above are independent of
+		// the store and still apply.
+		return emptyToNil(withheld), nil
+	}
+	bashGated, reason := bashWithheld(ctx, t.files, agent, agentIDOf(agent, req))
+	if bashGated {
+		withheld[bashToolName] = reason
+	}
+	return emptyToNil(withheld), nil
+}
+
+func emptyToNil(withheld map[string]string) map[string]string {
+	if len(withheld) == 0 {
+		return nil
+	}
+	return withheld
 }
 
 // knowledgeGateDecision reports whether the call must be refused by the

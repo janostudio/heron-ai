@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -114,6 +115,34 @@ func (l *ConfigLoader) LoadToolPolicyPhrases() []string {
 		return nil
 	}
 	return raw.Tools.RestrictedBashPhrases
+}
+
+// LoadPermissions 读取 .agents/settings.json 的 permissions 段。
+//
+// 这是引擎的全局权限 posture：shell / write / network 各一档，缺省 allow（等于加
+// 这个功能之前的行为）。放在 settings 而不是 flow，是因为它回答的是"这台机器上
+// 跑起来的任务允许做什么"，与具体 job 无关；放 flow 会让同一台机器上多个 flow
+// 各带一份答案，迟早不一致。
+//
+// 非法值不会被改写成另一档：这里逐条告警，Validate 供 --check-config 在部署前
+// 变成硬失败。
+func (l *ConfigLoader) LoadPermissions() types.PermissionsConfig {
+	var cfg types.PermissionsConfig
+	data, present := l.settingsBytes()
+	if !present {
+		return cfg
+	}
+	var raw struct {
+		Permissions types.PermissionsConfig `json:"permissions"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return cfg
+	}
+	cfg = raw.Permissions
+	for _, problem := range cfg.Validate() {
+		logging.Warn("permissions: invalid entry", map[string]any{"problem": problem})
+	}
+	return cfg
 }
 
 // LoadKnowledgeSettings 读取 .agents/settings.json 的 knowledge 段。

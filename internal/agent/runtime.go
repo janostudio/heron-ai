@@ -15,6 +15,7 @@ import (
 	"github.com/heron-ai/heron-engine/internal/definitions"
 	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/storage"
+	"github.com/heron-ai/heron-engine/internal/tool/script"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -109,12 +110,10 @@ type RenderContext struct {
 	ContextBlocks []types.ContextBlock
 }
 
-// WithToolPolicyPhrases rebuilds the default tool policy with additional
-// restricted Bash phrases from configuration. The built-in phrases always stay.
-func (t *TurnLoop) WithToolPolicyPhrases(extra []string) *TurnLoop {
-	if len(extra) > 0 {
-		t.toolPolicy = NewToolPolicy(extra)
-	}
+// WithPermissions rebuilds the tool policy from the runtime's global posture. The
+// built-in floor is merged in, so this can only add restrictions.
+func (t *TurnLoop) WithPermissions(posture types.PermissionsConfig, extraPhrases []string) *TurnLoop {
+	t.toolPolicy = NewPermissionPolicy(posture, extraPhrases)
 	return t
 }
 
@@ -1858,6 +1857,7 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 		}
 		batchResults := NewToolBatchExecutor(batch, maxParallel, true).Execute(ctx, parallelCalls)
 		for i, result := range batchResults {
+			t.normalizePauseRequest(req, parallelCalls[i], result)
 			results[parallelIndexes[i]] = result
 			t.emitToolEndHook(ctx, agent, req, round, parallelCalls[i], result)
 			if result != nil && result.Success {
@@ -1932,10 +1932,53 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 				"error":        result.Error,
 			})
 		}
+		t.normalizePauseRequest(req, call, result)
 		results[i] = result
 		t.emitToolEndHook(ctx, agent, req, round, call, result)
 	}
 	return results
+}
+
+// normalizePauseRequest fills the parts of a mid-program approval that only the
+// turn loop knows.
+//
+// Two things are added to what the sandbox produced:
+//   - the request id, which is how a later resume says "this is the question I am
+//     answering"; the sandbox has no agent turn id, so it cannot mint one.
+//   - the resume coordinates, appended to the call arguments: the resumed turn
+//     re-issues the same REPL call, and those two values are what let it skip the
+//     finished steps and run exactly the approved one.
+func (t *TurnLoop) normalizePauseRequest(req types.AgentRequest, call types.ToolCall, result *types.ToolResult) {
+	if result == nil || result.PendingApproval == nil || result.PendingApproval.RequestID != "" {
+		return
+	}
+	pending := result.PendingApproval
+	pending.RequestID = approvalID(req, call)
+	// The parked tool is the one that ran; a paused program must resume by being
+	// re-issued, never by calling the step's tool with the program's arguments.
+	pending.ToolName = call.Name
+	pending.CallID = req.CallID
+	pending.ToolCallID = call.ID
+	pending.Channel = "agent"
+	if pending.RequestedAt.IsZero() {
+		pending.RequestedAt = time.Now().UTC()
+	}
+	args := make(map[string]any, len(call.Arguments)+4)
+	for key, value := range call.Arguments {
+		args[key] = value
+	}
+	if meta, ok := result.Metadata, true; ok && meta != nil {
+		if id, ok := meta["script_id"].(string); ok && id != "" {
+			args["resume_script_id"] = id
+		}
+		if step, ok := meta["step"]; ok {
+			args["resume_step"] = step
+		}
+		// No third key: the validator rejects parameters a tool does not declare, and
+		// the step's tool already travels in the approval reason.
+	}
+	pending.Arguments = args
+	result.Next = &types.Route{Action: types.NextWaitApproval, Reason: pending.Reason}
 }
 
 func (t *TurnLoop) toolDecision(ctx context.Context, agent types.AgentConfig, req types.AgentRequest, call types.ToolCall) (ToolDecision, string, error) {
@@ -1971,6 +2014,44 @@ func (t *TurnLoop) toolDecision(ctx context.Context, agent types.AgentConfig, re
 		return decision, reason, err
 	}
 	if decision == ToolDeny {
+		return decision, reason, nil
+	}
+	// A statement inside a REPL program cannot ask a question mid-run. Two answers
+	// are possible, and which one applies depends on who already said yes:
+	//   - the posture asks about this tool, and the human approved the program before it
+	//     started → the grant covers the call and it runs;
+	//   - nothing approved it — a restricted command in a Flow that otherwise allows
+	//     shell, for instance → refuse here, before the effect, with a reason that
+	//     names the way out. That is a decision, not a wait.
+	//
+	// The step marker is required, not incidental: it is the only thing that
+	// distinguishes "a statement inside a program" from "the program call itself".
+	if decision == ToolRequireApproval && inScript(ctx) {
+		if grant := script.GrantFromContext(ctx); grant != nil {
+			scriptID, step, _ := script.StepFromContext(ctx)
+			if grant.CoversStep(scriptID, step) {
+				grant.RecordStep()
+				return ToolAllow, "approved for this step: " + reason, nil
+			}
+			if grant.Covers(call.Name) {
+				grant.Record(call.Name)
+				return ToolAllow, "approved with this " + ScriptToolName + " call: " + reason, nil
+			}
+		}
+		// No approval covers this step. Return the ask and let the sandbox pause the
+		// program there: the turn parks as waiting_approval, and the resumed run
+		// replays the finished steps and executes this one under the answer.
+		if agent.HITL == nil || !agent.HITL.Enabled {
+			return ToolDeny, reason + " (this Agent has hitl disabled, so the step cannot be approved)", nil
+		}
+		return ToolRequireApproval, reason, nil
+	}
+	// A REPL call itself is not a capability question. Whether a program may do
+	// something is decided per step while it runs: the sandbox pauses at the first
+	// step whose tool needs a human, and the answer covers that step only. There is
+	// no upfront approval any more — it asked the human to approve a program whose
+	// statements they could not see, which carried no information.
+	if isScriptTool(call.Name) {
 		return decision, reason, nil
 	}
 	if decision == ToolRequireApproval {
@@ -2919,7 +3000,7 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 				"Intermediate results stay inside the program; only the returned value and console output come back. " +
 				"Use it for batch work: scan many files, aggregate, filter, then return only the conclusion.",
 			Properties: map[string]types.JSONProperty{
-				"code": {Type: "string", Description: t.scriptDescriber(scriptVisibleTools(agent))},
+				"code": {Type: "string", Description: t.scriptDescriber(scriptVisibleTools(agent, t.deniedTools()))},
 				"timeout_ms": {Type: "integer", Description: "Compute budget in milliseconds. Tool calls do not count against it. " +
 					"Default 60000, max 600000."},
 			},

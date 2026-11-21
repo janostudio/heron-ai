@@ -1661,3 +1661,32 @@ func TestSelfTest_NewModel_Initialization(t *testing.T) {
 	cmds := model.GetSlashCommands()
 	assert.NotEmpty(t, cmds)
 }
+
+// A turn parked at an approval gate has to say so, and say how to answer: the
+// terminal has no dialog, so a status line alone leaves the operator with no way
+// to learn the approval id.
+func TestTUIModel_FlowResult_ShowsPendingApproval(t *testing.T) {
+	model := NewTUIModel("test", "gpt-4", 1, 1, &mockFlowRunner{})
+	model.ready = true
+	model.width = 100
+	model.height = 30
+
+	updated, _ := model.Update(flowResultMsg{result: &FlowResult{
+		Status:    types.SessionWaitingApproval,
+		SessionID: "fs_test_session",
+		PendingApprovals: []types.AgentPendingApproval{{
+			RequestID: "ap-1",
+			ToolName:  "REPL",
+			Reason:    "REPL declares Write, which this configuration asks a human about",
+		}},
+	}})
+	model = updated.(*TUIModel)
+
+	var rendered string
+	for _, message := range model.messages {
+		rendered += message.Content + "\n"
+	}
+	assert.Contains(t, rendered, "Waiting for approval: REPL")
+	assert.Contains(t, rendered, "ap-1")
+	assert.Contains(t, rendered, "fs_test_session")
+}

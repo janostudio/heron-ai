@@ -79,4 +79,3 @@ func TestTrimLineTrailingPaddingNoTrailingSpace(t *testing.T) {
 	assert.Equal(t, "bold text", ansi.Strip(out), "trailing padding is not the only thing kept")
 	assert.True(t, strings.HasSuffix(out, "\x1b[0m"), "line is closed with a reset")
 }
-
