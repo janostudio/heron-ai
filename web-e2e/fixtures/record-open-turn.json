@@ -1,0 +1,101 @@
+{
+  "session": {
+    "id": "fs_open_turn",
+    "status": "running"
+  },
+  "nodes": [],
+  "facts": {
+    "turns": 1,
+    "team_turns": 1,
+    "calls": 1,
+    "tool_calls": 1,
+    "tool_failures": 0,
+    "input_tokens": 120,
+    "output_tokens": 40,
+    "models": [
+      "demo-model"
+    ]
+  },
+  "events": [
+    {
+      "seq": 10,
+      "type": "session.turn.started",
+      "flow_turn_id": "ft_open",
+      "team_turn_id": "",
+      "call_turn_id": "",
+      "team_id": "",
+      "created_at": "2026-11-04T02:00:00.000Z",
+      "payload": {
+        "input": "跑一个长任务",
+        "turn": {
+          "id": "ft_open",
+          "flow_session_id": "fs_open_turn",
+          "origin": "user",
+          "input": "跑一个长任务",
+          "status": "running",
+          "started_at": "2026-11-04T02:00:00.000Z"
+        }
+      }
+    },
+    {
+      "seq": 11,
+      "type": "session.team_turn.started",
+      "flow_turn_id": "ft_open",
+      "team_turn_id": "tt_open",
+      "call_turn_id": "",
+      "team_id": "runner",
+      "created_at": "2026-11-04T02:00:01.000Z",
+      "payload": {
+        "team_turn": {
+          "id": "tt_open",
+          "team_id": "runner",
+          "status": "running"
+        }
+      }
+    },
+    {
+      "seq": 12,
+      "type": "session.agent_turn.started",
+      "flow_turn_id": "ft_open",
+      "team_turn_id": "tt_open",
+      "call_turn_id": "tt_open:runner",
+      "team_id": "runner",
+      "created_at": "2026-11-04T02:00:01.500Z",
+      "payload": {}
+    },
+    {
+      "seq": 13,
+      "type": "session.tool_call.started",
+      "flow_turn_id": "ft_open",
+      "team_turn_id": "tt_open",
+      "call_turn_id": "tt_open:runner",
+      "team_id": "runner",
+      "created_at": "2026-11-04T02:00:02.000Z",
+      "payload": {
+        "tool_call_id": "open-c1",
+        "tool_name": "Bash",
+        "arguments": {
+          "command": "sleep 30"
+        }
+      }
+    },
+    {
+      "seq": 14,
+      "type": "session.agent.model_response",
+      "flow_turn_id": "ft_open",
+      "team_turn_id": "",
+      "call_turn_id": "",
+      "team_id": "",
+      "created_at": "2026-11-04T02:00:03.000Z",
+      "payload": {
+        "structured": true,
+        "reply": "已经开始执行，先等它跑完。",
+        "text": "{\"reply\":\"已经开始执行，先等它跑完。\",\"next\":{\"action\":\"proceed\"}}",
+        "usage": {
+          "prompt_tokens": 120,
+          "completion_tokens": 40
+        }
+      }
+    }
+  ]
+}

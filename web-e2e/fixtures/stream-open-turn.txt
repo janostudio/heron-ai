@@ -1,0 +1,12 @@
+id: 20
+data: {"seq": 20, "type": "session.tool_call.completed", "flow_turn_id": "ft_open", "team_turn_id": "tt_open", "call_turn_id": "tt_open:runner", "team_id": "runner", "created_at": "2026-11-04T02:00:32.000Z", "payload": {"tool_call_id": "open-c1", "tool_name": "Bash", "content": "done"}}
+
+id: 21
+data: {"seq": 21, "type": "session.tool_call.started", "flow_turn_id": "ft_open", "team_turn_id": "tt_open", "call_turn_id": "tt_open:runner", "team_id": "runner", "created_at": "2026-11-04T02:00:33.000Z", "payload": {"tool_call_id": "open-c2", "tool_name": "Read", "arguments": {"file_path": "/path/to/file"}}}
+
+id: 22
+data: {"seq": 22, "type": "session.agent.model_response", "flow_turn_id": "ft_open", "team_turn_id": "", "call_turn_id": "", "team_id": "", "created_at": "2026-11-04T02:00:34.000Z", "payload": {"structured": true, "reply": "第二个工具也回来了。", "text": "{\"reply\":\"第二个工具也回来了。\",\"next\":{\"action\":\"proceed\"}}", "usage": {"prompt_tokens": 30, "completion_tokens": 10}}}
+
+id: 23
+data: {"seq": 23, "type": "session.turn.ended", "flow_turn_id": "ft_open", "team_turn_id": "", "call_turn_id": "", "team_id": "", "created_at": "2026-11-04T02:00:35.000Z", "payload": {"origin": "user", "reply": "第二个工具也回来了。"}}
+

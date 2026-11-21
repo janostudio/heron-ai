@@ -28,10 +28,15 @@ CHROMIUM_PATH=~/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome node ru
 | token gate | 服务端 401 时弹登录框；填 token 后进列表并落到 localStorage |
 | loopback without token | 服务端不要求 token 时**不**弹登录框（回环默认模式） |
 | new session | 列表页有新建入口、表单默认收起、提交后请求体为 `{input}`、跳到 `/s/<新 id>` 并渲染出该会话 |
+| sidebar: layout, collapse, config | 品牌独占一行、新建与搜索同排、标题两行截断带 tooltip、收起/展开按钮、底部「全局配置」入口与配置页（settings 全部段落 + 定义资产、默认值标记、权限枚举、编辑后 PATCH 只带改动的字段、无凭据） |
 | record: single agent | 发送者标签、正文取 `reply` 而非信封、原始输出折叠默认收起、每条消息时间、agent 耗时、回合耗时、工具行状态与输出、回合答复不重复 |
-| record: multiple agents | 同一回合内 `default / coordinator`、`probe / terrain`、`facts / inspect`、`repo-info / inspect`、`analyze`（team 同名只显示一次） |
+| record: multiple agents | 发送者同时给出 team 与 agent（`default / coordinator`、`probe / terrain`、`facts / inspect`、`repo-info / inspect`、`analyze / analyst`）、工具按消息边界分成默认收起的折叠组（单个工具也折叠，摘要写出那次调用） |
 | composer | Enter 发送、请求体 `{input}`、粘附件生成 chip、请求体 `attachments[].data_base64` |
 | live stream | 发送时出现 live 回合、工具行从「进行中」到「成功」并填入输出、team 派发行带 team 名、回合结束散去高亮并补耗时、agent 消息边跑边出现 |
+| record: dispatch and approval rows | 静态渲染同样画 team 派发行（带完成与耗时）与审批行（工具名 + 已批准/已拒绝），与 live 渲染一致 |
+| live: an open turn keeps growing | 打开时会话已在跑：记录快照先渲染，流推送的后续工具与消息追加到同一回合，不重复画回合，回合结束后收起停止按钮 |
+| chat: tool folds follow the message that led to them | 一个回合里消息与工具交错时，工具按消息边界分成多个折组（单个工具也折叠并写出工具名）；结束后整段过程（消息+工具）收进默认收起的「思考过程」折叠，只露最后一条结论 |
+| chat: opens at the bottom, jump button returns | 打开会话落在底部、悬浮按钮按距底距离显隐、点击回到底部后收起 |
 
 `live stream` 的 SSE **不用 route mock**：mock 会把整个 body 一次吐出，页面在断言之前就跑完了，看不到任何中间态。所以本地 HTTP server 按 120ms 一帧真实地写，POST 也按住 2.2s 再返回，模拟同步接口的真实时序。
 

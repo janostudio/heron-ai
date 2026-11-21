@@ -163,7 +163,22 @@
       "payload": {
         "reply": "当前目录下有一个 `.agents` 目录。\n\n**要点**\n\n- 只有一个目录\n- 没有其它文件\n\n```bash\nls -la\n```\n\n| 项 | 值 |\n|---|---|\n| 目录 | 1 |\n",
         "origin": "user",
-        "intermediate": false
+        "intermediate": false,
+        "stop_reason": "end_turn",
+        "awaiting": "",
+        "contributors": [
+          {
+            "team": "default",
+            "reply": "当前目录下有一个 .agents 目录。"
+          }
+        ],
+        "deliveries": [
+          {
+            "message_id": "msg_delivery_1",
+            "team_id": "default",
+            "text": "投递：目录已确认。"
+          }
+        ]
       }
     }
   ],
