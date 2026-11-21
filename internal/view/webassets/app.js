@@ -28,6 +28,7 @@
     app.className = inRecord ? "app record-view" : "app";
   }
   var sidebar = document.getElementById("sidebar");
+  var shell = document.querySelector(".shell");
   var currentRecord = null;
   var currentMode = "chat";
 
@@ -62,7 +63,7 @@
       child.forEach(function (item) { appendChild(node, item); });
       return;
     }
-    node.appendChild(typeof child === "string" ? text(child) : child);
+    node.appendChild(typeof child === "string" || typeof child === "number" ? text(child) : child);
   }
 
   function clear(node) {
@@ -458,6 +459,9 @@
 
   function renderLogin(message) {
     if (sidebar) { sidebar.classList.add("hidden"); }
+    // The collapse control belongs to the sidebar; on the login screen there is
+    // no sidebar to collapse.
+    if (shell) { shell.classList.add("logged-out"); }
     clear(app);
     setRecordView(false);
     var input = el("input", {
@@ -513,6 +517,10 @@
       renderRecord(sessionID);
       return;
     }
+    if (location.pathname === "/config") {
+      renderConfig();
+      return;
+    }
     renderWelcome();
   }
 
@@ -554,7 +562,7 @@
    * dispatch can take minutes — leaves them with nothing to look at. */
   function renderNewSession() {
     var busy = false;
-    var toggle = el("button", { type: "button", class: "new-toggle" }, "\uff0b \u65b0\u5efa\u4f1a\u8bdd");
+    var toggle = el("button", { type: "button", class: "new-toggle", title: "\u65b0\u5efa\u4f1a\u8bdd" }, "\uff0b \u65b0\u5efa");
     var notice = el("div", { class: "new-notice hidden" });
     var box = el("div", { class: "new-session" }, toggle, notice);
 
@@ -566,7 +574,7 @@
     function reset() {
       busy = false;
       toggle.disabled = false;
-      toggle.textContent = "\uff0b \u65b0\u5efa\u4f1a\u8bdd";
+      toggle.textContent = "\uff0b \u65b0\u5efa";
     }
 
     function create() {
@@ -628,7 +636,15 @@
   var sidebarSearch = "";
   var sidebarReady = false;
 
+  /* A prompt is often several sentences long. The row shows two lines of it and
+   * puts the rest in the tooltip: a list where every item is five lines tall is
+   * a list nobody can scan. */
   function sessionRow(session, activeID) {
+    var title = session.title || "(\u672a\u547d\u540d)";
+    var main = el("span", { class: "row-main" },
+      el("div", { class: "title", title: session.title ? session.title : "" }, title),
+      el("div", { class: "meta" },
+        session.turns + " \u8f6e \u00b7 " + tokenCount(session.tokens) + " tok \u00b7 " + relativeTime(session.updated_at)));
     return el("a", {
       class: "row" + (session.id === activeID ? " active" : ""),
       href: "/s/" + encodeURIComponent(session.id),
@@ -636,10 +652,7 @@
       "data-id": session.id
     },
       el("span", { class: session.active ? "dot active" : "dot" }),
-      el("span", { class: "row-main" },
-        el("div", { class: "title" }, session.title || "(\u672a\u547d\u540d)"),
-        el("div", { class: "meta" },
-          session.turns + " \u8f6e \u00b7 " + tokenCount(session.tokens) + " tok \u00b7 " + relativeTime(session.updated_at))));
+      main);
   }
 
   function applySidebarFilter(rows, keyword) {
@@ -659,14 +672,67 @@
     });
   }
 
+  /* The configuration entry sits at the bottom, away from the list it does not
+   * act on: it opens the server's own settings, not a session. */
+  function renderSidebarFoot() {
+    return el("div", { class: "side-foot" },
+      el("a", { class: "side-foot-link", href: "/config", "data-link": "1" }, "\u5168\u5c40\u914d\u7f6e"));
+  }
+
+  /* The entry's own highlight, kept apart from renderSidebarFoot so switching
+   * between a session and the settings page can update it without rebuilding
+   * the list — the same reason the rows get updateSidebarActive. */
+  function updateSidebarFoot() {
+    if (!sidebar) { return; }
+    var entry = sidebar.querySelector(".side-foot-link");
+    if (entry) { entry.classList.toggle("active", location.pathname === "/config"); }
+  }
+
+  /* Collapse control.
+   *
+   * It lives outside the sidebar so it stays reachable while the sidebar is
+   * gone; it is positioned against the sidebar's edge, half way down, where the
+   * eye looks for it. The state is remembered: collapsing is a preference about
+   * the page, not about one visit. */
+  var SIDEBAR_COLLAPSED_KEY = "heron.sidebar.collapsed";
+
+  function sidebarCollapsedPreference() {
+    try { return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1"; } catch (error) { return false; }
+  }
+
+  function applySidebarCollapsed(collapsed) {
+    if (!shell) { return; }
+    shell.classList.toggle("side-collapsed", collapsed);
+    var button = shell.querySelector(".side-toggle");
+    if (button) {
+      button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      button.title = collapsed ? "\u5c55\u5f00\u4fa7\u680f" : "\u6536\u8d77\u4fa7\u680f";
+    }
+  }
+
+  function renderSidebarToggle() {
+    if (!shell || shell.querySelector(".side-toggle")) { return; }
+    var button = el("button", { type: "button", class: "side-toggle", "aria-label": "\u6536\u8d77\u4fa7\u680f" },
+      el("span", { class: "chev" }));
+    button.addEventListener("click", function () {
+      var collapsed = !shell.classList.contains("side-collapsed");
+      applySidebarCollapsed(collapsed);
+      try { window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0"); } catch (error) { /* storage disabled */ }
+    });
+    shell.insertBefore(button, app);
+    applySidebarCollapsed(sidebarCollapsedPreference());
+  }
+
   function renderSidebar(activeID) {
     if (!sidebar) { return; }
     sidebar.classList.remove("hidden");
+    if (shell) { shell.classList.remove("logged-out"); }
 
     // Switching sessions only moves the highlight; re-fetching the list on
     // every click would make the sidebar flicker and drop the search term.
     if (sidebarReady) {
       updateSidebarActive(activeID);
+      updateSidebarFoot();
       return;
     }
 
@@ -677,12 +743,15 @@
       placeholder: "\u641c\u7d22\u4f1a\u8bdd",
       value: sidebarSearch
     });
-    sidebar.appendChild(el("div", { class: "side-head" },
-      el("a", { class: "side-title", href: "/", "data-link": "1" }, "heron-ai"),
-      search));
-    sidebar.appendChild(renderNewSession());
+    // The name is the page's anchor and takes the full width; the two controls
+    // that act on the list below share the next row.
+    sidebar.appendChild(el("div", { class: "side-brand" },
+      el("a", { class: "side-title", href: "/", "data-link": "1" }, "heron-ai")));
+    sidebar.appendChild(el("div", { class: "side-actions" }, renderNewSession(), search));
     var rows = el("div", { class: "rows side-rows" });
     sidebar.appendChild(rows);
+    sidebar.appendChild(renderSidebarFoot());
+    updateSidebarFoot();
 
     search.addEventListener("input", function () {
       sidebarSearch = search.value;
@@ -722,13 +791,585 @@
       el("p", { class: "muted" }, "\u4ece\u5de6\u4fa7\u9009\u4e00\u4e2a\u4f1a\u8bdd\uff0c\u6216\u65b0\u5efa\u4e00\u4e2a\u3002")));
   }
 
+  /* ---------- config ---------- */
+  /* What this server is actually running, and the little of it that can be
+   * changed from here. Edits go to .agents/settings.json through
+   * PATCH /api/config; those values are read when the runtime is built, so the
+   * page says "restart to apply" instead of pretending they are live. */
+  var CONFIG_LABELS = {
+    max_team_turns: "\u5355\u8f6e\u6700\u5927 team \u56de\u5408",
+    max_calls_per_team_turn: "\u5355 team \u56de\u5408\u6700\u5927 call",
+    max_agent_rounds: "\u5355\u8f6e\u6700\u5927 agent \u6b65\u6570",
+    max_parallel_teams: "\u5e76\u884c team \u4e0a\u9650",
+    max_parallel_calls: "\u5e76\u884c call \u4e0a\u9650",
+    max_coordinate_retries: "\u56de\u9000\u534f\u8c03\u6b21\u6570\u4e0a\u9650",
+    max_parallel_tools: "\u5e76\u884c\u5de5\u5177\u4e0a\u9650",
+    max_active_team_sessions: "\u5e76\u5b58 team \u5b9e\u4f8b\u4e0a\u9650",
+    max_task_context_depth: "\u4efb\u52a1\u5d4c\u5957\u5c42\u6570",
+    level: "\u7ea7\u522b",
+    output: "\u8f93\u51fa",
+    dir: "\u76ee\u5f55",
+    max_file_size: "\u5355\u6587\u4ef6\u4e0a\u9650",
+    max_backups: "\u5907\u4efd\u4e2a\u6570",
+    retention_days: "\u4fdd\u7559\u5929\u6570",
+    bash: "Bash",
+    write: "Write",
+    websearch: "WebSearch",
+    webfetch: "WebFetch",
+    enabled: "\u5f00\u5173",
+    timeout_ms: "\u8d85\u65f6\uff08ms\uff09",
+    max_steps: "\u5d4c\u5957\u5de5\u5177\u6b21\u6570\u4e0a\u9650",
+    max_output_bytes: "\u8f93\u51fa\u4e0a\u9650\uff08\u5b57\u8282\uff09",
+    catalog_budget: "\u5de5\u5177\u76ee\u5f55\u9884\u7b97",
+    summary_model: "\u603b\u7ed3\u6a21\u578b",
+    provider: "\u63d0\u4f9b\u65b9",
+    restricted_bash_phrases: "\u7981\u6b62\u547d\u4ee4\u7247\u6bb5"
+  };
+
+  // The order a reader expects, which is not the alphabetical order a JSON
+  // object comes back in.
+  var CONFIG_FIELD_ORDER = {
+    runtime: ["max_team_turns", "max_calls_per_team_turn", "max_agent_rounds",
+      "max_parallel_teams", "max_parallel_calls", "max_coordinate_retries",
+      "max_parallel_tools", "max_active_team_sessions", "max_task_context_depth"],
+    logging: ["level", "output", "dir", "max_file_size", "max_backups", "retention_days"],
+    permissions: ["bash", "write", "websearch", "webfetch"],
+    repl: ["enabled", "timeout_ms", "max_steps", "max_output_bytes", "catalog_budget"]
+  };
+
+  var PERMISSION_CHOICES = [
+    ["allow", "\u5141\u8bb8"],
+    ["ask", "\u8be2\u95ee"],
+    ["deny", "\u62d2\u7edd"]
+  ];
+
+  // Which fields are numbers. The edit form cannot infer this from a value the
+  // file does not set yet: an unset budget would render as a text box and be
+  // sent back as a string.
+  var CONFIG_NUMBER_FIELDS = {
+    runtime: ["max_team_turns", "max_calls_per_team_turn", "max_agent_rounds",
+      "max_parallel_teams", "max_parallel_calls", "max_coordinate_retries",
+      "max_parallel_tools", "max_active_team_sessions", "max_task_context_depth"],
+    logging: ["max_backups", "retention_days"],
+    repl: ["timeout_ms", "max_steps", "max_output_bytes", "catalog_budget"]
+  };
+
+  function isNumberField(group, key) {
+    var fields = CONFIG_NUMBER_FIELDS[group];
+    return Boolean(fields && fields.indexOf(key) >= 0);
+  }
+
+  var configState = { data: null, editing: false, envDrafts: [], notice: "" };
+
+  function renderConfig() {
+    clear(app);
+    setRecordView(false);
+    app.appendChild(el("div", { class: "top" }, el("h1", null, "\u5168\u5c40\u914d\u7f6e")));
+    var body = el("div", { class: "config-view" },
+      el("div", { class: "muted" }, "\u8bfb\u53d6\u4e2d\u2026"));
+    app.appendChild(body);
+
+    configState.editing = false;
+    configState.envDrafts = [];
+    configState.notice = "";
+
+    apiFetch("/api/config")
+      .then(function (response) {
+        if (!response.ok) { throw new Error("HTTP " + response.status); }
+        return response.json();
+      })
+      .then(function (config) {
+        configState.data = config || {};
+        paintConfig(body);
+      })
+      .catch(function (error) {
+        if (error && error.unauthorized) { return; }
+        clear(body);
+        body.appendChild(el("div", { class: "error-box" },
+          "\u8bfb\u53d6\u914d\u7f6e\u5931\u8d25\uff1a" + error.message));
+      });
+  }
+
+  function configCard(title, content) {
+    return el("section", { class: "config-card" }, el("h2", null, title), content);
+  }
+
+  /* Rows are a definition list, not a table: every value is one line of text
+   * and labels are short, so there is nothing to align across columns. */
+  function configRows(pairs) {
+    var list = el("dl", { class: "config-rows" });
+    pairs.forEach(function (pair) {
+      var value = pair[1];
+      if (value === null || value === undefined || value === "") { return; }
+      // false is a value here, not an absence: a tool that is switched off is
+      // exactly what a settings page has to say.
+      list.appendChild(el("dt", null, pair[0]));
+      list.appendChild(el("dd", null, value === true ? "\u5f00\u542f" : value === false ? "\u5173\u95ed" : value));
+    });
+    return list;
+  }
+
+  function sectionValues(section) {
+    return (section && section.values) || {};
+  }
+
+  function sectionExplicit(section) {
+    var set = {};
+    ((section && section.explicit) || []).forEach(function (key) { set[key] = true; });
+    return set;
+  }
+
+  function orderedFields(group, values, includeMissing) {
+    var order = CONFIG_FIELD_ORDER[group];
+    if (!order) { return Object.keys(values || {}); }
+    if (includeMissing) { return order.slice(); }
+    return order.filter(function (key) { return values && values[key] !== undefined; });
+  }
+
+  function formatConfigValue(value) {
+    if (value === true) { return "\u5f00\u542f"; }
+    if (value === false) { return "\u5173\u95ed"; }
+    if (value === null || value === undefined || value === "") { return "\u2014"; }
+    return String(value);
+  }
+
+  /* A value the file does not set is shown with its default and a marker: the
+   * difference between "this workspace chose 200" and "200 is the fallback" is
+   * the first thing a reader needs from this page. */
+  function configValueRows(group, values, explicit) {
+    var list = el("dl", { class: "config-rows" });
+    // Every field the section can hold is listed: a reader has to see that
+    // logging.output exists and is unset, not just the keys someone happened to
+    // write into the file.
+    orderedFields(group, values, true).forEach(function (key) {
+      var dd = el("dd", null, formatConfigValue(values[key]));
+      if (explicit && !explicit[key]) {
+        dd.appendChild(el("span", { class: "config-default" }, "\u9ed8\u8ba4"));
+      }
+      list.appendChild(el("dt", null, CONFIG_LABELS[key] || key));
+      list.appendChild(dd);
+    });
+    return list;
+  }
+
+  function configEditInput(path, value, numeric) {
+    if (typeof value === "boolean") {
+      var box = el("input", { class: "config-toggle", type: "checkbox", "data-path": path });
+      box.checked = value;
+      box.setAttribute("data-before", value ? "1" : "0");
+      return box;
+    }
+    var text = value === null || value === undefined ? "" : String(value);
+    // Zero means "not set" for these budgets, and a 0 in the box would fail the
+    // "positive integer" check on save.
+    if (numeric && Number(value) === 0) { text = ""; }
+    return el("input", {
+      class: "config-input",
+      type: numeric ? "number" : "text",
+      value: text,
+      "data-path": path,
+      "data-before": text
+    });
+  }
+
+  function configEditRows(group, values, explicit, prefix) {
+    var list = el("dl", { class: "config-rows" });
+    orderedFields(group, values, true).forEach(function (key) {
+      var numeric = isNumberField(group, key) || typeof values[key] === "number";
+      var dd = el("dd", null, configEditInput((prefix || group) + "." + key, values[key], numeric));
+      if (explicit && !explicit[key]) {
+        dd.appendChild(el("span", { class: "config-default" }, "\u9ed8\u8ba4"));
+      }
+      list.appendChild(el("dt", null, CONFIG_LABELS[key] || key));
+      list.appendChild(dd);
+    });
+    return list;
+  }
+
+  function configPermissionRows(values, explicit) {
+    if (!configState.editing) { return configValueRows("permissions", values, explicit); }
+    var list = el("dl", { class: "config-rows" });
+    orderedFields("permissions", values).forEach(function (key) {
+      var select = el("select", { class: "config-input config-select", "data-path": "permissions." + key, "data-before": values[key] });
+      PERMISSION_CHOICES.forEach(function (choice) {
+        var option = el("option", { value: choice[0] }, choice[1]);
+        if (values[key] === choice[0]) { option.selected = true; }
+        select.appendChild(option);
+      });
+      list.appendChild(el("dt", null, CONFIG_LABELS[key] || key));
+      list.appendChild(el("dd", null, select));
+    });
+    return list;
+  }
+
+  /* data-path values are dotted because the write is one nested object:
+   * tools.repl.enabled has to end up inside tools.repl, not as a flat key. */
+  function assignConfigPath(target, path, value) {
+    var parts = path.split(".");
+    var node = target;
+    for (var index = 0; index < parts.length - 1; index++) {
+      if (!node[parts[index]] || typeof node[parts[index]] !== "object") { node[parts[index]] = {}; }
+      node = node[parts[index]];
+    }
+    node[parts[parts.length - 1]] = value;
+  }
+
+  /* The edit/save pair sits above the cards: one mode for the whole page beats a
+   * button per card, because the write is one PATCH either way. */
+  function configToolbar(container) {
+    var bar = el("div", { class: "config-bar" },
+      el("span", { class: "config-notice" }, configState.notice || ""),
+      el("span", { class: "config-actions" },
+        configState.editing
+          ? [el("button", { type: "button", class: "config-action", "data-config-action": "cancel" }, "\u53d6\u6d88"),
+             el("button", { type: "button", class: "config-action primary", "data-config-action": "save" }, "\u4fdd\u5b58")]
+          : el("button", { type: "button", class: "config-action", "data-config-action": "edit" }, "\u7f16\u8f91")));
+
+    bar.addEventListener("click", function (event) {
+      var action = event.target.getAttribute ? event.target.getAttribute("data-config-action") : "";
+      if (!action) { return; }
+      if (action === "save") { saveConfig(container); return; }
+      configState.editing = action === "edit";
+      configState.envDrafts = [];
+      configState.notice = "";
+      paintConfig(container);
+    });
+    return bar;
+  }
+
+  function showConfigNotice(text) {
+    configState.notice = text || "";
+    var notice = document.querySelector(".config-notice");
+    if (notice) { notice.textContent = configState.notice; }
+  }
+
+  /* The REPL block and the bash phrases the gate refuses. Both halves live in
+   * the tools section, so both are edited here. */
+  function configToolsCard(tools) {
+    var repl = tools.repl || {};
+    var phrases = tools.restricted_bash_phrases || [];
+    var body = el("div", null);
+
+    body.appendChild(el("div", { class: "config-sub" }, "REPL"));
+    if (configState.editing) {
+      var replValues = {};
+      CONFIG_FIELD_ORDER.repl.forEach(function (key) {
+        replValues[key] = repl[key] === undefined ? "" : repl[key];
+      });
+      body.appendChild(configEditRows("repl", replValues, null, "tools.repl"));
+    } else {
+      body.appendChild(configValueRows("repl", repl, null));
+    }
+
+    body.appendChild(el("div", { class: "config-sub" }, "\u7981\u6b62\u547d\u4ee4\u7247\u6bb5"));
+    if (configState.editing) {
+      body.appendChild(el("input", {
+        class: "config-input config-input-wide",
+        type: "text",
+        value: phrases.join(", "),
+        "data-before": phrases.join(", "),
+        "data-path": "tools.restricted_bash_phrases",
+        placeholder: "\u9017\u53f7\u5206\u9694\uff0c\u7559\u7a7a\u8868\u793a\u4e0d\u9650\u5236"
+      }));
+    } else {
+      body.appendChild(phrases.length
+        ? el("div", { class: "config-phrases" }, phrases.join("\u3001"))
+        : el("div", { class: "muted" }, "\u672a\u8bbe\u7f6e"));
+    }
+    return body;
+  }
+
+  /* Web tools carry an API key and an endpoint, and either can hold a token:
+   * this page reports the provider and whether a key is set, nothing else. */
+  function describeWebEndpoint(endpoint) {
+    var parts = [];
+    if (endpoint.provider) { parts.push(endpoint.provider); }
+    if (endpoint.max_results) { parts.push(endpoint.max_results + " \u6761"); }
+    if (endpoint.format) { parts.push(endpoint.format); }
+    if (endpoint.location) { parts.push(endpoint.location); }
+    if (endpoint.language) { parts.push(endpoint.language); }
+    if (endpoint.timeout_ms) { parts.push(endpoint.timeout_ms + "ms"); }
+    if (endpoint.url_set) { parts.push("\u81ea\u5b9a\u4e49 endpoint"); }
+    return parts.join(" \u00b7 ");
+  }
+
+  function configWebCard(web) {
+    var rows = [
+      ["\u63d0\u4f9b\u65b9", web.provider || "duckduckgo"],
+      ["API Key", web.api_key_set ? "\u5df2\u914d\u7f6e" : "\u672a\u914d\u7f6e"]
+    ];
+    var search = describeWebEndpoint(web.search || {});
+    var fetch = describeWebEndpoint(web.fetch || {});
+    if (search) { rows.push(["search", search]); }
+    if (fetch) { rows.push(["fetch", fetch]); }
+    return configRows(rows);
+  }
+
+  function configMCPCard(servers) {
+    var body = el("div", { class: "config-teams" });
+    servers.forEach(function (server) {
+      var meta = [];
+      if (server.transport) { meta.push(server.transport); }
+      if (server.command) { meta.push(server.command); }
+      if (server.args_count) { meta.push(server.args_count + " \u4e2a\u53c2\u6570"); }
+      if (server.url_set) { meta.push("url \u5df2\u914d\u7f6e"); }
+      if ((server.header_keys || []).length) { meta.push("header: " + server.header_keys.join("\u3001")); }
+      if ((server.env_keys || []).length) { meta.push("env: " + server.env_keys.join("\u3001")); }
+      body.appendChild(el("div", { class: "config-team" },
+        el("span", { class: "config-team-name" }, server.name || "(\u672a\u547d\u540d)"),
+        el("span", { class: "config-team-meta" }, meta.join(" \u00b7 "))));
+    });
+    return body;
+  }
+
+  /* The files that define this workspace. Folded by default: they answer "what
+   * is in here", not "what is in force" — the cards above do that. */
+  function configAssetsCard(assets) {
+    var groups = [
+      ["flows", "Flow"], ["teams", "Team"], ["agents", "Agent"],
+      ["skills", "Skill"], ["rules", "\u89c4\u5219"], ["knowledge", "\u77e5\u8bc6"]
+    ];
+    var body = el("div", { class: "config-assets" });
+    var total = 0;
+    groups.forEach(function (pair) {
+      var names = assets[pair[0]] || [];
+      total += names.length;
+      if (!names.length) { return; }
+      body.appendChild(el("div", { class: "config-asset" },
+        el("span", { class: "config-asset-kind" }, pair[1] + "\uff08" + names.length + "\uff09"),
+        el("span", { class: "config-asset-names" }, names.join("\u3001"))));
+    });
+    if (!total) { body.appendChild(el("div", { class: "muted" }, "\u6ca1\u6709\u5b9a\u4e49\u6587\u4ef6\u3002")); }
+    return el("details", { class: "config-fold" },
+      el("summary", null, "\u5df2\u52a0\u8f7d\u7684\u5b9a\u4e49\uff08" + total + " \u4e2a\u6587\u4ef6\uff09"),
+      body);
+  }
+
+  /* Environment values never come back from the server, so editing is
+   * write-only: a name and a new value go into a draft list, and nothing here
+   * can show what the current value is. */
+  function configEnvCard(config) {
+    var keys = config.env_keys || [];
+    var wrap = el("div", null,
+      configRows([["\u540d\u79f0", keys.length ? keys.join("\u3001") : "\uff08\u65e0\uff09"]]));
+    if (!configState.editing) { return wrap; }
+
+    var drafts = el("div", { class: "config-drafts" });
+    function paintDrafts() {
+      clear(drafts);
+      configState.envDrafts.forEach(function (item) {
+        drafts.appendChild(el("span", { class: "config-draft" }, item.name));
+      });
+    }
+    paintDrafts();
+
+    var nameInput = el("input", { class: "config-input", type: "text", placeholder: "\u53d8\u91cf\u540d" });
+    var valueInput = el("input", { class: "config-input", type: "password", placeholder: "\u65b0\u503c\uff08\u5df2\u6709\u503c\u4e0d\u56de\u663e\uff09" });
+    var add = el("button", { type: "button", class: "config-action" }, "\u52a0\u5165");
+    add.addEventListener("click", function () {
+      var name = nameInput.value.trim();
+      if (!name) { nameInput.focus(); return; }
+      configState.envDrafts.push({ name: name, value: valueInput.value });
+      nameInput.value = "";
+      valueInput.value = "";
+      paintDrafts();
+    });
+
+    wrap.appendChild(el("div", { class: "config-env-editor" }, nameInput, valueInput, add));
+    wrap.appendChild(drafts);
+    return wrap;
+  }
+
+  function saveConfig(container) {
+    var update = {};
+    var invalid = null;
+
+    Array.prototype.forEach.call(container.querySelectorAll("[data-path]"), function (control) {
+      var path = control.getAttribute("data-path");
+      var before = control.getAttribute("data-before");
+      var value;
+
+      if (control.classList.contains("config-toggle")) {
+        value = control.checked;
+        if ((before === "1") === value) { return; }
+      } else if (control.tagName === "SELECT") {
+        value = control.value;
+        if (value === before) { return; }
+      } else {
+        var raw = control.value.trim();
+        if (path === "tools.restricted_bash_phrases") {
+          if (raw === (before || "")) { return; }
+          value = raw ? raw.split(",").map(function (item) { return item.trim(); }).filter(Boolean) : [];
+        } else if (control.type === "number") {
+          if (!raw) { return; }
+          value = Number(raw);
+          if (!isFinite(value) || value <= 0) { invalid = control; return; }
+        } else {
+          value = raw;
+        }
+        // Compare as text: a number field yields a number here while the
+        // original is the string it was rendered from.
+        if (String(value) === before) { return; }
+      }
+      assignConfigPath(update, path, value);
+    });
+    if (invalid) {
+      showConfigNotice("\u8bf7\u586b\u5199\u6b63\u6574\u6570");
+      invalid.focus();
+      return;
+    }
+
+    if (configState.envDrafts.length) {
+      if (!update.env) { update.env = {}; }
+      configState.envDrafts.forEach(function (item) { update.env[item.name] = item.value; });
+    }
+
+    if (!Object.keys(update).length) {
+      showConfigNotice("\u6ca1\u6709\u6539\u52a8");
+      return;
+    }
+
+    showConfigNotice("\u4fdd\u5b58\u4e2d\u2026");
+    apiFetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(update)
+    })
+      .then(function (response) {
+        if (response.ok) { return response.json(); }
+        return response.text().then(function (text) {
+          throw new Error((text || "").trim() || ("HTTP " + response.status));
+        });
+      })
+      .then(function (config) {
+        configState.data = config || configState.data;
+        configState.editing = false;
+        configState.envDrafts = [];
+        configState.notice = config && config.restart_required
+          ? "\u5df2\u4fdd\u5b58\uff0c\u91cd\u542f\u540e\u751f\u6548"
+          : "\u5df2\u4fdd\u5b58";
+        paintConfig(container);
+      })
+      .catch(function (error) {
+        if (error && error.unauthorized) { return; }
+        showConfigNotice("\u4fdd\u5b58\u5931\u8d25\uff1a" + error.message);
+      });
+  }
+
+  function paintConfig(container) {
+    clear(container);
+    var config = configState.data || {};
+    container.appendChild(configToolbar(container));
+
+    var build = [config.version, config.commit].filter(Boolean).join(" \u00b7 ");
+    container.appendChild(configCard("\u8fd0\u884c", configRows([
+      ["\u5de5\u4f5c\u76ee\u5f55", config.workdir || ""],
+      ["\u7248\u672c", build]
+    ])));
+
+    var flow = config.flow || {};
+    if (flow.flow_id) {
+      var teams = el("div", { class: "config-teams" });
+      (flow.teams || []).forEach(function (team) {
+        var calls = (team.calls || []).map(function (call) {
+          return call.agent ? call.name + "\uff08" + call.agent + "\uff09" : call.name;
+        }).join("\u3001");
+        teams.appendChild(el("div", { class: "config-team" },
+          el("span", { class: "config-team-name" }, team.name),
+          el("span", { class: "config-team-meta", title: team.goal || "" },
+            (team.entry ? "\u5165\u53e3 \u00b7 " : "") + (team.lifecycle || "") +
+            (calls ? " \u00b7 " + calls : ""))));
+      });
+      container.appendChild(configCard("Flow",
+        el("div", null,
+          configRows([["Flow", flow.flow_id], ["\u5165\u53e3 team", flow.entry || ""]]),
+          teams)));
+    }
+
+    var runtime = config.runtime || {};
+    var runtimeValues = sectionValues(runtime);
+    var runtimeExplicit = sectionExplicit(runtime);
+    container.appendChild(configCard("\u8fd0\u884c\u65f6\u9650\u5236",
+      configState.editing
+        ? configEditRows("runtime", runtimeValues, runtimeExplicit)
+        : configValueRows("runtime", runtimeValues, runtimeExplicit)));
+
+    var logging = config.logging || {};
+    var loggingValues = sectionValues(logging);
+    var loggingExplicit = sectionExplicit(logging);
+    container.appendChild(configCard("\u65e5\u5fd7",
+      configState.editing
+        ? configEditRows("logging", loggingValues, loggingExplicit)
+        : configValueRows("logging", loggingValues, loggingExplicit)));
+
+    var permissions = config.permissions || {};
+    container.appendChild(configCard("\u6743\u9650", configPermissionRows(
+      sectionValues(permissions), sectionExplicit(permissions))));
+
+    container.appendChild(configCard("\u5de5\u5177", configToolsCard(config.tools || {})));
+
+    container.appendChild(configCard("Web", configWebCard(config.web || {})));
+
+    var knowledge = config.knowledge || {};
+    var summaryModel = sectionValues(knowledge).summary_model || "";
+    container.appendChild(configCard("\u77e5\u8bc6",
+      configState.editing
+        ? configEditRows("knowledge", { summary_model: summaryModel }, null)
+        : configRows([["\u603b\u7ed3\u6a21\u578b", summaryModel || "\u9ed8\u8ba4\u6a21\u578b"]])));
+
+    if ((config.mcp || []).length) {
+      container.appendChild(configCard("MCP", configMCPCard(config.mcp)));
+    }
+
+    container.appendChild(configCard("\u73af\u5883\u53d8\u91cf", configEnvCard(config)));
+
+    if (config.model && (config.model.default || (config.model.available || []).length)) {
+      var modelBody = el("div", null, configRows([["\u9ed8\u8ba4", config.model.default || ""]]));
+      var available = config.model.available || [];
+      if (available.length) {
+        // A deployment can carry dozens of model ids. The list is what this page
+        // is for, but it is not the first thing to read: it starts folded with
+        // its count on the summary line.
+        modelBody.appendChild(el("details", { class: "config-fold" },
+          el("summary", null, "\u53ef\u7528\u6a21\u578b\uff08" + available.length + " \u4e2a\uff09"),
+          el("div", { class: "config-model-list" }, available.join("\u3001"))));
+      }
+      container.appendChild(configCard("\u6a21\u578b", modelBody));
+    }
+
+    if (config.assets) {
+      container.appendChild(configCard("\u5b9a\u4e49\u8d44\u4ea7", configAssetsCard(config.assets)));
+    }
+
+    var files = config.files || {};
+    var fileRows = [];
+    if (files.settings) { fileRows.push(["\u8bbe\u7f6e", files.settings]); }
+    if (files.models) { fileRows.push(["\u6a21\u578b", files.models]); }
+    if (fileRows.length) { container.appendChild(configCard("\u914d\u7f6e\u6587\u4ef6", configRows(fileRows))); }
+  }
+
   /* ---------- record ---------- */
+  /* The heading of a conversation is the question that started it. The product
+   * name and the session id used to sit here and said nothing a reader needed:
+   * the sidebar already names the workspace, and the id is in the address bar. */
+  function sessionHeading(record) {
+    var events = (record && record.events) || [];
+    for (var index = 0; index < events.length; index++) {
+      if (events[index].type !== "session.turn.started") { continue; }
+      var payload = events[index].payload || {};
+      var input = payload.input || (payload.turn && payload.turn.input) || "";
+      var text = String(input).replace(/\s+/g, " ").trim();
+      if (text) { return text; }
+    }
+    return "";
+  }
+
   function renderRecord(sessionID) {
     clear(app);
+    // The sidebar is the way back to the list: a second link in the header was
+    // one more thing to read on every page and pointed at the same place.
     app.appendChild(el("div", { class: "top" },
-      el("h1", null, "heron-ai"),
-      el("span", { class: "crumb" }, link("/", "\u2190 \u4f1a\u8bdd\u5217\u8868")),
-      el("span", { class: "crumb mono" }, sessionID)));
+      el("h1", { class: "session-title" }, "")));
 
     apiFetch("/api/sessions/" + encodeURIComponent(sessionID) + "/record")
       .then(function (response) {
@@ -755,17 +1396,17 @@
   function paintRecord(sessionID, record, topology) {
     currentRecord = record;
     topologyState = topology || null;
+    indexCallAgents(record, topologyState);
     resetRunState(record);
     // A conversation with nothing in it renders the same chrome as one with
     // history: same header, same counters at zero, no messages. Saying "新会话"
     // and putting the caret in the box is what makes the arrival visible.
     var empty = isEmptyRecord(record);
+    var heading = sessionHeading(record);
     clear(app);
     setRecordView(true);
     var top = el("div", { class: "top" },
-      el("h1", null, "heron-ai"),
-      el("span", { class: "crumb" }, link("/", "\u2190 \u4f1a\u8bdd\u5217\u8868")),
-      el("span", { class: "crumb mono" }, sessionID));
+      el("h1", { class: "session-title", title: heading }, heading));
     if (empty) { top.appendChild(el("span", { class: "badge-new" }, "\u65b0\u4f1a\u8bdd")); }
     app.appendChild(top);
 
@@ -794,9 +1435,23 @@
     // state onto the composer that only exists now.
     syncTurnChrome();
     if (empty) { focusComposer(); }
-    if (scrollToBottom) {
+
+    /* A conversation is read from its newest message, so opening one lands at
+     * the bottom. The button is the way back after scrolling up into history. */
+    var jump = el("button", { type: "button", class: "scroll-bottom", title: "\u5230\u4f1a\u8bdd\u5e95\u90e8" },
+      el("span", { class: "chev" }));
+    jump.addEventListener("click", function () { scrollRecordToBottom(); });
+    function syncJump() {
+      var distance = body.scrollHeight - body.scrollTop - body.clientHeight;
+      jump.classList.toggle("hidden", distance < 160);
+    }
+    body.addEventListener("scroll", syncJump);
+    app.appendChild(jump);
+
+    if (currentMode === "chat" || scrollToBottom) {
       scrollToBottom = false;
       scrollRecordToBottom();
+      syncJump();
     }
   }
 
@@ -1243,6 +1898,7 @@
     view.head.appendChild(view.timing);
     view.box.appendChild(view.head);
     view.box.appendChild(view.body);
+    view.run = toolRun(view.body);
 
     view.push = function (event) {
       var payload = event.payload || {};
@@ -1284,8 +1940,8 @@
         return;
       }
       if (event.type === "session.team_turn.ended") {
-        // The terminal event carries the finished turn under team_result.
-        var doneTurn = payload.team_turn || (payload.team_result || {}).turn || {};
+        // The terminal event carries the finished turn under team_result.turn.
+        var doneTurn = (payload.team_result || {}).turn || {};
         var doneID = doneTurn.id || event.team_turn_id || "";
         var doneRow = view["team_" + doneID];
         if (doneRow) {
@@ -1300,6 +1956,9 @@
       if (event.type === "session.agent.model_response") {
         var reply = modelReply(payload);
         if (!reply.body) { return; }
+        // The tools that follow this message are what it led to; keeping them
+        // out of the fold above is what makes the message readable as a step.
+        view.run.segment();
         view.lastText = reply.body;
         view.lastSeqOfCall[call] = event.seq;
         var body = el("div", { class: "body markdown" }, renderMarkdown(reply.body));
@@ -1325,18 +1984,9 @@
 
       if (event.type === "session.tool_call.started") {
         var key = payload.tool_call_id || ("seq-" + event.seq);
-        var node = el("details", { class: "tool running" },
-          el("summary", null,
-            el("span", { class: "name" }, payload.tool_name || "tool"),
-            el("span", { class: "arg" }, toolSummary(payload.tool_name, payload.arguments || {})),
-            el("span", { class: "state" }, "\u8fdb\u884c\u4e2d")),
-          el("div", { class: "tool-body" },
-            payload.arguments && Object.keys(payload.arguments).length
-              ? el("pre", { class: "args" }, JSON.stringify(payload.arguments, null, 2))
-              : null,
-            el("pre", { class: "out" }, "")));
-        view.tools[key] = node;
-        view.body.appendChild(node);
+        var tool = buildTool(payload);
+        tool.classList.add("running");
+        view.tools[key] = view.run.add(tool);
         return;
       }
       if (event.type === "session.tool_call.completed" || event.type === "session.tool_call.failed") {
@@ -1351,7 +2001,33 @@
             ? (payload.error || "")
             : (typeof payload.content === "string" ? payload.content : JSON.stringify(payload.content || "", null, 2));
         }
-        if (event.type === "session.tool_call.failed") { target.open = true; }
+        if (event.type === "session.tool_call.failed") {
+          target.open = true;
+          view.run.failure();
+        }
+        return;
+      }
+
+      // An approval request is a turn that stopped to ask a human. It is a step
+      // like a Team dispatch, and the answer is a second field, not a new turn.
+      if (event.type === "session.approval.requested") {
+        var approval = payload.approval || {};
+        var approvalRow = el("div", { class: "step approval-step", "data-request": approval.request_id || "" },
+          el("span", { class: "step-kind" }, "\u5ba1\u6279"),
+          el("span", { class: "step-target" }, approval.tool_name || "tool"),
+          stamp(event.created_at),
+          el("span", { class: "step-state" }, "\u7b49\u5f85\u5ba1\u6279"));
+        view["approval:" + (approval.request_id || approval.tool_call_id || "")] = approvalRow;
+        view.body.appendChild(approvalRow);
+        return;
+      }
+      if (event.type === "session.approval.resolved") {
+        var decision = payload.approval || {};
+        var pendingRow = view["approval:" + (decision.request_id || "")];
+        if (!pendingRow) { return; }
+        var pendingState = pendingRow.querySelector(".step-state");
+        if (pendingState) { pendingState.textContent = decision.approved ? "\u5df2\u6279\u51c6" : "\u5df2\u62d2\u7edd"; }
+        if (decision.reason) { pendingRow.appendChild(el("span", { class: "took" }, decision.reason)); }
         return;
       }
     };
@@ -1376,6 +2052,13 @@
       }
       if (view.intermediate) { view.tags.appendChild(tag("\u4e2d\u95f4\u56de\u5408")); }
       if (view.origin === "wakeup") { view.tags.appendChild(tag("\u5b9a\u65f6\u68c0\u67e5", "warn")); }
+      // Same four fields the static renderer reads off the same event: the
+      // deliveries a Team sent the user, where the reply came from, and how the
+      // turn ended.
+      renderDeliveries(view.body, payload.deliveries);
+      renderContributors(view.body, payload.contributors);
+      renderTurnOutcome(view.body, payload.stop_reason, payload.awaiting);
+      foldProcess(view.body);
       // Durations land once the call actually has an end; until then the
       // per-message slot stays empty rather than guessing.
       Object.keys(view.spans).forEach(function (callID) {
@@ -1410,6 +2093,11 @@
    * the log with the page showing nothing new until a reload. */
   var sessionStream = null;
 
+  /* Live views for turns the record still had open when it was read. renderChat
+   * builds them from the record; attachSessionStream takes them over and keeps
+   * appending, so a turn that was already running keeps growing on screen. */
+  var liveTurnViews = {};
+
   /* A turn is active from its started event to its terminal one. The stop
    * button follows this rather than the composer's sending state: a message
    * that was accepted but whose turn is still running must keep 停止 available. */
@@ -1433,15 +2121,22 @@
    * "running" for good — and with the status as the source, the stop button then
    * never goes away. The events are what the runtime folds anyway: a turn is
    * active from its started event until its terminal one. */
-  function turnsOpenIn(events) {
+  /* Which turns the record still has open: started, no terminal event. They are
+   * the ones whose later events describe work the page has not drawn yet. */
+  function openTurnIds(events) {
     var open = {};
     (events || []).forEach(function (event) {
       if (!event || !event.type) { return; }
-      var id = event.flow_turn_id || "flow";
+      var id = event.flow_turn_id;
+      if (!id) { return; }
       if (event.type === "session.turn.started") { open[id] = true; return; }
       if (isTurnEndType(event.type)) { delete open[id]; }
     });
-    return Object.keys(open).length > 0;
+    return open;
+  }
+
+  function turnsOpenIn(events) {
+    return Object.keys(openTurnIds(events)).length > 0;
   }
 
   function markTurnActive(delta) {
@@ -1503,8 +2198,12 @@
     // (Cancel, for one, returns before the terminal event is written).
     var sessionOver = sessionStatus === "completed" || sessionStatus === "failed" ||
       sessionStatus === "cancelled";
-    if (!sessionOver && turnsOpenIn(currentRecord.events || [])) { markTurnActive(1); }
-    var turns = {};
+    var openIds = Object.keys(openTurnIds(currentRecord.events || []));
+    if (!sessionOver) { openIds.forEach(function () { markTurnActive(1); }); }
+    // Turns the record left open already have a live view; the ones that end
+    // later are created here.
+    var turns = liveTurnViews;
+    liveTurnViews = {};
     var lastSeq = lastSeqOf(currentRecord);
     var stopped = false;
     var stopFn = null;
@@ -1536,10 +2235,27 @@
 
       var id = event.flow_turn_id || "flow";
       if (known[id]) {
-        // This turn is already on screen as history. Drawing its later events
-        // would duplicate it; the record is what the page renders from. Its
-        // terminal event still has to settle the counter primed from the record.
-        if (isTerminalTurn(event.type)) { settleTurn(id); }
+        var live = turns[id];
+        if (!live) {
+          // This turn is already on screen as a finished block of history.
+          // Drawing its later events would duplicate it; the record is what the
+          // page renders from. Its terminal event still has to settle the
+          // counter primed from the record.
+          if (isTerminalTurn(event.type)) { settleTurn(id); }
+          return;
+        }
+        // The record was read while this turn was still running, so the page
+        // holds a snapshot of it. What arrives now is the rest of the same
+        // turn: append it to the view the record already produced.
+        live.push(event);
+        if (isTerminalTurn(event.type)) {
+          settleTurn(id);
+          live.finish(event);
+        } else {
+          applyRunEvent(event);
+          refreshRunView();
+        }
+        scrollRecordToBottom();
         return;
       }
       var view = turnFor(id);
@@ -1580,6 +2296,10 @@
   function renderChat(record) {
     var wrap = el("div", { class: "chat" });
     var turns = groupByTurn(record.events || []);
+    // A turn the record still has open is drawn as a live one and handed to the
+    // stream, so the events that follow it are appended instead of dropped.
+    var open = openTurnIds(record.events || []);
+    liveTurnViews = {};
     if (turns.length === 0) {
       wrap.appendChild(el("div", { class: "empty" }, "\u8fd9\u662f\u4e00\u4e2a\u65b0\u4f1a\u8bdd\uff0c\u5728\u4e0b\u9762\u7684\u8f93\u5165\u6846\u8f93\u5165\u7b2c\u4e00\u6761\u6d88\u606f\u3002"));
       return wrap;
@@ -1600,7 +2320,16 @@
       wrap.appendChild(older);
     }
 
-    turns.slice(hiddenCount).forEach(function (turn) { wrap.appendChild(renderTurn(turn)); });
+    turns.slice(hiddenCount).forEach(function (turn) {
+      if (open[turn.id]) {
+        var live = createLiveTurn(turn.id);
+        turn.events.forEach(function (past) { live.push(past); });
+        liveTurnViews[turn.id] = live;
+        wrap.appendChild(live.box);
+        return;
+      }
+      wrap.appendChild(renderTurn(turn));
+    });
     return wrap;
   }
 
@@ -1617,7 +2346,8 @@
           id: key, events: [], input: "", origin: "", reply: "",
           error: "", intermediate: false, limit: null, startedAt: "", endedAt: "",
           models: [], promptTokens: 0, completionTokens: 0,
-          cacheHitTokens: 0, cacheMissTokens: 0, attachments: []
+          cacheHitTokens: 0, cacheMissTokens: 0, attachments: [],
+          deliveries: [], contributors: [], stopReason: "", awaiting: ""
         };
         order.push(map[key]);
       }
@@ -1646,10 +2376,77 @@
         turn.error = payload.error || turn.error;
         turn.intermediate = payload.intermediate === true;
         if (payload.limit) { turn.limit = payload.limit; }
+        // The terminal event carries four more fields this page renders: who
+        // contributed to the reply, the messages a Team delivered to the user,
+        // how the turn ended and who it waits for.
+        if (payload.contributors) { turn.contributors = payload.contributors; }
+        if (payload.deliveries) { turn.deliveries = payload.deliveries; }
+        turn.stopReason = payload.stop_reason || turn.stopReason;
+        turn.awaiting = payload.awaiting || turn.awaiting;
         turn.endedAt = event.created_at || turn.endedAt;
       }
     });
     return order;
+  }
+
+  /* How a turn ended, and who it is waiting for. Two fields on one event, not a
+   * state to be inferred from the event's name. */
+  var STOP_REASON_LABELS = {
+    end_turn: "\u6b63\u5e38\u7ed3\u675f",
+    max_rounds: "\u8fbe\u5230\u6b65\u6570\u4e0a\u9650",
+    max_tool_calls: "\u8fbe\u5230\u5de5\u5177\u8c03\u7528\u4e0a\u9650",
+    max_tokens: "\u8fbe\u5230 token \u4e0a\u9650",
+    cancelled: "\u5df2\u53d6\u6d88",
+    refusal: "\u6a21\u578b\u62d2\u7edd",
+    failed: "\u5931\u8d25"
+  };
+  var AWAITING_LABELS = {
+    user: "\u7b49\u5f85\u4f60\u8f93\u5165",
+    tool: "\u7b49\u5f85\u5de5\u5177\u8fd4\u56de",
+    approval: "\u7b49\u5f85\u5ba1\u6279"
+  };
+
+  function renderTurnOutcome(box, stopReason, awaiting) {
+    var parts = [];
+    if (stopReason && stopReason !== "end_turn") {
+      parts.push("\u7ed3\u675f\uff1a" + (STOP_REASON_LABELS[stopReason] || stopReason));
+    }
+    if (awaiting) {
+      parts.push(AWAITING_LABELS[awaiting] || ("\u7b49\u5f85\uff1a" + awaiting));
+    }
+    if (!parts.length) { return; }
+    box.appendChild(el("div", { class: "turn-outcome" }, parts.join(" \u00b7 ")));
+  }
+
+  /* A delivery is a message a Team sent the user, carried on the turn's
+   * terminal event rather than as a reply: it has to be read as the user's own
+   * message, with the Team that sent it named. */
+  function renderDeliveries(box, deliveries) {
+    (deliveries || []).forEach(function (delivery) {
+      var text = (delivery && delivery.text) || "";
+      if (!text.trim()) { return; }
+      box.appendChild(el("div", { class: "msg delivery" },
+        el("div", { class: "who" },
+          el("span", { class: "delivery-tag" }, "\u6295\u9012"),
+          delivery.team_id || "team"),
+        el("div", { class: "body markdown" }, renderMarkdown(text))));
+    });
+  }
+
+  /* Provenance of the closing answer: which Teams said what. Folded, because it
+   * is a second reading of the reply above, not a new one. */
+  function renderContributors(box, contributors) {
+    if (!contributors || !contributors.length) { return; }
+    var details = el("details", { class: "turn-contributors" },
+      el("summary", null, "\u6765\u6e90\uff1a" + contributors.map(function (item) {
+        return item.team || "team";
+      }).join("\u3001")));
+    contributors.forEach(function (item) {
+      details.appendChild(el("div", { class: "contributor" },
+        el("span", { class: "contributor-team" }, item.team || "team"),
+        el("span", { class: "contributor-reply" }, item.reply || "")));
+    });
+    box.appendChild(details);
   }
 
   /* The first turn carries what the user attached, inside
@@ -1749,17 +2546,43 @@
    *
    * Agent names are only unique inside a team: `inspect` runs in both the facts
    * and repo-info teams. So the team belongs in the label, not in a tooltip
-   * that needs a mouse to reveal. When the two names coincide (the analyze
-   * team's analyze call) printing both would just repeat the word. */
+   * that needs a mouse to reveal.
+   *
+   * The call name is not the agent: the coding team's coding call is run by
+   * code-fixer. Both layers matter — the team says where the work belongs, the
+   * agent says who spoke — so the label always carries both, even when the two
+   * names coincide. Dropping the team in that case left the message signed with
+   * one word that named neither layer. */
+  /* team + call name → the agent that runs it. Built from the record's nodes
+   * and the configured topology: the first says what ran, the second also knows
+   * the calls that were configured but never started. */
+  var callAgents = {};
+
+  function indexCallAgents(record, topology) {
+    callAgents = {};
+    function put(team, call, agent) {
+      if (!team || !call || !agent) { return; }
+      callAgents[team + "\u0000" + call] = agent;
+    }
+    ((record && record.nodes) || []).forEach(function (node) {
+      if (node.kind === "call_turn" || node.kind === "agent_session") {
+        put(node.team_id, node.call_id, node.agent_id);
+      }
+    });
+    ((topology && topology.teams) || []).forEach(function (team) {
+      (team.calls || []).forEach(function (call) {
+        put(team.name, call.name, call.agent);
+      });
+    });
+  }
+
   function speakerLabel(event) {
     var call = event.call_turn_id || "";
     var index = call.lastIndexOf(":");
-    var agent = index >= 0 ? call.slice(index + 1) : "";
+    var name = index >= 0 ? call.slice(index + 1) : "";
     var team = event.team_id || "";
-    if (!team || !agent || team === agent) {
-      return { team: "", agent: agent || team };
-    }
-    return { team: team, agent: agent };
+    if (!name) { return { team: "", agent: team }; }
+    return { team: team, agent: callAgents[team + "\u0000" + name] || name };
   }
 
   /* session.agent.model_response carries the reply twice: `reply` is what the engine
@@ -1786,6 +2609,41 @@
       } catch (error) { /* not an envelope: fall through to the raw text */ }
     }
     return { body: text, raw: "" };
+  }
+
+  /* The reasoning behind an answer — the messages that thought aloud and the
+   * tools they called — reads as one block once the turn is over: what a reader
+   * wants first is the conclusion, and the process is one click away instead of
+   * forty rows of scrolling. The last message is the conclusion and stays out;
+   * a turn with nothing behind it is not folded at all. */
+  function foldProcess(body) {
+    var messages = [];
+    Array.prototype.forEach.call(body.children, function (node) {
+      if (node.classList && node.classList.contains("msg") &&
+        node.classList.contains("from-agent")) {
+        messages.push(node);
+      }
+    });
+    if (!messages.length) { return; }
+    // Calls, not folds: the header counts what ran, not how it was grouped.
+    var tools = body.querySelectorAll(".tool").length;
+    if (messages.length < 2 && tools === 0) { return; }
+
+    var first = messages[0];
+    var last = messages[messages.length - 1];
+    var collected = [];
+    for (var node = first; node && node !== last; node = node.nextSibling) {
+      collected.push(node);
+    }
+    if (!collected.length) { return; }
+
+    var fold = el("details", { class: "turn-process" },
+      el("summary", null, "\u601d\u8003\u8fc7\u7a0b \u00b7 " + messages.length +
+        " \u6bb5 \u00b7 " + tools + " \u6b21\u5de5\u5177"),
+      el("div", { class: "turn-process-body" }));
+    body.insertBefore(fold, first);
+    var target = fold.querySelector(".turn-process-body");
+    collected.forEach(function (item) { target.appendChild(item); });
   }
 
   function renderTurn(turn) {
@@ -1863,12 +2721,17 @@
     }
 
     var tools = {};
+    var teamRows = {};
     var lastText = "";
+    var run = toolRun(box);
     turn.events.forEach(function (event) {
       var payload = event.payload || {};
       if (event.type === "session.agent.model_response") {
         var view = modelReply(payload);
         if (view.body) {
+          // Same boundary as the live renderer: a message ends the current tool
+          // fold, so the tools below it belong to this message, not the one above.
+          run.segment();
           lastText = view.body;
           var body = el("div", { class: "body markdown" }, renderMarkdown(view.body));
           if (view.raw) {
@@ -1895,7 +2758,7 @@
       }
       if (event.type === "session.tool_call.started") {
         var key = payload.tool_call_id || ("seq-" + event.seq);
-        tools[key] = appendTool(box, payload);
+        tools[key] = run.add(buildTool(payload));
         return;
       }
       if (event.type === "session.tool_call.completed" || event.type === "session.tool_call.failed") {
@@ -1910,7 +2773,58 @@
             : (typeof payload.content === "string" ? payload.content : JSON.stringify(payload.content || "", null, 2));
           pre.textContent = output;
         }
-        if (event.type === "session.tool_call.failed") { node.open = true; }
+        if (event.type === "session.tool_call.failed") {
+          node.open = true;
+          run.failure();
+        }
+        return;
+      }
+      /* The same two rows the live renderer builds, built from the same events:
+       * a Team dispatch and the approval request it may raise. Without them a
+       * reload dropped the dispatch line and never showed a pending approval at
+       * all, even though both are in the record.
+       */
+      if (event.type === "session.team_turn.started") {
+        var teamTurn = payload.team_turn || {};
+        var teamTurnID = teamTurn.id || "";
+        if (!teamTurnID) { return; }
+        var teamRow = el("div", { class: "step team-step", "data-team-turn": teamTurnID },
+          el("span", { class: "step-kind" }, "\u6d3e\u53d1"),
+          el("span", { class: "step-target" }, teamTurn.team_id || event.team_id || "team"),
+          stamp(event.created_at),
+          el("span", { class: "step-state" }, "\u8fd0\u884c\u4e2d"));
+        teamRows[teamTurnID] = teamRow;
+        box.appendChild(teamRow);
+        return;
+      }
+      if (event.type === "session.team_turn.ended") {
+        var endedTurn = (payload.team_result || {}).turn || {};
+        var endedRow = teamRows[endedTurn.id || event.team_turn_id || ""];
+        if (!endedRow) { return; }
+        var endedState = endedRow.querySelector(".step-state");
+        if (endedState) { endedState.textContent = "\u5b8c\u6210"; }
+        var teamTook = elapsed(endedTurn.started_at || "", event.created_at || "");
+        if (teamTook) { endedRow.appendChild(el("span", { class: "took" }, teamTook)); }
+        return;
+      }
+      if (event.type === "session.approval.requested") {
+        var approval = payload.approval || {};
+        var approvalRow = el("div", { class: "step approval-step", "data-request": approval.request_id || "" },
+          el("span", { class: "step-kind" }, "\u5ba1\u6279"),
+          el("span", { class: "step-target" }, approval.tool_name || "tool"),
+          stamp(event.created_at),
+          el("span", { class: "step-state" }, "\u7b49\u5f85\u5ba1\u6279"));
+        teamRows["approval:" + (approval.request_id || approval.tool_call_id || "")] = approvalRow;
+        box.appendChild(approvalRow);
+        return;
+      }
+      if (event.type === "session.approval.resolved") {
+        var decision = payload.approval || {};
+        var pendingRow = teamRows["approval:" + (decision.request_id || "")];
+        if (!pendingRow) { return; }
+        var pendingState = pendingRow.querySelector(".step-state");
+        if (pendingState) { pendingState.textContent = decision.approved ? "\u5df2\u6279\u51c6" : "\u5df2\u62d2\u7edd"; }
+        if (decision.reason) { pendingRow.appendChild(el("span", { class: "took" }, decision.reason)); }
         return;
       }
     });
@@ -1934,6 +2848,10 @@
         el("div", { class: "who" }, "\u56de\u5408\u7b54\u590d", stamp(turn.endedAt)),
         el("div", { class: "body markdown" }, renderMarkdown(turn.reply))));
     }
+    renderDeliveries(box, turn.deliveries);
+    renderContributors(box, turn.contributors);
+    renderTurnOutcome(box, turn.stopReason, turn.awaiting);
+    foldProcess(box);
     return box;
   }
 
@@ -1953,9 +2871,9 @@
     return json.slice(0, 120);
   }
 
-  function appendTool(box, call) {
+  function buildTool(call) {
     var args = call.arguments || {};
-    var node = el("details", { class: "tool" },
+    return el("details", { class: "tool" },
       el("summary", null,
         el("span", { class: "name" }, call.tool_name || "tool"),
         el("span", { class: "arg" }, toolSummary(call.tool_name, args)),
@@ -1963,8 +2881,75 @@
       el("div", { class: "tool-body" },
         Object.keys(args).length ? el("pre", { class: "args" }, JSON.stringify(args, null, 2)) : null,
         el("pre", { class: "out" }, "")));
-    box.appendChild(node);
-    return node;
+  }
+
+  /* A turn's tool calls, folded behind a header per message.
+   *
+   * A question can leave dozens of calls behind it, and one line per call turns
+   * the transcript into a wall of tool rows that has to be scrolled past to
+   * find the next thing the agent said. Each fold covers the calls one message
+   * led to, so the reader can see which message prompted which calls.
+   *
+   * A fold that holds a single call still folds, and names that call on its
+   * header line: a bare row among folded groups breaks the rhythm, and the
+   * header would otherwise hide the only thing it holds. */
+  function toolRun(parent) {
+    var run = { group: null, body: null, cards: [], failures: 0, count: null, fails: null };
+
+    function paint() {
+      if (!run.group) { return; }
+      var label = "\u5de5\u5177\u8c03\u7528 " + run.cards.length + " \u6b21";
+      // A fold that holds one call would otherwise hide the only thing it has:
+      // name that call on the header line.
+      if (run.cards.length === 1) {
+        var name = run.cards[0].querySelector(".name");
+        var arg = run.cards[0].querySelector(".arg");
+        var detail = [(name && name.textContent) || "", (arg && arg.textContent) || ""]
+          .join(" ").trim();
+        if (detail) { label += " \u00b7 " + detail; }
+      }
+      run.count.textContent = label;
+      run.fails.textContent = run.failures ? " \u00b7 " + run.failures + " \u5931\u8d25" : "";
+    }
+
+    /* Every call goes into a fold, even a lone one: a message followed by one
+     * raw tool row and a message followed by a folded group read as two
+     * different things, and the row is what breaks the rhythm of the
+     * transcript. */
+    run.add = function (node) {
+      if (!run.group) {
+        run.count = el("span", { class: "count" });
+        run.fails = el("span", { class: "fails" });
+        run.group = el("details", { class: "tool-group" },
+          el("summary", null, run.count, run.fails));
+        run.body = el("div", { class: "tool-group-body" });
+        run.group.appendChild(run.body);
+        parent.appendChild(run.group);
+      }
+      run.body.appendChild(node);
+      run.cards.push(node);
+      paint();
+      return node;
+    };
+
+    run.failure = function () {
+      run.failures += 1;
+      paint();
+    };
+
+    /* A message closes the current fold: the tools after it are what that
+     * message led to, and folding them together with the ones it explained
+     * makes the next message look unmotivated. */
+    run.segment = function () {
+      run.group = null;
+      run.body = null;
+      run.cards = [];
+      run.failures = 0;
+      run.count = null;
+      run.fails = null;
+    };
+
+    return run;
   }
 
   /* ---------- run board ---------- */
@@ -2390,10 +3375,12 @@
     events.forEach(function (event) {
       var payload = event.payload || {};
       if (event.type === "session.team_turn.started" || event.type === "session.team_turn.ended") {
-        // The completed event carries its result under team_result.turn, the
-        // started one under team_turn. Reading only the latter left every Team
+        // The started event carries the turn under team_turn, the terminal one
+        // under team_result.turn. Reading one field for both left every Team
         // row with no end time, so a finished turn rendered as 运行中.
-        var teamTurn = payload.team_turn || (payload.team_result || {}).turn || {};
+        var teamTurn = event.type === "session.team_turn.started"
+          ? (payload.team_turn || {})
+          : ((payload.team_result || {}).turn || {});
         var teamID = teamTurn.id || "";
         if (!teamID) { return; }
         var team = teamTurn.team_id || event.team_id || "";
@@ -2520,6 +3507,30 @@
   function renderTree(record) {
     var wrap = el("div");
     var nodes = record.nodes || [];
+    /* An agent_session hangs off its team_session, which the record does not
+     * ship as a node. Left alone the row is unreachable from the roots and the
+     * agent layer never renders — the tree then shows a Team with nothing but
+     * its call under it. Reattach it to the call_turn that ran it, so the tree
+     * reads team → call → agent. */
+    var ids = {};
+    nodes.forEach(function (node) { ids[node.id] = true; });
+    var callTurns = {};
+    nodes.forEach(function (node) {
+      if (node.kind === "call_turn" && node.team_turn_id) {
+        callTurns[node.team_turn_id + "\u0000" + (node.call_id || "")] = node.id;
+      }
+    });
+    nodes = nodes.map(function (node) {
+      var host = node.parent && ids[node.parent] ? "" :
+        (node.kind === "agent_session"
+          ? callTurns[(node.team_turn_id || "") + "\u0000" + (node.call_id || "")] || ""
+          : "");
+      if (!host) { return node; }
+      var copy = {};
+      for (var key in node) { if (Object.prototype.hasOwnProperty.call(node, key)) { copy[key] = node[key]; } }
+      copy.parent = host;
+      return copy;
+    });
     var childrenOf = {};
     nodes.forEach(function (node) {
       var parent = node.parent || "";
@@ -2611,8 +3622,15 @@
     // made one question look like four; the second level is an execution turn.
     if (node.kind === "flow_turn") { return node.user_turn ? "回合" : "执行轮"; }
     if (node.kind === "team_turn") { return (node.team_id || "team"); }
-    if (node.kind === "call_turn") { return (node.call_id || "call") + (node.call_type ? " \u00b7 " + node.call_type : ""); }
-    if (node.kind === "agent_session") { return node.agent_id || ""; }
+    if (node.kind === "call_turn") {
+      // The call names the step, the agent names who ran it. A command call has
+      // no agent, so its type is the only thing there is to show; when the two
+      // names coincide the type says more than the repetition would.
+      var detail = node.agent_id && node.agent_id !== node.call_id
+        ? node.agent_id : (node.call_type || "");
+      return (node.call_id || "call") + (detail ? " \u00b7 " + detail : "");
+    }
+    if (node.kind === "agent_session") { return node.agent_id ? "agent " + node.agent_id : ""; }
     return "";
   }
 
@@ -2777,5 +3795,6 @@
     return wrap;
   }
 
+  renderSidebarToggle();
   route();
 })();

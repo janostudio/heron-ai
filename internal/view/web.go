@@ -409,7 +409,10 @@ func projectFacts(facts *eval.SessionFacts) factsView {
 // it cannot read a file the binary did not ship.
 func (h *Handler) HandleWebStatic(w http.ResponseWriter, r *http.Request) {
 	switch {
-	case r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/s/"):
+	// Every page route serves the same document; the page routes itself from the
+	// address bar. /config is one of those routes, so a reload on it must land on
+	// the page rather than a 404.
+	case r.URL.Path == "/" || r.URL.Path == "/config" || strings.HasPrefix(r.URL.Path, "/s/"):
 		h.serveAsset(w, r, "index.html", "text/html; charset=utf-8")
 	case strings.HasPrefix(r.URL.Path, "/static/"):
 		name := strings.TrimPrefix(r.URL.Path, "/static/")

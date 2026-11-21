@@ -1,0 +1,286 @@
+{
+  "session": {
+    "id": "fs_interleave",
+    "status": "completed"
+  },
+  "nodes": [],
+  "facts": {
+    "turns": 1,
+    "team_turns": 1,
+    "calls": 1,
+    "tool_calls": 4,
+    "tool_failures": 0,
+    "input_tokens": 180,
+    "output_tokens": 36,
+    "models": [
+      "demo-model"
+    ]
+  },
+  "events": [
+    {
+      "seq": 1,
+      "type": "session.turn.started",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "",
+      "call_turn_id": "",
+      "team_id": "",
+      "created_at": "2026-11-06T02:00:00.000Z",
+      "payload": {
+        "input": "分两批查一下",
+        "turn": {
+          "id": "ft_mix",
+          "flow_session_id": "fs_interleave",
+          "origin": "user",
+          "input": "分两批查一下",
+          "status": "waiting_input",
+          "started_at": "2026-11-06T02:00:00.000Z"
+        }
+      }
+    },
+    {
+      "seq": 2,
+      "type": "session.team_turn.started",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:01.000Z",
+      "payload": {
+        "team_turn": {
+          "id": "tt_mix",
+          "team_id": "solo",
+          "status": "running"
+        }
+      }
+    },
+    {
+      "seq": 3,
+      "type": "session.agent_turn.started",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:01.500Z",
+      "payload": {}
+    },
+    {
+      "seq": 4,
+      "type": "session.agent.model_response",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:02.000Z",
+      "payload": {
+        "structured": false,
+        "text": "先看看目录结构。",
+        "usage": {
+          "prompt_tokens": 40,
+          "completion_tokens": 10
+        }
+      }
+    },
+    {
+      "seq": 5,
+      "type": "session.tool_call.started",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:03.000Z",
+      "payload": {
+        "tool_call_id": "mix-c1",
+        "tool_name": "Bash",
+        "arguments": {
+          "command": "ls"
+        }
+      }
+    },
+    {
+      "seq": 6,
+      "type": "session.tool_call.completed",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:04.000Z",
+      "payload": {
+        "tool_call_id": "mix-c1",
+        "tool_name": "Bash",
+        "content": "packages"
+      }
+    },
+    {
+      "seq": 7,
+      "type": "session.tool_call.started",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:05.000Z",
+      "payload": {
+        "tool_call_id": "mix-c2",
+        "tool_name": "Read",
+        "arguments": {
+          "file_path": "/path/to/package.json"
+        }
+      }
+    },
+    {
+      "seq": 8,
+      "type": "session.tool_call.completed",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:06.000Z",
+      "payload": {
+        "tool_call_id": "mix-c2",
+        "tool_name": "Read",
+        "content": "{}"
+      }
+    },
+    {
+      "seq": 9,
+      "type": "session.agent.model_response",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:07.000Z",
+      "payload": {
+        "structured": false,
+        "text": "目录里有两个包，再看配置。",
+        "usage": {
+          "prompt_tokens": 60,
+          "completion_tokens": 12
+        }
+      }
+    },
+    {
+      "seq": 10,
+      "type": "session.tool_call.started",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:08.000Z",
+      "payload": {
+        "tool_call_id": "mix-c3",
+        "tool_name": "Read",
+        "arguments": {
+          "file_path": "/path/to/config.yml"
+        }
+      }
+    },
+    {
+      "seq": 11,
+      "type": "session.tool_call.completed",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:09.000Z",
+      "payload": {
+        "tool_call_id": "mix-c3",
+        "tool_name": "Read",
+        "content": "name: demo"
+      }
+    },
+    {
+      "seq": 12,
+      "type": "session.tool_call.started",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:10.000Z",
+      "payload": {
+        "tool_call_id": "mix-c4",
+        "tool_name": "Grep",
+        "arguments": {
+          "pattern": "name"
+        }
+      }
+    },
+    {
+      "seq": 13,
+      "type": "session.tool_call.completed",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:11.000Z",
+      "payload": {
+        "tool_call_id": "mix-c4",
+        "tool_name": "Grep",
+        "content": "config.yml:1"
+      }
+    },
+    {
+      "seq": 14,
+      "type": "session.agent.model_response",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:12.000Z",
+      "payload": {
+        "structured": false,
+        "text": "确认了：配置在 a 包里。",
+        "usage": {
+          "prompt_tokens": 80,
+          "completion_tokens": 14
+        }
+      }
+    },
+    {
+      "seq": 15,
+      "type": "session.agent_turn.completed",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "tt_mix:solo",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:13.000Z",
+      "payload": {}
+    },
+    {
+      "seq": 16,
+      "type": "session.team_turn.ended",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "tt_mix",
+      "call_turn_id": "",
+      "team_id": "solo",
+      "created_at": "2026-11-06T02:00:14.000Z",
+      "payload": {
+        "team_result": {
+          "turn": {
+            "id": "tt_mix",
+            "team_id": "solo",
+            "status": "completed",
+            "started_at": "2026-11-06T02:00:01.000Z"
+          }
+        },
+        "stop_reason": "end_turn",
+        "awaiting": ""
+      }
+    },
+    {
+      "seq": 17,
+      "type": "session.turn.ended",
+      "flow_turn_id": "ft_mix",
+      "team_turn_id": "",
+      "call_turn_id": "",
+      "team_id": "",
+      "created_at": "2026-11-06T02:00:15.000Z",
+      "payload": {
+        "reply": "确认了：配置在 a 包里。",
+        "origin": "user",
+        "stop_reason": "end_turn",
+        "awaiting": "",
+        "contributors": [],
+        "deliveries": []
+      }
+    }
+  ]
+}

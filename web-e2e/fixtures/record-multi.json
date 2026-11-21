@@ -750,6 +750,64 @@
           "updated_at": "2026-11-03T02:10:56.000Z"
         }
       }
+    },
+    {
+      "flow_turn_id": "ft_exec",
+      "team_turn_id": "tt_probe",
+      "call_turn_id": "tt_probe:terrain",
+      "team_id": "probe",
+      "seq": 43,
+      "type": "session.tool_call.started",
+      "created_at": "2026-11-03T02:10:08.000Z",
+      "payload": {
+        "tool_call_id": "read-doc-1",
+        "tool_name": "Read",
+        "arguments": {
+          "file_path": "repo-a/README.md"
+        }
+      }
+    },
+    {
+      "flow_turn_id": "ft_exec",
+      "team_turn_id": "tt_probe",
+      "call_turn_id": "tt_probe:terrain",
+      "team_id": "probe",
+      "seq": 44,
+      "type": "session.tool_call.completed",
+      "created_at": "2026-11-03T02:10:08.400Z",
+      "payload": {
+        "tool_call_id": "read-doc-1",
+        "content": "repo-a 的说明文件"
+      }
+    },
+    {
+      "flow_turn_id": "ft_exec",
+      "team_turn_id": "tt_probe",
+      "call_turn_id": "tt_probe:terrain",
+      "team_id": "probe",
+      "seq": 45,
+      "type": "session.tool_call.started",
+      "created_at": "2026-11-03T02:10:09.000Z",
+      "payload": {
+        "tool_call_id": "read-doc-2",
+        "tool_name": "Read",
+        "arguments": {
+          "file_path": "repo-a/CHANGELOG.md"
+        }
+      }
+    },
+    {
+      "flow_turn_id": "ft_exec",
+      "team_turn_id": "tt_probe",
+      "call_turn_id": "tt_probe:terrain",
+      "team_id": "probe",
+      "seq": 46,
+      "type": "session.tool_call.failed",
+      "created_at": "2026-11-03T02:10:09.500Z",
+      "payload": {
+        "tool_call_id": "read-doc-2",
+        "error": "file not found"
+      }
     }
   ],
   "nodes": [

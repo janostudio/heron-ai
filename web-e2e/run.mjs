@@ -32,10 +32,14 @@ const files = {
   single: JSON.parse(await readFile(path.join(fixtures, "record-single.json"), "utf8")),
   staleStatus: JSON.parse(await readFile(path.join(fixtures, "record-stale-status.json"), "utf8")),
   liveTurn: JSON.parse(await readFile(path.join(fixtures, "record-live-turn.json"), "utf8")),
+  approval: JSON.parse(await readFile(path.join(fixtures, "record-approval.json"), "utf8")),
+  interleave: JSON.parse(await readFile(path.join(fixtures, "record-interleave.json"), "utf8")),
+  openTurn: JSON.parse(await readFile(path.join(fixtures, "record-open-turn.json"), "utf8")),
   multi: JSON.parse(await readFile(path.join(fixtures, "record-multi.json"), "utf8")),
   topology: JSON.parse(await readFile(path.join(fixtures, "topology.json"), "utf8")),
   topologyMulti: JSON.parse(await readFile(path.join(fixtures, "topology-multi.json"), "utf8")),
   stream: await readFile(path.join(fixtures, "stream.txt"), "utf8"),
+  streamOpenTurn: await readFile(path.join(fixtures, "stream-open-turn.txt"), "utf8"),
 };
 
 /* emptyRecord is what GET /record answers for a session opened from the UI and
@@ -90,12 +94,18 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === "/api/stream") {
     streamServed = true;
+    // A session that was already running when the page opened gets its own
+    // frames: this is the case where the record is a snapshot of a turn that
+    // keeps growing.
+    const streamText = url.searchParams.get("session_id") === "fs_open_turn"
+      ? files.streamOpenTurn
+      : files.stream;
     // Honour Last-Event-ID like the real endpoint: a subscriber that resumes
     // must not get frames it already has, otherwise the page would render the
     // same turn twice and no frontend fix could ever prove itself here.
     const last = parseInt(req.headers["last-event-id"] || "0", 10) || 0;
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
-    const frames = files.stream.split("\n\n")
+    const frames = streamText.split("\n\n")
       .filter((frame) => frame.trim())
       .filter((frame) => {
         const match = frame.match(/^id:\s*(\d+)/m);
@@ -149,6 +159,50 @@ function speakerOf(text) {
 }
 
 /* ---------- mock API ---------- */
+// The config view the mock answers with. Synthetic like every other fixture: no
+// credential, no real endpoint.
+const CONFIG_FIXTURE = {
+  version: "1.0.0",
+  commit: "test",
+  workdir: "/path/to/workspace",
+  files: { settings: ".agents/settings.json", models: ".agents/models.json" },
+  // Sections carry the values in force plus which of them the file sets; the
+  // rest are the engine's defaults, and the page marks them as such.
+  runtime: {
+    values: {
+      max_team_turns: 4, max_calls_per_team_turn: 100, max_agent_rounds: 12,
+      max_parallel_teams: 20, max_parallel_calls: 20, max_coordinate_retries: 20,
+      max_parallel_tools: 2, max_active_team_sessions: 8, max_task_context_depth: 3,
+    },
+    explicit: ["max_team_turns", "max_agent_rounds", "max_parallel_tools"],
+  },
+  logging: {
+    values: { level: "info", output: "", dir: ".agents/data/logs", max_file_size: "50MB", retention_days: 7 },
+    explicit: ["level", "dir", "max_file_size", "retention_days"],
+  },
+  permissions: {
+    values: { bash: "allow", write: "allow", websearch: "allow", webfetch: "allow" },
+    explicit: [],
+  },
+  tools: { repl: { enabled: true }, restricted_bash_phrases: [] },
+  web: { provider: "duckduckgo", api_key_set: false, search: {}, fetch: {} },
+  knowledge: { values: {}, explicit: [] },
+  env_keys: ["WORKSPACE"],
+  model: { default: "model-a", available: ["model-a", "model-b"] },
+  assets: {
+    flows: ["default.yml"], teams: ["desk.yml"], agents: ["planner", "fixer"],
+    skills: ["demo-skill"], rules: ["minimal-change.md"], knowledge: [],
+  },
+  flow: {
+    flow_id: "demo-flow",
+    entry: "desk",
+    teams: [
+      { name: "desk", entry: true, lifecycle: "shared", calls: [{ name: "plan", type: "agent", agent: "planner" }] },
+      { name: "fixer", lifecycle: "isolated", calls: [{ name: "patch", type: "agent", agent: "fixer" }] },
+    ],
+  },
+};
+
 /* locked=true reproduces a server that requires the bearer token. The stream is
  * deliberately not mocked here: it is served by the local HTTP server above so
  * that frames arrive over time. */
@@ -205,6 +259,24 @@ function apiRouter(options = {}) {
         body: JSON.stringify(graph),
       });
     }
+    // The settings page behind the sidebar's config entry. Shape only: the
+    // server sends no credentials, so neither does this fixture. PATCH returns
+    // the same snapshot with the flags the real endpoint sets.
+    if (url.pathname === "/api/config") {
+      if (request.method() === "PATCH") {
+        state.configPatch = JSON.parse(request.postData() || "{}");
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ...CONFIG_FIXTURE, updated: true, restart_required: true }),
+        });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(CONFIG_FIXTURE),
+      });
+    }
     if (url.pathname.startsWith("/api/sessions/") && url.pathname.endsWith("/record")) {
       const id = url.pathname.split("/")[3];
       // A session created from the UI has nothing in it yet: one created event,
@@ -213,6 +285,9 @@ function apiRouter(options = {}) {
         : id === "fs_created_from_ui" ? emptyRecord(id)
         : id === "fs_stale_status" ? files.staleStatus
         : id === "fs_live_turn" ? files.liveTurn
+        : id === "fs_open_turn" ? files.openTurn
+        : id === "fs_approval" ? files.approval
+        : id === "fs_interleave" ? files.interleave
         : files.single;
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(record) });
     }
@@ -307,7 +382,9 @@ await run("token gate", async () => {
 
   await page.fill(".token-input", TOKEN);
   await page.click(".login button");
-  await page.waitForSelector(".rows", { timeout: 5000 });
+  // The container exists before the list does: waiting on the rows is what makes
+  // the count below meaningful instead of a race against the fetch.
+  await page.waitForSelector(".row", { timeout: 5000 });
   check("输入 token 后进入会话列表", await page.locator(".row").count() === 2);
   check("登录后 token 落到 localStorage", (await page.evaluate(() => localStorage.getItem("heron.serve.token"))) === TOKEN);
   check("未登录时不发业务请求", state.sent === null);
@@ -322,7 +399,9 @@ await run("token gate", async () => {
 await run("loopback without token", async () => {
   const { context, page, errors } = await newPage(browser, {});
   await page.goto(`${base}/`);
-  await page.waitForSelector(".rows", { timeout: 5000 });
+  // The container exists before the list does: waiting on the rows is what makes
+  // the count below meaningful instead of a race against the fetch.
+  await page.waitForSelector(".row", { timeout: 5000 });
   check("服务端不要求 token 时不弹登录框", await page.locator(".login").count() === 0);
   check("直接渲染会话列表", await page.locator(".row").count() === 2);
   check("无 console error", errors.length === 0, errors.join(" | "));
@@ -333,7 +412,9 @@ await run("loopback without token", async () => {
 await run("new session", async () => {
   const { context, page, state, errors } = await newPage(browser, {});
   await page.goto(`${base}/`);
-  await page.waitForSelector(".rows", { timeout: 5000 });
+  // The container exists before the list does: waiting on the rows is what makes
+  // the count below meaningful instead of a race against the fetch.
+  await page.waitForSelector(".row", { timeout: 5000 });
 
   checkEqual("列表页有新建入口", await page.locator(".new-toggle").count(), 1);
 
@@ -383,13 +464,104 @@ await run("sidebar search", async () => {
   await context.close();
 });
 
+/* ---------- 4b. sidebar: layout, collapse, config entry ---------- */
+await run("sidebar: layout, collapse, config", async () => {
+  const { context, page, state, errors } = await newPage(browser, {});
+  await page.goto(`${base}/`);
+  await page.waitForSelector(".row", { timeout: 5000 });
+
+  // The name is the anchor and owns a row; the two controls that act on the
+  // list share the next one.
+  checkEqual("品牌独占一行", await page.locator(".side-brand .side-title").count(), 1);
+  checkEqual("新建在操作行", await page.locator(".side-actions .new-toggle").count(), 1);
+  checkEqual("搜索在操作行", await page.locator(".side-actions .side-search").count(), 1);
+  checkEqual("底部有配置入口", await page.locator(".side-foot .side-foot-link").innerText(), "全局配置");
+
+  // Two lines and a tooltip, not five lines per row.
+  const title = page.locator(".row .title").first();
+  checkEqual("标题最多两行", await title.evaluate((node) => getComputedStyle(node).webkitLineClamp), "2");
+  check("标题带全文 tooltip", (await title.getAttribute("title")) !== null);
+
+  // The collapse control lives outside the sidebar, so it survives the click
+  // that hides the sidebar — it is the only way back.
+  await page.waitForSelector(".side-toggle", { timeout: 3000 });
+  await page.click(".side-toggle");
+  checkEqual("收起后侧栏不显示", await page.locator(".sidebar").isVisible(), false);
+  check("收起后按钮仍在", await page.locator(".side-toggle").isVisible());
+  await page.click(".side-toggle");
+  checkEqual("再点一次展开", await page.locator(".sidebar").isVisible(), true);
+  checkEqual("收起状态被记住",
+    await page.evaluate(() => localStorage.getItem("heron.sidebar.collapsed")), "0");
+
+  await page.click(".side-foot-link");
+  await page.waitForSelector(".config-card", { timeout: 5000 });
+  const cards = await page.locator(".config-card h2").allInnerTexts();
+  check("配置页给出运行与 Flow", cards.includes("运行") && cards.includes("Flow"), cards.join(" | "));
+  // settings.json has more sections than the limits and the log: the posture
+  // each governed tool gets, the REPL block, the web provider and the knowledge
+  // summary model are part of the same file and belong on the same page.
+  check("配置页覆盖全部设置段",
+    ["运行时限制", "日志", "权限", "工具", "Web", "知识"].every((name) => cards.includes(name)),
+    cards.join(" | "));
+  check("未配置的值标为默认", (await page.locator(".config-default").count()) >= 1);
+  check("定义资产列出内容",
+    (await page.locator(".config-assets").textContent()).includes("planner"),
+    await page.locator(".config-assets").textContent());
+  // The product name and a "back to the list" link were saying what the sidebar
+  // already shows; the page's own title is the only heading left.
+  checkEqual("配置页标题", await page.locator(".top h1").innerText(), "全局配置");
+  checkEqual("配置页没有返回跳转", await page.locator(".top .crumb").count(), 0);
+  const text = await page.locator(".config-view").innerText();
+  check("配置页显示工作目录", text.includes("/path/to/workspace"), text.slice(0, 80));
+  checkEqual("配置页列出 team", await page.locator(".config-team-name").count(), 2);
+  checkEqual("可用模型默认收起",
+    await page.locator(".config-fold").first().evaluate((node) => node.open), false);
+  // The page shows what a reader can act on; credentials never leave the
+  // process, so no fixture can put one on this page either.
+  check("配置页不含凭据", !text.includes("api_key") && !text.includes("secret"), text.slice(0, 80));
+
+  // Editing lands through PATCH, and only what changed travels: two readers
+  // editing different fields must not overwrite each other.
+  await page.click('[data-config-action="edit"]');
+  await page.waitForSelector('[data-path="runtime.max_agent_rounds"]', { timeout: 3000 });
+  checkEqual("权限在编辑态用枚举选择", await page.locator(".config-select").count(), 4);
+  checkEqual("工具预算在编辑态可改", await page.locator('[data-path="tools.repl.max_steps"]').count(), 1);
+  await page.fill('[data-path="runtime.max_agent_rounds"]', "30");
+  await page.click('[data-config-action="save"]');
+  await page.waitForFunction(() => {
+    const notice = document.querySelector(".config-notice");
+    return Boolean(notice) && notice.textContent.indexOf("已保存") >= 0;
+  }, null, { timeout: 5000 });
+  const notice = await page.locator(".config-notice").innerText();
+  check("保存后提示重启生效", notice.includes("重启"), notice);
+  checkEqual("PATCH 只带改动的字段",
+    JSON.stringify(state.configPatch && state.configPatch.runtime),
+    JSON.stringify({ max_agent_rounds: 30 }));
+  check("PATCH 不带没动的段", !(state.configPatch && state.configPatch.logging),
+    JSON.stringify(state.configPatch));
+  checkEqual("保存后退出编辑态", await page.locator("[data-path]").count(), 0);
+
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
 /* ---------- 5. single-agent record ---------- */
 await run("record: single agent", async () => {
   const { context, page, errors } = await newPage(browser, {});
   await page.goto(`${base}/s/fs_single_agent`);
   await page.waitForSelector(".chat .turn", { timeout: 5000 });
 
-  const who = (await page.locator(".msg .who").allTextContents()).map(speakerOf);
+  // The heading is the question that opened the conversation, one line, with
+  // the rest in the tooltip. The product name, the session id and a second link
+  // back to the list all used to sit here; the sidebar already does all three.
+  checkEqual("会话标题取首条 prompt", await page.locator(".top h1").innerText(), "看看当前目录");
+  checkEqual("标题单行截断",
+    await page.locator(".top h1").evaluate((node) => getComputedStyle(node).textOverflow), "ellipsis");
+  check("标题带全文 tooltip",
+    (await page.locator(".top h1").getAttribute("title")) === "看看当前目录");
+  checkEqual("顶部只剩标题", await page.locator(".top .crumb").count(), 0);
+
+  const who = (await page.locator(".msg:not(.delivery) .who").allTextContents()).map(speakerOf);
   checkEqual("消息发送者", who.join("|"), "你|default / coordinator");
 
   const body = page.locator(".msg.from-agent .body").first();
@@ -397,8 +569,16 @@ await run("record: single agent", async () => {
   check("正文是可读答复", bodyText.includes(".agents"), bodyText.slice(0, 40));
   check("正文不含信封字段", !bodyText.includes("intent_hint") && !bodyText.includes('"reply"'), bodyText.slice(0, 40));
 
-  checkEqual("markdown 粗体", await body.locator("strong").count(), 1);
-  checkEqual("markdown 列表项", await body.locator("li").count(), 2);
+  // The terminal event carries more than a reply: messages a Team sent the user
+  // (deliveries), where the answer came from (contributors), and how the turn
+  // ended (stop_reason / awaiting).
+  checkEqual("投递消息渲染成用户消息", await page.locator(".chat .delivery").count(), 1);
+  check("投递消息标出 team", (await page.locator(".chat .delivery").innerText()).includes("default"));
+  check("回复来源可展开",
+    (await page.locator(".turn-contributors summary").innerText()).includes("default"));
+  checkEqual("正常结束不显示结束行", await page.locator(".turn-outcome").count(), 0);
+
+  checkEqual("markdown 粗体", await body.locator("strong").count(), 1);  checkEqual("markdown 列表项", await body.locator("li").count(), 2);
   checkEqual("markdown 代码块", await body.locator(".code-block").count(), 1);
   checkEqual("代码块语言", await body.locator(".code-lang").first().innerText(), "bash");
   check("代码块内容完整", (await body.locator(".code-block code").first().textContent()).includes("ls -la"));
@@ -429,9 +609,10 @@ await run("record: single agent", async () => {
     await page.locator(".turn-usage").first().innerText());
 
   checkEqual("工具行数量", await page.locator(".tool").count(), 1);
-  checkEqual("工具状态", await page.locator(".tool .state").first().innerText(), "成功");
+  checkEqual("单个工具也折叠成组", await page.locator(".tool-group").count(), 1);
+  checkEqual("工具状态", (await page.locator(".tool .state").first().textContent()).trim(), "成功");
   check("工具输出已填入", (await page.locator(".tool pre.out").first().textContent()).includes("drwxr-xr-x"));
-  checkEqual("工具摘要显示命令而非 JSON", await page.locator(".tool .arg").first().innerText(), "ls -la");
+  checkEqual("工具摘要显示命令而非 JSON", (await page.locator(".tool .arg").first().textContent()).trim(), "ls -la");
   check("完整参数保留在展开区", (await page.locator(".tool pre.args").first().textContent()).includes("\"command\""));
 
   checkEqual("回合最终答复不重复渲染", await page.locator(".msg.from-agent").count(), 1);
@@ -445,11 +626,27 @@ await run("record: multiple agents", async () => {
   await page.goto(`${base}/s/fs_multi_agent`);
   await page.waitForSelector(".chat .turn", { timeout: 5000 });
 
-  const who = (await page.locator(".msg .who").allTextContents()).map(speakerOf);
+  const who = (await page.locator(".msg:not(.delivery) .who").allTextContents()).map(speakerOf);
   checkEqual("同一回合内的发送者", who.join("|"),
-    "你|default / coordinator|probe / terrain|facts / inspect|repo-info / inspect|analyze|回合答复");
+    "你|default / coordinator|probe / terrain|facts / inspect|repo-info / inspect|analyze / analyst|回合答复");
   check("同名 agent 靠 team 区分", who.includes("facts / inspect") && who.includes("repo-info / inspect"));
-  check("team 与 agent 同名时不重复", who.includes("analyze") && !who.includes("analyze / analyze"));
+  // Team and agent are two layers and both stay in the label. The analyze team's
+  // analyze call is run by the analyst agent, and dropping the team would leave
+  // the message signed with a word that names neither layer.
+  check("署名同时给出 team 与 agent", who.includes("analyze / analyst"));
+
+  // Every call is folded — including a lone one — and the folds follow the
+  // messages, so this turn's three calls land in two groups.
+  checkEqual("没有裸露的工具行",
+    await page.locator(".tool").count() - await page.locator(".tool-group .tool").count(), 0);
+  checkEqual("按消息边界分成两组", await page.locator(".tool-group").count(), 2);
+  checkEqual("折叠组默认收起",
+    await page.locator(".tool-group").first().evaluate((node) => node.open), false);
+  const summaries = await page.evaluate(() => [...document.querySelectorAll(".tool-group > summary")]
+    .map((node) => node.textContent.replace(/\s+/g, " ").trim()));
+  check("单工具组摘要写出那次调用", summaries[0].startsWith("工具调用 1 次 · "), summaries[0]);
+  checkEqual("多工具组摘要给出次数与失败数", summaries[1], "工具调用 2 次 · 1 失败");
+  checkEqual("组内保留每一条工具", await page.locator(".tool-group .tool").count(), 3);
   checkEqual("每条消息都有时间戳", await page.locator(".msg .when").count(), 7);
   await page.click('.seg button[data-mode="run"]');
   await page.waitForSelector(".run-node", { timeout: 3000 });
@@ -558,12 +755,12 @@ await run("live stream", async () => {
   // Frames land 120ms apart: the row appears on started, its result on the next
   // frame. Waiting for the state, not the row, is what makes this assertion
   // about live updating rather than about timing.
-  await page.waitForSelector(".turn.live .tool", { timeout: 5000 });
+  await page.waitForSelector(".turn.live .tool", { state: "attached", timeout: 5000 });
   await page.waitForFunction(() => {
     const states = [...document.querySelectorAll(".turn.live .tool .state")];
     return states.length > 0 && states[states.length - 1].textContent.trim() === "成功";
   }, null, { timeout: 5000 });
-  checkEqual("实时工具行状态", await page.locator(".turn.live .tool .state").last().innerText(), "成功");
+  checkEqual("实时工具行状态", (await page.locator(".turn.live .tool .state").last().textContent()).trim(), "成功");
   await page.waitForFunction(() => {
     const outs = [...document.querySelectorAll(".turn.live .tool pre.out")];
     return outs.length > 0 && outs[outs.length - 1].textContent.includes("drwxr-xr-x");
@@ -764,6 +961,143 @@ await run("composer: stop button only while a turn runs", async () => {
     (await live.page.locator(".composer-status").innerText()).includes("正在执行"));
   check("运行态无 console error", live.errors.length === 0, live.errors.join(" | "));
   await live.context.close();
+});
+
+/* ---------- a turn that was already running when the page opened ---------- */
+await run("live: an open turn keeps growing", async () => {
+  // The record is a snapshot: it was read while the turn was still running, so
+  // it holds a tool that has started and a message that has been said. The
+  // stream then delivers what happened next. Those events belong to a turn the
+  // page already drew, and the page used to drop them on the floor — the
+  // transcript only caught up after a reload.
+  const { context, page, errors } = await newPage(browser, { stream: true });
+  await page.goto(`${base}/s/fs_open_turn`);
+  await page.waitForSelector(".chat .turn", { timeout: 5000 });
+  checkEqual("记录里的工具先画出来", await page.locator(".chat .tool").count(), 1);
+  check("记录里的消息已渲染", (await page.locator(".chat").innerText()).includes("已经开始执行"));
+
+  await page.waitForFunction(() => {
+    const chat = document.querySelector(".chat");
+    return Boolean(chat) && chat.innerText.includes("第二个工具也回来了");
+  }, null, { timeout: 8000 });
+
+  checkEqual("流推送的工具追加到当前回合", await page.locator(".chat .tool").count(), 2);
+  const text = await page.locator(".chat").innerText();
+  check("流推送的消息出现在页面上", text.includes("第二个工具也回来了"), text.slice(0, 120));
+  checkEqual("没有重复画回合", await page.locator(".chat .turn").count(), 1);
+
+  // The terminal event arrives a frame later; the stop button follows it.
+  await page.waitForFunction(() => !document.body.classList.contains("turn-active"),
+    null, { timeout: 5000 });
+  check("回合结束后不再显示运行中",
+    await page.locator(".composer-stop").isVisible() === false);
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- chat opens at the bottom, with a way back there ---------- */
+await run("chat: opens at the bottom, jump button returns", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await page.goto(`${base}/s/fs_multi_agent`);
+  await page.waitForSelector(".chat .turn", { timeout: 5000 });
+  await page.waitForTimeout(200);
+
+  const opened = await page.evaluate(() => {
+    const pane = document.getElementById("record-body");
+    return { distance: Math.round(pane.scrollHeight - pane.scrollTop - pane.clientHeight) };
+  });
+  check("打开会话就在底部", opened.distance <= 2, JSON.stringify(opened));
+  checkEqual("在底部时不显示悬浮按钮", await page.locator(".scroll-bottom").isVisible(), false);
+
+  // A finished turn folds its process, so the page is short until it is opened:
+  // unfold first, then check that there is something to scroll back from.
+  await page.evaluate(() => {
+    document.querySelectorAll(".turn-process").forEach((node) => { node.open = true; });
+  });
+  await page.waitForTimeout(200);
+  check("展开过程后内容可滚动",
+    await page.evaluate(() => {
+      const pane = document.getElementById("record-body");
+      return pane.scrollHeight > pane.clientHeight;
+    }));
+
+  await page.evaluate(() => { document.getElementById("record-body").scrollTop = 0; });
+  await page.waitForTimeout(200);
+  checkEqual("滚上去后出现悬浮按钮", await page.locator(".scroll-bottom").isVisible(), true);
+
+  await page.click(".scroll-bottom");
+  await page.waitForTimeout(300);
+  const after = await page.evaluate(() => {
+    const pane = document.getElementById("record-body");
+    return { distance: Math.round(pane.scrollHeight - pane.scrollTop - pane.clientHeight) };
+  });
+  check("点击后回到最底部", after.distance <= 2, JSON.stringify(after));
+  checkEqual("回到底部后按钮收起", await page.locator(".scroll-bottom").isVisible(), false);
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- a dispatch and an approval both survive a reload ---------- */
+await run("record: dispatch and approval rows", async () => {
+  // Two event kinds the live renderer drew but the static one did not: a Team
+  // dispatch line and the approval request that paused the turn. A reload used
+  // to drop the dispatch row and never show the approval at all.
+  const { context, page, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_approval`);
+  await page.waitForSelector(".chat .turn", { timeout: 5000 });
+
+  checkEqual("静态渲染有 team 派发行", await page.locator(".chat .team-step").count(), 1);
+  check("派发行标出完成与耗时",
+    (await page.locator(".chat .team-step").innerText()).includes("完成"),
+    await page.locator(".chat .team-step").innerText());
+  checkEqual("审批行出现", await page.locator(".chat .approval-step").count(), 1);
+  check("审批行标出工具与结果",
+    (await page.locator(".chat .approval-step").innerText()).includes("Bash") &&
+    (await page.locator(".chat .approval-step").innerText()).includes("已批准"),
+    await page.locator(".chat .approval-step").innerText());
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- tools are folded per message, not per turn ---------- */
+await run("chat: tool folds follow the message that led to them", async () => {
+  // A turn that reads: message, two tools, message, two tools, message. Folding
+  // every tool of the turn into one block put the second message below calls it
+  // never made, so the reader could not tell why it was said.
+  const { context, page, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_interleave`);
+  await page.waitForSelector(".chat .turn", { timeout: 5000 });
+
+  checkEqual("按消息边界分成两个工具折组", await page.locator(".chat .tool-group").count(), 2);
+  const counts = await page.evaluate(() => [...document.querySelectorAll(".chat .tool-group > summary")]
+    .map((node) => node.textContent.replace(/\s+/g, " ").trim()));
+  check("每组只含自己那两个工具",
+    counts.every((text) => text.includes("工具调用 2 次")), counts.join(" | "));
+
+  // The alternation lives inside the process fold now; the conclusion stays out.
+  const shape = await page.evaluate(() => {
+    const turn = document.querySelector(".chat .turn");
+    const kind = (node) => {
+      if (node.classList.contains("msg")) {
+        return node.classList.contains("from-agent") ? "msg" : null;
+      }
+      if (node.classList.contains("tool-group")) { return "tools"; }
+      return null;
+    };
+    const body = turn.querySelector(".turn-process-body");
+    return {
+      inside: [...(body ? body.children : [])].map(kind).filter(Boolean).join(">"),
+      outside: [...turn.children].map(kind).filter(Boolean).join(">"),
+      folded: Boolean(turn.querySelector(".turn-process")),
+      open: turn.querySelector(".turn-process") ? turn.querySelector(".turn-process").open : null,
+    };
+  });
+  checkEqual("折叠内消息与工具交替", shape.inside, "msg>tools>msg>tools");
+  checkEqual("折叠外只剩结论", shape.outside, "msg");
+  check("过程默认收起", shape.folded && shape.open === false);
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
 });
 
 /* ---------- overview: the counters have their own tab ---------- */

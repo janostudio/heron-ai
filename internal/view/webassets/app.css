@@ -55,27 +55,66 @@ html, body { height: 100%; }
 /* The window itself never scrolls: the transcript does. A scrolling window is
  * what dragged the header and the composer around with the content. */
 body { overflow: hidden; }
-.shell { display: flex; align-items: stretch; height: 100vh; }
+.shell { display: flex; align-items: stretch; height: 100vh; position: relative; }
+/* Column layout: the brand and the controls keep their height, the list takes
+   what is left and scrolls, and the settings entry stays at the bottom. Without
+   this the entry would sit right under the last session or far below it. */
 .sidebar { flex: 0 0 288px; width: 288px; height: 100vh;
-  overflow-y: auto; padding: 14px 12px; border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 10px;
+  overflow: hidden; padding: 14px 12px; border-right: 1px solid var(--border);
   background: var(--bg-subtle); }
 .sidebar.hidden { display: none; }
-.side-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.shell.side-collapsed .sidebar { display: none; }
+.side-brand { flex: 0 0 auto; }
 .side-title { font-size: 15px; font-weight: 600; color: var(--text); }
-.side-search { flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--border-strong);
+.side-actions { flex: 0 0 auto; display: flex; gap: 8px; align-items: center; }
+.side-actions .new-session { flex: 0 0 auto; }
+.side-search { flex: 1 1 auto; min-width: 0; padding: 4px 8px; border: 1px solid var(--border-strong);
   border-radius: 6px; font: inherit; font-size: 12px; color: var(--text); background: var(--bg); }
+.side-rows { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .side-rows .row { padding: 6px 8px; border-radius: 6px; }
 .side-rows .row.active { background: var(--accent-soft); }
+.side-foot { flex: 0 0 auto; padding-top: 8px; border-top: 1px solid var(--border); }
+.side-foot-link { display: block; padding: 6px 8px; border-radius: 6px; font-size: 12px; color: var(--muted); }
+.side-foot-link:hover { background: var(--bg); color: var(--text); text-decoration: none; }
+.side-foot-link.active { background: var(--accent-soft); color: var(--accent); }
+/* The collapse control sits on the sidebar's edge, half way down. It is a child
+   of the shell, not of the sidebar, so it is still there once the sidebar is
+   gone — the only way back. */
+.side-toggle { position: absolute; left: 288px; top: 50%; transform: translateY(-50%);
+  z-index: 6; width: 14px; height: 46px; padding: 0; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-left: 0; border-radius: 0 6px 6px 0;
+  background: var(--bg); }
+.side-toggle:hover { background: var(--bg-subtle); }
+.side-toggle .chev { width: 0; height: 0;
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  border-right: 5px solid var(--faint); }
+.shell.side-collapsed .side-toggle { left: 0; }
+.shell.side-collapsed .side-toggle .chev { border-right: 0; border-left: 5px solid var(--faint); }
+.shell.logged-out .side-toggle { display: none; }
 .row-main { min-width: 0; }
-/* List pages scroll as a whole; the session page pins its header, tab strip and
- * composer and scrolls only #record-body (see .record-view below). */
-.app { flex: 1; min-width: 0; max-width: 1180px; margin: 0 auto; padding: 24px 20px 200px;
+/* The conversation pins its header, tab strip and composer and scrolls only
+ * #record-body (see .record-view below). */
+.app { position: relative; flex: 1; min-width: 0; max-width: 1180px; margin: 0 auto; padding: 24px 20px 200px;
   height: 100vh; overflow-y: auto; display: flex; flex-direction: column; }
 .app.record-view { overflow: hidden; padding-bottom: 14px; }
 .app.record-view > .top,
 .app.record-view > .modes,
 .app.record-view > .error-box { flex: 0 0 auto; }
 #record-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px; }
+/* Floating "jump to newest": only while there is something below the fold, so
+   it does not sit on top of the last message when the reader is already there. */
+.scroll-bottom { position: absolute; right: 20px; bottom: 148px; z-index: 6;
+  width: 34px; height: 34px; padding: 0; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-strong); border-radius: 50%;
+  background: var(--bg); box-shadow: 0 2px 10px rgba(0, 0, 0, .18); }
+.scroll-bottom:hover { background: var(--bg-subtle); }
+.scroll-bottom.hidden { display: none; }
+.scroll-bottom .chev { width: 0; height: 0;
+  border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 6px solid var(--faint); }
 .welcome { padding: 18vh 0 0; text-align: center; }
 .welcome h1 { font-size: 20px; margin: 0 0 6px; }
 .turn-usage { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
@@ -179,11 +218,20 @@ body { overflow: hidden; }
   .app { padding: 10px 12px; }
   .app.record-view { padding-bottom: 8px; }
   .app.record-view > .top { padding-bottom: 2px; }
+  /* The sidebar is a band across the top here, so a control on its edge has no
+     edge to sit on — and a collapsed band would hide the way back. */
+  .side-toggle { display: none; }
+  .shell.side-collapsed .sidebar { display: flex; }
 }
 
 /* header */
 .top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
 .top h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+/* The conversation is titled by the prompt that started it: one line, the rest
+   in the tooltip. It takes the free width, so the back link keeps its place at
+   the far right instead of being pushed around by a long question. */
+.top h1.session-title { flex: 1 1 0; min-width: 0; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
 .top .spacer { flex: 1; }
 .crumb { color: var(--muted); font-size: 13px; }
 
@@ -197,7 +245,8 @@ body { overflow: hidden; }
 .row:hover { background: var(--bg-subtle); border-color: var(--border); }
 .row .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); margin-top: 6px; }
 .row .dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.row .title { font-weight: 550; }
+.row .title { font-weight: 550; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .row .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .row .right { text-align: right; font-size: 12px; color: var(--faint); white-space: nowrap; }
 .row .right .id { font-family: var(--mono); }
@@ -270,6 +319,13 @@ tr.hidden { display: none; }
 .turn.wakeup { border-left-color: var(--warn-line); }
 .turn.failed { border-left-color: var(--danger); }
 .turn-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+/* The reasoning behind an answer, folded once the turn is over. The conclusion
+   stays outside, so a finished turn reads as a result with its process one
+   click away. */
+.turn-process { margin: 6px 0; }
+.turn-process > summary { cursor: pointer; padding: 3px 8px; font-size: 12px; color: var(--faint); }
+.turn-process-body { padding: 2px 0 2px 10px; border-left: 2px solid var(--border); }
+.turn-process-body > * + * { margin-top: 8px; }
 .turn-head .t { font-size: 12px; color: var(--faint); font-family: var(--mono); }
 .turn-head .turn-span { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
 /* Messages read as chat: the user's own words sit right, everything an agent
@@ -278,6 +334,18 @@ tr.hidden { display: none; }
 .msg { width: fit-content; max-width: 94%; margin-bottom: 12px; border-radius: 10px; padding: 8px 12px; }
 .msg.from-agent { background: var(--bg-subtle); border: 1px solid var(--border); }
 .msg.from-user { margin-left: auto; background: var(--accent-soft); }
+/* A delivery is a message a Team sent the user, not the closing reply: it is
+   rendered as a message of its own with the sender named. */
+.msg.delivery { background: var(--bg-subtle); border: 1px solid var(--border);
+  border-left: 3px solid var(--accent); }
+.delivery-tag { padding: 0 6px; font-size: 10px; color: var(--accent);
+  background: var(--accent-soft); border-radius: 999px; }
+.turn-outcome { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.turn-contributors { margin-top: 6px; font-size: 12px; }
+.turn-contributors summary { cursor: pointer; color: var(--muted); }
+.contributor { display: flex; gap: 8px; padding: 3px 0; }
+.contributor-team { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.contributor-reply { color: var(--muted); overflow-wrap: anywhere; }
 .msg .who { display: flex; align-items: baseline; gap: 8px; font-size: 12px;
   color: var(--faint); margin-bottom: 2px; }
 .msg .when { margin-left: auto; font-variant-numeric: tabular-nums; cursor: help; }
@@ -301,6 +369,23 @@ tr.hidden { display: none; }
 .tool .state { margin-left: auto; font-size: 11px; color: var(--faint); }
 .tool pre { margin: 0; padding: 8px 10px; border-top: 1px solid var(--border);
   font-family: var(--mono); font-size: 11px; white-space: pre-wrap; overflow-x: auto; color: var(--muted); }
+
+/* A turn's tool calls behind one header: the transcript stays readable, and the
+   individual calls stay one click away. The header is the same height as a
+   single tool row, so folding costs nothing when closed. */
+.tool-group { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-subtle); margin: 6px 0; }
+.tool-group summary { cursor: pointer; padding: 5px 10px; font-size: 12px; display: flex; gap: 8px; align-items: baseline; }
+/* The fold marker is drawn, not typed: a text triangle would end up in
+   innerText and in anything that copies the row. */
+.tool-group summary::before { content: ""; align-self: center; width: 0; height: 0;
+  border-left: 5px solid var(--faint); border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  transition: transform .12s ease; }
+.tool-group[open] summary::before { transform: rotate(90deg); }
+.tool-group .count { font-weight: 550; min-width: 0; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.tool-group .fails { margin-left: auto; font-size: 11px; color: var(--danger); }
+.tool-group-body { padding: 0 6px 6px; border-top: 1px solid var(--border); }
+.tool-group-body .tool { margin: 4px 0 0; }
 
 /* tree */
 .tree { font-size: 13px; }
@@ -327,6 +412,58 @@ tr.hidden { display: none; }
   background: var(--bg-subtle); font-size: 12px; }
 .detail dl { display: grid; grid-template-columns: 120px minmax(0,1fr); gap: 4px 12px; margin: 0 0 10px; }
 .detail dt { color: var(--faint); } .detail dd { margin: 0; }
+
+/* config page: one card per subject, rows inside. Nothing here is editable —
+   the server reports what it loaded, and a page that looked like a form would
+   promise a write path that does not exist. */
+.config-view { display: flex; flex-direction: column; gap: 12px; max-width: 880px; }
+.config-card { border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-subtle); padding: 12px 14px; }
+.config-card h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.config-rows { display: grid; grid-template-columns: 132px minmax(0,1fr); gap: 6px 12px; margin: 0;
+  font-size: 13px; }
+.config-rows dt { color: var(--faint); }
+.config-rows dd { margin: 0; overflow-wrap: anywhere; }
+.config-teams { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
+.config-team { display: flex; gap: 10px; align-items: baseline; padding: 4px 8px;
+  border-radius: 6px; background: var(--bg); font-size: 13px; }
+.config-team-name { font-family: var(--mono); font-weight: 550; }
+.config-team-meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.config-fold { margin-top: 8px; }
+.config-fold summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.config-model-list { margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.6;
+  overflow-wrap: anywhere; }
+/* Edit mode: one bar for the page, because saving is one PATCH for the page. */
+.config-bar { display: flex; align-items: center; gap: 10px; min-height: 28px; }
+.config-notice { font-size: 12px; color: var(--muted); }
+.config-actions { margin-left: auto; display: flex; gap: 8px; }
+.config-action { font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer;
+  color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; }
+.config-action:hover { background: var(--bg-subtle); }
+.config-action.primary { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.config-input { width: 100%; max-width: 320px; padding: 3px 8px; font: inherit; font-size: 12px;
+  color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: 6px; }
+.config-input[type="number"] { max-width: 140px; }
+.config-toggle { width: 15px; height: 15px; }
+.config-env-editor { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.config-env-editor .config-input { max-width: 200px; }
+.config-drafts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.config-draft { padding: 1px 8px; font-size: 11px; color: var(--muted);
+  background: var(--bg-sunken); border-radius: 999px; }
+/* A value the file does not set: the reader has to know they are seeing the
+   engine's fallback, not a decision this workspace made. */
+.config-default { margin-left: 6px; padding: 0 6px; font-size: 10px; color: var(--faint);
+  background: var(--bg-sunken); border-radius: 999px; }
+.config-sub { margin: 10px 0 6px; font-size: 11px; color: var(--faint); }
+.config-sub:first-child { margin-top: 0; }
+.config-phrases { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.config-input-wide { max-width: 100%; }
+.config-select { max-width: 160px; }
+.config-assets { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.config-asset { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.config-asset-kind { flex: 0 0 76px; color: var(--faint); font-size: 12px; }
+.config-asset-names { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 560px) { .config-rows { grid-template-columns: 96px minmax(0,1fr); } }
 
 /* raw */
 .raw { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -392,11 +529,11 @@ tr.hidden { display: none; }
 
 /* New-session entry on the list page. One click opens an empty conversation;
    the first message is typed there, so nothing waits on a form. */
-.new-session { margin-bottom: 16px; }
-.new-toggle { font: inherit; font-size: 13px; padding: 6px 12px; cursor: pointer;
+.new-session { display: flex; flex-direction: column; gap: 6px; }
+.new-toggle { font: inherit; font-size: 12px; padding: 5px 10px; cursor: pointer; white-space: nowrap;
   color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent);
   border-radius: 6px; }
-.new-notice { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.new-notice { font-size: 12px; color: var(--muted); }
 
 /* Same reason as the notice: a page with no messages has to announce itself,
    or arriving at it is indistinguishable from the click doing nothing. */

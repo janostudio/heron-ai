@@ -265,6 +265,12 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 	// can only show what already ran; this is what lets a board show the Teams
 	// that have not started yet.
 	mux.HandleFunc("/api/topology", handler.HandleTopology)
+	// The settings the page shows behind its config entry: limits, the log
+	// destination, tool switches, model ids and the Flow graph. Credentials and
+	// environment values are not part of the answer. PATCH edits the fields the
+	// page can change; the file is merged, so the rest of it survives.
+	mux.HandleFunc("GET /api/config", handler.HandleConfig)
+	mux.HandleFunc("PATCH /api/config", handler.HandleConfigUpdate)
 	// Readiness for an embedding client: it starts sending work only after the
 	// engine reports it has a runtime, and the counts tell an operator whether
 	// the timers survived a restart.
