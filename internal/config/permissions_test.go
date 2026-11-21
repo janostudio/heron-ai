@@ -66,3 +66,22 @@ func TestLoadPermissionsReportsUnknownDecisions(t *testing.T) {
 	require.Equal(t, types.PermissionAsk, cfg.DecisionFor("Write"))
 	require.Equal(t, types.PermissionAllow, cfg.DecisionFor("Bash"))
 }
+
+// The unknown-key report has one schema for the whole file. A new section that is
+// missing there is reported on every start — a warning that is wrong is worse than
+// no warning, because it teaches people to ignore the report.
+func TestSettingsSchemaKnowsThePermissionSection(t *testing.T) {
+	known := []byte(`{"permissions": {"bash": "ask", "write": "allow", "websearch": "allow", "webfetch": "deny"}}`)
+	require.Empty(t, CheckSettingsFields(known), "the four fields are read by LoadPermissions")
+
+	// A misspelling inside the section is still a misspelling, and the report
+	// suggests the key that was meant. `shell` is reported without a suggestion on
+	// purpose: "shell" and "bash" are not textually close, and guessing would be
+	// worse than saying nothing.
+	fields := CheckSettingsFields([]byte(`{"permissions": {"bassh": "ask", "shell": "deny"}}`))
+	require.Len(t, fields, 2)
+	require.Equal(t, "permissions.bassh", fields[0].Path)
+	require.Equal(t, "bash", fields[0].Suggestion)
+	require.Equal(t, "permissions.shell", fields[1].Path)
+	require.Empty(t, fields[1].Suggestion)
+}
