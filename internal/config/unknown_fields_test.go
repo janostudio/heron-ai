@@ -123,3 +123,34 @@ func TestUnknownSettingsFieldsReadsThroughTheLoader(t *testing.T) {
 		t.Fatalf("got %v, want one unknown field runtime suggesting runtime", got)
 	}
 }
+
+// The repository's own settings must not trip the report it just gained: a
+// warning on the shipped configuration is the first thing a new user would see,
+// and it would be a schema this file has not caught up with rather than a
+// mistake in the configuration.
+func TestRepositorySettingsMatchTheSchema(t *testing.T) {
+	patterns := []string{
+		filepath.Join("..", "..", "configs", "settings.json"),
+		filepath.Join("..", "..", "examples", "*", ".agents", "settings.json"),
+	}
+	checked := 0
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatalf("glob %s: %v", pattern, err)
+		}
+		for _, path := range matches {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			checked++
+			if got := CheckSettingsFields(data); len(got) != 0 {
+				t.Errorf("%s reports keys no loader reads: %v", path, got)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Skip("no settings.json found in the repository")
+	}
+}

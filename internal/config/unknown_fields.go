@@ -45,7 +45,8 @@ type settingsSchema struct {
 	Knowledge types.KnowledgeConfig `json:"knowledge"`
 	Web       types.WebConfig       `json:"web"`
 	Tools     struct {
-		RestrictedBashPhrases []string `json:"restricted_bash_phrases"`
+		RestrictedBashPhrases []string           `json:"restricted_bash_phrases"`
+		Repl                  types.ScriptConfig `json:"repl"`
 	} `json:"tools"`
 	Env map[string]string       `json:"env"`
 	MCP []types.MCPServerConfig `json:"mcp"`
