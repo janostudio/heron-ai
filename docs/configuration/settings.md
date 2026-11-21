@@ -18,6 +18,7 @@ model registry (endpoints and keys), `settings.json` is engine behavior.
 | `web` | `ConfigLoader.LoadWebSettings` | Data source for the `WebSearch` / `WebFetch` tools |
 | `mcp` | `ConfigLoader.LoadMCPServers` | MCP servers connected at startup |
 | `tools` | `LoadToolPolicyPhrases`, `LoadScriptSettings` | Extra Bash policy phrases, `REPL` tool (`tools.repl`) |
+| `permissions` | `ConfigLoader.LoadPermissions` | Global posture: what a run on this machine may do without a human |
 | `env` | `ConfigLoader.LoadGlobalEnv` | Env vars injected into every subprocess |
 
 Sections that are **not** read by any code path are listed in
@@ -205,7 +206,9 @@ servers. A malformed section is an error, not a silent skip.
 ```
 
 Extra phrases merged into the builtin Bash safety floor. The list only grows —
-config cannot unblock a phrase the engine already refuses.
+config cannot unblock a phrase the engine already refuses. It is a *per-command*
+backstop; the broader question ("may runs on this machine use a shell at all") is
+the `permissions` section [below](#permissions).
 
 ### tools.repl
 
@@ -235,8 +238,101 @@ default**; the switch has to be explicit.
 | `max_output_bytes` | integer | `102400` | Cap on return value plus console output. |
 | `catalog_budget` | integer | `8000` | Character budget for the tool catalog injected with the `code` parameter. |
 
-Write operations inside a script still pass the policy, Bash gate and approval
-checks one by one.
+### When it is worth a program
+
+A program costs one parse and one extra hop; what it saves is round trips and
+context. Measured on a 40-file aggregation: eight programs wrapped 118 tool calls,
+622 KB of intermediate output never entered the context, and only 16 KB (the return
+values) did — 10 model requests instead of one per call.
+
+The rule that falls out of that, and that the tool description also states:
+
+- **more than about three calls of the same kind, or intermediate output bigger
+  than ~10 KB** → one program;
+- **one or two calls with a small result** → call the tool directly; wrapping it
+  costs more than it saves.
+
+`REPL` has no permission settings of its own. A program runs under the same
+posture as a direct call, taken from the `permissions` section of this file
+([below](#permissions)):
+
+- `allow`: that call runs unattended;
+- `ask`: the program **pauses at that step** and the turn parks as
+  `waiting_approval`. Approving re-issues the same program with the step marked
+  approved: finished steps are replayed (no repeated side effects) and execution
+  continues from there. A second `ask` later in the program pauses it again;
+- `deny`: the tool is not bound inside the program at all.
+
+Per-command rules still apply to each statement: the shell floor, the `.env` rule,
+the path restriction and `PreToolUse` hooks all run at the inner call — an inner
+`ask` from any of them pauses the program the same way.
+
+## permissions
+
+The one place that decides what a run may do without a human. It is global to the
+runtime — every Flow and every Agent started from this `.agents/` inherits it —
+because the question is about the machine ("may runs here execute commands"), not
+about a task. A per-Flow or per-Agent answer would be the same answer written
+several times.
+
+```json
+{
+  "permissions": {
+    "bash": "allow",
+    "write": "ask",
+    "websearch": "allow",
+    "webfetch": "allow"
+  }
+}
+```
+
+| Field | Type | Default | Governs |
+|-------|------|---------|---------|
+| `bash` | string | `allow` | the `Bash` tool |
+| `write` | string | `allow` | the `Write` tool |
+| `websearch` | string | `allow` | the `WebSearch` tool |
+| `webfetch` | string | `allow` | the `WebFetch` tool |
+
+Each field is named after the tool it governs — there is no shared "network" or
+"shell" bucket to decode. Each takes `allow`, `ask` or `deny`:
+
+| Decision | Direct call | Inside a `REPL` program |
+|----------|-------------|-------------------------|
+| `allow` | runs | runs |
+| `ask` | parks for one approval | the program **pauses at that step**; the turn parks as `waiting_approval`, and the resumed run replays the finished steps and executes the approved one |
+| `deny` | refused, and the tool is withheld from the model | not bound at all |
+
+### What this section does not cover
+
+- **A value is per field, not a global switch.** There is no
+  `"permissions": "allow"`. Each governed tool has its own line, and a tool with no
+  line is not governed at all.
+- **Only four tools are governed.** `Read`, `Grep`, `Glob`, `CodeNav`, `TodoWrite`,
+  `TodoRead`, `State`, `AskUserQuestion`, `Spawn` and the Team tools cannot change
+  anything outside the conversation, so they run without asking and without a knob.
+  A tool that is not in the table above keeps its own behaviour.
+- **`REPL` is not here, by design.** It is not a capability: it is a program that
+  calls the tools above. Whether a program may do something is answered per step
+  while it runs — a program that only reads runs free, and one that reaches `Bash`
+  or `Write` inherits that tool's decision at the step where it happens. Adding a
+  `repl` line would only create a second place to say the same thing.
+- **Omitting the section means `allow` everywhere**, which is what every
+  installation did before the section existed.
+- **Two things are not configurable**, because a run that needs them needs a human:
+  a shell command containing `rm -rf`, `sudo `, `shutdown`, `mkfs` or
+  `git reset --hard`, and a write to `.env`. Inside a program they behave like any
+  other `ask`: the program pauses at that step.
+  `tools.restricted_bash_phrases` adds phrases to the first, never removes these.
+
+One approval covers the whole program, and that includes the two floor rules above:
+a program approved under `bash: ask` may run a command the engine would otherwise
+ask about. The alternative — stopping at the first such statement — is the
+half-finished program the design removes. The approval reason says so, so the human
+agrees to the program, not to a list of statements they cannot see.
+
+`--check-config` rejects a value that is not one of the three decisions: a
+misspelled posture would otherwise fall back to `allow` and read as a restriction
+that is not there.
 
 ## env
 
@@ -309,6 +405,12 @@ There is currently no configuration for run-data retention.
   "tools": {
     "restricted_bash_phrases": ["prod-deploy"],
     "repl": { "enabled": false }
+  },
+  "permissions": {
+    "bash": "ask",
+    "write": "allow",
+    "websearch": "allow",
+    "webfetch": "allow"
   },
   "env": {
     "WORKSPACE_ROOT": ".",

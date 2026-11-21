@@ -19,6 +19,10 @@ heron --serve --port 8080 --flow .agents/flows/default.yml
 # Resume a waiting FlowSession
 heron --prompt "Continue..." --session <flow_session_id> --flow .agents/flows/default.yml
 
+# Answer a pending approval of a parked session (the id comes from the output)
+heron --approve <approval_id> --session <flow_session_id> --flow .agents/flows/default.yml
+heron --deny <approval_id> --session <flow_session_id> --flow .agents/flows/default.yml
+
 # Knowledge: learn one session (incremental). Flags must come BEFORE the id:
 # `heron knowledge <id> --flow X` would silently ignore --flow.
 heron knowledge --flow .agents/flows/default.yml <flow_session_id>
@@ -58,7 +62,9 @@ heron --version
 | `--log-level` | string | from `settings.json` | `debug`, `info`, `warn`, `error`. |
 | `--max-rounds` | int | `0` (use config) | Override the per-Agent max rounds. |
 | `--list` | bool | false | List sessions and pick one to resume. |
-| `--check-config` | bool | false | Load flow/team/agent definitions, print each Team binding's lifecycle, exit 0 on valid. |
+| `--approve` | string | empty | Approve a pending approval by id. Requires `--session`. |
+| `--deny` | string | empty | Refuse a pending approval by id. Requires `--session`. |
+| `--check-config` | bool | false | Load flow/team/agent definitions and validate the `permissions` section, print each Team binding's lifecycle, exit 0 on valid. |
 | `--json-rpc` | bool | false | Long-lived JSON-RPC 2.0 over stdin/stdout. |
 | `--serve` | bool | false | Start HTTP server mode. |
 | `--host` | string | `127.0.0.1` | Bind address for `--serve`. |
@@ -126,6 +132,33 @@ Some combinations are refused at startup rather than resolved silently:
 | Ctrl+L | Clear the message list (same as `/clear`; the display is not recoverable) |
 | Home / End | Jump to the top / bottom of the transcript |
 | Ctrl+C | Exit |
+
+## Approvals
+
+An `ask` decision — a restricted shell phrase, a write to `.env`, or a governed tool the
+runtime's `permissions` section marks `ask` — parks the turn instead of failing it.
+Inside a `REPL` program the program itself pauses at that step and resumes after the
+answer, so the parking can happen mid-program:
+
+```
+Status: waiting_approval
+Approval needed: Bash — permissions: bash=ask in this runtime
+  Script: script-... (step 3); approving resumes the program from that step
+  approval id: fs_test_session:approval:tc-1-0
+  this turn is parked, not failed: answer it with `--approve <id> --session <session>`,
+  or POST /api/approvals on a --serve instance
+```
+
+The terminal has no dialog, which is why the id is printed: without it the only
+way out is the HTTP API. The TUI prints the same line above the status bar. A
+denied approval is not a failed turn — the reason goes back to the model, which
+can re-plan — but nothing runs.
+
+When the question comes from inside a program, the approval names the tool and the
+step, and approving it re-issues the same program with the finished steps served
+from the replay log — no side effect repeats. A second `ask` later in the program
+parks it again, which is what lets `permissions` stay a per-tool decision instead of
+a per-program negotiation.
 
 ## Non-Interactive Mode
 
@@ -283,8 +316,9 @@ heron --check-config --flow .agents/flows/default.yml
 ```
 
 Loads the same definitions the runtime loads, without building a model
-provider and without touching a session, then prints every Team binding's
-resolved lifecycle:
+provider and without touching a session, validates the `permissions` section
+(an unknown decision is an error here, not a warning), then prints
+every Team binding's resolved lifecycle:
 
 ```
 default      team=qa_team      lifecycle=shared

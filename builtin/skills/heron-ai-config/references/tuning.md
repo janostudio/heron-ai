@@ -65,7 +65,7 @@
 | `structured_output` | 无 | 下游要按字段取值（`${records.X.Data.<field>}`） | 模型必须输出合法 JSON；不合法会触发一次重试，仍失败则该轮 failed |
 | `completion.require_tool` / `required_tools` | 关 | prompt 已明确"必须先查证"，模型仍直接作答 | 误伤：模型用了别的方式达成同样效果也会被判未完成 |
 | `completion.require_workspace_change` | 关 | 任务必须改代码才算完成 | 只读任务开了会必然失败 |
-| `hitl.enabled` | 关 | 危险动作要人工确认 | 无人审批时整轮挂起（子 agent 尤其注意） |
+| `hitl.enabled` | 关 | 危险动作要人工确认 | 关 = 需要审批的调用直接被拒（不挂起）；开 = 停在该轮等应答，没人答就一直停（子 agent 尤其注意） |
 
 ## 6. 编排兜底（`settings.json`）
 
@@ -76,6 +76,8 @@
 | `runtime.max_active_team_sessions` | 8 | `isolated` 实例不够用（未关闭的实例计入配额） | 太高会累积未关闭实例 |
 | `logging.level` | `info` | 要 `model request usage` 之类细节 | 日志体积上涨 |
 | `tools.restricted_bash_phrases` | 内置 5 条 | 需要额外禁用某类命令 | 命中是"需审批"而非拒绝，无人审批时挂起 |
+| `tools.repl.enabled` | 关 | 批量任务（同类调用 ≥3 次或中间结果 >10KB） | 单次调用写成程序反而更贵；程序内无法暂停等审批 |
+| `permissions`（settings） | 四个工具全 `allow` + 内置底线 | 要让这台机器上的 Bash / Write / 联网走审批或被禁 | `ask` 对 REPL 是"程序跑到该步暂停、批准后续跑"；逐条命令仍受内置底线约束 |
 
 ## 7. 改完怎么验证
 

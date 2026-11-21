@@ -107,7 +107,8 @@ tools:
 - **`models.json` 是唯一必需文件**：缺它或 `models` 为空，启动直接失败。
 - **`workspace.read_roots`**：只读扩展根，相对**进程 cwd** 解析；条目失效被跳过（不报错），代价是那一刻读不到。
 - **`lifecycle: isolated`** 必须同时 `inputs.user_message: true`，否则加载报错。
-- **`settings.json` 的 `tools.restricted_bash_phrases`**：只增不减，命中变"需审批"。
+- **`settings.json` 的 `permissions`**：全局权限，`bash` / `write` / `websearch` / `webfetch` 各取 `allow`/`ask`/`deny`，缺省 `allow`，本运行时所有 Flow / Agent 继承。字段名即工具名，不覆盖只读工具；内置底线（受限 shell 短语、写 `.env`）删不掉；`REPL` 无单独权限配置：程序内某一步命中 `ask` 就地暂停（回合进入 waiting_approval），批准后重放已完成步骤、从该步继续。
+- **`settings.json` 的 `tools.restricted_bash_phrases`**：只增不减，命中变"需审批"，是逐条命令的兜底。
 
 ## 5. 自检：`--check-config` 能拦什么
 
