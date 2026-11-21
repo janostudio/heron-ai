@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/logging"
+	"github.com/heron-ai/heron-engine/internal/metrics"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
 
@@ -204,7 +205,9 @@ const maxConcurrentWakeupFires = 8
 func (r *Runtime) fireDueWakeups(ctx context.Context) {
 	now := time.Now().UTC()
 	sem := r.wakeupSemaphore()
-	for _, record := range r.pendingWakeups() {
+	records := r.pendingWakeups()
+	metrics.Set(metricWakeupsPending, int64(len(records)))
+	for _, record := range records {
 		if r.wakeupHeld(record.ID, now) {
 			continue
 		}
@@ -259,6 +262,7 @@ func (r *Runtime) releaseWakeupFire(wakeupID string) {
 // resuming is Recover's job, not a timer's.
 func (r *Runtime) fireWakeup(ctx context.Context, record types.WakeupRecord) {
 	defer r.releaseWakeupFire(record.ID)
+	metrics.Inc(metricWakeupsFired)
 
 	_, err := r.ResumeForWakeup(ctx, record.FlowSessionID, record)
 	switch {
@@ -295,6 +299,7 @@ func (r *Runtime) fireWakeup(ctx context.Context, record types.WakeupRecord) {
 // rather than counted down — the causes this covers clear in minutes, and a
 // record that keeps failing is visible in the event stream.
 func (r *Runtime) rescheduleWakeup(ctx context.Context, record types.WakeupRecord, reason, message string) {
+	metrics.Inc(metricWakeupResched)
 	retry := record
 	retry.FireAt = time.Now().UTC().Add(wakeupSkipRetry)
 	if markErr := r.markWakeup(ctx, retry, types.EventWakeupSkipped, map[string]any{
