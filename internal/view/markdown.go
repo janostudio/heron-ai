@@ -154,5 +154,3 @@ func escapeSequenceLen(s string) int {
 		return 2
 	}
 }
-
-

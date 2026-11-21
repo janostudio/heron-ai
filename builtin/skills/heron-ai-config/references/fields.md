@@ -296,7 +296,8 @@ frontmatter 之后是正文：**原样拼进 system prompt**，不做模板渲�
 | `knowledge` | `summary_model`（空 = 默认模型） |
 | `web` | `provider` / `api_key` / `fetch.provider` |
 | `mcp` | `name` / `transport`(`stdio`\|`http`) / `command`+`args` / `url`+`headers` / `env` |
-| `tools` | `restricted_bash_phrases`（只增不减）、`repl.*`（默认关；开了还要 `hitl.enabled`） |
+| `tools` | `restricted_bash_phrases`（只增不减）、`repl.*`（默认关） |
+| `permissions` | `bash` / `write` / `websearch` / `webfetch`，各取 `allow`\|`ask`\|`deny`（缺省 `allow`）。全局权限，本运行时所有 Flow / Agent 继承；字段名即工具名，`REPL` 无单独配置，程序内按步暂停 |
 | `env` | 注入子进程的环境变量；**每个值按路径解析**（相对工作区根），非路径值会被拼成路径，只适合放路径锚点 |
 
 **不生效的段**（老配置常见）：`logging.output`（被丢弃）、`paths.data`（硬编码 `.agents/data/`）、`agent.*`（没有全局 agent 段，单 agent 限制在 `AGENT.md`，全局在 `runtime.max_agent_rounds`）、`observability`（包已删）。

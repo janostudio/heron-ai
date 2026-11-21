@@ -29,6 +29,10 @@ type FlowResult struct {
 	Status    types.SessionStatus
 	Usage     types.TokenUsage
 	SessionID string
+	// PendingApprovals are the Tool calls the turn parked on. The terminal has no
+	// dialog, so the display has to name them: a parked turn otherwise looks like
+	// a turn that simply stopped.
+	PendingApprovals []types.AgentPendingApproval
 }
 
 // TeamOutput is the display projection for one TeamTurn.
@@ -235,7 +239,6 @@ var welcomeKeyStyle = lipgloss.NewStyle().
 var welcomeHintStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("243"))
 
-
 // ===== TUIModel =====
 
 // TUIModel is the bubbletea model for the interactive TUI
@@ -412,8 +415,8 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if msg.Alt {
-			// Alt+↑ scrolls the transcript (REPL-safe: plain ↑ is history).
-			m.viewport.ScrollUp(scrollLines)
+				// Alt+↑ scrolls the transcript (REPL-safe: plain ↑ is history).
+				m.viewport.ScrollUp(scrollLines)
 				return m, nil
 			}
 			// In a multi-line input, ↑ first moves the cursor up; only once it
@@ -590,6 +593,21 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Timestamp:  time.Now(),
 					AgentIndex: i,
 					TeamName:   team.TeamID,
+				})
+			}
+
+			// A turn can end parked at an approval gate. Saying so — and saying how
+			// to answer it — is the difference between "the engine is busy" and "it
+			// is waiting for you": the terminal has no dialog, so the only way a
+			// human can unblock the session is to be told the approval id.
+			for _, pending := range msg.result.PendingApprovals {
+				m.addMessage(DisplayMessage{
+					Role: RoleSystem,
+					Content: fmt.Sprintf(
+						"Waiting for approval: %s — %s\n  approval id: %s\n  answer: POST /api/approvals?session_id=%s {\"approval_id\":%q,\"approved\":true}",
+						pending.ToolName, pending.Reason, pending.RequestID, msg.result.SessionID, pending.RequestID),
+					RoundNum:  m.roundNum,
+					Timestamp: time.Now(),
 				})
 			}
 

@@ -70,6 +70,8 @@ func main() {
 	serveHost := flag.String("host", "", "HTTP server bind host (default: 127.0.0.1)")
 	authToken := flag.String("auth-token", "", "Bearer token required by --serve (default: $HERON_SERVE_TOKEN)")
 	listFlag := flag.Bool("list", false, "List sessions; pick one interactively to resume it")
+	approveID := flag.String("approve", "", "Answer a pending approval of an existing session (requires --session)")
+	denyID := flag.String("deny", "", "Refuse a pending approval of an existing session (requires --session)")
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	checkConfig := flag.Bool("check-config", false, "Load the flow/team/agent definitions, print each Team binding's lifecycle, and exit (0 = valid)")
 	flag.Usage = usage
@@ -150,7 +152,63 @@ func main() {
 		runPrompt(flowPath, *sessionID, *prompt, overrides)
 		return
 	}
+	// Answering a pending approval is its own mode: the terminal has no dialog, and
+	// a parked session would otherwise have to be resumed through the HTTP API. One
+	// flag is the smallest surface that makes `--prompt` output actionable.
+	if *approveID != "" && *denyID != "" {
+		fmt.Fprintln(os.Stderr, "Error: --approve and --deny are mutually exclusive")
+		os.Exit(1)
+	}
+	if (*approveID != "" || *denyID != "") && *prompt != "" {
+		fmt.Fprintln(os.Stderr, "Error: --approve/--deny cannot be combined with --prompt")
+		os.Exit(1)
+	}
+	if *approveID != "" || *denyID != "" {
+		id, approved := *approveID, true
+		if id == "" {
+			id, approved = *denyID, false
+		}
+		if *sessionID == "" {
+			fmt.Fprintln(os.Stderr, "Error: --approve/--deny requires --session")
+			os.Exit(1)
+		}
+		runApproval(flowPath, *sessionID, id, approved, overrides)
+		return
+	}
 	runTUI(flowPath, overrides)
+}
+
+// runApproval answers one pending approval and renders the resumed turn with the
+// same output as a normal prompt run, so a caller script does not need a second
+// parser for the approval path.
+func runApproval(flowPath, sessionID, approvalID string, approved bool, o cliOverrides) {
+	ctx := context.Background()
+	bundle, modelName, err := buildCurrentRuntime(ctx, flowPath, o)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error building runtime: %v\n", err)
+		os.Exit(1)
+	}
+	flowRuntime, ok := bundle.Flow.(types.ApprovalFlowRuntime)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "Error: approval resume is not configured for this runtime")
+		shutdownAndExit(bundle, 1)
+	}
+	reason := ""
+	if !approved {
+		reason = "denied on the command line"
+	}
+	result, err := flowRuntime.ResumeApproval(ctx, sessionID, approvalID, approved, reason)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resuming approval: %v\n", err)
+		shutdownAndExit(bundle, 1)
+	}
+	if err := writePromptResult(os.Stdout, bundle.Definitions.Flow.ID, modelName, result); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing result: %v\n", err)
+		shutdownAndExit(bundle, 1)
+	}
+	if err := bundle.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: error shutting down runtime: %v\n", err)
+	}
 }
 
 func resolveFlowPath(flowPath string) string {
@@ -330,6 +388,16 @@ func writePromptResult(w io.Writer, flowID, modelName string, result types.FlowT
 	printf("Model: %s\n", modelName)
 	printf("FlowSession: %s\n", result.Session.ID)
 	printf("Status: %s\n", result.Session.Status)
+	// A parked turn is not an error and not a finished answer: it is a question.
+	// Printing only the status left the operator with no way to learn the approval
+	// id, and --prompt exits immediately afterwards, so the question would sit
+	// unanswered until the session was resumed by hand.
+	for _, pending := range result.PendingApprovals {
+		printf("Approval needed: %s — %s\n", pending.ToolName, pending.Reason)
+		printf("  approval id: %s\n", pending.RequestID)
+		printf("  this turn is parked, not failed: answer it with `--approve %s --session %s`, "+
+			"or POST /api/approvals on a --serve instance\n", pending.RequestID, result.Session.ID)
+	}
 	if usage := aggregateTeamUsage(result.TeamResults); usage.TotalTokens > 0 {
 		printf("Tokens: %d (prompt %d, completion %d)\n", usage.TotalTokens, usage.PromptTokens, usage.CompletionTokens)
 		// How much of the prompt the provider served from its cache. Without it
@@ -1165,10 +1233,11 @@ func (r *sessionFlowRunner) projectTurn(result types.FlowTurnResult) (*view.Flow
 		})
 	}
 	return &view.FlowResult{
-		Teams:     outputs,
-		Status:    result.Session.Status,
-		Usage:     aggregateTeamUsage(result.TeamResults),
-		SessionID: result.Session.ID,
+		Teams:            outputs,
+		Status:           result.Session.Status,
+		Usage:            aggregateTeamUsage(result.TeamResults),
+		SessionID:        result.Session.ID,
+		PendingApprovals: result.PendingApprovals,
 	}, nil
 }
 
@@ -1312,6 +1381,15 @@ func checkConfigOnly(flowPath string) int {
 	fmt.Printf("flow %s: %d bindings ok (%d isolated)\n", defs.Flow.ID, len(names), isolated)
 	printRulePathWarnings(defs)
 	printUnknownSettingsWarnings()
+	// The permission posture is validated here: this mode exists to refuse a
+	// deployment that would behave differently than its author thinks, and a
+	// misspelled decision silently falling back to allow is exactly that.
+	if problems := loader.LoadPermissions().Validate(); len(problems) > 0 {
+		for _, problem := range problems {
+			fmt.Fprintf(os.Stderr, "config invalid: %s\n", problem)
+		}
+		return 1
+	}
 	return 0
 }
 

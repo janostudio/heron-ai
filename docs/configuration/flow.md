@@ -44,6 +44,10 @@ teams:
 | `teams` | map | Team bindings, keyed by Flow-local Team name |
 | `workspace` | object | Execution backend (local / remote SSH), 见 [workspace](./workspace.md) |
 
+Permissions are **not** here: they are one global posture in
+`settings.json` ([settings.md](./settings.md#permissions)), because "may a run on
+this machine execute commands" is a property of the machine, not of the job.
+
 ### Team binding
 
 | Field | Type | Description |

@@ -112,13 +112,27 @@ func (t *ScriptTool) Parameters() map[string]any {
 			"type":        "integer",
 			"description": "Compute budget in milliseconds. Tool calls do not count against it. Default 60000, max 600000.",
 		},
+		// Set by the approval resume path, never by the model: the resumed turn
+		// re-issues the same program and these two values are what let it replay the
+		// finished steps and run exactly the approved one. They are declared here
+		// because the validator rejects parameters a tool does not know.
+		"resume_script_id": map[string]any{
+			"type":        "string",
+			"description": "Internal: the paused program this approval resumes.",
+		},
+		"resume_step": map[string]any{
+			"type":        "integer",
+			"description": "Internal: the step the approval covers.",
+		},
 	}
 }
 
-// NeedsApproval is true because the whole program is the unit a human reviews.
-// Inner calls are still gated one by one by the caller's policy layer; this flag
-// covers the "model can run arbitrary code with tool access" decision.
-func (t *ScriptTool) NeedsApproval() bool { return true }
+// NeedsApproval is false because a program is not itself a capability question: its
+// steps are judged one by one as they run (see TurnLoop.toolDecision), and a step
+// that needs a human pauses the program instead of failing it. A constant true here
+// made every REPL call need a human regardless of content, which carried no
+// information and trained everyone to click through it.
+func (t *ScriptTool) NeedsApproval() bool { return false }
 
 // Execution is serial: a program may write, and running it beside another tool
 // call would make the write order depend on scheduling.
@@ -164,6 +178,9 @@ func (t *ScriptTool) contractText() string {
 	var b strings.Builder
 	b.WriteString("JavaScript program body. It runs as a function body, so `return` is allowed and top-level declarations are local.\n")
 	b.WriteString("Contract:\n")
+	b.WriteString("- The tools bound here are the same ones this Agent may call directly; the runtime's permissions decide which.\n")
+	b.WriteString("- Worth a program: several calls of the same kind (a loop over files/rows), or intermediate output large enough that only the conclusion matters. " +
+		"A single call with a small result is cheaper done directly — a program costs one parse and one extra hop.\n")
 	b.WriteString("- Tools are synchronous: `const r = tools.Read({file: \"x\"})`; there is no async, no Promise, no setTimeout.\n")
 	b.WriteString("- Every tool returns {ok, content, metadata?}; failures throw a ToolCallError you can catch.\n")
 	b.WriteString("- Only the returned value and console.log output are sent back. Filter and aggregate before returning.\n")
@@ -226,21 +243,75 @@ func (t *ScriptTool) Execute(ctx context.Context, params map[string]any) (*types
 		spec = provider
 	}
 
+	// A resumed run is the same program with one step already answered for. The
+	// replay log skips everything that finished, so the step executes exactly once.
+	var approvedStep *int
+	if id, _ := params["resume_script_id"].(string); id == scriptID {
+		if step, ok := numberParam(params, "resume_step"); ok {
+			value := int(step)
+			approvedStep = &value
+		}
+	}
+
 	runner := &Runner{Caller: composedCaller{call: caller, spec: spec}, Store: t.store}
 	ex, err := runner.Run(ctx, RunRequest{
-		ScriptID:  scriptID,
-		Code:      code,
-		Timeout:   timeout,
-		MaxSteps:  t.opts.MaxSteps,
-		MaxOutput: t.opts.MaxOutput,
-		ToolNames: names,
+		ScriptID:     scriptID,
+		Code:         code,
+		Timeout:      timeout,
+		MaxSteps:     t.opts.MaxSteps,
+		MaxOutput:    t.opts.MaxOutput,
+		ToolNames:    names,
+		ApprovedStep: approvedStep,
 	})
+
+	// A pause is not a failure: the program did nothing at the gated step and will
+	// be resumed. Reporting it as a pending approval is what lets the turn park
+	// instead of telling the model its program broke.
+	if ex.Paused != nil {
+		paused := ex.Paused
+		return &types.ToolResult{
+			Success: false,
+			Error: fmt.Sprintf("%s paused at step %d: %s needs approval",
+				ToolName, paused.Step, paused.Tool),
+			Metadata: map[string]any{
+				"paused":    true,
+				"script_id": paused.ScriptID,
+				"step":      paused.Step,
+				"tool":      paused.Tool,
+			},
+			// ToolName is the tool being parked — the program — not the inner call.
+			// The resume path re-issues exactly this tool with these arguments, so
+			// naming the inner tool would resume by calling, say, Write with a
+			// program's arguments (observed: `parameter "file" is required`).
+			PendingApproval: &types.AgentPendingApproval{
+				ToolName:    ToolName,
+				Arguments:   paused.Args,
+				Reason:      fmt.Sprintf("%s (paused at step %d: %s)", paused.Reason, paused.Step, paused.Tool),
+				RequestedAt: time.Now().UTC(),
+				Channel:     "agent",
+			},
+			Next: &types.Route{Action: types.NextWaitApproval, Reason: paused.Reason},
+		}, nil
+	}
 
 	result := &types.ToolResult{
 		Success:      err == nil,
 		Content:      t.renderContent(ex),
 		Metadata:     t.metadata(ex),
 		WorkspaceOps: collectWorkspaceOps(ex.Steps),
+	}
+	// One approval covers every use of a capability in this program. Recording
+	// the count on the result is what makes that auditable afterwards: without
+	// it the transcript shows one question and N side effects with nothing tying
+	// them together.
+	if grant := GrantFromContext(ctx); grant != nil {
+		if result.Metadata == nil {
+			result.Metadata = map[string]any{}
+		}
+		result.Metadata["approved_capabilities"] = grant.Covered()
+		if usage := grant.Usage(); len(usage) > 0 {
+			result.Metadata["approved_calls"] = usage
+		}
 	}
 	if err != nil {
 		result.Error = err.Error()

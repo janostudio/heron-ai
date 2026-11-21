@@ -40,6 +40,19 @@ func (s *scriptRun) installTools() error {
 	}); err != nil {
 		return fmt.Errorf("bind tools.all: %w", err)
 	}
+	// Tools the Agent owns but this runtime's permissions refuse are bound as
+	// refusals rather than left undefined. Left undefined, "tools.Bash is not a
+	// function" reads like a missing feature and the model retries variations;
+	// the truth is that the posture denies the tool, and saying so ends the loop.
+	for _, name := range BlockedFromContext(s.ctx) {
+		blocked := name
+		if err := obj.Set(blocked, func(goja.FunctionCall) goja.Value {
+			panic(s.rt.NewTypeError(
+				"%s is not available to this program: this runtime's permissions do not allow it", blocked))
+		}); err != nil {
+			return fmt.Errorf("bind blocked tool %s: %w", name, err)
+		}
+	}
 	return s.rt.Set("tools", obj)
 }
 
@@ -114,6 +127,12 @@ func (s *scriptRun) callTool(name string, args map[string]any) (*types.ToolResul
 	result, execErr := s.runner.Caller.Execute(callCtx, name, args)
 	end()
 	if execErr != nil {
+		if approval, ok := AsApprovalRequired(execErr); ok {
+			// The sandbox owns the step numbering: a caller that reports a pause
+			// without it would otherwise land the record on the wrong step.
+			approval.Step = step
+			return nil, s.stopForApproval(approval, name, hash)
+		}
 		result = &types.ToolResult{Success: false, Error: execErr.Error()}
 	}
 
@@ -127,6 +146,34 @@ func (s *scriptRun) callTool(name string, args map[string]any) (*types.ToolResul
 	}
 	s.recordStep(rec)
 	return result, nil
+}
+
+// stopForApproval records the pause and stops the VM.
+//
+// The record is `paused`, not `started`: the call certainly did not run, so a
+// denial must not leave the program looking like it may have half-executed an
+// effect (which forever blocks a retry), and a later resume must re-execute this
+// step rather than treat it as done.
+func (s *scriptRun) stopForApproval(approval ApprovalRequest, name, hash string) error {
+	if approval.ScriptID == "" {
+		approval.ScriptID = s.scriptID
+	}
+	approval.Tool = name
+	if approval.Args == nil {
+		approval.Args = map[string]any{}
+	}
+	if s.runner.Store != nil {
+		if err := s.runner.Store.Append(s.ctx, s.scriptID, StepRecord{
+			Step: approval.Step, ToolName: name, ArgsHash: hash, Status: stepPaused,
+		}); err != nil {
+			return fmt.Errorf("record paused step: %w", err)
+		}
+	}
+	s.paused = &approval
+	// Interrupt, not a Go error: a script could catch a thrown error and keep
+	// going, and continuing past a gated step is exactly what must not happen.
+	s.rt.Interrupt("approval required")
+	return &ErrApprovalRequired{Request: approval}
 }
 
 // isEffectful defaults to true when the executor cannot describe the tool:
@@ -302,6 +349,10 @@ func (s *scriptRun) executeBatchCall(call batchCall) (*types.ToolResult, error) 
 	result, execErr := s.runner.Caller.Execute(callCtx, call.name, call.args)
 	end()
 	if execErr != nil {
+		if approval, ok := AsApprovalRequired(execErr); ok {
+			approval.Step = call.step
+			return nil, s.stopForApproval(approval, call.name, call.hash)
+		}
 		result = &types.ToolResult{Success: false, Error: execErr.Error()}
 	}
 

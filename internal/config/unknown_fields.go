@@ -48,8 +48,9 @@ type settingsSchema struct {
 		RestrictedBashPhrases []string           `json:"restricted_bash_phrases"`
 		Repl                  types.ScriptConfig `json:"repl"`
 	} `json:"tools"`
-	Env map[string]string       `json:"env"`
-	MCP []types.MCPServerConfig `json:"mcp"`
+	Permissions types.PermissionsConfig `json:"permissions"`
+	Env         map[string]string       `json:"env"`
+	MCP         []types.MCPServerConfig `json:"mcp"`
 }
 
 // UnknownSettingsFields reports keys in .agents/settings.json that no loader

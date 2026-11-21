@@ -120,7 +120,12 @@ Each agent can be configured with:
   Two tools are conditional: `REPL` only appears when
   `settings.json` sets `tools.repl.enabled`, and `ScheduleWakeup` /
   `CancelWakeup` only exist under `--serve`, the one mode whose process
-  outlives its turns.
+  outlives its turns. `REPL` has no permission settings of its own: a program is
+  bound to the tools its Agent may call, minus the tools the runtime's
+  `permissions` section denies. A step that needs approval pauses the program — the
+  sandbox stops the VM, the turn parks, and the resumed run replays the finished
+  steps and executes the approved one (`internal/agent/policy.go`,
+  `internal/agent/script_gate.go`, `internal/tool/script/pause.go`).
   `WebSearch` and `WebFetch` additionally read their data source from the `web`
   section of `.agents/settings.json` — the provider defaults to `duckduckgo`
   (keyless, search only); `tinyfish`, `brave` and `tavily` need an `api_key`
@@ -140,6 +145,10 @@ Each agent can be configured with:
 - **Delegation**: an Agent reaches other Teams through the `Team` / `ListTeams` /
   `Spawn` tools and the Flow's `can_activate` bindings. There is no separate
   `handoffs` field — configuring one is silently ignored.
-- **HITL**: Human-in-the-loop approval gates
+- **HITL**: Human-in-the-loop approval gates. What an `ask` decision covers is the
+  `permissions` section's business (`settings.json`, merged with a builtin floor):
+  the loop only routes on `allow` / `ask` / `deny`.
+  `PosturePolicy` answers which tools the posture refuses; a step that needs a human
+  becomes a durable approval rather than a blocked dialog.
 - **MCP**: Tools discovered from configured MCP servers, listed per agent under
   `tools.mcp`

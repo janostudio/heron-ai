@@ -34,6 +34,10 @@ type SpecProvider interface {
 const (
 	stepStarted = "started"
 	stepDone    = "done"
+	// stepPaused means the call stopped at the approval gate and never ran. It is
+	// deliberately distinct from started-without-done: that state means "may have
+	// landed", while this one means "certainly did not".
+	stepPaused = "paused"
 )
 
 // StepRecord is one inner tool call. Status started without a matching done
@@ -70,6 +74,10 @@ type Execution struct {
 	TimedOut bool
 	// Truncated reports that Value or Console hit MaxOutputBytes.
 	Truncated bool
+	// Paused is set when the program stopped at a step that needs a human. The
+	// caller turns it into an approval request; the program itself is resumed later
+	// by replaying it with ApprovedStep set.
+	Paused *ApprovalRequest
 }
 
 // RunRequest is one script execution.
@@ -86,6 +94,14 @@ type RunRequest struct {
 	// Catalog is the pre-rendered tool catalog. It lives on the `code`
 	// parameter description, not in the runtime.
 	Catalog string
+	// ApprovedStep is the step a human just approved, or nil for a fresh run. It is
+	// what lets the replay pass a started-without-result record at that one step:
+	// everything else about the interruption rule is unchanged, because a pause
+	// tells us the call certainly did not land.
+	//
+	// A pointer, not an int: the zero value of an int is a valid step number, so a
+	// caller that forgot to set it would silently approve step 0.
+	ApprovedStep *int
 }
 
 // ErrEffectInterrupted reports a replay that found an effectful call started but
@@ -124,7 +140,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (Execution, error) {
 		}
 		recorded = loaded
 	}
-	if err := checkInterruptedEffects(recorded, r.Store != nil); err != nil {
+	if err := checkInterruptedEffects(recorded, r.Store != nil, req.ApprovedStep); err != nil {
 		return Execution{}, err
 	}
 
@@ -163,6 +179,13 @@ func (r *Runner) Run(ctx context.Context, req RunRequest) (Execution, error) {
 		ex.Truncated = true
 	}
 
+	if run.paused != nil {
+		// A pause is not a failure: the program did nothing at the gated step, and
+		// the caller will ask a human and resume it. Returning the error here would
+		// make ScriptTool report a broken program instead of a pending approval.
+		ex.Paused = run.paused
+		return ex, nil
+	}
 	if err != nil {
 		if run.interrupted != nil {
 			ex.Canceled = errors.Is(run.interrupted, errCanceled)
@@ -203,6 +226,10 @@ type scriptRun struct {
 	inflight    int32
 	lastActive  int64
 	interrupted error
+	// paused records the step that stopped at the approval gate. It is set before
+	// the VM is interrupted, so eval can tell "waiting for a human" apart from
+	// "canceled" and "timed out".
+	paused *ApprovalRequest
 	// stepsMu guards exec.Steps: tools.all runs read-only members concurrently.
 	stepsMu sync.Mutex
 }
@@ -217,10 +244,15 @@ func indexSteps(records []StepRecord) map[int]StepRecord {
 	return out
 }
 
-// checkInterruptedEffects refuses to continue a script whose last effectful
-// call has a started record but no result. Without a store every run is the
-// first run, so there is nothing to refuse.
-func checkInterruptedEffects(records []StepRecord, hasStore bool) error {
+// checkInterruptedEffects refuses to continue a script whose effectful call has a
+// started record but no result. Without a store every run is the first run, so
+// there is nothing to refuse.
+//
+// Two records are allowed to clear the pending state: done (the call completed)
+// and paused (the call was stopped at the approval gate and certainly did not
+// run). approvedStep additionally excuses a started record at that one step,
+// because the human just answered for it.
+func checkInterruptedEffects(records []StepRecord, hasStore bool, approvedStep *int) error {
 	if !hasStore {
 		return nil
 	}
@@ -228,8 +260,11 @@ func checkInterruptedEffects(records []StepRecord, hasStore bool) error {
 	for _, rec := range records {
 		switch rec.Status {
 		case stepStarted:
+			if approvedStep != nil && rec.Step == *approvedStep {
+				continue
+			}
 			pending[rec.Step] = rec
-		case stepDone:
+		case stepDone, stepPaused:
 			delete(pending, rec.Step)
 		}
 	}
@@ -277,6 +312,10 @@ func (s *scriptRun) eval(code string) (goja.Value, error) {
 		defer func() {
 			if rec := recover(); rec != nil {
 				if _, ok := rec.(*goja.InterruptedError); ok {
+					if s.paused != nil {
+						runErr = &ErrApprovalRequired{Request: *s.paused}
+						return
+					}
 					runErr = s.interruptedErr()
 					return
 				}
@@ -286,6 +325,9 @@ func (s *scriptRun) eval(code string) (goja.Value, error) {
 		value, runErr = s.rt.RunString("(function(){\n" + code + "\n})()")
 	}()
 	if runErr != nil {
+		if s.paused != nil {
+			return nil, &ErrApprovalRequired{Request: *s.paused}
+		}
 		var interrupted *goja.InterruptedError
 		if errors.As(runErr, &interrupted) {
 			return nil, s.interruptedErr()

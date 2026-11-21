@@ -20,7 +20,9 @@ func TestDefaultToolPolicyRequiresApprovalForDangerousBash(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, ToolRequireApproval, decision)
-	require.Contains(t, reason, "restricted")
+	// The reason names the command, so the operator knows which word triggered the
+	// question instead of guessing which of several rules applied.
+	require.Contains(t, reason, "rm -rf")
 }
 
 func TestDefaultContextPolicyNormalizesBlocks(t *testing.T) {
@@ -249,7 +251,7 @@ func TestIsContextLimitErrorDoesNotClassifyUnrelatedError(t *testing.T) {
 
 // 内置安全底线不能被配置清空；外部配置只能追加。
 func TestToolPolicyMergesDefaultsWithConfig(t *testing.T) {
-	policy := NewToolPolicy([]string{"kubectl delete ns", " RM -RF ", ""})
+	policy := NewPermissionPolicy(types.PermissionsConfig{}, []string{"kubectl delete ns", " RM -RF ", ""})
 
 	if decision, _, _ := policy.Check(context.Background(), ToolPolicyRequest{
 		Call: types.ToolCall{Name: "Bash", Arguments: map[string]any{"command": "git reset --hard HEAD"}},
@@ -269,7 +271,7 @@ func TestToolPolicyMergesDefaultsWithConfig(t *testing.T) {
 }
 
 func TestDefaultToolPolicyIgnoresEmptyConfig(t *testing.T) {
-	policy := NewToolPolicy(nil)
+	policy := NewPermissionPolicy(types.PermissionsConfig{}, nil)
 	if decision, _, _ := policy.Check(context.Background(), ToolPolicyRequest{
 		Call: types.ToolCall{Name: "Bash", Arguments: map[string]any{"command": "sudo reboot"}},
 	}); decision != ToolRequireApproval {
