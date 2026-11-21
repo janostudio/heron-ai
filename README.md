@@ -94,6 +94,7 @@ building a model client or opening a session, and prints each Team binding's lif
 | **Knowledge** | `heron knowledge` distills finished sessions into Markdown entries; `gc` archives by `ExpiresAt` |
 | **Multimedia** | Image / file content blocks over HTTP and CLI |
 | **Storage** | `.agents/data/sessions/<id>/{flow,team,agent}.jsonl` — one append-only log split by producing layer |
+| **Observability** | `GET /metrics` (Prometheus text) reports turns started / finished / in flight and wake-ups fired / rescheduled / pending; `GET /api/health` reports readiness |
 
 ## Architecture
 

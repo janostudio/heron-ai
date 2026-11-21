@@ -30,6 +30,8 @@
 - [x] `--serve`：HTTP + SSE，含内置 Web UI
 - [x] `stream-json` 客户端模式
 - [x] `--check-config`：不建模型客户端的配置门禁
+- [x] 未知配置键报告：启动日志与 `--check-config` 点名，带最近合法键建议
+- [x] `GET /metrics`：进程计数器（回合、唤醒），Prometheus 文本格式
 
 **工具与生态**
 
@@ -43,7 +45,7 @@
 ## 下一步
 
 - [ ] **扩展运行时**：`internal/extension` 目前只有注册表。Lua / WASM 的执行器与
-      能力沙箱均未实现，配置里写扩展不会生效
+      能力沙箱均未实现；配置里写扩展键会被当作未知键报告，不会生效
 - [ ] **文档站点**：把 `docs/` 发布成可搜索的站点。当前入口是 [docs/INDEX.md](docs/INDEX.md)
 - [ ] **eval 能力对外化**：`internal/eval` 已有关联 ID 与事实派生，但还没有 CLI/TUI 入口
 - [ ] **Team 包版本与兼容性**：manifest 已声明 `version` 与 `apiVersion`，尚未做升级路径
