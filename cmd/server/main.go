@@ -24,6 +24,7 @@ import (
 	"github.com/heron-ai/heron-engine/internal/app"
 	"github.com/heron-ai/heron-engine/internal/config"
 	"github.com/heron-ai/heron-engine/internal/knowledge"
+	"github.com/heron-ai/heron-engine/internal/metrics"
 	"github.com/heron-ai/heron-engine/internal/model"
 	"github.com/heron-ai/heron-engine/internal/sessionlist"
 	"github.com/heron-ai/heron-engine/internal/storage"
@@ -225,6 +226,10 @@ func startServer(flowPath, host, port, token string, exitWithParent bool, o cliO
 	// FS, so a traversal attempt can only 404.
 	mux.HandleFunc("/", handler.HandleWebStatic)
 	mux.HandleFunc("/api/stream", handler.HandleStream)
+	// Process counters in Prometheus text format. A long turn gives no signal
+	// while it runs; these numbers answer "is anything moving" without reading
+	// session files. Local to the process: a restart resets them.
+	mux.HandleFunc("/metrics", handleMetrics)
 	mux.HandleFunc("/api/recovery/status", handler.HandleRecoveryStatus)
 	mux.HandleFunc("/api/recovery", handler.HandleRecover)
 	mux.HandleFunc("/api/resume", handler.HandleResume)
@@ -1306,7 +1311,33 @@ func checkConfigOnly(flowPath string) int {
 	}
 	fmt.Printf("flow %s: %d bindings ok (%d isolated)\n", defs.Flow.ID, len(names), isolated)
 	printRulePathWarnings(defs)
+	printUnknownSettingsWarnings()
 	return 0
+}
+
+// printUnknownSettingsWarnings reports keys in .agents/settings.json that no
+// loader reads.
+//
+// A misspelled key is silent at runtime — each loader decodes its own section
+// and ignores the rest — so the file looks applied while part of it does
+// nothing. Printing here as well as through the logger is deliberate:
+// --check-config is the command a person runs *to* validate configuration, and
+// it never builds a logger.
+func printUnknownSettingsWarnings() {
+	for _, unknown := range config.NewConfigLoader(".").UnknownSettingsFields() {
+		fmt.Fprintf(os.Stderr, "warning: .agents/settings.json: %s\n", unknown)
+	}
+}
+
+// handleMetrics serves the process counters in Prometheus text exposition
+// format.
+//
+// The counters are a handful of integers, so the exposition is written here
+// rather than through a client library: one format string instead of a
+// dependency, and a scraper either parses it or the bug is in this function.
+func handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = io.WriteString(w, metrics.Render())
 }
 
 // printRulePathWarnings reports rules that gate on paths.

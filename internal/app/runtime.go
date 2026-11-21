@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/heron-ai/heron-engine/internal/agent"
@@ -210,6 +211,16 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	// last called logging.SetDefault.
 	execLogger := buildLogger(workspaceRoot, logLevelOverride)
 	logging.SetDefault(execLogger)
+	// A key no loader reads is invisible by construction: each loader decodes
+	// only its own section, so a typo simply disappears and the setting looks
+	// applied. Report it once, at startup, with the nearest accepted name —
+	// never fatal, because a settings file written for a newer build (or
+	// carrying an extension's own section) must still start.
+	for _, unknown := range config.NewConfigLoader(workspaceRoot).UnknownSettingsFields() {
+		execLogger.Warn(unknown.String(), map[string]any{
+			"file": ".agents/settings.json",
+		})
+	}
 	// One agent is one agent: the Spawn tool's inline children, durable
 	// SpawnChild tasks, and the Team scheduler's synthetic calls (batch C)
 	// share one agent-state lock set so the same dynamic agent never runs two
@@ -585,13 +596,23 @@ func BuildRuntime(ctx context.Context, store *types.DefinitionStore, provider ty
 	taskRunner.SetCompletionHandler(onTaskDone)
 	// A previous process may have completed a durable task before this
 	// runtime installed its callback. Re-scan terminal tasks on startup.
+	//
+	// The replay is bounded: onTaskDone can resume a session, and a long-lived
+	// store accumulates terminal tasks, so launching one goroutine per task
+	// turned a restart into a burst of concurrent turns. A small worker pool
+	// keeps the replay off the startup path's critical section while staying
+	// within what the store and the model provider can absorb.
 	if tasks, listErr := taskStore.List(ctx); listErr == nil {
+		replay := make([]types.ToolTask, 0, len(tasks))
 		for _, task := range tasks {
 			if task.Status == types.ToolTaskCompleted ||
 				task.Status == types.ToolTaskFailed ||
 				task.Status == types.ToolTaskCancelled {
-				go onTaskDone(context.Background(), task)
+				replay = append(replay, task)
 			}
+		}
+		if len(replay) > 0 {
+			go replayTerminalTasks(replay, onTaskDone)
 		}
 	}
 
@@ -645,8 +666,57 @@ func newWebHTTPClient() *http.Client {
 	return &http.Client{}
 }
 
+// terminalReplayWorkers bounds the startup replay of terminal durable tasks.
+// Each replay can resume a session, so the pool is deliberately small: the
+// replay recovers answers finished just before a restart, it is not a backlog
+// to work through at full speed.
+const terminalReplayWorkers = 4
+
+// replayTerminalTasks hands terminal tasks to handle with a bounded number of
+// goroutines.
+//
+// The handle runs on a detached context on purpose: the replay must not be
+// cancelled by whatever deadline the caller gave BuildRuntime, because the
+// answers it re-delivers would then be lost until the next restart. What is
+// bounded here is only how many run at once.
+func replayTerminalTasks(tasks []types.ToolTask, handle func(context.Context, types.ToolTask)) {
+	if len(tasks) == 0 {
+		return
+	}
+	workers := terminalReplayWorkers
+	if len(tasks) < workers {
+		workers = len(tasks)
+	}
+	queue := make(chan types.ToolTask)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for task := range queue {
+				handle(context.Background(), task)
+			}
+		}()
+	}
+	for _, task := range tasks {
+		queue <- task
+	}
+	close(queue)
+	wg.Wait()
+}
+
 func (b *RuntimeBundle) Close() error {
-	if b == nil || b.MCP == nil {
+	if b == nil {
+		return nil
+	}
+	// Stop the runtime's own background work first (the wake-up scheduler loop
+	// and the turns it started). Turns and Teams the caller accepted are not
+	// cancelled here: outliving a request is what makes accept-then-answer
+	// work, and they have their own cancellation path.
+	if stopper, ok := b.Flow.(types.FlowRuntimeStopper); ok {
+		stopper.Stop()
+	}
+	if b.MCP == nil {
 		return nil
 	}
 	return b.MCP.Close()

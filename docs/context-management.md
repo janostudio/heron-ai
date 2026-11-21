@@ -348,7 +348,7 @@ agent.jsonl 记录 agent 内部行为（增量事件，非完整 prompt 快照�
 ```json
 {"type":"session.agent_turn.completed","payload":{"call_result":{
   "status":"completed",
-  "call_turn_id":"tt_5eb9655c3700b924:answer",
+  "call_turn_id":"tt_test_answer:answer",
   "usage":{"prompt_tokens":2195,"completion_tokens":81,"total_tokens":2276},
   "requests":[{"round":0,"message_count":2,"usage":{"prompt_tokens":2195}}]
 }}}

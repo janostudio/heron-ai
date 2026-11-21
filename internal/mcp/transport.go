@@ -115,7 +115,21 @@ func NewStdioTransport(command string, args []string, env map[string]string, glo
 	}
 }
 
-func (t *StdioTransport) Start(_ context.Context) error {
+// Start launches the server process.
+//
+// The context bounds the handshake, not the server's lifetime. A stdio MCP
+// server is long-lived and outlives the call that started it, so binding the
+// process to this context with exec.CommandContext would kill a healthy server
+// the moment Connect's own timeout fired — a server that answers `initialize`
+// quickly but is still installing its tool list would vanish mid-session.
+// Cancelling the server is Close's job: it signals the process group, then
+// kills what is still alive after the grace period. What this context can
+// bound is the window before the process exists, which is checked here so a
+// caller that already gave up does not spawn a child it will never close.
+func (t *StdioTransport) Start(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(t.Command) == "" {
 		return errors.New("mcp stdio transport: command is empty")
 	}
