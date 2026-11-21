@@ -146,7 +146,12 @@ func (m *MessageContextManager) AddMessageContext(ctx context.Context, message t
 
 	// Outside the lock: the hook writes a session event, and holding the
 	// manager mutex across that append serialised every reader behind disk IO.
-	if compactErr == nil && summary != "" && hook != nil {
+	//
+	// Dropped groups without a summary still fire: the context lost messages,
+	// and a compaction that leaves no trace cannot be replayed or explained
+	// afterwards. The summary stays empty in that case, which is the truth of
+	// what the model was handed.
+	if compactErr == nil && (summary != "" || dropped > 0) && hook != nil {
 		hook(summary, dropped)
 	}
 	if compactErr != nil {
@@ -220,7 +225,7 @@ func (m *MessageContextManager) Compact(ctx context.Context) error {
 	// Outside the lock: the hook writes a session event, and doing that while
 	// holding the manager mutex serialised every other reader (Messages, Stats)
 	// behind a disk append.
-	if err == nil && summary != "" && hook != nil {
+	if err == nil && (summary != "" || dropped > 0) && hook != nil {
 		hook(summary, dropped)
 	}
 	return err
@@ -237,7 +242,7 @@ func (m *MessageContextManager) CompactForce(ctx context.Context) error {
 	summary, dropped, err := m.compactLocked(ctx, true)
 	hook := m.compactHook
 	m.mu.Unlock()
-	if err == nil && summary != "" && hook != nil {
+	if err == nil && (summary != "" || dropped > 0) && hook != nil {
 		hook(summary, dropped)
 	}
 	return err
@@ -259,10 +264,11 @@ func (m *MessageContextManager) CompactionCount() int {
 	return m.compactions
 }
 
-// SetCompactHook installs an optional callback invoked after each successful
-// active-context compaction. It receives the merged summary and the number of
-// dropped message groups. The hook is invoked while the manager lock is held,
-// so it must not call back into the manager.
+// SetCompactHook installs an optional callback invoked after a compaction that
+// changed the active context. It receives the summary that is in effect —
+// empty when the dropped groups produced no text, or when the budget trimmed
+// the summary away — and the number of dropped message groups. The hook runs
+// without the manager lock held, so it may read the manager.
 func (m *MessageContextManager) SetCompactHook(hook func(summary string, droppedCount int)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -375,9 +381,11 @@ func (m *MessageContextManager) toolOutputLimitChars() int {
 }
 
 // compactLocked rewrites the active context and reports what it dropped. It
-// returns the summary and the number of dropped groups instead of invoking the
-// hook itself: the hook is caller-facing state (a session write) and must not
-// run under m.mu. Callers hold the lock.
+// returns the summary that ended up in the context (empty when the dropped
+// groups produced none, or when the budget trimmed it away) and the number of
+// dropped groups instead of invoking the hook itself: the hook is
+// caller-facing state (a session write) and must not run under m.mu. Callers
+// hold the lock.
 func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool) (string, int, error) {
 	if err := contextErr(ctx); err != nil {
 		return "", 0, err
@@ -522,9 +530,9 @@ func (m *MessageContextManager) compactLocked(ctx context.Context, force ...bool
 	m.active = candidate
 	m.compactions++
 	if m.exceedsHardLimitLocked() {
-		return summary, len(dropped), fmt.Errorf("%w after compaction: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
+		return contextSummaryOf(candidate), len(dropped), fmt.Errorf("%w after compaction: estimated %d tokens", ErrContextLimit, m.estimateMessagesLocked())
 	}
-	return summary, len(dropped), nil
+	return contextSummaryOf(candidate), len(dropped), nil
 }
 
 func (m *MessageContextManager) applyMicrocompactLocked() {
@@ -622,6 +630,25 @@ func hasCompactionSummary(messages []types.Message) bool {
 		}
 	}
 	return false
+}
+
+// contextSummaryOf returns the compaction summary that is actually present in
+// messages, or "" when none is. The text handed to the compactor is not the
+// same thing: a later budget step can shorten the summary away entirely (see
+// trimCompactionSummaryToLimit and the removeCompactionSummary branch in
+// compactLocked), and the dropped groups themselves may carry no text worth
+// summarising. Recording what landed in the context keeps a later replay in
+// step with what the model actually read.
+func contextSummaryOf(messages []types.Message) string {
+	for _, message := range messages {
+		if message.Role != "user" || !strings.Contains(message.Content, compactedContextMarker) {
+			continue
+		}
+		if _, summary := stripCompactionSummary(message.Content); summary != "" {
+			return summary
+		}
+	}
+	return ""
 }
 
 func removeCompactionSummary(messages []types.Message) []types.Message {
