@@ -197,3 +197,27 @@ func TestProviderErrorFallsBackToStatusWithoutCode(t *testing.T) {
 		t.Fatal("ProviderError must stay reachable via errors.As")
 	}
 }
+
+// A gateway can answer 400 and still mean "come back in 20 seconds". Reading that
+// as bad_request ends the turn with an error the user cannot act on and skips the
+// fallback chain; the body is the only place the signal lives.
+func TestClassifyProviderErrorRetriesTransientGatewayUnavailable(t *testing.T) {
+	body := []byte(`{"code":11134,"msg":"the model provider is temporarily unavailable, please retry later",` +
+		`"retry_policy":{"retry":true,"retry_after":20},"extError":{"code":"service_unavailable"}}`)
+	err := ClassifyProviderErrorWithCode(400, "", "", body)
+	if err.Kind != KindServerError {
+		t.Fatalf("kind = %s, want %s", err.Kind, KindServerError)
+	}
+	if !err.Retryable() {
+		t.Fatal("a transient gateway failure must be retryable")
+	}
+	if err.RetryAfter != 20*time.Second {
+		t.Fatalf("retry after = %s, want 20s", err.RetryAfter)
+	}
+
+	// A genuine bad request stays non-retryable: retrying it just burns turns.
+	bad := ClassifyProviderErrorWithCode(400, "invalid_request_error", "", []byte(`{"message":"unknown parameter"}`))
+	if bad.Kind != KindBadRequest || bad.Retryable() {
+		t.Fatalf("kind = %s retryable = %v, want bad_request and not retryable", bad.Kind, bad.Retryable())
+	}
+}

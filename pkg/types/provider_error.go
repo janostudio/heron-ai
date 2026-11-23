@@ -103,7 +103,64 @@ func ClassifyProviderError(statusCode int, errorType string, body []byte) *Provi
 func ClassifyProviderErrorWithCode(statusCode int, errorType, errorCode string, body []byte) *ProviderError {
 	kind := classifyKind(statusCode, errorType, errorCode)
 	message := strings.TrimSpace(string(body))
-	return &ProviderError{Kind: kind, StatusCode: statusCode, Code: strings.TrimSpace(errorCode), Message: message}
+	// A gateway can answer 400 and still mean "try again": one provider returns
+	//   {"code":11134,"msg":"the model provider is temporarily unavailable…",
+	//    "retry_policy":{"retry":true,"retry_after":20}}
+	// for a transient upstream outage. Reading that as bad_request ends the turn
+	// with a failure the human can do nothing about, and skips the fallback chain
+	// that exists for exactly this. The body is the only place this signal lives,
+	// so it is checked here rather than in the status-code table.
+	if kind == KindBadRequest && transientUnavailable(message) {
+		kind = KindServerError
+	}
+	providerErr := &ProviderError{Kind: kind, StatusCode: statusCode, Code: strings.TrimSpace(errorCode), Message: message}
+	if providerErr.RetryAfter == 0 {
+		providerErr.RetryAfter = retryAfterFromBody(message)
+	}
+	return providerErr
+}
+
+// transientUnavailable reports whether the body says the failure is temporary.
+// Deliberately narrow: only phrases a gateway uses for "upstream is down, retry"
+// — a genuine bad_request (bad parameter, unknown model) must stay non-retryable.
+func transientUnavailable(body string) bool {
+	lower := strings.ToLower(body)
+	for _, marker := range []string{
+		"service_unavailable",
+		"temporarily unavailable",
+		"temporarily_unavailable",
+		`"retry":true`,
+		`"retry": true`,
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// retryAfterFromBody reads the retry hint some gateways put in the body when the
+// status code itself does not carry one (Retry-After header absent).
+func retryAfterFromBody(body string) time.Duration {
+	const key = `"retry_after"`
+	index := strings.Index(strings.ToLower(body), key)
+	if index < 0 {
+		return 0
+	}
+	rest := body[index+len(key):]
+	rest = strings.TrimLeft(rest, " \t:")
+	digits := 0
+	for digits < len(rest) && rest[digits] >= '0' && rest[digits] <= '9' {
+		digits++
+	}
+	if digits == 0 {
+		return 0
+	}
+	seconds, err := strconv.Atoi(rest[:digits])
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // IsContextLimit reports a request rejected for exceeding the context window.
