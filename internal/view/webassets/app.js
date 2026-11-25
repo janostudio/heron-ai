@@ -1724,9 +1724,11 @@
       setBusy(true, "\u5df2\u53d1\u9001\uff0c\u6b63\u5728\u6267\u884c\u2026\u8fc7\u7a0b\u4f1a\u5b9e\u65f6\u51fa\u73b0\u5728\u5bf9\u8bdd\u91cc\u3002");
       scrollRecordToBottom();
 
-      /* 202 means accepted, not done: the turn's events arrive on the session
-       * stream like any other turn. The composer is therefore free as soon as
-       * the acceptance lands, and the stop button follows the stream instead. */
+      /* 202 means accepted, not done. The body says *where* it was accepted:
+       * `steered` means the turn that is running already has the message and
+       * will read it before its next decision, `queued` alone means the next
+       * turn will. Showing the difference is the point — otherwise the message
+       * leaves the composer and nothing visible happens for minutes. */
       apiFetch("/api/sessions/" + encodeURIComponent(sessionID) + "/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1738,9 +1740,15 @@
             throw new Error((text || "").trim() || ("HTTP " + response.status));
           });
         })
-        .then(function () {
+        .then(function (accepted) {
           if (token !== runToken) { return; }
-          setBusy(false, "");
+          var hint = "";
+          if (accepted && accepted.steered) {
+            hint = "\u5df2\u63d2\u5165\u5f53\u524d\u8f6e\u6b21\uff1a\u4e0b\u4e00\u6b65\u51b3\u7b56\u524d\u4f1a\u5e26\u7740\u8fd9\u6761\u6d88\u606f\u91cd\u65b0\u89c4\u5212\u3002";
+          } else if (accepted && accepted.queued) {
+            hint = "\u5df2\u6392\u961f\uff1a\u5f53\u524d\u8f6e\u7ed3\u675f\u540e\u6267\u884c\u3002";
+          }
+          setBusy(false, hint);
         })
         .catch(function (error) {
           if (error && error.unauthorized) { return; }
@@ -1925,6 +1933,18 @@
           if (liveAttachments.length) { liveMessage.appendChild(attachmentChips(liveAttachments)); }
           view.body.appendChild(liveMessage);
         }
+        return;
+      }
+
+      /* A message the user sent while this turn was running. It belongs inside
+       * the turn, at the point it was taken: the answer below is replying to it
+       * too, and a reader who cannot see it would think the turn changed its
+       * mind on its own. */
+      if (event.type === "session.user_input.injected") {
+        view.run.segment();
+        view.body.appendChild(el("div", { class: "msg from-user" },
+          el("div", { class: "who" }, "\u4f60\uff08\u63d2\u8bdd\uff09", stamp(event.created_at)),
+          el("div", { class: "body" }, payload.input || "")));
         return;
       }
 
@@ -2737,6 +2757,15 @@
     var run = toolRun(box);
     turn.events.forEach(function (event) {
       var payload = event.payload || {};
+      // Input the user sent while this turn was running: same reason as the live
+      // view — the reply below is answering it, so it has to be visible.
+      if (event.type === "session.user_input.injected") {
+        run.segment();
+        box.appendChild(el("div", { class: "msg from-user" },
+          el("div", { class: "who" }, "\u4f60\uff08\u63d2\u8bdd\uff09", stamp(event.created_at)),
+          el("div", { class: "body" }, payload.input || "")));
+        return;
+      }
       if (event.type === "session.agent.model_response") {
         var view = modelReply(payload);
         if (view.body) {

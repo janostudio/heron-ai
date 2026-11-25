@@ -45,7 +45,27 @@ type AgentRequest struct {
 	// sees only the edges leaving its own node, so one Agent definition is
 	// granted different reach in different Flows.
 	AllowedTeams []string
+	// Steering is polled before every model round. A user message that arrived
+	// while this turn was running joins the conversation there, so a correction
+	// lands before the next decision instead of after the answer it contradicts.
+	Steering SteeringSource
 }
+
+// SteeringInput is one user message handed to a turn that is already running.
+//
+// The alternatives are both worse: refusing it makes the user wait, and storing
+// it for after the turn finishes makes them wait behind work they may have just
+// invalidated ("stop, look at this"). MessageID ties the input to the mailbox
+// record it came from, so the stored copy can be marked delivered rather than
+// run a second time as its own turn.
+type SteeringInput struct {
+	MessageID string
+	Blocks    []ContextBlock
+}
+
+// SteeringSource is polled by the Agent loop before each model round. It returns
+// the messages that arrived since the previous poll, and nil when there are none.
+type SteeringSource func() []SteeringInput
 
 // AgentResult is the result of one Agent execution.
 //
@@ -136,6 +156,8 @@ type CallRequest struct {
 	// AllowedTeams is this Team's can_activate: what the calls in it may hand
 	// work to.
 	AllowedTeams []string
+	// Steering reaches through to the Agent's loop; the Flow owns the inbox.
+	Steering SteeringSource
 }
 
 // CallResult is the normalized result returned by an Agent, Command, or
@@ -234,6 +256,9 @@ type TeamTurnRequest struct {
 	ResumeCompletedCalls []string
 	ResumeResults        map[string]CallResult
 	ResumeCalls          map[string]TeamCallResume
+	// Steering is handed to every Agent call in this turn: input that arrives
+	// mid-turn belongs to the running conversation, not to a later turn.
+	Steering SteeringSource
 }
 
 // TeamCallResume identifies the checkpoint that must be resumed for one
@@ -330,8 +355,11 @@ type FlowTurnResult struct {
 	// running: it was stored, not executed, and the current turn will start it
 	// as soon as it finishes. The caller should tell the user it was received
 	// rather than treat this as the answer.
-	Queued bool   `json:"queued,omitempty"`
-	Reply  string `json:"reply"`
+	Queued bool `json:"queued,omitempty"`
+	// Steered is set when the message was handed to a turn that is still
+	// running, so it takes effect within that turn rather than after it.
+	Steered bool   `json:"steered,omitempty"`
+	Reply   string `json:"reply"`
 	// FinalReply is the reply of the hop that ended the turn — the Team that
 	// handed the result back to nobody (no activator) or to the user. Reply
 	// is the concatenation of every Team's reply in the turn, which includes

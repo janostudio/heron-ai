@@ -303,6 +303,11 @@ func (h *Handler) HandleSubmitInput(w http.ResponseWriter, r *http.Request) {
 		"session_id": result.Session.ID,
 		"status":     "accepted",
 		"queued":     result.Queued,
+		// steered says the running turn already has the message; queued without
+		// it means the next turn will. The distinction is the whole wait, so the
+		// client needs both and the text to show with them.
+		"steered": result.Steered,
+		"reply":   result.Reply,
 	})
 }
 

@@ -141,7 +141,8 @@ Content-Type: application/json
 { "input": "...", "attachments": [...] }
 
 → 202 Accepted
-{ "session_id": "fs_abc", "status": "accepted", "queued": true }
+{ "session_id": "fs_abc", "status": "accepted", "queued": true, "steered": true,
+  "reply": "已插入当前轮次：下一个决策前会带着这条消息重新规划。" }
 ```
 
 - **不返回 turn_id**：turn 在受理之后才创建，号由常驻流里的 `session.turn.started`
@@ -150,6 +151,10 @@ Content-Type: application/json
 - **202 只表示受理**，不表示完成，也不保证一定能跑完 —— 结果和失败都在流里。
 - `queued` 当前恒为 `true`：`SubmitInput` 一律先入队再排空，所以它只表示
   「已受理」，不能用来区分「立即执行」与「排队等待」。
+- `steered` 才区分这两种情况：会话忙时消息被交给**正在跑的那一轮**，它的下一个
+  模型轮次会带上这条消息重新规划（`session.user_input.injected` 事件记录文本与
+  时间点）；`steered: false` 表示消息留在信箱，等当前轮结束后作为新的一轮执行。
+- `reply` 是给人看的一句话，客户端直接展示即可，不要用它判断状态。
 - **幂等（未实现）**：下文提议的 `Idempotency-Key` 与 `(session_id, idempotency_key)`
   去重目前没有实现，handler 不读该请求头，重复提交会真的再跑一轮。实现前调用方
   必须自己保证不重试。
@@ -167,7 +172,9 @@ SubmitInput(ctx, sessionID, input, blocks):
   1. 复用 HandleInput 的前置校验（waiting_approval / interrupted / waiting_tool / 有 running team 都拒绝）
   2. queueUserInput(...)         —— 入队，返回 Queued
   3. 若会话空闲 → go drainQueuedInput(ctx, sessionID)   —— 主动排空
-     若会话忙   → 什么也不做，当前回合结束时会自己排空
+     若会话忙   → steerUserInput(...)                    —— 交给正在跑的回合
+                  它在下一个模型轮次前取走，并把信箱那条标记 delivered；
+                  交接失败（回合刚好结束）→ 同样 go drainQueuedInput 兜底
 ```
 
 `drainQueuedInput` 已经存在且有 `resumeLock` 保护，重复触发是幂等的（队列空就退出）。

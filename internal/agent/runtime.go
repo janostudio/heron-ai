@@ -668,6 +668,32 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			return nil, err
 		default:
 		}
+		// Input that arrived while this turn was running joins the conversation
+		// here — before the next decision, not after the answer. The user who
+		// sends it is usually correcting a plan they can already see going wrong,
+		// so making them wait for the turn to end answers a question they have
+		// withdrawn. The message is a plain user turn: the model treats it like
+		// any other instruction and re-plans from it.
+		if req.Steering != nil {
+			for _, steering := range req.Steering() {
+				text := contextBlockText(steering.Blocks, "input")
+				if strings.TrimSpace(text) == "" {
+					continue
+				}
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{
+					Role: "user", Content: text,
+				}); addErr != nil {
+					return nil, addErr
+				}
+				logging.Info("user input injected into running turn", map[string]any{
+					"flow_session_id": req.FlowSessionID,
+					"flow_turn_id":    req.FlowTurnID,
+					"call_id":         req.CallID,
+					"round":           round,
+					"message_id":      steering.MessageID,
+				})
+			}
+		}
 		// The input text is fixed for the whole execution, so it is checked
 		// once, on the first round this execution runs. A resumed turn starts
 		// at checkpoint.NextRound: its input is fresh user text and must be

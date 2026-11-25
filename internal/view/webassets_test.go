@@ -51,3 +51,24 @@ func TestStopDoesNotDependOnTurnClass(t *testing.T) {
 	require.NotContains(t, body, "turn-active",
 		"stop() must not gate on the class that only decides whether the button is painted")
 }
+
+// TestSubmitReportsWhereTheMessageWent pins the feedback the composer owes after a
+// send. A message that leaves the box with no visible outcome is indistinguishable
+// from one that was dropped, which is what made a steered turn look broken: the
+// server had taken the text and the page said nothing.
+func TestSubmitReportsWhereTheMessageWent(t *testing.T) {
+	script := pageScript(t)
+	require.Contains(t, script, "accepted.steered",
+		"the composer has to read steered, or a message handed to the running turn looks ignored")
+	require.Contains(t, script, "accepted.queued",
+		"and it has to say when the message is waiting for the next turn instead")
+}
+
+// TestInjectedInputIsVisibleInTheTranscript: the correction is part of the turn's
+// story. Rendering only the answer makes the turn look like it changed direction on
+// its own.
+func TestInjectedInputIsVisibleInTheTranscript(t *testing.T) {
+	script := pageScript(t)
+	require.Equal(t, 2, strings.Count(script, `"session.user_input.injected"`),
+		"both renderers (live turn and folded history) must show the injected message")
+}

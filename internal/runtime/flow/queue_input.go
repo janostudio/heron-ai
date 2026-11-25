@@ -43,6 +43,10 @@ const mailboxKindUser = "user"
 // stored rather than executed.
 const userInputQueuedReply = "已收到，当前任务完成后继续处理。"
 
+// userInputSteeredReply is the queued reply minus the wait: the running turn
+// takes the message at its next model round instead of finishing first.
+const userInputSteeredReply = "已插入当前轮次：下一个决策前会带着这条消息重新规划。"
+
 // queueUserInput stores a message that arrived while the session was running.
 //
 // Returning it as queued rather than as an error keeps the promise the user
@@ -54,27 +58,35 @@ const userInputQueuedReply = "已收到，当前任务完成后继续处理。"
 // storing only the text would drop them silently: the queued turn would run
 // against a message the user never sent.
 func (r *Runtime) queueUserInput(ctx context.Context, session types.FlowSession, input string, blocks []types.ContextBlock) (types.FlowTurnResult, error) {
+	_, result, err := r.enqueueUserInput(ctx, session, input, blocks)
+	return result, err
+}
+
+// enqueueUserInput is queueUserInput with the stored message handed back, so the
+// caller can also push it into a running turn's inbox (see steerUserInput).
+func (r *Runtime) enqueueUserInput(ctx context.Context, session types.FlowSession, input string, blocks []types.ContextBlock) (types.MailboxMessage, types.FlowTurnResult, error) {
 	defs := r.definitions.Snapshot()
 	entry := defs.Flow.EntryTeamID
 	if entry == "" {
-		return types.FlowTurnResult{}, fmt.Errorf("flow has no entry team; cannot queue input")
+		return types.MailboxMessage{}, types.FlowTurnResult{}, fmt.Errorf("flow has no entry team; cannot queue input")
 	}
 	payload := map[string]any{"input": input}
 	if len(blocks) > 0 {
 		payload["context_blocks"] = blocks
 	}
-	if _, err := r.enqueueMessage(ctx, session, types.FlowTurn{},
+	msg, err := r.enqueueMessage(ctx, session, types.FlowTurn{},
 		types.MailboxAddress{TeamID: entry},
 		mailboxKindUser,
 		payload,
-	); err != nil {
-		return types.FlowTurnResult{}, err
+	)
+	if err != nil {
+		return types.MailboxMessage{}, types.FlowTurnResult{}, err
 	}
 	logging.Info("user input queued behind a running turn", map[string]any{
 		"flow_session_id": session.ID,
 		"session_status":  string(session.Status),
 	})
-	return types.FlowTurnResult{
+	return msg, types.FlowTurnResult{
 		Session: session,
 		Queued:  true,
 		Reply:   userInputQueuedReply,
