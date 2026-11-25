@@ -170,3 +170,86 @@ Body.
 	})
 	require.ErrorContains(t, err, "reachable only from inside REPL")
 }
+
+// TestToolSurfaceWarningsReportsImpliedCodeTools keeps the redundancy note narrow:
+// it fires for a code tool listed next to REPL, and for nothing else.
+func TestToolSurfaceWarningsReportsImpliedCodeTools(t *testing.T) {
+	warnings := ToolSurfaceWarnings(types.AgentConfig{
+		Name:  "repl-only",
+		Tools: types.ToolConfig{Builtin: []string{"Bash", "REPL"}},
+	})
+	require.Len(t, warnings, 1)
+	require.Contains(t, warnings[0], "Bash")
+	require.Contains(t, warnings[0], "REPL already implies")
+
+	require.Empty(t, ToolSurfaceWarnings(types.AgentConfig{
+		Name:  "native",
+		Tools: types.ToolConfig{Builtin: []string{"Bash", "Read"}},
+	}), "no REPL means no derivation to report")
+
+	require.Empty(t, ToolSurfaceWarnings(types.AgentConfig{
+		Name:  "override",
+		Tools: types.ToolConfig{Builtin: []string{"Bash", "REPL"}, Direct: []string{"Bash", "REPL"}},
+	}), "an explicit surface is the author's decision, not a warning")
+}
+
+// TestLoadDefinitionsDerivesSurfaceFromREPL is the one-line definition end to end:
+// the YAML carries REPL and Team, and the loader hands the runtime a surface where
+// the code tools are sandbox-only.
+func TestLoadDefinitionsDerivesSurfaceFromREPL(t *testing.T) {
+	root := t.TempDir()
+	agentsDir := filepath.Join(root, ".agents", "agents")
+	teamsDir := filepath.Join(root, ".agents", "teams")
+	flowsDir := filepath.Join(root, ".agents", "flows")
+	require.NoError(t, os.MkdirAll(agentsDir, 0755))
+	require.NoError(t, os.MkdirAll(teamsDir, 0755))
+	require.NoError(t, os.MkdirAll(flowsDir, 0755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(flowsDir, "default.yml"), []byte(`
+id: flow
+entry: default
+teams:
+  default:
+    team: default-team
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(teamsDir, "default.yml"), []byte(`
+id: default-team
+calls: {}
+`), 0644))
+	agentPath := filepath.Join(agentsDir, "repl-only", "AGENT.md")
+	require.NoError(t, os.MkdirAll(filepath.Dir(agentPath), 0755))
+	require.NoError(t, os.WriteFile(agentPath, []byte(`---
+name: repl-only
+tools:
+  builtin: [REPL, Team]
+---
+You work through REPL.
+`), 0644))
+
+	definitions, err := NewConfigLoader(root).LoadDefinitions(context.Background(), DefinitionsLoadRequest{
+		FlowPath: filepath.Join(flowsDir, "default.yml"),
+	})
+	require.NoError(t, err)
+	agent := definitions.Agents["repl-only"]
+	require.Equal(t, []string{"REPL", "Team"}, agent.Tools.InjectedBuiltin())
+	require.Equal(t, []string{"Bash", "Read", "Write", "Grep", "Glob"}, agent.Tools.SandboxBuiltin())
+}
+
+// TestREPLDisabledWarningsCoversTheEmptySurface: declaring REPL while the tool is
+// switched off leaves the Agent without its code tools and without a replacement.
+func TestREPLDisabledWarningsCoversTheEmptySurface(t *testing.T) {
+	defs := &types.Definitions{
+		Script: types.ScriptConfig{Enabled: false},
+		Agents: map[string]types.AgentConfig{
+			"repl-only": {Name: "repl-only", Tools: types.ToolConfig{Builtin: []string{"REPL"}}},
+			"native":    {Name: "native", Tools: types.ToolConfig{Builtin: []string{"Bash"}}},
+		},
+	}
+	warnings := REPLDisabledWarnings(defs)
+	require.Len(t, warnings, 1)
+	require.Contains(t, warnings[0], "repl-only")
+	require.NotContains(t, warnings[0], "native")
+
+	defs.Script.Enabled = true
+	require.Empty(t, REPLDisabledWarnings(defs), "nothing to report once the tool is on")
+}

@@ -54,7 +54,7 @@ tools:
 |---|---|
 | `name` | 加载失败 `agent definition name is required` |
 | `model.model` | 回退到 `models.json` 顶层 `model`；默认一改，所有没写 model 的 agent 静默换模型 |
-| `tools.builtin` | 没有工具。写错名字**不报错**，只是模型看不见那个工具 |
+| `tools.builtin` | 没有工具。写错名字**不报错**，只是模型看不见那个工具；声明 `REPL` 时它同时是"模型面 + 沙箱面"的划分依据（见 `references/fields.md` 的 tools 节） |
 
 ### 有目标才写
 

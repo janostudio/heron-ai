@@ -1765,8 +1765,9 @@ func countFileChanges(operations []types.WorkspaceOperation) int {
 }
 
 func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig, req types.AgentRequest, round, maxParallel int, calls []types.ToolCall) []*types.ToolResult {
-	allowed := make(map[string]struct{}, len(agent.Tools.Builtin)+len(agent.Tools.Custom)+len(agent.Tools.MCP))
-	for _, name := range agent.Tools.Builtin {
+	callable := agent.Tools.CallableBuiltin()
+	allowed := make(map[string]struct{}, len(callable)+len(agent.Tools.Custom)+len(agent.Tools.MCP))
+	for _, name := range callable {
 		allowed[name] = struct{}{}
 	}
 	for _, name := range agent.Tools.Custom {

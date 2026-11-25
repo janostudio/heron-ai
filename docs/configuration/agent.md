@@ -172,7 +172,7 @@ The content above belongs in:
 | `builtin` | array | Built-in tool names |
 | `custom` | array | Custom tool names |
 | `mcp` | array | MCP server tool names |
-| `direct` | array | Narrows what is injected into the request. Builtin tools this list leaves out stay callable from inside `REPL` only — see [tools.direct](#toolsdirect-repl-only-tool-surface) |
+| `direct` | array | Overrides the derived surface: exactly these tools are injected, the rest of `builtin` stays reachable from inside a program. Rarely needed — see [REPL surface](#repl-surface-declaring-repl-switches-the-tool-surface) |
 
 Built-in tools:
 
@@ -199,44 +199,68 @@ A tool must be both listed here and declared in the agent's `tools.builtin` to
 be visible to the model. Declaring a name that the registry does not know has
 no effect and produces no error at load time.
 
-#### tools.direct (REPL-only tool surface)
+#### REPL surface (declaring `REPL` switches the tool surface)
 
-`builtin` is what the agent may call. `direct` is what the model may call
-**itself**. When `direct` is set, the builtin tools it leaves out are not injected
-as tools at all: they are reachable only from inside a `REPL` program, and `REPL`
-is the single direct entry point.
+Declaring `REPL` in `tools.builtin` is the whole switch. It moves the code tools
+into the program, so the definition lists REPL plus the tools that are **not**
+code work:
 
 ```yaml
 tools:
-  builtin: [Bash, Read, Grep, Glob, Write, REPL, Team]
-  direct:  [REPL, Team]        # the code tools become sandbox globals
+  builtin: [REPL, Team, TeamSession]      # the code tools are implied
 ```
 
-The two lists are complementary — a builtin tool is either injected or bound
-inside the sandbox, never both — which is what removes the choice between calling
-`Bash` and writing a program that calls it. `REPL`'s `code` parameter description
-lists exactly the sandbox half, so the model reads the same set it can bind.
+| | `REPL` declared | `REPL` not declared |
+|---|---|---|
+| Injected into the request | `builtin` minus the code tools | `builtin` unchanged |
+| Callable from inside a program | `Bash` `Read` `Write` `Grep` `Glob` | nothing |
+| Callable at all | `builtin` plus the code tools | `builtin` |
 
-Leaving `direct` empty keeps the previous behaviour: every declared builtin tool
-is injected, and the sandbox can call them as well. Definitions written before
-this field existed therefore load unchanged.
+The code tools are a constant (`types.REPLCodeTools`), not a second config list:
+"which tools are code tools" is a property of the engine, and repeating the set in
+every definition is a second place to get wrong. Listing one of them next to
+`REPL` is implied rather than wrong — `--check-config` prints a note for it and the
+runtime moves it into the sandbox either way.
 
-`--check-config` rejects the two shapes that would otherwise fail silently:
+The two surfaces never overlap: a tool is either injected or bound inside the
+program. `REPL`'s `code` parameter description lists exactly the sandbox half, and
+a call to a sandbox tool at the conversation layer is refused with the call site
+named (`call it inside a program as tools.Bash({...})`) instead of "not allowed".
+
+Declaring REPL also grants the code tools: an Agent that declares only `[REPL]`
+can still run `tools.Bash`. That is deliberate — the alternative is a code box with
+nothing in it — but it means `builtin` no longer reads as a verbatim permission
+list.
+
+##### tools.direct (explicit override)
+
+`direct` overrides the derivation, for a surface that is neither "everything
+declared" nor "REPL only": the tools it leaves out stay callable from inside a
+program. It is normally not written at all.
+
+```yaml
+tools:
+  builtin: [Bash, Read, Write, REPL]
+  direct:  [Bash, REPL]        # Bash stays a direct call, Write is sandbox-only
+```
+
+`--check-config` rejects the two `direct` shapes that would otherwise fail
+silently:
 
 - a `direct` name that `builtin`/`custom`/`mcp` do not declare — the schema loop
   skips unknown names, so the definition would lose a tool it claims to have;
-- a narrowed `builtin` that does not inject `REPL` — those tools would have no
-  caller at all.
+- builtin tools left out of `direct` while `REPL` is not injected — those tools
+  would have no caller at all (this includes a `builtin` that never declares REPL).
 
-Two consequences worth knowing before narrowing a surface:
+Two consequences worth knowing either way:
 
 - **Hand-off tools never bind inside a program.** `Team`, `Spawn` and `Collect`
   dispatch work that finishes after the synchronous run ends, so the sandbox
-  refuses to bind them. Leave them in `direct`; leaving them out of it makes them
-  unreachable rather than sandboxed.
+  refuses to bind them. They have to be injected — listing them in `builtin`
+  alongside `REPL` is what keeps them reachable.
 - **Tools a Skill grants land on the `builtin` side.** A skill's `tools:` list is
-  appended to `tools.builtin` for that call, so under a narrowed surface the
-  granted tool is reachable from inside a program and not as a direct call.
+  appended to `tools.builtin` for that call; under a REPL surface a granted code
+  tool is reachable from inside a program, not as a direct call.
 
 ### web (data source for `WebSearch` / `WebFetch`)
 

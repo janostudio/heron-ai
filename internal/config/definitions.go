@@ -417,6 +417,10 @@ const replToolName = "REPL"
 //     schema loop skips it and the definition loses a tool it claims to have;
 //   - builtin tools left out of direct while REPL is not injected are reachable
 //     only from inside a program, and the model is never given the program tool.
+//
+// Without direct the surface is derived from whether REPL is declared, and the only
+// thing worth reporting is a code tool listed next to REPL (ToolSurfaceWarnings) —
+// the runtime moves it into the sandbox either way, so it is implied, not wrong.
 func checkToolVisibility(agent types.AgentConfig) error {
 	direct := agent.Tools.Direct
 	if len(direct) == 0 {
@@ -459,6 +463,49 @@ func checkToolVisibility(agent types.AgentConfig) error {
 			agent.Name, len(sandboxed), replToolName, replToolName, replToolName)
 	}
 	return nil
+}
+
+// ToolSurfaceWarnings reports declarations the derived tool surface makes
+// redundant, one line each: a code tool listed next to REPL. It is a warning rather
+// than an error because the runtime resolves it the same way either way, and it is
+// reported by --check-config rather than the logger because the person who can fix
+// it is the one running the check.
+func ToolSurfaceWarnings(agent types.AgentConfig) []string {
+	if len(agent.Tools.Direct) > 0 || !agent.Tools.DeclaresREPL() {
+		return nil
+	}
+	var out []string
+	for _, name := range agent.Tools.Builtin {
+		if types.IsREPLCodeTool(name) {
+			out = append(out, fmt.Sprintf(
+				"agent %q declares %s, which REPL already implies: it runs inside the program either way",
+				agent.Name, name))
+		}
+	}
+	return out
+}
+
+// REPLDisabledWarnings reports Agents that declare REPL while settings.json turns the
+// tool off. The surface is derived from that declaration, so the Agent loses its code
+// tools and gets nothing in their place — a configuration that runs but cannot work.
+func REPLDisabledWarnings(defs *types.Definitions) []string {
+	if defs == nil || defs.Script.Enabled {
+		return nil
+	}
+	names := make([]string, 0, len(defs.Agents))
+	for name := range defs.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out []string
+	for _, name := range names {
+		if defs.Agents[name].Tools.DeclaresREPL() {
+			out = append(out, fmt.Sprintf(
+				"agent %q declares REPL but settings.json sets tools.repl.enabled false: its code tools are removed and nothing replaces them",
+				name))
+		}
+	}
+	return out
 }
 
 func (l *ConfigLoader) loadSkillDefinitions(dir string) (map[string]types.Skill, error) {

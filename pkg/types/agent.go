@@ -70,31 +70,80 @@ type ToolConfig struct {
 	Builtin []string `yaml:"builtin" json:"builtin"`
 	Custom  []string `yaml:"custom,omitempty" json:"custom,omitempty"`
 	MCP     []string `yaml:"mcp,omitempty" json:"mcp,omitempty"`
-	// Direct narrows which declared tools the model may call itself. When it is
-	// set, only these names are rendered into the request's tool list; the
-	// builtin tools it leaves out stay callable from inside a program (the REPL
-	// sandbox) and nowhere else. Empty keeps the behaviour definitions written
-	// before this field existed rely on: every declared builtin tool is injected.
+	// Direct is the escape hatch for a surface that is neither "everything
+	// declared is injected" nor "REPL only". When set, exactly this list is
+	// rendered into the request and the rest of Builtin is reachable only from
+	// inside a program. Leave it empty and the surface follows from whether REPL
+	// is declared — see InjectedBuiltin.
 	Direct []string `yaml:"direct,omitempty" json:"direct,omitempty"`
 }
 
-// InjectedBuiltin is the builtin list rendered into the model-facing schema.
-// A program still reaches the rest of Builtin, so a narrowed list moves tools
-// into the sandbox rather than deleting them.
-func (c ToolConfig) InjectedBuiltin() []string {
-	if len(c.Direct) == 0 {
-		return c.Builtin
+// replToolName is the code-execution tool. It is spelled here because this
+// package cannot import the tool implementation that owns the constant.
+const replToolName = "REPL"
+
+// REPLCodeTools are the tools a program owns once REPL is declared. The set is a
+// constant rather than a second config list because "which tools are code tools"
+// is a property of the engine: an Agent that works through a program wants all of
+// them in there, and repeating the list in every definition only creates a second
+// place to get wrong.
+var REPLCodeTools = []string{"Bash", "Read", "Write", "Grep", "Glob"}
+
+// IsREPLCodeTool reports whether name is one of the tools a program owns.
+func IsREPLCodeTool(name string) bool {
+	for _, code := range REPLCodeTools {
+		if code == name {
+			return true
+		}
 	}
-	return c.Direct
+	return false
 }
 
-// SandboxBuiltin is the builtin list a program may call: Builtin minus the tools
-// injected directly. Keeping the two lists complementary means one tool surface
-// is never offered twice — a model that can call Bash directly has no reason to
-// write a program to call it.
+// DeclaresREPL reports whether the Agent works through a program. Declaring REPL
+// is the whole switch: it moves REPLCodeTools into the sandbox, so a definition
+// that wants that surface lists REPL and the tools that are NOT code work.
+func (c ToolConfig) DeclaresREPL() bool {
+	for _, name := range c.Builtin {
+		if name == replToolName {
+			return true
+		}
+	}
+	return false
+}
+
+// InjectedBuiltin is the builtin list rendered into the model-facing schema.
+// In order: Direct when set; otherwise Builtin minus REPLCodeTools when REPL is
+// declared; otherwise Builtin unchanged. Every branch keeps one tool in exactly
+// one place — a model that can call Bash directly has no reason to write a
+// program that calls it, and vice versa.
+func (c ToolConfig) InjectedBuiltin() []string {
+	if len(c.Direct) > 0 {
+		return c.Direct
+	}
+	if !c.DeclaresREPL() {
+		return c.Builtin
+	}
+	out := make([]string, 0, len(c.Builtin))
+	for _, name := range c.Builtin {
+		if IsREPLCodeTool(name) {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// SandboxBuiltin is what a program may call. In order: Builtin minus Direct when
+// Direct is set (the two lists complementary); otherwise all of REPLCodeTools when
+// REPL is declared, listed or not — a definition that declares REPL is asking for
+// them, and making the author repeat the set would be the second surface this
+// design removes; otherwise nothing.
 func (c ToolConfig) SandboxBuiltin() []string {
 	if len(c.Direct) == 0 {
-		return c.Builtin
+		if !c.DeclaresREPL() {
+			return nil
+		}
+		return append([]string(nil), REPLCodeTools...)
 	}
 	direct := make(map[string]struct{}, len(c.Direct))
 	for _, name := range c.Direct {
@@ -105,6 +154,28 @@ func (c ToolConfig) SandboxBuiltin() []string {
 		if _, injected := direct[name]; injected {
 			continue
 		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// CallableBuiltin is every builtin name the Agent may call: its sandbox tools
+// included, because those are not free text — a program may only call what the
+// executor allows. The execution allowlist and the Bash gate read this rather than
+// Builtin, or a sandboxed tool would be advertised inside a program and refused at
+// the executor, and a sandboxed Bash would slip past the knowledge gate.
+func (c ToolConfig) CallableBuiltin() []string {
+	sandbox := c.SandboxBuiltin()
+	if len(sandbox) == 0 {
+		return c.Builtin
+	}
+	seen := make(map[string]struct{}, len(c.Builtin)+len(sandbox))
+	out := make([]string, 0, len(c.Builtin)+len(sandbox))
+	for _, name := range append(append([]string(nil), c.Builtin...), sandbox...) {
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		seen[name] = struct{}{}
 		out = append(out, name)
 	}
 	return out

@@ -1386,6 +1386,7 @@ func checkConfigOnly(flowPath string) int {
 	}
 	fmt.Printf("flow %s: %d bindings ok (%d isolated)\n", defs.Flow.ID, len(names), isolated)
 	printRulePathWarnings(defs)
+	printToolSurfaceWarnings(defs)
 	printUnknownSettingsWarnings()
 	// The permission posture is validated here: this mode exists to refuse a
 	// deployment that would behave differently than its author thinks, and a
@@ -1445,6 +1446,28 @@ func printRulePathWarnings(defs *types.Definitions) {
 		if warning := config.RulePathWarning(defs.Rules[name]); warning != "" {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 		}
+	}
+}
+
+// printToolSurfaceWarnings reports tool declarations the derived surface makes
+// redundant, so a definition that looks like it injects Bash does not silently mean
+// something else. Warnings, not errors: the runtime resolves them the same way.
+func printToolSurfaceWarnings(defs *types.Definitions) {
+	if defs == nil {
+		return
+	}
+	names := make([]string, 0, len(defs.Agents))
+	for name := range defs.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		for _, warning := range config.ToolSurfaceWarnings(defs.Agents[name]) {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+		}
+	}
+	for _, warning := range config.REPLDisabledWarnings(defs) {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 	}
 }
 

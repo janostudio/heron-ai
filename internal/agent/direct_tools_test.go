@@ -132,3 +132,50 @@ func TestRunRefusesDirectCallToSandboxTool(t *testing.T) {
 	}
 	require.Contains(t, told, "call it inside a program as tools.Bash")
 }
+
+// TestDeclaringREPLAloneNarrowsTheSurface is the configuration this design exists
+// for: one list, no direct field. The code tools leave the schema and show up in the
+// catalog instead.
+func TestDeclaringREPLAloneNarrowsTheSurface(t *testing.T) {
+	var catalogued []string
+	loop := &TurnLoop{}
+	loop.SetScriptDescription(func(names []string) string {
+		catalogued = names
+		return "CATALOG"
+	})
+	schemas := loop.buildToolSchemas(types.AgentConfig{
+		Tools: types.ToolConfig{Builtin: []string{"REPL", "Team"}},
+	})
+	names := collectSchemaNames(schemas)
+	require.True(t, names["REPL"])
+	require.True(t, names["Team"])
+	require.True(t, names["Collect"], "Team implies Collect")
+	require.False(t, names["Bash"], "the code tools are implied, not injected")
+	require.Equal(t, []string{"Bash", "Glob", "Grep", "Read", "Write"}, catalogued)
+}
+
+// TestDirectCallToImplicitCodeToolIsRefused covers the refusal on the same shape:
+// Bash is never declared, only implied, and calling it at the conversation layer is
+// still refused rather than executed.
+func TestDirectCallToImplicitCodeToolIsRefused(t *testing.T) {
+	model := &mockModelProvider{responses: []types.ChatResponse{
+		{ToolCalls: []types.ToolCall{{ID: "c1", Name: "Bash", Arguments: map[string]any{"command": "ls"}}}},
+		{Text: `{"reply":"ok"}`, FinishReason: "stop"},
+	}}
+	executor := &sandboxCallRecorder{}
+	loop := NewTurnLoop(model, executor, nil, NewRouteParser(), nil, nil,
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hi"}}})
+	loop.SetScriptDescription(func([]string) string { return "CATALOG" })
+	_, err := loop.Run(context.Background(), types.AgentConfig{
+		Name:  "repl-only",
+		Tools: types.ToolConfig{Builtin: []string{"REPL", "Team"}},
+		Loop:  types.LoopConfig{MaxRounds: 3},
+	}, types.AgentRequest{
+		CallID:        "call",
+		AgentID:       "repl-only",
+		AgentTurnID:   "turn",
+		ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "hi"}},
+	})
+	require.NoError(t, err)
+	require.NotContains(t, executor.calls, "Bash")
+}

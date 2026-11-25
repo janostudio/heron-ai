@@ -522,3 +522,21 @@ func TestBashGateEndToEndTurn(t *testing.T) {
 	assert.Contains(t, schemaNames(model.lastTools), "Read",
 		"and must still advertise the other declared tools")
 }
+
+// TestImplicitBashIsWithheldWithPrivateKnowledge pins which list the gate reads.
+// Declaring REPL implies Bash without naming it, so a gate keyed on tools.builtin
+// would grant the shell to exactly the definitions that look narrowest.
+func TestImplicitBashIsWithheldWithPrivateKnowledge(t *testing.T) {
+	loop, files := bashGateLoop(t.TempDir())
+	agent := types.AgentConfig{
+		Name:  "holder",
+		Tools: types.ToolConfig{Builtin: []string{"REPL"}},
+	}
+	writePrivateKnowledge(t, files, "holder", "secret")
+
+	decision, reason, denied := loop.knowledgeGateDecision(context.Background(), agent,
+		types.AgentRequest{}, types.ToolCall{Name: "Bash"})
+	require.True(t, denied, "Bash is implied by REPL and must still be withheld")
+	assert.Equal(t, ToolDeny, decision)
+	assert.Contains(t, reason, "private knowledge")
+}

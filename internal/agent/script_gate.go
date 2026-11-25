@@ -275,11 +275,15 @@ func (t *TurnLoop) withScriptGate(ctx context.Context, agent types.AgentConfig, 
 // because the tool is reachable only from inside a program. The message names the
 // call site instead of saying "not allowed": the tool exists, it is one level away,
 // and a refusal that hides that sends the model looking for a permission problem.
+//
+// Both surfaces are read from the config rather than from a mode flag, so the
+// derived shape (REPL declared, code tools implied) and the explicit one (Direct)
+// answer the same way.
 func sandboxOnlyReason(agent types.AgentConfig, name string) (string, bool) {
-	if len(agent.Tools.Direct) == 0 || isScriptTool(name) {
+	if isScriptTool(name) {
 		return "", false
 	}
-	for _, injected := range agent.Tools.Direct {
+	for _, injected := range agent.Tools.InjectedBuiltin() {
 		if injected == name {
 			return "", false
 		}
