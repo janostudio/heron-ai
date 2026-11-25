@@ -1755,8 +1755,16 @@
      * with it depends on ctx propagation inside the runtime, which this page
      * cannot see. So the copy says "停止" and reports what the server answered,
      * rather than claiming the work definitely ended. */
+    var stopping = false;
+
     function stop() {
-      if (!document.body.classList.contains("turn-active")) { return; }
+      // The button is shown by CSS from the same class, so a click that arrives
+      // here is a click on a visible button. The guard that used to sit here
+      // tested that class instead, which made the handler depend on a style rule
+      // nothing guaranteed — and the listener itself was missing, so the button
+      // did nothing at all. `stopping` is the real duplicate-click guard.
+      if (stopping) { return; }
+      stopping = true;
       runToken += 1;
       setBusy(false, "\u6b63\u5728\u8bf7\u6c42\u505c\u6b62\u2026");
       apiFetch("/api/cancel?session_id=" + encodeURIComponent(sessionID), { method: "POST" })
@@ -1767,10 +1775,12 @@
           });
         })
         .then(function () {
+          stopping = false;
           scrollToBottom = true;
           renderRecord(sessionID);
         })
         .catch(function (error) {
+          stopping = false;
           if (error && error.unauthorized) { return; }
           setBusy(false, "\u505c\u6b62\u5931\u8d25\uff1a" + error.message);
         });
@@ -1785,6 +1795,7 @@
     });
     input.addEventListener("input", autosize);
     sendButton.addEventListener("click", submit);
+    stopButton.addEventListener("click", stop);
     attachButton.addEventListener("click", function () { filePicker.click(); });
     filePicker.addEventListener("change", function () {
       addFiles(filePicker.files);
