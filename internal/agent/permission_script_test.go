@@ -153,18 +153,24 @@ func TestScriptGateBindsPostureAllowedToolsOnly(t *testing.T) {
 	agent := scriptTestAgent("Read", "Write", "Bash", "Team", ScriptToolName)
 
 	ctx := loop.withScriptGate(context.Background(), agent, types.AgentRequest{}, 1, []types.ToolCall{scriptCall("return 1;")})
-	assert.Equal(t, []string{"Read", "Write"}, script.ToolNamesFromContext(ctx))
+	// Declaring REPL puts the whole code-tool set in the sandbox, so Read and
+	// Write are bound whether or not the definition repeats them; Bash is listed
+	// only in Blocked because this posture denies it.
+	assert.Equal(t, []string{"Glob", "Grep", "Read", "Write"}, script.ToolNamesFromContext(ctx))
 	assert.Equal(t, []string{"Bash"}, script.BlockedFromContext(ctx))
 
 	gate, ok := script.GateFromContext(ctx)
 	require.True(t, ok)
 
-	refused, err := gate(ctx, "Bash", map[string]any{"command": "ls"})
+	// The real caller is the sandbox, which tags the step onto the context; the
+	// direct-call refusal keys on that tag, so the harness must carry it too.
+	step := script.WithStep(ctx, "script-1", 0)
+	refused, err := gate(step, "Bash", map[string]any{"command": "ls"})
 	require.NoError(t, err)
 	require.False(t, refused.Success)
 	assert.Contains(t, refused.Error, "this runtime's permissions do not allow it")
 
-	allowed, err := gate(ctx, "Read", map[string]any{"file": "a"})
+	allowed, err := gate(step, "Read", map[string]any{"file": "a"})
 	require.NoError(t, err)
 	require.True(t, allowed.Success)
 	assert.Equal(t, []string{"Read"}, executor.executed)
@@ -284,10 +290,10 @@ func TestScriptBindsCustomAndMCPTools(t *testing.T) {
 		HITL: &types.HITLConfig{Enabled: true},
 	}
 
-	assert.Equal(t, []string{"Read", "deploy", "github_search"}, loop.scriptBindableTools(agent))
+	assert.Equal(t, []string{"Bash", "Glob", "Grep", "Read", "Write", "deploy", "github_search"}, loop.scriptBindableTools(agent))
 
 	ctx := loop.withScriptGate(context.Background(), agent, types.AgentRequest{}, 1, []types.ToolCall{scriptCall("return 1;")})
-	assert.Equal(t, []string{"Read", "deploy", "github_search"}, script.ToolNamesFromContext(ctx))
+	assert.Equal(t, []string{"Bash", "Glob", "Grep", "Read", "Write", "deploy", "github_search"}, script.ToolNamesFromContext(ctx))
 }
 
 // A paused program must resume as a program. The parked tool name is the one that

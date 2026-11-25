@@ -52,14 +52,19 @@ type PosturePolicy interface {
 	DenyTools() []string
 }
 
-// agentToolUniverse is every tool the Agent may call, spelled the way the executor's
+// agentToolUniverse is every tool a program may call, spelled the way the executor's
 // allowlist spells it: builtin, custom and the MCP names the Agent declares. The
-// sandbox and the model's schema both start from this list, so a program cannot be
-// quietly weaker than the model — an Agent whose custom tool works directly had it
-// silently missing inside programs before this existed.
+// builtin half comes from SandboxBuiltin(), i.e. the declared set minus tools.direct:
+// a tool the model calls itself is not also bound inside a program, which is what
+// makes a REPL-only definition a single surface instead of two overlapping ones.
+//
+// Custom and MCP tools are always part of the universe: they have no sandbox-only
+// counterpart, so excluding them here would silently weaken a program relative to
+// the model.
 func agentToolUniverse(agent types.AgentConfig) []string {
-	names := make([]string, 0, len(agent.Tools.Builtin)+len(agent.Tools.Custom)+len(agent.Tools.MCP))
-	names = append(names, agent.Tools.Builtin...)
+	sandbox := agent.Tools.SandboxBuiltin()
+	names := make([]string, 0, len(sandbox)+len(agent.Tools.Custom)+len(agent.Tools.MCP))
+	names = append(names, sandbox...)
 	names = append(names, agent.Tools.Custom...)
 	names = append(names, agent.Tools.MCP...)
 	sort.Strings(names)
@@ -264,6 +269,33 @@ func (t *TurnLoop) withScriptGate(ctx context.Context, agent types.AgentConfig, 
 		}
 		return result, nil
 	})
+}
+
+// sandboxOnlyReason reports whether a direct (non-program) call must be refused
+// because the tool is reachable only from inside a program. The message names the
+// call site instead of saying "not allowed": the tool exists, it is one level away,
+// and a refusal that hides that sends the model looking for a permission problem.
+//
+// Both surfaces are read from the config rather than from a mode flag, so the
+// derived shape (REPL declared, code tools implied) and the explicit one (Direct)
+// answer the same way.
+func sandboxOnlyReason(agent types.AgentConfig, name string) (string, bool) {
+	if isScriptTool(name) {
+		return "", false
+	}
+	for _, injected := range agent.Tools.InjectedBuiltin() {
+		if injected == name {
+			return "", false
+		}
+	}
+	for _, sandboxed := range agent.Tools.SandboxBuiltin() {
+		if sandboxed == name {
+			return fmt.Sprintf(
+				"%s is not a direct tool for this Agent: call it inside a program as tools.%s({...})",
+				name, name), true
+		}
+	}
+	return "", false
 }
 
 func filterScriptCalls(calls []types.ToolCall) []types.ToolCall {

@@ -173,7 +173,10 @@ func privateKnowledgeDir(agentID string) string {
 // the policy path has the request too) and making the resolution explicit at
 // each site is what keeps it from being silently defaulted.
 func bashWithheld(ctx context.Context, files storage.FileStore, agent types.AgentConfig, agentID string) (bool, string) {
-	if !declaresTool(agent.Tools.Builtin, bashToolName) {
+	// CallableBuiltin rather than Builtin: an Agent that declares REPL reaches Bash
+	// through the sandbox without listing it, and a gate that only looked at the
+	// declared list would grant exactly the shell this check exists to withhold.
+	if !declaresTool(agent.Tools.CallableBuiltin(), bashToolName) {
 		return false, ""
 	}
 	has, ok := hasPrivateKnowledge(ctx, files, agentID)
@@ -215,7 +218,7 @@ func (t *TurnLoop) withheldTools(ctx context.Context, agent types.AgentConfig, r
 	// file store, so it is evaluated before the knowledge gate's early return.
 	withheld := map[string]string{}
 	denied := t.deniedTools()
-	for _, name := range agent.Tools.Builtin {
+	for _, name := range agent.Tools.CallableBuiltin() {
 		if denied[name] {
 			withheld[name] = fmt.Sprintf("this runtime's permissions refuse %s", name)
 		}

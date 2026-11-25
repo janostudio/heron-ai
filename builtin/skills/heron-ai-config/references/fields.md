@@ -176,11 +176,16 @@ frontmatter 之后是正文：**原样拼进 system prompt**，不做模板渲�
 |---|---|---|
 | 选 | `builtin` | `Read` `Write` `Grep` `Glob` `Bash` `WebSearch` `WebFetch` `CodeNav` `AskUserQuestion` `TodoWrite` `TodoRead` `Spawn` `Collect` `ListTeams` `Team` `TeamSession` `State` `Define` `REPL` `ScheduleWakeup` `CancelWakeup` |
 | 选 | `custom` / `mcp` | 自定义 / MCP 工具 |
+| 选 | `direct` | 覆盖推导：只有这些注入，其余 `builtin` 只进沙箱。一般不用写 |
 
 - **没有 `Edit`**：改文件用 `Read` → `Write`（整文件覆盖）。
 - 写错工具名**不报错**，只是模型看不见 → "模型说没有某能力"先核名字。
 - `Spawn` / `State` / `Define` 按需开启；不写进 `builtin` 就没有。
 - **`Collect` 自动授予**：声明了 `Team` 或 `Spawn` 时引擎自动加入允许清单，不用手写。
+- **声明 `REPL` 就是代码模式**：`Bash` / `Read` / `Write` / `Grep` / `Glob` 自动进沙箱（引擎常量，不必列），模型面只留 `builtin` 里剩下的工具（`Team`、`TodoWrite`、`WebSearch`…）。"模型只有 REPL"因此是一行：`builtin: [REPL, Team, TeamSession, …]`。
+- **`REPL` 同时授予那五个工具**：只写 `[REPL]` 也能跑 shell，所以 `builtin` 不再逐项等于权限清单；把 `Bash` 写在 `REPL` 旁边是多余的（加载时打一条提示，运行时照样移进沙箱）。
+- **不声明 `REPL` = 老行为**：`builtin` 全量注入，没有沙箱。
+- **`direct` 只在需要第三种形态时写**（比如 `builtin: [Bash, Read, REPL]` + `direct: [Bash, REPL]` 让 `Bash` 保持直连、`Read` 只在沙箱）。写了就以它为准；`--check-config` 会拦两种静默失效：`direct` 里有没声明的名字，或藏了工具却没注入 `REPL`。
 - `WebSearch` / `WebFetch` 的数据源在 `settings.json` 的 `web` 段：默认 `duckduckgo`（免 key，仅 search）；换 provider 必须显式写 `{"web": {"provider": "tinyfish", "api_key": "..."}}`——只写 api_key **不会**切换 provider。key 三级来源：`web.api_key` > `WEB_SEARCH_API_KEY` > `env` 段。
 
 ### loop
