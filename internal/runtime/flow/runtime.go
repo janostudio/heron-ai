@@ -79,6 +79,12 @@ type Runtime struct {
 	// status written while the turn keeps going is a lie the user sees as an
 	// answer arriving after they cancelled.
 	turnCancels map[string]context.CancelFunc
+	// steerMu guards steering: the inbox of user input that arrived while each
+	// session's turn was running. A message here has already been stored in the
+	// mailbox; the inbox only decides whether the running turn reads it now
+	// instead of after it ends.
+	steerMu  sync.Mutex
+	steering map[string]*steeringInbox
 	// closedInterrupts records the sessions whose dangling executions have
 	// already been given a terminal event by this process. One pass is enough:
 	// the terminal it writes is what subsequent replays read.
@@ -401,7 +407,8 @@ func (r *Runtime) SubmitInput(ctx context.Context, sessionID, input string, bloc
 			return types.FlowTurnResult{}, err
 		}
 	}
-	queued, err := r.queueUserInput(ctx, session, input, blocks)
+	blocks = withInputBlock(input, blocks)
+	message, queued, err := r.enqueueUserInput(ctx, session, input, blocks)
 	if err != nil {
 		return types.FlowTurnResult{}, err
 	}
@@ -410,7 +417,21 @@ func (r *Runtime) SubmitInput(ctx context.Context, sessionID, input string, bloc
 		// already been written, so cancelling the HTTP request must not cancel
 		// the turn it just accepted.
 		go r.drainQueuedInput(context.Background(), sessionID)
+		return queued, nil
 	}
+	// The turn is running: hand the message to it. This is the case that used to
+	// make the user wait behind work they may have just invalidated — the turn
+	// reads it before its next model round instead of finishing first.
+	if r.steerUserInput(sessionID, message, blocks) {
+		queued.Steered = true
+		queued.Reply = userInputSteeredReply
+		return queued, nil
+	}
+	// The turn ended between the busy check and the hand-off. Nobody else will
+	// drain this message: the idle branch above is the only other starter, and it
+	// was skipped because the session looked busy. Starting the drain here keeps
+	// the message from waiting for the user's next one.
+	go r.drainQueuedInput(context.Background(), sessionID)
 	return queued, nil
 }
 
@@ -1789,6 +1810,7 @@ func (r *Runtime) executeTeamTurn(
 		ResumeApproval:     current.resumeApproval,
 		ResumeResults:      current.resumeResults,
 		ResumeCalls:        current.resumeCalls,
+		Steering:           r.steeringSource(ctx, session, flowTurn.ID),
 	})
 	if runErr != nil {
 		logging.ErrorUnlessCancelled(runErr, "team run failed", map[string]any{
@@ -2656,8 +2678,13 @@ func (r *Runtime) markTurnRunning(ctx context.Context, sessionID string) (contex
 	r.runningTurns[sessionID] = true
 	r.turnCancels[sessionID] = cancel
 	r.turnMu.Unlock()
+	// The inbox is published for exactly as long as this turn runs: a message
+	// arriving inside that window is taken by the turn, and one arriving after
+	// it falls back to the queue-and-drain path.
+	clearInbox := r.registerSteeringInbox(sessionID)
 	return turnCtx, func() {
 		cancel()
+		clearInbox()
 		r.turnMu.Lock()
 		delete(r.runningTurns, sessionID)
 		delete(r.turnCancels, sessionID)

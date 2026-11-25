@@ -390,6 +390,7 @@ func (r *Runtime) runBatch(
 				ResumeCheckpointID: req.ResumeCheckpointID,
 				ResumeTaskID:       req.ResumeTaskID,
 				Limits:             req.Limits,
+				Steering:           req.Steering,
 			}
 			if isSpawned {
 				// "## Your Item" (design 21 §4.4): a synthetic call receives

@@ -138,3 +138,25 @@ func TestAgentExecutorPassesStructuredContextBlocks(t *testing.T) {
 	require.Equal(t, types.TurnCompleted, result.Status)
 	require.Equal(t, blocks, runner.request.ContextBlocks)
 }
+
+// TestAgentExecutorPassesSteering: the inbox a Flow publishes has to survive the
+// hop through this layer, or a mid-turn message silently degrades to "queued for
+// the next turn" — the exact wait the feature removes. The field is copied by hand
+// here, which is what makes a regression invisible without this test.
+func TestAgentExecutorPassesSteering(t *testing.T) {
+	runner := &captureAgentRunner{}
+	executor := NewAgentExecutor(runner)
+
+	polls := 0
+	steering := func() []types.SteeringInput {
+		polls++
+		return nil
+	}
+	request := agentExecutorRequest("")
+	request.Steering = steering
+	_, err := executor.Execute(context.Background(), request)
+	require.NoError(t, err)
+	require.NotNil(t, runner.request.Steering, "the Agent request must carry the source")
+	runner.request.Steering()
+	require.Equal(t, 1, polls, "and it must be the same function the Flow published")
+}

@@ -51,8 +51,13 @@ const (
 	// production ("B → A") without duplicating the content: the production is
 	// shown once, at its producer, and every use is an edge.
 	EventSharedRecordConsumed = "session.record.consumed"
-	EventRecoveryRequested    = "session.recovery.requested"
-	EventRecoveryCompleted    = "session.recovery.completed"
+	// EventUserInputInjected records that a message the user sent while a turn
+	// was running was handed to that turn instead of waiting for the next one.
+	// The mailbox's own delivered event follows it; this one carries the text so
+	// a reader can see what the model was told, and when.
+	EventUserInputInjected = "session.user_input.injected"
+	EventRecoveryRequested = "session.recovery.requested"
+	EventRecoveryCompleted = "session.recovery.completed"
 
 	// Mailbox events (also recorded in flow.jsonl).
 	EventMailboxMessageEnqueued  = "session.mailbox.message.enqueued"

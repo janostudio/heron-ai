@@ -668,6 +668,32 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			return nil, err
 		default:
 		}
+		// Input that arrived while this turn was running joins the conversation
+		// here — before the next decision, not after the answer. The user who
+		// sends it is usually correcting a plan they can already see going wrong,
+		// so making them wait for the turn to end answers a question they have
+		// withdrawn. The message is a plain user turn: the model treats it like
+		// any other instruction and re-plans from it.
+		if req.Steering != nil {
+			for _, steering := range req.Steering() {
+				text := contextBlockText(steering.Blocks, "input")
+				if strings.TrimSpace(text) == "" {
+					continue
+				}
+				if addErr := contextManager.AddMessageContext(ctx, types.Message{
+					Role: "user", Content: text,
+				}); addErr != nil {
+					return nil, addErr
+				}
+				logging.Info("user input injected into running turn", map[string]any{
+					"flow_session_id": req.FlowSessionID,
+					"flow_turn_id":    req.FlowTurnID,
+					"call_id":         req.CallID,
+					"round":           round,
+					"message_id":      steering.MessageID,
+				})
+			}
+		}
 		// The input text is fixed for the whole execution, so it is checked
 		// once, on the first round this execution runs. A resumed turn starts
 		// at checkpoint.NextRound: its input is fresh user text and must be
@@ -1765,8 +1791,9 @@ func countFileChanges(operations []types.WorkspaceOperation) int {
 }
 
 func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig, req types.AgentRequest, round, maxParallel int, calls []types.ToolCall) []*types.ToolResult {
-	allowed := make(map[string]struct{}, len(agent.Tools.Builtin)+len(agent.Tools.Custom)+len(agent.Tools.MCP))
-	for _, name := range agent.Tools.Builtin {
+	callable := agent.Tools.CallableBuiltin()
+	allowed := make(map[string]struct{}, len(callable)+len(agent.Tools.Custom)+len(agent.Tools.MCP))
+	for _, name := range callable {
 		allowed[name] = struct{}{}
 	}
 	for _, name := range agent.Tools.Custom {
@@ -1803,6 +1830,22 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 	for i, call := range filtered {
 		if _, ok := allowed[call.Name]; !ok {
 			rejected[i] = "tool is not allowed for this Agent"
+		}
+	}
+	// A tool the definition moved into the sandbox is callable only from inside a
+	// program. The schema no longer offers it, and this is where "not offered"
+	// becomes "not accepted": every sandbox tool passes the allowlist above (that
+	// is what lets a program call it), so a model that emits the name anyway would
+	// otherwise be served exactly as if the surface had never been narrowed.
+	for i, call := range filtered {
+		if _, ok := rejected[i]; ok {
+			continue
+		}
+		if _, _, insideProgram := script.StepFromContext(ctx); insideProgram {
+			continue
+		}
+		if reason, sandboxOnly := sandboxOnlyReason(agent, call.Name); sandboxOnly {
+			rejected[i] = reason
 		}
 	}
 	// A model may omit the tool call id. The started/completed/failed events
@@ -3008,7 +3051,11 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 		}
 	}
 
-	toolNames := append([]string(nil), agent.Tools.Builtin...)
+	// tools.direct narrows what is injected: a tool the definition moves into the
+	// sandbox is still callable, just not from the conversation layer. Iterating
+	// InjectedBuiltin() rather than Builtin() is what keeps the model from being
+	// offered both a direct call and a program that reaches the same tool.
+	toolNames := append([]string(nil), agent.Tools.InjectedBuiltin()...)
 	sort.Strings(toolNames)
 	seen := make(map[string]struct{}, len(toolNames))
 	for _, toolName := range toolNames {
