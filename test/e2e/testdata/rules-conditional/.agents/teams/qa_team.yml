@@ -1,0 +1,22 @@
+id: qa_team
+goal: 回答用户的问题。
+
+state:
+  enabled: true
+  max_items: 20
+  max_chars: 4000
+  inject_summary: true
+
+calls:
+  answer:
+    type: agent
+    agent: assistant
+    responsibility: 回答用户的问题。
+    inputs:
+      user_message: true
+    output:
+      record: Answer
+
+output:
+  from: answer
+  record: Answer

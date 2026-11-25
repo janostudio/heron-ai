@@ -1385,7 +1385,7 @@ func checkConfigOnly(flowPath string) int {
 		fmt.Printf("%-12s team=%-12s lifecycle=%s\n", name, binding.TeamID, lifecycle)
 	}
 	fmt.Printf("flow %s: %d bindings ok (%d isolated)\n", defs.Flow.ID, len(names), isolated)
-	printRulePathWarnings(defs)
+	printConditionalRules(defs)
 	printToolSurfaceWarnings(defs)
 	printUnknownSettingsWarnings()
 	// The permission posture is validated here: this mode exists to refuse a
@@ -1425,15 +1425,15 @@ func handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	_, _ = io.WriteString(w, metrics.Render())
 }
 
-// printRulePathWarnings reports rules that gate on paths.
+// printConditionalRules lists the rules that are not in the system prompt, and
+// reports the path patterns that can never match.
 //
-// Such a rule joins the system prompt only on turns whose text mentions a
-// matching path, so the prompt — which is the prefix prompt caching reuses —
-// becomes a function of what the user typed. The rule loads fine, so nothing
-// else would mention it. Printing here rather than only through the logger is
-// deliberate: configuration is loaded before the execution logger exists, and
-// --check-config never builds one.
-func printRulePathWarnings(defs *types.Definitions) {
+// A conditional rule is invisible by design: it is absent from the prompt on
+// every turn that does not touch its directory. That is the point, and it is
+// also why it needs printing — "why did this rule never apply" has no answer
+// anywhere else. The lint half matters as much: an absolute pattern or a ".."
+// silently never matches.
+func printConditionalRules(defs *types.Definitions) {
 	if defs == nil {
 		return
 	}
@@ -1443,7 +1443,12 @@ func printRulePathWarnings(defs *types.Definitions) {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if warning := config.RulePathWarning(defs.Rules[name]); warning != "" {
+		rule := defs.Rules[name]
+		if len(rule.Paths) == 0 {
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "info: rule %q is conditional: paths=%v\n", rule.ID, rule.Paths)
+		if warning := config.RulePathConfigWarning(rule); warning != "" {
 			fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 		}
 	}
@@ -1496,7 +1501,7 @@ func buildProvider(ctx context.Context, flowPath, modelOverride string) (*types.
 	if err != nil {
 		return nil, nil, err
 	}
-	printRulePathWarnings(definitions)
+	printConditionalRules(definitions)
 
 	models, err := loadModelsConfig()
 	if err != nil {

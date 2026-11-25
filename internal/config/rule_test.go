@@ -97,15 +97,25 @@ func TestLoadRuleMetaStillParses(t *testing.T) {
 	require.Equal(t, "", rule.Content)
 }
 
-// 声明了 paths 的规则会让 system prompt 随输入变化，缓存前缀随之失效。
-// 规则本身仍然可用，但这条代价必须能被告知——加载打日志，--check-config 打印。
-func TestRulePathWarning(t *testing.T) {
+// 条件规则不进 system prompt，代价从"缓存失效"变成"写错了就永不触发"。
+// 后者更隐蔽：规则文件加载成功、Agent 也引用了它，只是那条 pattern 永远匹配不上。
+func TestRulePathConfigWarning(t *testing.T) {
 	plain := types.RuleItem{ID: "plain", Content: "x"}
-	require.Empty(t, RulePathWarning(plain), "无条件规则不该有告警")
+	require.Empty(t, RulePathConfigWarning(plain), " unconditional rule has nothing to warn about")
 
-	gated := types.RuleItem{ID: "go-only", Paths: []string{"*.go"}}
-	warning := RulePathWarning(gated)
-	require.Contains(t, warning, "go-only")
-	require.Contains(t, warning, "*.go")
-	require.Contains(t, warning, "input-dependent")
+	// A leading ../ is how a configuration names the repository around the
+	// workspace (docs/, knowledge/ live there in some deployments).
+	ok := types.RuleItem{ID: "docs", Paths: []string{"docs/**", "knowledge/*.md", "../docs/**"}}
+	require.Empty(t, RulePathConfigWarning(ok))
+
+	for name, rule := range map[string]types.RuleItem{
+		"absolute": {ID: "abs", Paths: []string{"/docs/**"}},
+		"midclimb": {ID: "mid", Paths: []string{"docs/../elsewhere/**"}},
+		"midglob":  {ID: "mid", Paths: []string{"docs/**/x.md"}},
+		"empty":    {ID: "blank", Paths: []string{"  "}},
+	} {
+		warning := RulePathConfigWarning(rule)
+		require.NotEmpty(t, warning, name)
+		require.Contains(t, warning, rule.ID)
+	}
 }

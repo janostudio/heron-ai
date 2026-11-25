@@ -49,6 +49,11 @@ type AgentRequest struct {
 	// while this turn was running joins the conversation there, so a correction
 	// lands before the next decision instead of after the answer it contradicts.
 	Steering SteeringSource
+	// ConditionalRules are the rules whose applicability depends on the paths
+	// this turn touches. Resident rules are already in the system prompt; these
+	// are injected when a tool call touches a matching path, so a definition can
+	// carry directory contracts without paying for them on every turn.
+	ConditionalRules []ConditionalRule
 }
 
 // SteeringInput is one user message handed to a turn that is already running.
@@ -158,6 +163,10 @@ type CallRequest struct {
 	AllowedTeams []string
 	// Steering reaches through to the Agent's loop; the Flow owns the inbox.
 	Steering SteeringSource
+	// ConditionalRules are the referenced rules that declare paths. The Flow
+	// resolves scope and body; the Agent loop matches them against the paths its
+	// tools touch.
+	ConditionalRules []ConditionalRule
 }
 
 // CallResult is the normalized result returned by an Agent, Command, or

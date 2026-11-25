@@ -79,6 +79,7 @@ func (e *AgentExecutor) Execute(ctx context.Context, req types.CallRequest) (typ
 		MaxParallelTools:   req.Limits.WithDefaults().MaxParallelTools,
 		AllowedTeams:       req.AllowedTeams,
 		Steering:           req.Steering,
+		ConditionalRules:   req.ConditionalRules,
 	})
 	if err != nil {
 		logging.ErrorUnlessCancelled(err, "agent executor failed", map[string]any{

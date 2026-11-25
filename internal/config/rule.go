@@ -6,7 +6,6 @@ import (
 
 	"github.com/adrg/frontmatter"
 
-	"github.com/heron-ai/heron-engine/internal/logging"
 	"github.com/heron-ai/heron-engine/internal/storage"
 	"github.com/heron-ai/heron-engine/pkg/types"
 )
@@ -37,34 +36,36 @@ func (l *ConfigLoader) loadRuleMeta(path string) (*types.RuleItem, error) {
 		return nil, err
 	}
 	rule.Path = path
-	if warning := RulePathWarning(rule); warning != "" {
-		logging.Warn(warning, map[string]any{
-			"rule":  rule.ID,
-			"paths": rule.Paths,
-		})
-	}
-
 	return &rule, nil
 }
 
-// RulePathWarning explains why a rule that gates on paths is expensive, or ""
-// when the rule applies unconditionally.
+// RulePathConfigWarning reports the paths declarations that will never match,
+// or will match something the author did not mean.
 //
-// Rules are rendered into the system prompt, which is the prefix prompt
-// caching reuses. A path-gated rule joins that prompt only on turns whose text
-// mentions a matching path, so the prefix becomes a function of what the user
-// typed: each turn that matches differently starts a new cache entry, and every
-// call is billed at full price again. The rule still works; it is just
-// expensive, and nothing else would ever say so.
-//
-// Loading logs it once; --check-config prints it, because that is the gate
-// people and CI actually read.
-func RulePathWarning(rule types.RuleItem) string {
-	if len(rule.Paths) == 0 {
-		return ""
+// The patterns are compared against workspace-relative paths, so an absolute one
+// can never hit, ".." climbs out of the place the comparison happens in, and a
+// "**" in the middle reads as a glob that Go's matcher cannot express. Each is a
+// rule that silently never applies — the failure mode this feature has to avoid
+// most.
+func RulePathConfigWarning(rule types.RuleItem) string {
+	for _, pattern := range rule.Paths {
+		trimmed := strings.TrimSpace(pattern)
+		switch {
+		case trimmed == "":
+			return fmt.Sprintf("rule %q declares an empty path pattern", rule.ID)
+		case strings.HasPrefix(trimmed, "/"):
+			return fmt.Sprintf("rule %q: pattern %q is absolute; patterns are workspace-relative", rule.ID, pattern)
+		case strings.Contains(strings.TrimPrefix(strings.TrimPrefix(trimmed, "../"), "../"), ".."):
+			// A leading ../ is how a configuration names a directory that lives
+			// next to the workspace (docs/, knowledge/ in the repository around
+			// it). A ".." anywhere else climbs out mid-path, which no touched
+			// path will ever equal.
+			return fmt.Sprintf("rule %q: pattern %q climbs out of the workspace", rule.ID, pattern)
+		case strings.Contains(trimmed, "**") && !strings.HasSuffix(trimmed, "/**"):
+			return fmt.Sprintf("rule %q: pattern %q uses ** somewhere other than the end; only a trailing /** is supported", rule.ID, pattern)
+		}
 	}
-	return fmt.Sprintf("rule %q declares paths %v: the system prompt becomes input-dependent, so its cached prefix stops being reusable",
-		rule.ID, rule.Paths)
+	return ""
 }
 
 // LoadRuleBody 读取规则文件并返回剥离 frontmatter 后的正文。

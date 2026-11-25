@@ -264,65 +264,52 @@ func TestRenderRulesWithLoader(t *testing.T) {
 
 	t.Run("loader reads body for empty content", func(t *testing.T) {
 		r := &Runtime{ruleLoader: loader}
-		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-loaded"}, "any", "any", "")
+		out := r.renderResidentRules(ctx, definitions, []string{"r-loaded"}, "any", "any")
 		assert.Equal(t, "### r-loaded (hard)\nloaded body", out)
 	})
 
 	t.Run("in-memory content wins over loader", func(t *testing.T) {
 		r := &Runtime{ruleLoader: loader}
-		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-memory"}, "any", "any", "")
+		out := r.renderResidentRules(ctx, definitions, []string{"r-memory"}, "any", "any")
 		assert.Equal(t, "### r-memory\nin memory", out)
 	})
 
-	t.Run("paths gate matches", func(t *testing.T) {
+	// A rule that declares paths is a directory contract: it must not enter the
+	// system prompt at all, because that is the cost this split exists to avoid.
+	t.Run("path-gated rule stays out of the system prompt", func(t *testing.T) {
 		r := &Runtime{ruleLoader: loader}
-		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-gated"}, "any", "any", "fix src/main.go now")
-		assert.Equal(t, "### r-gated\ngated body", out)
+		out := r.renderResidentRules(ctx, definitions, []string{"r-gated"}, "any", "any")
+		assert.Equal(t, "", out)
 	})
 
-	t.Run("paths gate misses", func(t *testing.T) {
+	// It is not dropped either: it becomes a conditional rule with its body, and
+	// the Agent loop decides when it applies.
+	t.Run("path-gated rule is collected as conditional", func(t *testing.T) {
 		r := &Runtime{ruleLoader: loader}
-		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-gated"}, "any", "any", "fix README.md now")
-		assert.Equal(t, "", out)
+		collected := r.conditionalRules(ctx, definitions, []string{"r-gated", "r-memory"}, "any", "any")
+		require.Len(t, collected, 1)
+		assert.Equal(t, "r-gated", collected[0].ID)
+		assert.Equal(t, []string{"src/*.go"}, collected[0].Paths)
+		assert.Equal(t, "gated body", collected[0].Body)
 	})
 
 	t.Run("loader empty body skipped", func(t *testing.T) {
 		r := &Runtime{ruleLoader: loader}
-		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-nopath"}, "any", "any", "")
+		out := r.renderResidentRules(ctx, definitions, []string{"r-nopath"}, "any", "any")
 		assert.Equal(t, "", out)
 	})
 
 	t.Run("loader error skipped", func(t *testing.T) {
 		r := &Runtime{ruleLoader: loader}
-		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-err"}, "any", "any", "")
+		out := r.renderResidentRules(ctx, definitions, []string{"r-err"}, "any", "any")
 		assert.Equal(t, "", out)
 	})
 
 	t.Run("nil loader skips empty-content rules", func(t *testing.T) {
 		r := &Runtime{}
-		out := r.renderRulesWithLoader(ctx, definitions, []string{"r-loaded"}, "any", "any", "")
+		out := r.renderResidentRules(ctx, definitions, []string{"r-loaded"}, "any", "any")
 		assert.Equal(t, "", out)
 	})
-}
-
-func TestRulePathsMatch(t *testing.T) {
-	tests := []struct {
-		name     string
-		patterns []string
-		ctx      string
-		expected bool
-	}{
-		{"empty patterns always match", nil, "anything", true},
-		{"glob hit", []string{"src/*.go"}, "edit src/main.go", true},
-		{"glob miss", []string{"src/*.go"}, "edit README.md", false},
-		{"multiple patterns one hit", []string{"docs/*.md", "src/*.go"}, "edit src/a.go", true},
-		{"token split on quotes", []string{"pkg/*.go"}, `open "pkg/x.go"`, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, rulePathsMatch(tt.patterns, tt.ctx))
-		})
-	}
 }
 
 func TestRuleVisible(t *testing.T) {
