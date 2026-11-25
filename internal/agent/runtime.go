@@ -1805,6 +1805,22 @@ func (t *TurnLoop) executeToolCalls(ctx context.Context, agent types.AgentConfig
 			rejected[i] = "tool is not allowed for this Agent"
 		}
 	}
+	// A tool the definition moved into the sandbox is callable only from inside a
+	// program. The schema no longer offers it, and this is where "not offered"
+	// becomes "not accepted": every sandbox tool passes the allowlist above (that
+	// is what lets a program call it), so a model that emits the name anyway would
+	// otherwise be served exactly as if the surface had never been narrowed.
+	for i, call := range filtered {
+		if _, ok := rejected[i]; ok {
+			continue
+		}
+		if _, _, insideProgram := script.StepFromContext(ctx); insideProgram {
+			continue
+		}
+		if reason, sandboxOnly := sandboxOnlyReason(agent, call.Name); sandboxOnly {
+			rejected[i] = reason
+		}
+	}
 	// A model may omit the tool call id. The started/completed/failed events
 	// share this value as their pairing key, so it has to exist before the
 	// first event is emitted and must not change afterwards.

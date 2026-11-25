@@ -271,6 +271,29 @@ func (t *TurnLoop) withScriptGate(ctx context.Context, agent types.AgentConfig, 
 	})
 }
 
+// sandboxOnlyReason reports whether a direct (non-program) call must be refused
+// because the tool is reachable only from inside a program. The message names the
+// call site instead of saying "not allowed": the tool exists, it is one level away,
+// and a refusal that hides that sends the model looking for a permission problem.
+func sandboxOnlyReason(agent types.AgentConfig, name string) (string, bool) {
+	if len(agent.Tools.Direct) == 0 || isScriptTool(name) {
+		return "", false
+	}
+	for _, injected := range agent.Tools.Direct {
+		if injected == name {
+			return "", false
+		}
+	}
+	for _, sandboxed := range agent.Tools.SandboxBuiltin() {
+		if sandboxed == name {
+			return fmt.Sprintf(
+				"%s is not a direct tool for this Agent: call it inside a program as tools.%s({...})",
+				name, name), true
+		}
+	}
+	return "", false
+}
+
 func filterScriptCalls(calls []types.ToolCall) []types.ToolCall {
 	var out []types.ToolCall
 	for _, call := range calls {

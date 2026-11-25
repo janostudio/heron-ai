@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -71,4 +73,62 @@ func TestDirectWithoutNarrowingKeepsEveryTool(t *testing.T) {
 	names := collectSchemaNames(schemas)
 	require.True(t, names["Bash"])
 	require.True(t, names["Read"])
+}
+
+// sandboxCallRecorder records the calls that reach execution, so a test can tell
+// "refused by the surface" from "executed and failed later".
+type sandboxCallRecorder struct{ calls []string }
+
+func (e *sandboxCallRecorder) Execute(_ context.Context, name string, _ map[string]any) (*types.ToolResult, error) {
+	e.calls = append(e.calls, name)
+	return &types.ToolResult{Success: true, Content: "ok"}, nil
+}
+
+func runNarrowed(t *testing.T, model *mockModelProvider, executor ToolExecutor) types.AgentResult {
+	t.Helper()
+	loop := NewTurnLoop(model, executor, nil, NewRouteParser(), nil, nil,
+		&mockPromptRenderer{messages: []types.Message{{Role: "user", Content: "hi"}}})
+	loop.SetScriptDescription(func([]string) string { return "CATALOG" })
+	result, err := loop.Run(context.Background(), types.AgentConfig{
+		Name:  "narrowed",
+		Tools: types.ToolConfig{Builtin: []string{"Bash", "Read", "REPL"}, Direct: []string{"REPL"}},
+		Loop:  types.LoopConfig{MaxRounds: 3},
+	}, types.AgentRequest{
+		CallID:        "call",
+		AgentID:       "narrowed",
+		AgentTurnID:   "turn",
+		ContextBlocks: []types.ContextBlock{{Kind: "input", Text: "hi"}},
+	})
+	require.NoError(t, err)
+	return *result
+}
+
+// TestRunAdvertisesOnlyDirectTools is the end-to-end half of the schema test: it
+// reads the tool list the loop actually handed the model.
+func TestRunAdvertisesOnlyDirectTools(t *testing.T) {
+	model := &mockModelProvider{responses: []types.ChatResponse{{Text: `{"reply":"ok"}`, FinishReason: "stop"}}}
+	runNarrowed(t, model, &mockToolExecutor{})
+	require.Equal(t, map[string]bool{"REPL": true}, collectSchemaNames(model.lastTools))
+}
+
+// TestRunRefusesDirectCallToSandboxTool covers the case the schema cannot: a model
+// that emits a name it was never offered. The sandbox tool passes the allowlist (a
+// program needs it to), so only the call-site check keeps it out of the executor.
+func TestRunRefusesDirectCallToSandboxTool(t *testing.T) {
+	model := &mockModelProvider{responses: []types.ChatResponse{
+		{Text: "using bash", ToolCalls: []types.ToolCall{{ID: "c1", Name: "Bash", Arguments: map[string]any{"command": "ls"}}}},
+		{Text: `{"reply":"ok"}`, FinishReason: "stop"},
+	}}
+	executor := &sandboxCallRecorder{}
+	result := runNarrowed(t, model, executor)
+	require.NotNil(t, result.Reply)
+	require.NotContains(t, executor.calls, "Bash", "a sandbox-only tool must not reach the executor as a direct call")
+
+	var told string
+	for _, message := range model.lastMessages {
+		if strings.Contains(message.Content, "inside a program") {
+			told = message.Content
+		}
+	}
+	require.Contains(t, told, "call it inside a program as tools.Bash")
 }
