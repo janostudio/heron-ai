@@ -70,6 +70,44 @@ type ToolConfig struct {
 	Builtin []string `yaml:"builtin" json:"builtin"`
 	Custom  []string `yaml:"custom,omitempty" json:"custom,omitempty"`
 	MCP     []string `yaml:"mcp,omitempty" json:"mcp,omitempty"`
+	// Direct narrows which declared tools the model may call itself. When it is
+	// set, only these names are rendered into the request's tool list; the
+	// builtin tools it leaves out stay callable from inside a program (the REPL
+	// sandbox) and nowhere else. Empty keeps the behaviour definitions written
+	// before this field existed rely on: every declared builtin tool is injected.
+	Direct []string `yaml:"direct,omitempty" json:"direct,omitempty"`
+}
+
+// InjectedBuiltin is the builtin list rendered into the model-facing schema.
+// A program still reaches the rest of Builtin, so a narrowed list moves tools
+// into the sandbox rather than deleting them.
+func (c ToolConfig) InjectedBuiltin() []string {
+	if len(c.Direct) == 0 {
+		return c.Builtin
+	}
+	return c.Direct
+}
+
+// SandboxBuiltin is the builtin list a program may call: Builtin minus the tools
+// injected directly. Keeping the two lists complementary means one tool surface
+// is never offered twice — a model that can call Bash directly has no reason to
+// write a program to call it.
+func (c ToolConfig) SandboxBuiltin() []string {
+	if len(c.Direct) == 0 {
+		return c.Builtin
+	}
+	direct := make(map[string]struct{}, len(c.Direct))
+	for _, name := range c.Direct {
+		direct[name] = struct{}{}
+	}
+	out := make([]string, 0, len(c.Builtin))
+	for _, name := range c.Builtin {
+		if _, injected := direct[name]; injected {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 // HasBuiltin reports whether the Agent declared one builtin tool. Callers use

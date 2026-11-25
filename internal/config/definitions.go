@@ -397,7 +397,67 @@ func addAgentDefinition(agents map[string]types.AgentConfig, agent types.AgentCo
 	if _, exists := agents[agent.Name]; exists {
 		return fmt.Errorf("duplicate agent definition %q", agent.Name)
 	}
+	if err := checkToolVisibility(agent); err != nil {
+		return err
+	}
 	agents[agent.Name] = agent
+	return nil
+}
+
+// replToolName is the code-execution tool's name. It is spelled here rather than
+// imported from internal/agent because this package validates definitions, and the
+// runtime constant lives on the other side of that boundary.
+const replToolName = "REPL"
+
+// checkToolVisibility rejects tools.direct shapes the runtime turns into a dead end
+// without a symptom. Both are load-time errors rather than warnings because the
+// model cannot report what it never received:
+//
+//   - a name in direct that the agent never declared is not executable, so the
+//     schema loop skips it and the definition loses a tool it claims to have;
+//   - builtin tools left out of direct while REPL is not injected are reachable
+//     only from inside a program, and the model is never given the program tool.
+func checkToolVisibility(agent types.AgentConfig) error {
+	direct := agent.Tools.Direct
+	if len(direct) == 0 {
+		return nil
+	}
+	declared := make(map[string]struct{}, len(agent.Tools.Builtin)+len(agent.Tools.Custom)+len(agent.Tools.MCP))
+	for _, name := range agent.Tools.Builtin {
+		declared[name] = struct{}{}
+	}
+	for _, name := range agent.Tools.Custom {
+		declared[name] = struct{}{}
+	}
+	for _, name := range agent.Tools.MCP {
+		declared[name] = struct{}{}
+	}
+	injectsREPL := false
+	for _, name := range direct {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("agent %q: tools.direct contains an empty name", agent.Name)
+		}
+		if _, ok := declared[name]; !ok {
+			return fmt.Errorf("agent %q: tools.direct lists %q, which tools.builtin/custom/mcp do not declare", agent.Name, name)
+		}
+		if name == replToolName {
+			injectsREPL = true
+		}
+	}
+	sandboxed := agent.Tools.SandboxBuiltin()
+	if len(sandboxed) == 0 {
+		return nil
+	}
+	if _, declaresREPL := declared[replToolName]; !declaresREPL {
+		return fmt.Errorf(
+			"agent %q: tools.direct leaves %d builtin tool(s) with no way to call them (%s is not declared at all)",
+			agent.Name, len(sandboxed), replToolName)
+	}
+	if !injectsREPL {
+		return fmt.Errorf(
+			"agent %q: tools.direct leaves %d builtin tool(s) reachable only from inside %s, but does not inject %s itself (add %q to tools.direct)",
+			agent.Name, len(sandboxed), replToolName, replToolName, replToolName)
+	}
 	return nil
 }
 

@@ -178,7 +178,7 @@ func (t *ScriptTool) contractText() string {
 	var b strings.Builder
 	b.WriteString("JavaScript program body. It runs as a function body, so `return` is allowed and top-level declarations are local.\n")
 	b.WriteString("Contract:\n")
-	b.WriteString("- The tools bound here are the same ones this Agent may call directly; the runtime's permissions decide which.\n")
+	b.WriteString("- The tools bound here are this Agent's sandbox tools: the ones it may not call directly. A tool offered as a direct call is not bound here, and vice versa.\n")
 	b.WriteString("- Worth a program: several calls of the same kind (a loop over files/rows), or intermediate output large enough that only the conclusion matters. " +
 		"A single call with a small result is cheaper done directly — a program costs one parse and one extra hop.\n")
 	b.WriteString("- Tools are synchronous: `const r = tools.Read({file: \"x\"})`; there is no async, no Promise, no setTimeout.\n")

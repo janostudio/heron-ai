@@ -3008,7 +3008,11 @@ func (t *TurnLoop) buildToolSchemasFiltered(ctx context.Context, agent types.Age
 		}
 	}
 
-	toolNames := append([]string(nil), agent.Tools.Builtin...)
+	// tools.direct narrows what is injected: a tool the definition moves into the
+	// sandbox is still callable, just not from the conversation layer. Iterating
+	// InjectedBuiltin() rather than Builtin() is what keeps the model from being
+	// offered both a direct call and a program that reaches the same tool.
+	toolNames := append([]string(nil), agent.Tools.InjectedBuiltin()...)
 	sort.Strings(toolNames)
 	seen := make(map[string]struct{}, len(toolNames))
 	for _, toolName := range toolNames {

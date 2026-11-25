@@ -52,14 +52,19 @@ type PosturePolicy interface {
 	DenyTools() []string
 }
 
-// agentToolUniverse is every tool the Agent may call, spelled the way the executor's
+// agentToolUniverse is every tool a program may call, spelled the way the executor's
 // allowlist spells it: builtin, custom and the MCP names the Agent declares. The
-// sandbox and the model's schema both start from this list, so a program cannot be
-// quietly weaker than the model — an Agent whose custom tool works directly had it
-// silently missing inside programs before this existed.
+// builtin half comes from SandboxBuiltin(), i.e. the declared set minus tools.direct:
+// a tool the model calls itself is not also bound inside a program, which is what
+// makes a REPL-only definition a single surface instead of two overlapping ones.
+//
+// Custom and MCP tools are always part of the universe: they have no sandbox-only
+// counterpart, so excluding them here would silently weaken a program relative to
+// the model.
 func agentToolUniverse(agent types.AgentConfig) []string {
-	names := make([]string, 0, len(agent.Tools.Builtin)+len(agent.Tools.Custom)+len(agent.Tools.MCP))
-	names = append(names, agent.Tools.Builtin...)
+	sandbox := agent.Tools.SandboxBuiltin()
+	names := make([]string, 0, len(sandbox)+len(agent.Tools.Custom)+len(agent.Tools.MCP))
+	names = append(names, sandbox...)
 	names = append(names, agent.Tools.Custom...)
 	names = append(names, agent.Tools.MCP...)
 	sort.Strings(names)

@@ -172,6 +172,7 @@ The content above belongs in:
 | `builtin` | array | Built-in tool names |
 | `custom` | array | Custom tool names |
 | `mcp` | array | MCP server tool names |
+| `direct` | array | Narrows what is injected into the request. Builtin tools this list leaves out stay callable from inside `REPL` only — see [tools.direct](#toolsdirect-repl-only-tool-surface) |
 
 Built-in tools:
 
@@ -197,6 +198,45 @@ Built-in tools:
 A tool must be both listed here and declared in the agent's `tools.builtin` to
 be visible to the model. Declaring a name that the registry does not know has
 no effect and produces no error at load time.
+
+#### tools.direct (REPL-only tool surface)
+
+`builtin` is what the agent may call. `direct` is what the model may call
+**itself**. When `direct` is set, the builtin tools it leaves out are not injected
+as tools at all: they are reachable only from inside a `REPL` program, and `REPL`
+is the single direct entry point.
+
+```yaml
+tools:
+  builtin: [Bash, Read, Grep, Glob, Write, REPL, Team]
+  direct:  [REPL, Team]        # the code tools become sandbox globals
+```
+
+The two lists are complementary — a builtin tool is either injected or bound
+inside the sandbox, never both — which is what removes the choice between calling
+`Bash` and writing a program that calls it. `REPL`'s `code` parameter description
+lists exactly the sandbox half, so the model reads the same set it can bind.
+
+Leaving `direct` empty keeps the previous behaviour: every declared builtin tool
+is injected, and the sandbox can call them as well. Definitions written before
+this field existed therefore load unchanged.
+
+`--check-config` rejects the two shapes that would otherwise fail silently:
+
+- a `direct` name that `builtin`/`custom`/`mcp` do not declare — the schema loop
+  skips unknown names, so the definition would lose a tool it claims to have;
+- a narrowed `builtin` that does not inject `REPL` — those tools would have no
+  caller at all.
+
+Two consequences worth knowing before narrowing a surface:
+
+- **Hand-off tools never bind inside a program.** `Team`, `Spawn` and `Collect`
+  dispatch work that finishes after the synchronous run ends, so the sandbox
+  refuses to bind them. Leave them in `direct`; leaving them out of it makes them
+  unreachable rather than sandboxed.
+- **Tools a Skill grants land on the `builtin` side.** A skill's `tools:` list is
+  appended to `tools.builtin` for that call, so under a narrowed surface the
+  granted tool is reachable from inside a program and not as a direct call.
 
 ### web (data source for `WebSearch` / `WebFetch`)
 
