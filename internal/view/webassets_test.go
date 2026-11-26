@@ -86,3 +86,17 @@ func TestModeSwitcherCarriesOnlyTabs(t *testing.T) {
 	require.NotContains(t, string(style), ".modes .hint",
 		"no style may be left behind for the removed line")
 }
+
+// TestMessageLinksAreClickable pins what the reply renderer owes a reader: a URL
+// the model wrote has to be clickable. Models paste links bare and wrap them in
+// bold, and both used to reach the page as plain text, so a PR link had to be
+// selected and copied by hand.
+func TestMessageLinksAreClickable(t *testing.T) {
+	script := pageScript(t)
+	require.Contains(t, script, "function anchor(href, label)",
+		"an outbound link needs one builder, or target/rel drift apart")
+	require.Contains(t, script, "splitUrlTail(",
+		"a bare URL has to shed the sentence's punctuation before it becomes an href")
+	require.Contains(t, script, "target: \"_blank\"",
+		"a link out of the viewer opens away from it")
+}

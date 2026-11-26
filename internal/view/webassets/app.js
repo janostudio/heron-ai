@@ -350,11 +350,16 @@
     return table;
   }
 
-  /* Inline runs inside one line of text. No nesting: models rarely need
-   * bold-inside-link, and supporting it would cost more than it is worth here. */
+  /* Inline runs inside one line of text. Emphasis bodies are scanned again, so a
+   * link written as **https://…** is still a link — that is how a model reports
+   * a PR. Code is not scanned again: its body is shown as written.
+   *
+   * A bare URL is the last alternative because models paste links with no
+   * markdown around them at all, and a link the reader cannot click is a link
+   * they have to retype. */
   function inlineNodes(source) {
     var fragment = document.createDocumentFragment();
-    var pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(~~[^~]+~~)|(\[[^\]]+\]\((https?:\/\/[^)\s]+)\))/g;
+    var pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(~~[^~]+~~)|(\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))|(<(https?:\/\/[^\s>]+)>)|(https?:\/\/[^\s<>"'\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]+)/g;
     var last = 0;
     var match;
     while ((match = pattern.exec(source)) !== null) {
@@ -363,21 +368,47 @@
       if (match[1]) {
         fragment.appendChild(el("code", null, match[1].slice(1, -1)));
       } else if (match[2] || match[3]) {
-        fragment.appendChild(el("strong", null, match[2] ? match[2].slice(2, -2) : match[3].slice(2, -2)));
+        fragment.appendChild(el("strong", null, inlineNodes(match[2] ? match[2].slice(2, -2) : match[3].slice(2, -2))));
       } else if (match[4]) {
-        fragment.appendChild(el("em", null, match[4].slice(1, -1)));
+        fragment.appendChild(el("em", null, inlineNodes(match[4].slice(1, -1))));
       } else if (match[5]) {
-        fragment.appendChild(el("del", null, match[5].slice(2, -2)));
+        fragment.appendChild(el("del", null, inlineNodes(match[5].slice(2, -2))));
       } else if (match[6]) {
-        fragment.appendChild(el("a", {
-          href: match[7],
-          target: "_blank",
-          rel: "noopener noreferrer"
-        }, match[6].replace(/^\[|\]\(.*\)$/g, "")));
+        fragment.appendChild(anchor(match[8], match[7]));
+      } else if (match[9]) {
+        fragment.appendChild(anchor(match[10], match[10]));
+      } else if (match[11]) {
+        var bare = splitUrlTail(match[11]);
+        fragment.appendChild(anchor(bare.url, bare.url));
+        if (bare.tail) { fragment.appendChild(text(bare.tail)); }
       }
     }
     if (last < source.length) { fragment.appendChild(text(source.slice(last))); }
     return fragment;
+  }
+
+  /* An outbound link leaves the viewer: it is not a route of this page, so it
+   * carries no data-link and the router never sees its clicks. */
+  function anchor(href, label) {
+    return el("a", { href: href, target: "_blank", rel: "noopener noreferrer" }, label);
+  }
+
+  /* A URL ends where the sentence does: "see https://x/a." must not carry the
+   * full stop into the target. A closing paren stays part of the URL when the
+   * URL opened it (…/Foo_(bar)), and goes back to the sentence when it did not
+   * ("(see https://x/a)"). */
+  var URL_TAIL = /[.,;:!?)\]}>"'\u3000-\u303f\uff01-\uff0f\uff1a-\uff20]/;
+
+  function splitUrlTail(url) {
+    var tail = "";
+    while (url.length) {
+      var last = url.charAt(url.length - 1);
+      if (!URL_TAIL.test(last)) { break; }
+      if (last === ")" && url.split("(").length >= url.split(")").length) { break; }
+      tail = last + tail;
+      url = url.slice(0, -1);
+    }
+    return { url: url, tail: tail };
   }
 
   function codeBlock(code, lang) {
