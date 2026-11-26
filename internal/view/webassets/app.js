@@ -1423,8 +1423,7 @@
         modeButton("run", "\u8fd0\u884c", false),
         modeButton("waterfall", "\u65f6\u5e8f", false),
         modeButton("tree", "\u7ed3\u6784", false),
-        modeButton("raw", "\u539f\u59cb", false)),
-      el("span", { class: "hint", id: "mode-hint" }, "\u540c\u4e00\u4efd\u8bb0\u5f55\uff0c\u4e09\u79cd\u5448\u73b0\u3002")));
+        modeButton("raw", "\u539f\u59cb", false))));
 
     var body = el("div", { id: "record-body" });
     app.appendChild(body);
@@ -1479,38 +1478,31 @@
     currentMode = mode;
     stopSessionStream();
     clear(body);
-    var hint = document.getElementById("mode-hint");
     if (mode === "overview") {
       // The strip is navigation, not a statistic, but it is about the session as
       // a whole: it sat above every view before, taking height from the
       // transcript on all of them. Here it sits next to the numbers it indexes.
       body.appendChild(timeline(currentRecord.events));
       body.appendChild(kpiStrip(currentRecord.facts));
-      if (hint) { hint.textContent = "概览：事件时间条（点一段跳到原始事件）+ 本会话的回合、执行量与 token 消耗。"; }
       return;
     }
     if (mode === "run") {
       body.appendChild(renderRunners());
-      if (hint) { hint.textContent = "\u8fd0\u884c\uff1aFlow \u914d\u7f6e\u7684 team / agent\uff0c\u4ee5\u53ca\u672c\u6b21\u4f1a\u8bdd\u54ea\u4e9b\u5728\u8dd1\u3002"; }
       return;
     }
     if (mode === "waterfall") {
       body.appendChild(renderWaterfall(currentRecord));
-      if (hint) { hint.textContent = "\u65f6\u5e8f\uff1a\u6bcf\u4e2a team \u4e0e call \u7684\u6267\u884c\u533a\u95f4\uff0c\u6a2a\u5411\u4f4d\u7f6e\u5c31\u662f\u5e76\u884c\u5173\u7cfb\u3002"; }
       return;
     }
     if (mode === "tree") {
       body.appendChild(renderTree(currentRecord));
-      if (hint) { hint.textContent = "结构：回合 → 执行轮 → Team → Call → Agent；执行轮是这次提问派生出来的执行，点节点看它名下的事件。"; }
       return;
     }
     if (mode === "raw") {
       body.appendChild(renderRaw(currentRecord));
-      if (hint) { hint.textContent = "\u539f\u59cb\uff1a\u5408\u5e76\u4e09\u5c42\u540e\u7684\u5b8c\u6574\u4e8b\u4ef6\u5217\u8868\uff08\u53ea\u542b\u5df2\u53d1\u751f\u7684\u4e8b\u4ef6\uff09\uff0c\u70b9\u5f00\u770b payload\u3002"; }
       return;
     }
     body.appendChild(renderChat(currentRecord));
-    if (hint) { hint.textContent = "\u5bf9\u8bdd\uff1a\u4eba\u80fd\u8bfb\u7684\u6d88\u606f\u6d41\u3002"; }
     attachSessionStream(body);
   }
 
