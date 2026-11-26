@@ -1,0 +1,8 @@
+id: default
+entry: default
+
+teams:
+  default:
+    team: qa_team
+    inputs:
+      user_message: true

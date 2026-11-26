@@ -104,4 +104,9 @@ const (
 	EventToolCallCompleted  = "session.tool_call.completed"
 	EventToolCallFailed     = "session.tool_call.failed"
 	EventContextCompacted   = "session.context.compacted"
+	// EventRuleInjected records that a conditional rule entered this turn's
+	// context because a tool touched a matching path. The rule body is not in the
+	// payload: it is already in agent.jsonl's request, and repeating it here
+	// would double the size of the event for a reader who has both files.
+	EventRuleInjected = "session.rule.injected"
 )

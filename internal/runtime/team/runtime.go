@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -516,12 +515,17 @@ func (r *Runtime) runBatch(
 						tools...,
 					)
 				}
-				if text := r.renderRulesWithLoader(ctx, r.rules, agent.Rules, configured.AgentID, req.Team.ID, configured.Responsibility+"\n"+req.Input); text != "" {
+				// Resident rules go into the system prompt; conditional ones
+				// travel with the request and are injected by the Agent loop when
+				// a tool touches a matching path. The split is by declaration, not
+				// by guessing: a rule with paths is a directory contract.
+				if text := r.renderResidentRules(ctx, r.rules, agent.Rules, configured.AgentID, req.Team.ID); text != "" {
 					callReq.ContextBlocks = append(callReq.ContextBlocks, types.ContextBlock{
 						Kind: "rules", Text: text, Source: "rule",
 						Placement: "system", Stability: "stable", Priority: 90,
 					})
 				}
+				callReq.ConditionalRules = r.conditionalRules(ctx, r.rules, agent.Rules, configured.AgentID, req.Team.ID)
 				callReq.AgentDefinition = &agent
 				// State routing (design 26): the snapshot is never injected.
 				// Every Agent that declares the State tool gets the pointer,
@@ -968,19 +972,19 @@ func renderRules(definitions map[string]types.RuleItem, names []string, agentID,
 		if !ok || !ruleVisible(rule, agentID, teamID) || strings.TrimSpace(rule.Content) == "" {
 			continue
 		}
-		label := rule.ID
-		if rule.Type != "" {
-			label += " (" + rule.Type + ")"
-		}
-		sections = append(sections, "### "+label+"\n"+strings.TrimSpace(rule.Content))
+		sections = append(sections, "### "+rule.ID+"\n"+strings.TrimSpace(rule.Content))
 	}
 	return strings.Join(sections, "\n\n")
 }
 
-// renderRulesWithLoader renders rules, deferring body reads to the loader.
-// For each referenced rule it applies scope and paths gating, then uses the
-// in-memory Content when present, otherwise loads the body via ruleLoader.
-func (r *Runtime) renderRulesWithLoader(ctx context.Context, definitions map[string]types.RuleItem, names []string, agentID, teamID, pathContext string) string {
+// renderResidentRules renders the rules that are always in the system prompt,
+// deferring body reads to the loader.
+//
+// Rules that declare paths are skipped here on purpose: they belong to a
+// directory, not to the Agent, and rendering them unconditionally is exactly the
+// cost this split exists to avoid. They are collected by conditionalRules and
+// injected when a tool touches a matching path.
+func (r *Runtime) renderResidentRules(ctx context.Context, definitions map[string]types.RuleItem, names []string, agentID, teamID string) string {
 	if len(definitions) == 0 || len(names) == 0 {
 		return ""
 	}
@@ -988,10 +992,7 @@ func (r *Runtime) renderRulesWithLoader(ctx context.Context, definitions map[str
 	var sections []string
 	for _, name := range names {
 		rule, ok := definitions[name]
-		if !ok || !ruleVisible(rule, agentID, teamID) {
-			continue
-		}
-		if len(rule.Paths) > 0 && !rulePathsMatch(rule.Paths, pathContext) {
+		if !ok || !ruleVisible(rule, agentID, teamID) || len(rule.Paths) > 0 {
 			continue
 		}
 
@@ -1007,32 +1008,45 @@ func (r *Runtime) renderRulesWithLoader(ctx context.Context, definitions map[str
 			continue
 		}
 
-		label := rule.ID
-		if rule.Type != "" {
-			label += " (" + rule.Type + ")"
-		}
-		sections = append(sections, "### "+label+"\n"+content)
+		sections = append(sections, "### "+rule.ID+"\n"+content)
 	}
 	return strings.Join(sections, "\n\n")
 }
 
-// rulePathsMatch reports whether any path token in pathContext matches any
-// glob in patterns. pathContext is split on whitespace and quotes.
-func rulePathsMatch(patterns []string, pathContext string) bool {
-	if len(patterns) == 0 {
-		return true
+// conditionalRules collects the referenced rules that declare paths, in the
+// order the Agent lists them, with their bodies loaded.
+//
+// The order is the Agent's, not the filesystem's: a rule list is a document a
+// human wrote, and "the security rule first" is information worth keeping when
+// several rules trigger on one path.
+func (r *Runtime) conditionalRules(ctx context.Context, definitions map[string]types.RuleItem, names []string, agentID, teamID string) []types.ConditionalRule {
+	if len(definitions) == 0 || len(names) == 0 {
+		return nil
 	}
-	tokens := strings.FieldsFunc(pathContext, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '"' || r == '\'' || r == '`'
-	})
-	for _, token := range tokens {
-		for _, pattern := range patterns {
-			if matched, err := path.Match(pattern, token); err == nil && matched {
-				return true
-			}
+	var collected []types.ConditionalRule
+	for _, name := range names {
+		rule, ok := definitions[name]
+		if !ok || !ruleVisible(rule, agentID, teamID) || len(rule.Paths) == 0 {
+			continue
 		}
+		content := strings.TrimSpace(rule.Content)
+		if content == "" && rule.Path != "" && r.ruleLoader != nil {
+			loaded, err := r.ruleLoader(ctx, rule.Path)
+			if err != nil {
+				continue
+			}
+			content = strings.TrimSpace(loaded)
+		}
+		if content == "" {
+			continue
+		}
+		collected = append(collected, types.ConditionalRule{
+			ID:    rule.ID,
+			Paths: append([]string(nil), rule.Paths...),
+			Body:  content,
+		})
 	}
-	return false
+	return collected
 }
 
 func ruleVisible(rule types.RuleItem, agentID, teamID string) bool {

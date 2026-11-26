@@ -334,6 +334,11 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 	} else {
 		compactor = NewLLMCompactor(t.model, agent.Model)
 	}
+	// Conditional rules are matched where the paths exist: as this turn's tools
+	// touch them. Resident rules arrived with the system prompt; these are held
+	// here and injected when they apply, so a directory contract costs nothing on
+	// a turn that never goes near that directory.
+	ruleNotes := newRuleNoteSet(req.ConditionalRules)
 	contextManager := NewContextManagerWithCompactor(t.contextConfig(agent), nil, compactor)
 	contextManager.SetToolSchemas(toolSchemas)
 	contextManager.SetCompactHook(func(summary string, droppedCount int) {
@@ -430,6 +435,10 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		if compatibilityErr := validateCheckpointCompatibility(checkpoint, agent, contextManager); compatibilityErr != nil {
 			return nil, compatibilityErr
 		}
+		// The rules an earlier attempt of this turn already triggered must not
+		// arrive twice on resume. The checkpoint carries the operations that
+		// triggered them, which is enough to replay the identity.
+		ruleNotes.seedFromOps(checkpoint.WorkspaceOps)
 		if restoreErr := contextManager.RestoreActive(checkpoint.Messages); restoreErr != nil {
 			t.emitErrorHook(ctx, agent, req, 0, restoreErr)
 			return nil, restoreErr
@@ -742,6 +751,12 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 		}
 		for {
 			requestMessages := contextManager.Messages()
+			// The note rides at the tail of the request, above nothing that has to
+			// stay stable: the system prefix and the history above it are what the
+			// provider caches, and neither changes when a rule triggers.
+			if noteMessage, hasNotes := ruleNotes.noteMessage(); hasNotes {
+				requestMessages = append(append([]types.Message(nil), requestMessages...), noteMessage)
+			}
 			contextStats := contextManager.Stats()
 			requestStatIndex := len(requestStats)
 			requestStats = append(requestStats, buildModelRequestStats(
@@ -1226,7 +1241,37 @@ func (t *TurnLoop) Run(ctx context.Context, agent types.AgentConfig, req types.A
 			return waitResult, nil
 		}
 		ctx = t.withScriptGate(ctx, agent, req, round, resp.ToolCalls)
+		// The paths this batch is about to touch, from the arguments. A shell
+		// command reports no path, and a write that fails reports nothing at all,
+		// so the arguments are the only source that covers both; the operations
+		// the tools report are added afterwards for the paths they resolved.
+		var touchedPaths []pathTarget
+		for _, call := range resp.ToolCalls {
+			touchedPaths = append(touchedPaths, callPathTargets(call)...)
+		}
 		results := t.executeToolCalls(ctx, agent, req, round, req.MaxParallelTools, resp.ToolCalls)
+		for _, result := range results {
+			if result == nil {
+				continue
+			}
+			touchedPaths = append(touchedPaths, opPathTargets(result.WorkspaceOps)...)
+		}
+		for _, note := range ruleNotes.observe(touchedPaths) {
+			t.emitAgentEvent(ctx, req, round, types.EventRuleInjected, map[string]any{
+				"round":        round,
+				"rule_id":      note.ID,
+				"trigger_path": note.Path,
+				"trigger_kind": note.Kind,
+			})
+			logging.Info("conditional rule injected", map[string]any{
+				"flow_session_id": req.FlowSessionID,
+				"flow_turn_id":    req.FlowTurnID,
+				"call_id":         req.CallID,
+				"rule_id":         note.ID,
+				"trigger_path":    note.Path,
+				"trigger_kind":    note.Kind,
+			})
+		}
 		for i, call := range resp.ToolCalls {
 			toolResult := results[i]
 			if toolResult == nil {

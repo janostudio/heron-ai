@@ -264,6 +264,7 @@ Go 字段名（PascalCase）统一成 snake_case。字段集合由
 | `agent.model_response` / `agent.feedback` | `session.agent.model_response` / `session.agent.feedback` |
 | `tool_call.*` | `session.tool_call.*` |
 | `context.compacted` | `session.context.compacted` |
+| 条件规则注入（新） | `session.rule.injected`（`rule_id` / `trigger_path` / `trigger_kind` / `round`） |
 
 动作词保持 `started` / `completed` / `failed` / `cancelled`：事件记录的是已经发生的事，
 过去时是对的。`in_progress` 是状态名，不是事件名，所以没有采用。
