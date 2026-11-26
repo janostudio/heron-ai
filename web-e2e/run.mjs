@@ -30,6 +30,7 @@ const TOKEN = "e2e-token";
 const files = {
   sessions: JSON.parse(await readFile(path.join(fixtures, "sessions.json"), "utf8")),
   single: JSON.parse(await readFile(path.join(fixtures, "record-single.json"), "utf8")),
+  links: JSON.parse(await readFile(path.join(fixtures, "record-links.json"), "utf8")),
   staleStatus: JSON.parse(await readFile(path.join(fixtures, "record-stale-status.json"), "utf8")),
   liveTurn: JSON.parse(await readFile(path.join(fixtures, "record-live-turn.json"), "utf8")),
   approval: JSON.parse(await readFile(path.join(fixtures, "record-approval.json"), "utf8")),
@@ -288,6 +289,7 @@ function apiRouter(options = {}) {
         : id === "fs_open_turn" ? files.openTurn
         : id === "fs_approval" ? files.approval
         : id === "fs_interleave" ? files.interleave
+        : id === "fs_links" ? files.links
         : files.single;
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(record) });
     }
@@ -1214,6 +1216,46 @@ await run("tree: node detail aggregates the node", async () => {
   check("详情给出事件条数", metrics.includes("事件"), metrics.replace(/\n/g, " "));
   check("详情仍列出节点事件",
     (await page.locator("#node-detail table.raw tbody tr").count()) >= 1);
+
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- links in a model message are clickable ---------- */
+await run("links: a URL in a message is clickable", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_links`);
+  await page.waitForSelector(".chat .md", { timeout: 5000 });
+
+  const hrefs = await page.evaluate(() =>
+    Array.from(document.querySelectorAll(".chat .md a")).map((node) => node.getAttribute("href")));
+  const has = (href) => hrefs.includes(href);
+
+  // The reported case: the model bolds the URL, so the link sits inside <strong>.
+  check("粗体里的链接可点", has("https://github.com/janostudio/heron-ai/pull/88"), hrefs.join(" | "));
+  // Bare URLs are what models paste most: no [](), no <>.
+  check("裸链接可点", has("https://example.com/paren"), hrefs.join(" | "));
+  check("列表里的链接可点", has("https://example.com/list"), hrefs.join(" | "));
+  check("表格里的链接可点", has("https://example.com/table"), hrefs.join(" | "));
+  check("[文字](链接) 仍可点", has("https://example.com/md-link"), hrefs.join(" | "));
+
+  // The sentence, not the URL, owns the punctuation after it.
+  check("句末句号不进链接", has("https://example.com/a") && !has("https://example.com/a."), hrefs.join(" | "));
+  check("URL 自带的右括号保留", has("https://en.wikipedia.org/wiki/Foo_(bar)"), hrefs.join(" | "));
+  // A CJK sentence runs straight into the URL; neither side should swallow the other.
+  check("中文不进链接", has("https://example.com/zh"), hrefs.join(" | "));
+
+  // Two things that must stay text: code is shown as written, and a path on
+  // this page is not an outbound link.
+  const code = await page.locator(".chat .md code").first().textContent();
+  checkEqual("代码里的 URL 保持原样", code, "https://example.com/code");
+  check("页面内路径不当外链", !hrefs.some((href) => href && href.startsWith("/s/")), hrefs.join(" | "));
+
+  // An outbound link must not be routed by the page's own click handler, which
+  // would turn a click into a pushState to an unknown path.
+  checkEqual("外链不走页面路由", await page.locator(".chat .md a[data-link]").count(), 0);
+  const target = await page.locator(".chat .md a").first().getAttribute("target");
+  checkEqual("外链新窗口打开", target, "_blank");
 
   check("无 console error", errors.length === 0, errors.join(" | "));
   await context.close();

@@ -72,3 +72,31 @@ func TestInjectedInputIsVisibleInTheTranscript(t *testing.T) {
 	require.Equal(t, 2, strings.Count(script, `"session.user_input.injected"`),
 		"both renderers (live turn and folded history) must show the injected message")
 }
+
+// TestModeSwitcherCarriesOnlyTabs pins that the view switcher is just the tabs.
+// A description line beside the controls shares the row with the buttons and
+// repeats what the labels already say, so it belongs neither in the markup nor
+// in the stylesheet.
+func TestModeSwitcherCarriesOnlyTabs(t *testing.T) {
+	script := pageScript(t)
+	require.NotContains(t, script, "mode-hint", "the tab group must not render a description line")
+
+	style, err := webAssets.ReadFile("webassets/app.css")
+	require.NoError(t, err)
+	require.NotContains(t, string(style), ".modes .hint",
+		"no style may be left behind for the removed line")
+}
+
+// TestMessageLinksAreClickable pins what the reply renderer owes a reader: a URL
+// the model wrote has to be clickable. Models paste links bare and wrap them in
+// bold, and both used to reach the page as plain text, so a PR link had to be
+// selected and copied by hand.
+func TestMessageLinksAreClickable(t *testing.T) {
+	script := pageScript(t)
+	require.Contains(t, script, "function anchor(href, label)",
+		"an outbound link needs one builder, or target/rel drift apart")
+	require.Contains(t, script, "splitUrlTail(",
+		"a bare URL has to shed the sentence's punctuation before it becomes an href")
+	require.Contains(t, script, "target: \"_blank\"",
+		"a link out of the viewer opens away from it")
+}

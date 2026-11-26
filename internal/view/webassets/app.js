@@ -350,11 +350,16 @@
     return table;
   }
 
-  /* Inline runs inside one line of text. No nesting: models rarely need
-   * bold-inside-link, and supporting it would cost more than it is worth here. */
+  /* Inline runs inside one line of text. Emphasis bodies are scanned again, so a
+   * link written as **https://…** is still a link — that is how a model reports
+   * a PR. Code is not scanned again: its body is shown as written.
+   *
+   * A bare URL is the last alternative because models paste links with no
+   * markdown around them at all, and a link the reader cannot click is a link
+   * they have to retype. */
   function inlineNodes(source) {
     var fragment = document.createDocumentFragment();
-    var pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(~~[^~]+~~)|(\[[^\]]+\]\((https?:\/\/[^)\s]+)\))/g;
+    var pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(~~[^~]+~~)|(\[([^\]]+)\]\((https?:\/\/[^)\s]+)\))|(<(https?:\/\/[^\s>]+)>)|(https?:\/\/[^\s<>"'\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]+)/g;
     var last = 0;
     var match;
     while ((match = pattern.exec(source)) !== null) {
@@ -363,21 +368,47 @@
       if (match[1]) {
         fragment.appendChild(el("code", null, match[1].slice(1, -1)));
       } else if (match[2] || match[3]) {
-        fragment.appendChild(el("strong", null, match[2] ? match[2].slice(2, -2) : match[3].slice(2, -2)));
+        fragment.appendChild(el("strong", null, inlineNodes(match[2] ? match[2].slice(2, -2) : match[3].slice(2, -2))));
       } else if (match[4]) {
-        fragment.appendChild(el("em", null, match[4].slice(1, -1)));
+        fragment.appendChild(el("em", null, inlineNodes(match[4].slice(1, -1))));
       } else if (match[5]) {
-        fragment.appendChild(el("del", null, match[5].slice(2, -2)));
+        fragment.appendChild(el("del", null, inlineNodes(match[5].slice(2, -2))));
       } else if (match[6]) {
-        fragment.appendChild(el("a", {
-          href: match[7],
-          target: "_blank",
-          rel: "noopener noreferrer"
-        }, match[6].replace(/^\[|\]\(.*\)$/g, "")));
+        fragment.appendChild(anchor(match[8], match[7]));
+      } else if (match[9]) {
+        fragment.appendChild(anchor(match[10], match[10]));
+      } else if (match[11]) {
+        var bare = splitUrlTail(match[11]);
+        fragment.appendChild(anchor(bare.url, bare.url));
+        if (bare.tail) { fragment.appendChild(text(bare.tail)); }
       }
     }
     if (last < source.length) { fragment.appendChild(text(source.slice(last))); }
     return fragment;
+  }
+
+  /* An outbound link leaves the viewer: it is not a route of this page, so it
+   * carries no data-link and the router never sees its clicks. */
+  function anchor(href, label) {
+    return el("a", { href: href, target: "_blank", rel: "noopener noreferrer" }, label);
+  }
+
+  /* A URL ends where the sentence does: "see https://x/a." must not carry the
+   * full stop into the target. A closing paren stays part of the URL when the
+   * URL opened it (…/Foo_(bar)), and goes back to the sentence when it did not
+   * ("(see https://x/a)"). */
+  var URL_TAIL = /[.,;:!?)\]}>"'\u3000-\u303f\uff01-\uff0f\uff1a-\uff20]/;
+
+  function splitUrlTail(url) {
+    var tail = "";
+    while (url.length) {
+      var last = url.charAt(url.length - 1);
+      if (!URL_TAIL.test(last)) { break; }
+      if (last === ")" && url.split("(").length >= url.split(")").length) { break; }
+      tail = last + tail;
+      url = url.slice(0, -1);
+    }
+    return { url: url, tail: tail };
   }
 
   function codeBlock(code, lang) {
@@ -1423,8 +1454,7 @@
         modeButton("run", "\u8fd0\u884c", false),
         modeButton("waterfall", "\u65f6\u5e8f", false),
         modeButton("tree", "\u7ed3\u6784", false),
-        modeButton("raw", "\u539f\u59cb", false)),
-      el("span", { class: "hint", id: "mode-hint" }, "\u540c\u4e00\u4efd\u8bb0\u5f55\uff0c\u4e09\u79cd\u5448\u73b0\u3002")));
+        modeButton("raw", "\u539f\u59cb", false))));
 
     var body = el("div", { id: "record-body" });
     app.appendChild(body);
@@ -1479,38 +1509,31 @@
     currentMode = mode;
     stopSessionStream();
     clear(body);
-    var hint = document.getElementById("mode-hint");
     if (mode === "overview") {
       // The strip is navigation, not a statistic, but it is about the session as
       // a whole: it sat above every view before, taking height from the
       // transcript on all of them. Here it sits next to the numbers it indexes.
       body.appendChild(timeline(currentRecord.events));
       body.appendChild(kpiStrip(currentRecord.facts));
-      if (hint) { hint.textContent = "概览：事件时间条（点一段跳到原始事件）+ 本会话的回合、执行量与 token 消耗。"; }
       return;
     }
     if (mode === "run") {
       body.appendChild(renderRunners());
-      if (hint) { hint.textContent = "\u8fd0\u884c\uff1aFlow \u914d\u7f6e\u7684 team / agent\uff0c\u4ee5\u53ca\u672c\u6b21\u4f1a\u8bdd\u54ea\u4e9b\u5728\u8dd1\u3002"; }
       return;
     }
     if (mode === "waterfall") {
       body.appendChild(renderWaterfall(currentRecord));
-      if (hint) { hint.textContent = "\u65f6\u5e8f\uff1a\u6bcf\u4e2a team \u4e0e call \u7684\u6267\u884c\u533a\u95f4\uff0c\u6a2a\u5411\u4f4d\u7f6e\u5c31\u662f\u5e76\u884c\u5173\u7cfb\u3002"; }
       return;
     }
     if (mode === "tree") {
       body.appendChild(renderTree(currentRecord));
-      if (hint) { hint.textContent = "结构：回合 → 执行轮 → Team → Call → Agent；执行轮是这次提问派生出来的执行，点节点看它名下的事件。"; }
       return;
     }
     if (mode === "raw") {
       body.appendChild(renderRaw(currentRecord));
-      if (hint) { hint.textContent = "\u539f\u59cb\uff1a\u5408\u5e76\u4e09\u5c42\u540e\u7684\u5b8c\u6574\u4e8b\u4ef6\u5217\u8868\uff08\u53ea\u542b\u5df2\u53d1\u751f\u7684\u4e8b\u4ef6\uff09\uff0c\u70b9\u5f00\u770b payload\u3002"; }
       return;
     }
     body.appendChild(renderChat(currentRecord));
-    if (hint) { hint.textContent = "\u5bf9\u8bdd\uff1a\u4eba\u80fd\u8bfb\u7684\u6d88\u606f\u6d41\u3002"; }
     attachSessionStream(body);
   }
 
