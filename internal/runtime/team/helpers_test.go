@@ -129,7 +129,7 @@ func TestAgentStatePointer(t *testing.T) {
 func TestRenderRules(t *testing.T) {
 	definitions := map[string]types.RuleItem{
 		"r-all": {
-			ID: "r-all", Type: "hard", Content: "always applies",
+			ID: "r-all", Content: "always applies",
 			Scope: types.Scope{Type: "all"},
 		},
 		"r-team": {
@@ -137,7 +137,7 @@ func TestRenderRules(t *testing.T) {
 			Scope: types.Scope{Type: "team", Teams: []string{"team-a"}},
 		},
 		"r-agents": {
-			ID: "r-agents", Type: "soft", Content: "agent scoped",
+			ID: "r-agents", Content: "agent scoped",
 			Scope: types.Scope{Type: "agents", Agents: []string{"agent-x"}},
 		},
 		"r-empty": {
@@ -164,7 +164,7 @@ func TestRenderRules(t *testing.T) {
 			names:    []string{"r-all"},
 			agentID:  "any",
 			teamID:   "any",
-			expected: "### r-all (hard)\nalways applies",
+			expected: "### r-all\nalways applies",
 		},
 		{
 			name:     "team scope matches",
@@ -184,7 +184,7 @@ func TestRenderRules(t *testing.T) {
 			names:    []string{"r-agents"},
 			agentID:  "agent-x",
 			teamID:   "any",
-			expected: "### r-agents (soft)\nagent scoped",
+			expected: "### r-agents\nagent scoped",
 		},
 		{
 			name:    "agents scope mismatch",
@@ -203,7 +203,7 @@ func TestRenderRules(t *testing.T) {
 			names:    []string{"r-all", "r-missing"},
 			agentID:  "any",
 			teamID:   "any",
-			expected: "### r-all (hard)\nalways applies",
+			expected: "### r-all\nalways applies",
 		},
 	}
 	for _, tt := range tests {
@@ -223,7 +223,7 @@ func TestRenderRulesWithLoader(t *testing.T) {
 
 	definitions := map[string]types.RuleItem{
 		"r-loaded": {
-			ID: "r-loaded", Type: "hard", Path: "rules/loaded.md",
+			ID: "r-loaded", Path: "rules/loaded.md",
 			Scope: types.Scope{Type: "all"},
 		},
 		"r-memory": {
@@ -265,7 +265,7 @@ func TestRenderRulesWithLoader(t *testing.T) {
 	t.Run("loader reads body for empty content", func(t *testing.T) {
 		r := &Runtime{ruleLoader: loader}
 		out := r.renderResidentRules(ctx, definitions, []string{"r-loaded"}, "any", "any")
-		assert.Equal(t, "### r-loaded (hard)\nloaded body", out)
+		assert.Equal(t, "### r-loaded\nloaded body", out)
 	})
 
 	t.Run("in-memory content wins over loader", func(t *testing.T) {

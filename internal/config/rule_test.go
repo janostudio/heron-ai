@@ -86,13 +86,15 @@ func TestLoadRuleMetaStillParses(t *testing.T) {
 	rel := filepath.Join(".agents", "rules", "r.md")
 	full := filepath.Join(root, rel)
 	require.NoError(t, os.MkdirAll(filepath.Dir(full), 0755))
-	require.NoError(t, os.WriteFile(full, []byte("---\nid: r3\npriority: 7\n---\ncontent here\n"), 0644))
+	// type/priority were removed: a rule's only real levers are scope, paths and
+	// where it sits in the Agent's list. Neither field had a reader, so keeping
+	// them in the fixture would pin behaviour that does not exist.
+	require.NoError(t, os.WriteFile(full, []byte("---\nid: r3\n---\ncontent here\n"), 0644))
 
 	loader := NewConfigLoader(root)
 	rule, err := loader.loadRuleMeta(rel)
 	require.NoError(t, err)
 	require.Equal(t, "r3", rule.ID)
-	require.Equal(t, 7, rule.Priority)
 	require.Equal(t, rel, rule.Path)
 	require.Equal(t, "", rule.Content)
 }

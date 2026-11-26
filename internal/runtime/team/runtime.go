@@ -972,11 +972,7 @@ func renderRules(definitions map[string]types.RuleItem, names []string, agentID,
 		if !ok || !ruleVisible(rule, agentID, teamID) || strings.TrimSpace(rule.Content) == "" {
 			continue
 		}
-		label := rule.ID
-		if rule.Type != "" {
-			label += " (" + rule.Type + ")"
-		}
-		sections = append(sections, "### "+label+"\n"+strings.TrimSpace(rule.Content))
+		sections = append(sections, "### "+rule.ID+"\n"+strings.TrimSpace(rule.Content))
 	}
 	return strings.Join(sections, "\n\n")
 }
@@ -1012,11 +1008,7 @@ func (r *Runtime) renderResidentRules(ctx context.Context, definitions map[strin
 			continue
 		}
 
-		label := rule.ID
-		if rule.Type != "" {
-			label += " (" + rule.Type + ")"
-		}
-		sections = append(sections, "### "+label+"\n"+content)
+		sections = append(sections, "### "+rule.ID+"\n"+content)
 	}
 	return strings.Join(sections, "\n\n")
 }
@@ -1050,7 +1042,6 @@ func (r *Runtime) conditionalRules(ctx context.Context, definitions map[string]t
 		}
 		collected = append(collected, types.ConditionalRule{
 			ID:    rule.ID,
-			Type:  rule.Type,
 			Paths: append([]string(nil), rule.Paths...),
 			Body:  content,
 		})

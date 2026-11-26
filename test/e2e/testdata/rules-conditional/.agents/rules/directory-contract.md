@@ -1,8 +1,6 @@
 ---
-type: hard
 scope:
   type: all
-priority: 80
 paths:
   - docs/**
 ---

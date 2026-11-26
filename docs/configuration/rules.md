@@ -1,9 +1,10 @@
 # Rules Configuration
 
-Rules are prompt-level constraints that agents are told to follow. `type` is a
-label only: both `soft` and `hard` are injected the same way, and neither is
-enforced or blocking. `priority` is currently **not read** — it does not change
-ordering or strength.
+Rules are prompt-level constraints that agents are told to follow. Two fields say
+where a rule applies; there is deliberately no severity field. A rule is either
+resident or conditional, and its position in the Agent's `rules:` list is its
+order — that is the whole model. A `hard`/`soft` label or a numeric `priority`
+would suggest a weighting the engine does not have, so neither exists.
 
 A rule is either **resident** or **conditional**:
 
@@ -18,10 +19,8 @@ A rule is either **resident** or **conditional**:
 
 ```yaml
 ---
-type: hard
 scope:
   type: all
-priority: 10
 ---
 
 Never include API keys or passwords in responses.
@@ -31,10 +30,9 @@ A conditional rule adds `paths`:
 
 ```yaml
 ---
-type: hard
 scope:
-  agents: [researcher]
   type: agents
+  agents: [researcher]
 paths:
   - docs/**
   - ../docs/**
@@ -48,10 +46,12 @@ Write explanatory documents under docs/, not at its root.
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | 引用键（`rules:` 里写的就是它）；缺省取文件名 |
-| `type` | string | `soft` 或 `hard`，只作为注入标题里的标签，不改变行为 |
 | `scope` | object | Visibility control |
 | `paths` | array | 条件触发：命中本轮工具触及的路径时才注入；空=常驻 |
-| `priority` | integer | 预留字段，**当前无读取方** |
+
+Severity and weight are not fields. A rule that must not be traded away is a
+resident rule whose body says so plainly; the engine has nothing that would make
+`hard` mean more than `soft`.
 
 ### scope
 
@@ -90,13 +90,13 @@ path the command may never write teaches the model that rule notes are noise.
 ## Injection
 
 Resident rules are rendered into the system prompt as a `## rules` section, one
-`###` block per referenced rule, titled `<id> (<type>)`:
+`###` block per referenced rule, titled with its id:
 
 ```
 ## rules
-### api-keys (hard)
+### api-keys
 Never include API keys or passwords in responses.
-### objectivity (soft)
+### objectivity
 Be objective and cite sources.
 ```
 

@@ -2,11 +2,9 @@ package types
 
 // RuleItem represents a rule or constraint
 type RuleItem struct {
-	ID       string `yaml:"id" json:"id"`
-	Type     string `yaml:"type" json:"type"` // soft | hard
-	Content  string `yaml:"content" json:"content"`
-	Scope    Scope  `yaml:"scope" json:"scope"`
-	Priority int    `yaml:"priority,omitempty" json:"priority,omitempty"`
+	ID      string `yaml:"id" json:"id"`
+	Content string `yaml:"content" json:"content"`
+	Scope   Scope  `yaml:"scope" json:"scope"`
 
 	Path string `yaml:"-" json:"-"` // 源文件相对路径，供延迟读取
 	// Paths makes the rule conditional: it is injected when the turn touches one
@@ -23,7 +21,6 @@ type RuleItem struct {
 // rules directory itself — the Flow resolved both scope and file already.
 type ConditionalRule struct {
 	ID    string
-	Type  string
 	Paths []string
 	Body  string
 }
