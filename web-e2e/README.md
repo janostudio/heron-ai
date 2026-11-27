@@ -30,6 +30,8 @@ CHROMIUM_PATH=~/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome node ru
 | new session | 列表页有新建入口、表单默认收起、提交后请求体为 `{input}`、跳到 `/s/<新 id>` 并渲染出该会话 |
 | sidebar: layout, collapse, config | 品牌独占一行、新建与搜索同排、标题两行截断带 tooltip、收起/展开按钮、底部「全局配置」入口与配置页（settings 全部段落 + 定义资产、默认值标记、权限枚举、编辑后 PATCH 只带改动的字段、无凭据） |
 | record: single agent | 发送者标签、正文取 `reply` 而非信封、原始输出折叠默认收起、每条消息时间、agent 耗时、回合耗时、工具行状态与输出、回合答复不重复 |
+| record: every page loads | 记录超过一页时按 `after_seq` 逐页取到 `truncated` 为 0，落在一页之外的答复照样渲染、不出现未加载提示 |
+| record: switching views re-reads the open session | 切 tab 重新读当前会话并用新答案重绘（新事件不刷新页面就能看到）、只读当前会话不重新拉列表、连续切 tab 只发一次请求 |
 | record: multiple agents | 发送者同时给出 team 与 agent（`default / coordinator`、`probe / terrain`、`facts / inspect`、`repo-info / inspect`、`analyze / analyst`）、工具按消息边界分成默认收起的折叠组（单个工具也折叠，摘要写出那次调用） |
 | composer | Enter 发送、请求体 `{input}`、粘附件生成 chip、请求体 `attachments[].data_base64` |
 | live stream | 发送时出现 live 回合、工具行从「进行中」到「成功」并填入输出、team 派发行带 team 名、回合结束散去高亮并补耗时、agent 消息边跑边出现 |
