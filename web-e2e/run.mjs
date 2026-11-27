@@ -208,7 +208,7 @@ const CONFIG_FIXTURE = {
  * deliberately not mocked here: it is served by the local HTTP server above so
  * that frames arrive over time. */
 function apiRouter(options = {}) {
-  const state = { sent: null, created: null, createdUrl: "", createdCount: 0 };
+  const state = { sent: null, created: null, createdUrl: "", createdCount: 0, recordRequests: [], listRequests: 0 };
   const handler = async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -219,6 +219,7 @@ function apiRouter(options = {}) {
       return route.fulfill({ status: 401, body: "unauthorized" });
     }
     if (url.pathname === "/api/sessions" && request.method() === "GET") {
+      state.listRequests += 1;
       // A session created from the UI is in the real index the moment it is
       // created; the fixture list has to grow the same way, or the sidebar
       // assertions would be checking a list the server would never return.
@@ -276,6 +277,77 @@ function apiRouter(options = {}) {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(CONFIG_FIXTURE),
+      });
+    }
+    /* A session that keeps growing while it is open. Each read answers one event
+     * more, so a view that was redrawn from a fresh answer is distinguishable
+     * from one drawn out of what the page opened with. */
+    if (url.pathname === "/api/sessions/fs_refresh/record") {
+      state.recordRequests.push(url.search || "(no query)");
+      const seen = state.recordRequests.length;
+      const events = files.single.events.slice();
+      for (let i = 1; i < seen; i += 1) {
+        events.push({
+          seq: 9 + i,
+          type: "session.tool_call.started",
+          created_at: "2026-11-10T00:00:10.000Z",
+          payload: { tool_call_id: `call_late_${i}`, tool_name: "read", arguments: {} },
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...files.single,
+          session: { id: "fs_refresh", status: "completed" },
+          events,
+          latest_seq: events[events.length - 1].seq,
+          truncated: 0,
+        }),
+      });
+    }
+    /* A conversation longer than one page: the endpoint caps a response and says
+     * how many events it left behind, so the page has to keep asking from the
+     * last seq it holds. The split falls between the tool call and the model
+     * response, which leaves the first page with a question and no answer. */
+    /* The same split, but the second page fails. What the first page holds has
+     * to stay readable: a page that cannot be fetched is a banner, not a blank
+     * conversation. */
+    if (url.pathname === "/api/sessions/fs_paged_broken/record") {
+      const afterSeq = parseInt(url.searchParams.get("after_seq") || "0", 10) || 0;
+      state.recordRequests.push(url.search || "(no query)");
+      if (afterSeq > 0) { return route.fulfill({ status: 500, body: "boom" }); }
+      const all = files.single.events;
+      const split = 5;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...files.single,
+          after_seq: 0,
+          events: all.slice(0, split),
+          latest_seq: all[all.length - 1].seq,
+          truncated: all.length - split,
+        }),
+      });
+    }
+    if (url.pathname === "/api/sessions/fs_paged/record") {
+      const afterSeq = parseInt(url.searchParams.get("after_seq") || "0", 10) || 0;
+      state.recordRequests.push(url.search || "(no query)");
+      const all = files.single.events;
+      const split = 5;
+      const last = all[all.length - 1].seq;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...files.single,
+          after_seq: afterSeq,
+          events: afterSeq >= split ? all.slice(split) : all.slice(0, split),
+          latest_seq: last,
+          truncated: afterSeq >= split ? 0 : last - split,
+        }),
       });
     }
     if (url.pathname.startsWith("/api/sessions/") && url.pathname.endsWith("/record")) {
@@ -618,6 +690,72 @@ await run("record: single agent", async () => {
   check("完整参数保留在展开区", (await page.locator(".tool pre.args").first().textContent()).includes("\"command\""));
 
   checkEqual("回合最终答复不重复渲染", await page.locator(".msg.from-agent").count(), 1);
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- 5b. record: a conversation longer than one page ---------- */
+await run("record: every page loads", async () => {
+  const { context, page, state, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_paged`);
+  // The answer sits on the second page, so waiting for it is what proves the
+  // page asked for more than the first response.
+  await page.waitForSelector(".msg.from-agent", { timeout: 5000 });
+
+  checkEqual("记录被分成两页取回", state.recordRequests.length, 2);
+  check("第二次请求从最后一页的 seq 继续",
+    state.recordRequests[1].includes("after_seq=5"), state.recordRequests.join(" | "));
+  checkEqual("不再提示事件未加载", await page.locator(".error-box").count(), 0);
+  checkEqual("跨页之后答复只渲染一次", await page.locator(".msg.from-agent").count(), 1);
+  check("第一页的工具输出仍在",
+    (await page.locator(".tool pre.out").first().textContent()).includes("drwxr-xr-x"));
+  check("无 console error", errors.length === 0, errors.join(" | "));
+  await context.close();
+});
+
+/* ---------- 5c. record: a page that cannot be fetched ---------- */
+await run("record: a failed page keeps the rest", async () => {
+  const { context, page, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_paged_broken`);
+  await page.waitForSelector(".chat .turn", { timeout: 5000 });
+
+  checkEqual("已取到的回合仍然渲染", await page.locator(".chat .turn").count(), 1);
+  checkEqual("提示还有事件没取到", await page.locator(".error-box").count(), 1);
+  check("提示写明剩余条数",
+    (await page.locator(".error-box").innerText()).includes("还有 4 条"),
+    await page.locator(".error-box").innerText());
+  // A page-level 500 is the expected failure here; the browser logs it too.
+  const realErrors = errors.filter((text) => !text.includes("500"));
+  check("无 console error（500 除外）", realErrors.length === 0, realErrors.join(" | "));
+  await context.close();
+});
+
+/* ---------- 5d. record: switching views re-reads the open session ---------- */
+await run("record: switching views re-reads the open session", async () => {
+  const { context, page, state, errors } = await newPage(browser, {});
+  await page.goto(`${base}/s/fs_refresh`);
+  await page.waitForSelector(".chat .turn", { timeout: 5000 });
+  const readsOnOpen = state.recordRequests.length;
+  const listsOnOpen = state.listRequests;
+
+  await page.click('.seg button[data-mode="raw"]');
+  await page.waitForSelector(".raw-view tbody tr", { timeout: 5000 });
+  // The view is drawn from what the page holds and redrawn from the answer, so
+  // the extra event shows up without a reload.
+  await page.waitForFunction(() => document.querySelectorAll(".raw-view tbody tr").length === 10, null, { timeout: 5000 });
+  checkEqual("切 tab 后视图用新答案重绘", await page.locator(".raw-count").innerText(), "10 / 10 条");
+  check("切 tab 重新读了一次记录", state.recordRequests.length > readsOnOpen,
+    `${readsOnOpen} → ${state.recordRequests.length}`);
+  checkEqual("切 tab 只读当前会话，不重新拉列表", state.listRequests, listsOnOpen);
+
+  // Three tabs in a row ask once: the request in flight is shared.
+  const beforeBurst = state.recordRequests.length;
+  await page.click('.seg button[data-mode="overview"]');
+  await page.click('.seg button[data-mode="tree"]');
+  await page.click('.seg button[data-mode="raw"]');
+  await page.waitForTimeout(1200);
+  checkEqual("连续切 tab 只问一次", state.recordRequests.length - beforeBurst, 1);
+
   check("无 console error", errors.length === 0, errors.join(" | "));
   await context.close();
 });

@@ -1395,6 +1395,142 @@
     return "";
   }
 
+  /* The record endpoint answers one page at a time and reports how many events
+   * it left behind. Every view reads the same event list — the transcript, the
+   * waterfall and the raw view — so a half-loaded list drops turns from all of
+   * them. Walk after_seq until the server says nothing is left; how large a page
+   * is stays the server's decision. */
+  function fetchRecordPage(sessionID, afterSeq) {
+    var query = "/api/sessions/" + encodeURIComponent(sessionID) + "/record";
+    if (afterSeq > 0) { query += "?after_seq=" + afterSeq; }
+    return apiFetch(query).then(function (response) {
+      if (response.status === 404) { throw new Error("\u4f1a\u8bdd\u4e0d\u5b58\u5728"); }
+      if (!response.ok) { throw new Error("HTTP " + response.status); }
+      return response.json();
+    });
+  }
+
+  function fetchRecord(sessionID) {
+    function load(record, afterSeq) {
+      return fetchRecordPage(sessionID, afterSeq).then(function (page) {
+        if (!record) {
+          record = page;
+        } else {
+          record.events = (record.events || []).concat(page.events || []);
+        }
+        record.truncated = page.truncated || 0;
+        var next = lastSeqOf(record);
+        // A page that brought no new event would be asked for again forever.
+        if (!record.truncated || next <= afterSeq) { return record; }
+        return load(record, next).catch(function (error) {
+          // The pages already in hand stay usable; the banner reports what is
+          // still missing instead of blanking a conversation that is readable.
+          if (error && error.unauthorized) { throw error; }
+          return record;
+        });
+      });
+    }
+    return load(null, 0);
+  }
+
+  function recordSessionID(record) {
+    var session = record && record.session;
+    if (session && session.id) { return session.id; }
+    return typeof session === "string" ? session : "";
+  }
+
+  /* syncTruncatedNotice reports the events the server could not hand over, and
+   * clears the line once a later read has them. It sits above the view tabs next
+   * to where the record starts. */
+  function syncTruncatedNotice(record) {
+    var note = app.querySelector(".truncated-note");
+    var missing = (record && record.truncated) || 0;
+    if (!missing) {
+      if (note) { note.remove(); }
+      return;
+    }
+    if (!note) {
+      note = el("div", { class: "error-box truncated-note" });
+      var modes = app.querySelector(".modes");
+      if (modes) { app.insertBefore(note, modes); } else { app.appendChild(note); }
+    }
+    note.textContent = "\u8fd8\u6709 " + missing + " \u6761\u4e8b\u4ef6\u672a\u80fd\u52a0\u8f7d\u3002";
+  }
+
+  /* A refresh that failed leaves the view as it was and says so above it: the
+   * alternative is showing yesterday's events as if they were today's. */
+  function syncRefreshNotice(text) {
+    var note = app.querySelector(".refresh-note");
+    if (!text) {
+      if (note) { note.remove(); }
+      return;
+    }
+    if (!note) {
+      note = el("div", { class: "error-box refresh-note" });
+      var modes = app.querySelector(".modes");
+      if (modes) { app.insertBefore(note, modes); }
+    }
+    note.textContent = text;
+  }
+
+  /* Switching views re-reads the open session. The page used to be frozen at
+   * the moment it opened, so a turn that finished elsewhere — another browser,
+   * the CLI, a scheduled wake-up — only appeared after a reload. Only the open
+   * session is read here: the list and the other sessions are left alone, and
+   * one request per session is kept in flight so clicking through the tabs asks
+   * once. */
+  var recordRefresh = null;
+
+  function refreshRecord(sessionID) {
+    if (!sessionID) { return null; }
+    if (recordRefresh && recordRefresh.sessionID === sessionID) { return recordRefresh.promise; }
+    var entry = { sessionID: sessionID };
+    entry.promise = fetchRecord(sessionID)
+      .then(function (record) {
+        if (recordRefresh === entry) { recordRefresh = null; }
+        applyRecord(record);
+      })
+      .catch(function (error) {
+        if (recordRefresh === entry) { recordRefresh = null; }
+        if (error && error.unauthorized) { return; }
+        syncRefreshNotice("\u5237\u65b0\u5931\u8d25\uff1a" + error.message);
+      });
+    recordRefresh = entry;
+    return entry.promise;
+  }
+
+  function applyRecord(record) {
+    var body = document.getElementById("record-body");
+    if (!body) { return; }
+    // The answer can belong to a session the user has already left.
+    var open = recordSessionID(currentRecord);
+    if (open && recordSessionID(record) !== open) { return; }
+    /* The snapshot comes from disk and can lag the stream by a moment. Events
+     * already on the page beyond it are newer than anything the server could
+     * return, so they are kept rather than dropped. lastSeqOf is the fallback
+     * for a server that does not send latest_seq: without it the whole page
+     * would look newer than the snapshot and every event would double up. */
+    var latest = Math.max(record.latest_seq || 0, lastSeqOf(record));
+    var newer = ((currentRecord && currentRecord.events) || []).filter(function (event) {
+      return typeof event.seq === "number" && event.seq > latest;
+    });
+    record.events = (record.events || []).concat(newer);
+
+    currentRecord = record;
+    indexCallAgents(record, topologyState);
+    resetRunState(record);
+    syncRefreshNotice("");
+    syncTruncatedNotice(record);
+
+    var heading = sessionHeading(record);
+    var title = app.querySelector(".top .session-title");
+    if (title && heading) {
+      title.textContent = heading;
+      title.title = heading;
+    }
+    showMode(body, currentMode);
+  }
+
   function renderRecord(sessionID) {
     clear(app);
     // The sidebar is the way back to the list: a second link in the header was
@@ -1402,12 +1538,7 @@
     app.appendChild(el("div", { class: "top" },
       el("h1", { class: "session-title" }, "")));
 
-    apiFetch("/api/sessions/" + encodeURIComponent(sessionID) + "/record")
-      .then(function (response) {
-        if (response.status === 404) { throw new Error("\u4f1a\u8bdd\u4e0d\u5b58\u5728"); }
-        if (!response.ok) { throw new Error("HTTP " + response.status); }
-        return response.json();
-      })
+    fetchRecord(sessionID)
       .then(function (record) {
         /* The topology request is optional: an older server answers 404/501 and
          * the board falls back to the event-derived view it used before. */
@@ -1441,12 +1572,6 @@
     if (empty) { top.appendChild(el("span", { class: "badge-new" }, "\u65b0\u4f1a\u8bdd")); }
     app.appendChild(top);
 
-    if (record.truncated) {
-      app.appendChild(el("div", { class: "error-box" },
-        "\u8fd8\u6709 " + record.truncated + " \u6761\u4e8b\u4ef6\u672a\u52a0\u8f7d\uff08\u5355\u6b21\u4e0a\u9650\uff09\u3002\u53ef\u52a0 ?limit= \u63d0\u9ad8\u3002"));
-    }
-
-
     app.appendChild(el("div", { class: "modes" },
       el("div", { class: "seg", role: "group" },
         modeButton("chat", "\u5bf9\u8bdd", true),
@@ -1455,6 +1580,10 @@
         modeButton("waterfall", "\u65f6\u5e8f", false),
         modeButton("tree", "\u7ed3\u6784", false),
         modeButton("raw", "\u539f\u59cb", false))));
+
+    /* Every page was asked for, so a remainder means a page that could not be
+     * finished. Say so instead of showing a transcript that looks complete. */
+    syncTruncatedNotice(record);
 
     var body = el("div", { id: "record-body" });
     app.appendChild(body);
@@ -1500,6 +1629,10 @@
       // scroll offset lands the new view half-way through (or past its end).
       var pane = recordPane();
       if (pane) { pane.scrollTop = 0; }
+      // The view is drawn from what the page already has, then the open session
+      // is re-read and the view redrawn from the answer: the tab switch is what
+      // makes a turn finished elsewhere visible, without reloading the page.
+      refreshRecord(recordSessionID(currentRecord));
     });
     return button;
   }
